@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.problem — RFC 9457 Problem Details.
+"""Unit tests for farna.api.models.problem — RFC 9457 Problem Details.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the problem-detail
 models that every API error response is built from. The module has 5+ consumers
@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from starlette.exceptions import HTTPException
 
-from modulo.api.models.problem import (
+from farna.api.models.problem import (
     ProblemDetail,
     ProblemException,
     ProblemType,

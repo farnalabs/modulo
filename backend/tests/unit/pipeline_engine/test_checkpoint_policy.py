@@ -10,8 +10,8 @@ Covering:
 
 from typing import Any
 
-from modulo.core.pipeline_engine.executor import _graph_is_interactive
-from modulo.core.pipeline_engine.modulo_saver import (
+from farna.core.pipeline_engine.executor import _graph_is_interactive
+from farna.core.pipeline_engine.modulo_saver import (
     _CHECKPOINT_MESSAGE_TRIM_TAIL,
     _trim_checkpoint_channels,
 )

@@ -48,11 +48,11 @@ def _make_session(ctx: dict[str, Any]) -> AsyncMock:
 
 
 def _build_app(ctx: dict[str, Any]) -> FastAPI:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.routes.node_categories import router as nc_router
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.routes.node_categories import router as nc_router
+    from farna.auth.dependencies import get_current_tenant_user, get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.settings import Settings, get_settings
 
     app = FastAPI()
     app.include_router(nc_router)
@@ -118,7 +118,7 @@ def _given_pipeline_uses_category(name: str, nc_ctx: dict[str, Any]) -> None:
 
 @when("I delete the node category")
 def _when_delete_category(nc_ctx: dict[str, Any], request) -> None:
-    from modulo.db.crud.node_category import NodeCategoryInUseError
+    from farna.db.crud.node_category import NodeCategoryInUseError
 
     def _soft_delete(*_args: object, **_kwargs: object) -> bool:
         if nc_ctx.get("referencing"):
@@ -129,9 +129,9 @@ def _when_delete_category(nc_ctx: dict[str, Any], request) -> None:
     app = _build_app(nc_ctx)
     client = TestClient(app)
     with (
-        patch("modulo.api.routes.node_categories.soft_delete_node_category", side_effect=_soft_delete),
-        patch("modulo.api.routes.node_categories.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.node_categories.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.node_categories.soft_delete_node_category", side_effect=_soft_delete),
+        patch("farna.api.routes.node_categories.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.node_categories.set_rls_user_context", AsyncMock()),
     ):
         resp = client.delete(_CATEGORY_PATH)
     request.node._resp = resp

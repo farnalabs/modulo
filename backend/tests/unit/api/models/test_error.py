@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.error.
+"""Unit tests for farna.api.models.error.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the error-ingestion
 and error-dashboard schemas in ``api/models/error.py``. These schemas sit on
@@ -16,7 +16,7 @@ from typing import Any
 import pydantic
 import pytest
 
-from modulo.api.models.error import (
+from farna.api.models.error import (
     ErrorEventDetail,
     ErrorEventInput,
     ErrorEventListResponse,
@@ -102,20 +102,20 @@ class TestErrorIngestRequest:
 
 class TestIngestAndSessionSchemas:
     def test_error_group_result_surface(self) -> None:
-        from modulo.api.models.error import ErrorGroupResult
+        from farna.api.models.error import ErrorGroupResult
 
         result = ErrorGroupResult(group_id="g-1", is_new=True)
         assert result.group_id == "g-1"
         assert result.is_new is True
 
     def test_ingest_response_surface(self) -> None:
-        from modulo.api.models.error import ErrorGroupResult
+        from farna.api.models.error import ErrorGroupResult
 
         resp = ErrorIngestResponse(results=[ErrorGroupResult(group_id="g-1", is_new=True)])
         assert resp.results[0].group_id == "g-1"
 
     def test_session_key_default_expiry(self) -> None:
-        from modulo.api.models.error import SessionKeyResponse
+        from farna.api.models.error import SessionKeyResponse
 
         resp = SessionKeyResponse(key="abc")
         assert resp.expires_in_seconds == 3600

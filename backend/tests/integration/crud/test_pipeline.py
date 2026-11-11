@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.pipeline import (
+from farna.db.crud.pipeline import (
     GraphWriteActor,
     clone_pipeline,
     create_pipeline,
@@ -21,7 +21,7 @@ from modulo.db.crud.pipeline import (
     soft_delete_pipeline,
     update_pipeline,
 )
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

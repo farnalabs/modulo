@@ -1,6 +1,6 @@
 """Step definitions for the library fixture-contribution flow (contribute.feature).
 
-The contribution REST surface (``backend/src/modulo/api/routes/contributions.py``)
+The contribution REST surface (``backend/src/farna/api/routes/contributions.py``)
 is exercised end-to-end through the real routes with only the DB service functions
 patched: the draft -> review_queue -> published state machine, the admin-only
 ``contribution.publish`` role gate (403 for viewers), the version-bump flow
@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.library_service import ContributionInvalidTransitionError
-from modulo.db.crud.base import PageResult
+from farna.core.library_service import ContributionInvalidTransitionError
+from farna.db.crud.base import PageResult
 from tests.bdd.conftest import ORG_ID, USER_ID, _active_client, _store_response
 
 scenarios("../features/library/contribute.feature")
@@ -162,9 +162,9 @@ def _create_contribution(docstring: str, ctx: dict[str, Any], request: pytest.Fi
         slug=body.get("slug", "my-test-fixture"),
     )
     with (
-        patch("modulo.api.routes.contributions.contribute_fixture", new=AsyncMock(return_value=prim)),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.contribute_fixture", new=AsyncMock(return_value=prim)),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.post("/api/v1/library/contribute", json=body)
     _store_response(request, ctx, resp)
@@ -180,9 +180,9 @@ def _submit_contribution(ctx: dict[str, Any], request: pytest.FixtureRequest) ->
     else:
         submit = AsyncMock(side_effect=ContributionInvalidTransitionError("cannot submit a non-draft contribution"))
     with (
-        patch("modulo.api.routes.contributions.submit_contribution_for_review", new=submit),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.submit_contribution_for_review", new=submit),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/library/contribute/{contrib_id}/submit")
     _store_response(request, ctx, resp)
@@ -194,9 +194,9 @@ def _publish_contribution(ctx: dict[str, Any], request: pytest.FixtureRequest) -
     contrib_id = ctx["contrib_id"]
     prim = _mk_contribution(status="published", visibility="community")
     with (
-        patch("modulo.api.routes.contributions.publish_contribution", new=AsyncMock(return_value=prim)),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.publish_contribution", new=AsyncMock(return_value=prim)),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/library/contribute/{contrib_id}/publish")
     _store_response(request, ctx, resp)
@@ -222,9 +222,9 @@ def _submit_contribution_version(
     else:
         version = AsyncMock(side_effect=ContributionInvalidTransitionError("cannot version a draft contribution"))
     with (
-        patch("modulo.api.routes.contributions.submit_contribution_version", new=version),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.submit_contribution_version", new=version),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/library/contribute/{contrib_id}/versions", json=body)
     _store_response(request, ctx, resp)
@@ -238,9 +238,9 @@ def _list_contributions(client: Any, ctx: dict[str, Any], request: pytest.Fixtur
     ]
     result = PageResult(items=items, total=len(items), page=1, page_size=20)
     with (
-        patch("modulo.api.routes.contributions.list_contributions", new=AsyncMock(return_value=result)),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.list_contributions", new=AsyncMock(return_value=result)),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.get("/api/v1/library/contribute")
     _store_response(request, ctx, resp)
@@ -265,9 +265,9 @@ def _list_contributions_filtered(
         return PageResult(items=items, total=len(items), page=1, page_size=20)
 
     with (
-        patch("modulo.api.routes.contributions.list_contributions", new=_filtered),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.list_contributions", new=_filtered),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.get("/api/v1/library/contribute", params={"contribution_status": status})
     _store_response(request, ctx, resp)
@@ -281,9 +281,9 @@ def _list_contribution_versions(
 ) -> None:
     versions = ctx.get("contrib_versions") or [_mk_version(version="1.0", status="published")]
     with (
-        patch("modulo.api.routes.contributions.list_contribution_versions", new=AsyncMock(return_value=versions)),
-        patch("modulo.api.routes.contributions.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.contributions.list_contribution_versions", new=AsyncMock(return_value=versions)),
+        patch("farna.api.routes.contributions.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.contributions.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.get(f"/api/v1/library/contribute/{ctx['contrib_id']}/versions")
     _store_response(request, ctx, resp)

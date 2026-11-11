@@ -27,12 +27,12 @@ from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import RunDailyFact
-from modulo.db.models.system_map import (
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
     SystemMapLoopAdmissionAttempt,
@@ -42,7 +42,7 @@ from modulo.db.models.system_map import (
     SystemMapRelationship,
     SystemMapRevision,
 )
-from modulo.db.repositories.system_map import SystemMapRepository
+from farna.db.repositories.system_map import SystemMapRepository
 
 _ORG = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _MAP = uuid.UUID("22222222-2222-2222-2222-222222222222")

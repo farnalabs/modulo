@@ -25,10 +25,10 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.passwords import verify_password
-from modulo.cli import break_glass as bg
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditEvent
+from farna.auth.passwords import verify_password
+from farna.cli import break_glass as bg
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditEvent
 
 pytestmark = pytest.mark.integration
 

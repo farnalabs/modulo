@@ -23,9 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from modulo.api.routes.assistant import StreamRequest, stream_chat
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.models.assistant_message import ChatMessage
+from farna.api.routes.assistant import StreamRequest, stream_chat
+from farna.auth.jwt import TenantPrincipal
+from farna.db.models.assistant_message import ChatMessage
 
 
 class _BeginContext:
@@ -166,16 +166,16 @@ async def _run_stream(
         tool_defs_mock.return_value = []
 
     patches = [
-        patch("modulo.api.routes.assistant.AsyncSession", return_value=stream_session),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._build_backend", return_value=backend),
-        patch("modulo.api.routes.assistant.SkillLoader", return_value=loader),
-        patch("modulo.api.routes.assistant._reconstruct_messages", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.api.routes.assistant._call_mcp_tool", call_mcp_tool),
-        patch("modulo.api.routes.assistant._get_all_tool_definitions", tool_defs_mock),
+        patch("farna.api.routes.assistant.AsyncSession", return_value=stream_session),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant._build_backend", return_value=backend),
+        patch("farna.api.routes.assistant.SkillLoader", return_value=loader),
+        patch("farna.api.routes.assistant._reconstruct_messages", new_callable=AsyncMock, return_value=[]),
+        patch("farna.api.routes.assistant._call_mcp_tool", call_mcp_tool),
+        patch("farna.api.routes.assistant._get_all_tool_definitions", tool_defs_mock),
     ]
     if manifest_mock is not None:
-        patches.append(patch("modulo.core.manifest.get_manifest", manifest_mock))
+        patches.append(patch("farna.core.manifest.get_manifest", manifest_mock))
 
     with contextlib.ExitStack() as stack:
         for p in patches:

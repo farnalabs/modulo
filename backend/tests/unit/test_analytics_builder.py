@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
-from modulo.core.analytics.builder import (
+from farna.core.analytics.builder import (
     _DIMENSION_COLUMNS,
     _DIMENSION_KEY_ATTR,
     CAPACITY_ERROR_CODES,
@@ -42,7 +42,7 @@ from modulo.core.analytics.builder import (
     resolve_group_by,
     to_utc_aware,
 )
-from modulo.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.run_daily_facts import RunDailyFact
 
 _ORG = uuid.UUID("11111111-1111-4111-8111-111111111111")
 
@@ -98,7 +98,7 @@ class TestAllowlistRejection:
     def test_non_allowlisted_dimension_literal_raises(self) -> None:
         # A dimension value that is NOT an AnalyticsDimension member can never
         # reach the allowlist dict lookup; a raw string is rejected.
-        from modulo.core.analytics.builder import _DIMENSION_COLUMNS
+        from farna.core.analytics.builder import _DIMENSION_COLUMNS
 
         with pytest.raises(KeyError):
             _DIMENSION_COLUMNS["trigger_type; DROP TABLE runs"]  # type: ignore[index]
@@ -293,7 +293,7 @@ class TestFAR102Filters:
         # codes and never the literal dotted harness.unknown. A plain IN-clause
         # over the literal would match zero rows while the chart shows the
         # slice populated (the QA finding this test pins).
-        from modulo.core.pipeline_engine.error_codes import known_error_codes
+        from farna.core.pipeline_engine.error_codes import known_error_codes
 
         stmt, params = build_facts_query(_query(error_code="harness.unknown"))
         sql = str(stmt.compile(dialect=postgresql.dialect()))
@@ -340,7 +340,7 @@ class TestFAR102Filters:
         for code in ("provider.authentication", "provider.billing"):
             assert _row_dimension_key(SimpleNamespace(error_code=code), AnalyticsDimension.ERROR_CODE) == code
         # The unknown-slice complement therefore excludes both (they are known).
-        from modulo.core.pipeline_engine.error_codes import known_error_codes
+        from farna.core.pipeline_engine.error_codes import known_error_codes
 
         known = known_error_codes()
         assert "provider.authentication" in known
@@ -353,7 +353,7 @@ class TestFAR102Filters:
     def test_stall_error_codes_are_bound_not_interpolated(self) -> None:
         stmt, params = build_facts_query(_query())
         sql = str(stmt.compile(dialect=postgresql.dialect()))
-        from modulo.core.analytics.builder import STALL_ERROR_CODES
+        from farna.core.analytics.builder import STALL_ERROR_CODES
 
         for code in STALL_ERROR_CODES:
             assert code not in sql, f"stall error code {code!r} must be bound, never interpolated"
@@ -467,7 +467,7 @@ class TestFAR102Metrics:
         assert out[0]["avg_output_bytes"] == 200.0
 
     def test_stall_error_codes_constant_members(self) -> None:
-        from modulo.core.analytics.builder import STALL_ERROR_CODES
+        from farna.core.analytics.builder import STALL_ERROR_CODES
 
         assert "executor_stalled" in STALL_ERROR_CODES
         assert "node_timeout" in STALL_ERROR_CODES
@@ -478,7 +478,7 @@ class TestFAR102Metrics:
         # capacity sweep / dispatcher reconcile key on (db.crud.run) — a
         # re-spelled literal here would silently diverge the analytics
         # capacity slice from the sweep's markers.
-        from modulo.db.crud.run import CAPACITY_MARKERS, ERROR_CODE_CAPACITY_TIMEOUT
+        from farna.db.crud.run import CAPACITY_MARKERS, ERROR_CODE_CAPACITY_TIMEOUT
 
         assert CAPACITY_MARKERS | {ERROR_CODE_CAPACITY_TIMEOUT} == CAPACITY_ERROR_CODES
 
@@ -1521,7 +1521,7 @@ class TestReconcileCooldown:
     """
 
     def _module(self):
-        from modulo.core.analytics import maintenance as maintenance_mod
+        from farna.core.analytics import maintenance as maintenance_mod
 
         return maintenance_mod
 

@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.routes import analytics as analytics_routes
+from farna.api.routes import analytics as analytics_routes
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()

@@ -32,7 +32,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import (
+from farna.api.routes.pipelines import (
     PipelineGraphNode,
     PipelineGraphUpdate,
     _prepare_graph_write,

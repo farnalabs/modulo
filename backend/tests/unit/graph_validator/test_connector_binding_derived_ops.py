@@ -15,9 +15,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.connectors.base import connector_binding_required_acl_operations
-from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.core.team_visibility import extract_connector_bindings
+from farna.connectors.base import connector_binding_required_acl_operations
+from farna.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.team_visibility import extract_connector_bindings
 from tests.unit.graph_validator._helpers import (
     session_returning as _session_returning,
 )

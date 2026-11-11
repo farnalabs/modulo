@@ -7,7 +7,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.util._once import Once
 
-from modulo.otel_bridge.export import shutdown_otel
+from farna.otel_bridge.export import shutdown_otel
 
 
 def reset_global_provider() -> None:

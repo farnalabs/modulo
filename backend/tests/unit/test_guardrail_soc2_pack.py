@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.packs.soc2 — SOC 2 TSC pack content.
+"""Unit tests for farna.core.guardrails.packs.soc2 — SOC 2 TSC pack content.
 
 Covers the pack's CI readiness (every control mapped to a schema-valid
 guardrail), instantiation into a valid GuardrailConfigSet, the gap report
@@ -16,15 +16,15 @@ import uuid
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.guardrails import GuardrailAction, evaluate_guardrails
-from modulo.core.guardrails.config import (
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.guardrails import GuardrailAction, evaluate_guardrails
+from farna.core.guardrails.config import (
     GuardrailConfigItem,
     GuardrailConfigSet,
     to_eval_config,
     validate_config_set,
 )
-from modulo.core.guardrails.packs.soc2 import (
+from farna.core.guardrails.packs.soc2 import (
     ANOMALY_PATTERN,
     AWS_ACCESS_KEY_PATTERN,
     CARD_PATTERN,
@@ -36,7 +36,7 @@ from modulo.core.guardrails.packs.soc2 import (
     SSN_PATTERN,
     build_soc2_pack,
 )
-from modulo.core.guardrails.policy_pack import (
+from farna.core.guardrails.policy_pack import (
     assert_pack_ci_ready,
     dump_pack,
     instantiate_pack,
@@ -201,7 +201,7 @@ def test_soc2_pack_canary_actions_match_control_semantics():
 
 def _assert_linear(pattern: str) -> None:
     """A pack detection regex must be linear (no nested quantifiers / ReDoS)."""
-    from modulo.core.eval_engine import _has_nested_quantifier
+    from farna.core.eval_engine import _has_nested_quantifier
 
     assert not _has_nested_quantifier(pattern), f"{pattern!r} has a nested quantifier (ReDoS risk)"
     # Exercise the pattern on a long input to smoke out catastrophic backtracking.
@@ -300,7 +300,7 @@ def _guardrail_by_control(control_id: str) -> GuardrailConfigItem:
 
 def test_soc2_pack_cc61_aws_key_blocks_through_real_engine():
     """CC6.1's regex must fire as a block through the real guardrail runtime."""
-    from modulo.core.guardrails import GuardrailBlockedError
+    from farna.core.guardrails import GuardrailBlockedError
 
     eval_def = _eval_definition_for(_guardrail_by_control("CC6.1"))
     engine = EvalEngine()
@@ -311,7 +311,7 @@ def test_soc2_pack_cc61_aws_key_blocks_through_real_engine():
 
 
 def test_soc2_pack_cc66_executable_content_blocks_through_real_engine():
-    from modulo.core.guardrails import GuardrailBlockedError
+    from farna.core.guardrails import GuardrailBlockedError
 
     eval_def = _eval_definition_for(_guardrail_by_control("CC6.6"))
     engine = EvalEngine()

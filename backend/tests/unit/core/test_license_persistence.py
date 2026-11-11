@@ -34,10 +34,10 @@ from typing import Any, Self
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.feature_flags as feature_flags
-import modulo.core.license as license_mod
-from modulo.core.feature_flags import resolve_effective_license
-from modulo.core.license import (
+import farna.core.feature_flags as feature_flags
+import farna.core.license as license_mod
+from farna.core.feature_flags import resolve_effective_license
+from farna.core.license import (
     SYSTEM_LICENSE_REFRESH_TTL_SECONDS,
     PersistedLicenseAnchorError,
     PersistedLicenseState,
@@ -52,10 +52,10 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.license_signing import encode_license_key
-from modulo.core.registry.crypto import generate_keypair
-from modulo.db.models.base import Base
-from modulo.db.models.system_config import SystemConfig
+from farna.core.license_signing import encode_license_key
+from farna.core.registry.crypto import generate_keypair
+from farna.db.models.base import Base
+from farna.db.models.system_config import SystemConfig
 
 _TEST_KP = generate_keypair()
 _PRIVATE_KEY = _TEST_KP["private_key"]
@@ -418,7 +418,7 @@ async def test_plan_resolution_refreshes_the_persisted_licence_first(
 async def test_worker_job_start_refreshes_the_persisted_licence(monkeypatch: pytest.MonkeyPatch) -> None:
     """The worker resolves a tier INSIDE a job, so the per-job hook is the
     cross-process visibility point (no long-lived background task needed)."""
-    import modulo.core.saq_worker as saq_worker
+    import farna.core.saq_worker as saq_worker
 
     refresh_calls: list[bool] = []
 
@@ -438,7 +438,7 @@ async def test_worker_job_start_refreshes_the_persisted_licence(monkeypatch: pyt
 
     monkeypatch.setattr(license_mod, "persisted_license_refresh_due", lambda: True)
     monkeypatch.setattr(license_mod, "refresh_persisted_system_license", _record_refresh)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _SessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _SessionDouble())
 
     await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
 
@@ -575,14 +575,14 @@ async def test_plan_resolution_without_a_session_skips_the_refresh(monkeypatch: 
 
 
 async def test_worker_job_start_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.saq_worker as saq_worker
+    import farna.core.saq_worker as saq_worker
 
     async def _cancel(*_args: Any, **_kwargs: Any) -> None:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(license_mod, "persisted_license_refresh_due", lambda: True)
     monkeypatch.setattr(license_mod, "refresh_persisted_system_license", _cancel)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     with pytest.raises(asyncio.CancelledError):
         await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
@@ -590,7 +590,7 @@ async def test_worker_job_start_propagates_cancellation(monkeypatch: pytest.Monk
 
 async def test_worker_job_start_swallows_a_store_blip(monkeypatch: pytest.MonkeyPatch) -> None:
     """A licence-store failure must never fail a job's start (fail-open)."""
-    import modulo.core.saq_worker as saq_worker
+    import farna.core.saq_worker as saq_worker
 
     attempted: list[bool] = []
 
@@ -600,7 +600,7 @@ async def test_worker_job_start_swallows_a_store_blip(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(license_mod, "persisted_license_refresh_due", lambda: True)
     monkeypatch.setattr(license_mod, "refresh_persisted_system_license", _boom)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
 
@@ -608,7 +608,7 @@ async def test_worker_job_start_swallows_a_store_blip(monkeypatch: pytest.Monkey
 
 
 async def test_bootstrap_restores_a_persisted_licence(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.license_bootstrap as license_bootstrap
+    import farna.core.license_bootstrap as license_bootstrap
 
     state = PersistedLicenseState(active_key="persisted-key")
 
@@ -616,7 +616,7 @@ async def test_bootstrap_restores_a_persisted_licence(monkeypatch: pytest.Monkey
         return state
 
     monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     result = await license_bootstrap.restore_persisted_license(_settings())
 
@@ -624,13 +624,13 @@ async def test_bootstrap_restores_a_persisted_licence(monkeypatch: pytest.Monkey
 
 
 async def test_bootstrap_logs_when_no_licence_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.license_bootstrap as license_bootstrap
+    import farna.core.license_bootstrap as license_bootstrap
 
     async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
         return PersistedLicenseState()
 
     monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     result = await license_bootstrap.restore_persisted_license(_settings())
 
@@ -638,39 +638,39 @@ async def test_bootstrap_logs_when_no_licence_is_persisted(monkeypatch: pytest.M
 
 
 async def test_bootstrap_reraises_an_anchor_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.license_bootstrap as license_bootstrap
+    import farna.core.license_bootstrap as license_bootstrap
 
     async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
         raise license_mod.PersistedLicenseAnchorError("dev anchor")
 
     monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     with pytest.raises(license_mod.PersistedLicenseAnchorError):
         await license_bootstrap.restore_persisted_license(_settings())
 
 
 async def test_bootstrap_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.license_bootstrap as license_bootstrap
+    import farna.core.license_bootstrap as license_bootstrap
 
     async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     with pytest.raises(asyncio.CancelledError):
         await license_bootstrap.restore_persisted_license(_settings())
 
 
 async def test_bootstrap_is_fail_open_on_a_store_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.license_bootstrap as license_bootstrap
+    import farna.core.license_bootstrap as license_bootstrap
 
     async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
         raise RuntimeError("db down")
 
     monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
-    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+    monkeypatch.setattr("farna.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
 
     result = await license_bootstrap.restore_persisted_license(_settings())
 

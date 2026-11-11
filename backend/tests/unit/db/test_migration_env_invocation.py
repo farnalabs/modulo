@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from modulo.db.migrations import env as migration_env
+from farna.db.migrations import env as migration_env
 
 
 @pytest.fixture(autouse=True)

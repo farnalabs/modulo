@@ -42,24 +42,24 @@ def _make_provider(**overrides: object) -> MagicMock:
 
 def _patch_audit() -> object:
     return patch(
-        "modulo.db.crud.sso_provider.append_audit_event",
+        "farna.db.crud.sso_provider.append_audit_event",
         AsyncMock(),
     )
 
 
 class TestSlugify:
     def test_slugify_normalises_and_trims(self) -> None:
-        from modulo.db.crud.sso_provider import _slugify_provider_id
+        from farna.db.crud.sso_provider import _slugify_provider_id
 
         assert _slugify_provider_id("Acme Corp SSO!!") == "acme-corp-sso"
 
     def test_slugify_caps_at_58_chars(self) -> None:
-        from modulo.db.crud.sso_provider import _slugify_provider_id
+        from farna.db.crud.sso_provider import _slugify_provider_id
 
         assert len(_slugify_provider_id("x" * 100)) == 58
 
     def test_slugify_all_symbols_falls_back_to_sso(self) -> None:
-        from modulo.db.crud.sso_provider import _slugify_provider_id
+        from farna.db.crud.sso_provider import _slugify_provider_id
 
         assert _slugify_provider_id("###") == "sso"
 
@@ -90,7 +90,7 @@ class TestUniqueProviderId:
 
     @staticmethod
     async def _call(session: AsyncMock, base: str) -> str:
-        from modulo.db.crud.sso_provider import _unique_provider_id
+        from farna.db.crud.sso_provider import _unique_provider_id
 
         return await _unique_provider_id(session, base, _ORG_ID)
 
@@ -103,7 +103,7 @@ class TestReadPaths:
         scalars.all = MagicMock(return_value=providers)
         result.scalars = MagicMock(return_value=scalars)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.sso_provider import list_providers
+        from farna.db.crud.sso_provider import list_providers
 
         assert await list_providers(mock_session, org_id=_ORG_ID) == providers
 
@@ -112,7 +112,7 @@ class TestReadPaths:
         found = MagicMock(scalar_one_or_none=MagicMock(return_value=provider))
         missing = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         mock_session.execute = AsyncMock(side_effect=[found, missing])
-        from modulo.db.crud.sso_provider import get_provider
+        from farna.db.crud.sso_provider import get_provider
 
         assert await get_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID) is provider
         assert await get_provider(mock_session, _PROVIDER_ID) is None
@@ -120,14 +120,14 @@ class TestReadPaths:
     async def test_get_provider_by_provider_id_slug(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=provider)))
-        from modulo.db.crud.sso_provider import get_provider_by_provider_id
+        from farna.db.crud.sso_provider import get_provider_by_provider_id
 
         assert await get_provider_by_provider_id(mock_session, "acme") is provider
 
     async def test_get_enabled_saml_provider(self, mock_session: AsyncMock) -> None:
         provider = _make_provider(provider_type="saml")
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=provider)))
-        from modulo.db.crud.sso_provider import get_enabled_saml_provider
+        from farna.db.crud.sso_provider import get_enabled_saml_provider
 
         assert await get_enabled_saml_provider(mock_session) is provider
 
@@ -138,7 +138,7 @@ class TestReadPaths:
         scalars.all = MagicMock(return_value=providers)
         result.scalars = MagicMock(return_value=scalars)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.sso_provider import list_enabled_oidc_providers
+        from farna.db.crud.sso_provider import list_enabled_oidc_providers
 
         assert await list_enabled_oidc_providers(mock_session) == providers
 
@@ -149,7 +149,7 @@ class TestReadPaths:
         scalars.all = MagicMock(return_value=providers)
         result.scalars = MagicMock(return_value=scalars)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.sso_provider import list_enabled_saml_providers
+        from farna.db.crud.sso_provider import list_enabled_saml_providers
 
         assert await list_enabled_saml_providers(mock_session) == providers
 
@@ -159,7 +159,7 @@ class TestCreateProvider:
         mock_session.execute = AsyncMock(
             return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_make_provider()))
         )
-        from modulo.db.crud.sso_provider import create_provider
+        from farna.db.crud.sso_provider import create_provider
 
         with pytest.raises(ValueError, match="already exists"):
             await create_provider(
@@ -175,10 +175,10 @@ class TestCreateProvider:
         provider = _make_provider()
         del provider
         with (
-            patch("modulo.db.crud.sso_provider.encrypt_stored_secret", return_value=b"enc") as encrypt,
+            patch("farna.db.crud.sso_provider.encrypt_stored_secret", return_value=b"enc") as encrypt,
             _patch_audit() as audit,
         ):
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             result = await create_provider(
                 mock_session,
@@ -204,7 +204,7 @@ class TestCreateProvider:
     async def test_scopes_none_stays_none(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with _patch_audit():
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             result = await create_provider(
                 mock_session,
@@ -219,7 +219,7 @@ class TestCreateProvider:
     async def test_explicit_provider_id_overrides_slug(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with _patch_audit():
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             result = await create_provider(
                 mock_session,
@@ -233,7 +233,7 @@ class TestCreateProvider:
 
     def _system_scan_patches(self, modulo_system_database_url: str) -> object:
         return patch(
-            "modulo.db.crud.sso_provider.get_settings",
+            "farna.db.crud.sso_provider.get_settings",
             MagicMock(return_value=MagicMock(modulo_system_database_url=modulo_system_database_url)),
         )
 
@@ -244,7 +244,7 @@ class TestCreateProvider:
         scalars_all = MagicMock(all=MagicMock(return_value=[]))
         system_session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=scalars_all)))
         with self._system_scan_patches("postgresql://system"), _patch_audit():
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             await create_provider(
                 mock_session,
@@ -262,7 +262,7 @@ class TestCreateProvider:
     ) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with self._system_scan_patches(""), _patch_audit():
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             await create_provider(
                 mock_session,
@@ -280,12 +280,12 @@ class TestCreateProvider:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with (
             patch(
-                "modulo.db.crud.sso_provider.get_settings",
+                "farna.db.crud.sso_provider.get_settings",
                 MagicMock(side_effect=RuntimeError("settings unavailable")),
             ),
             _patch_audit(),
         ):
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             await create_provider(
                 mock_session,
@@ -300,7 +300,7 @@ class TestCreateProvider:
     async def test_audit_failure_is_swallowed(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with _patch_audit() as audit:
-            from modulo.db.crud.sso_provider import create_provider
+            from farna.db.crud.sso_provider import create_provider
 
             audit.side_effect = Exception("audit down")
             result = await create_provider(
@@ -315,8 +315,8 @@ class TestCreateProvider:
 
 class TestUpdateProvider:
     async def test_returns_none_when_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
-            from modulo.db.crud.sso_provider import update_provider
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
+            from farna.db.crud.sso_provider import update_provider
 
             assert (
                 await update_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID, fernet_key=_FERNET_KEY, name="x")
@@ -328,12 +328,12 @@ class TestUpdateProvider:
         no_conflict = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         mock_session.execute = AsyncMock(return_value=no_conflict)
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
-            patch("modulo.db.crud.sso_provider.apply_updates") as apply_updates,
-            patch("modulo.db.crud.sso_provider.encrypt_stored_secret", return_value=b"enc2") as encrypt,
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.apply_updates") as apply_updates,
+            patch("farna.db.crud.sso_provider.encrypt_stored_secret", return_value=b"enc2") as encrypt,
             _patch_audit() as audit,
         ):
-            from modulo.db.crud.sso_provider import update_provider
+            from farna.db.crud.sso_provider import update_provider
 
             result = await update_provider(
                 mock_session,
@@ -352,8 +352,8 @@ class TestUpdateProvider:
 
     async def test_non_string_client_secret_raises_type_error(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
-            from modulo.db.crud.sso_provider import update_provider
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
+            from farna.db.crud.sso_provider import update_provider
 
             with pytest.raises(TypeError, match="client_secret must be text"):
                 await update_provider(
@@ -368,8 +368,8 @@ class TestUpdateProvider:
         provider = _make_provider()
         conflicting = MagicMock()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=conflicting)))
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
-            from modulo.db.crud.sso_provider import update_provider
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
+            from farna.db.crud.sso_provider import update_provider
 
             with pytest.raises(ValueError, match="already exists"):
                 await update_provider(
@@ -383,11 +383,11 @@ class TestUpdateProvider:
     async def test_scopes_list_serialised(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
-            patch("modulo.db.crud.sso_provider.apply_updates") as apply_updates,
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.apply_updates") as apply_updates,
             _patch_audit(),
         ):
-            from modulo.db.crud.sso_provider import update_provider
+            from farna.db.crud.sso_provider import update_provider
 
             await update_provider(
                 mock_session,
@@ -402,11 +402,11 @@ class TestUpdateProvider:
     async def test_uneditable_fields_filtered_out(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
-            patch("modulo.db.crud.sso_provider.apply_updates") as apply_updates,
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.apply_updates") as apply_updates,
             _patch_audit(),
         ):
-            from modulo.db.crud.sso_provider import update_provider
+            from farna.db.crud.sso_provider import update_provider
 
             await update_provider(
                 mock_session,
@@ -424,11 +424,11 @@ class TestUpdateProvider:
         provider = _make_provider()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
-            patch("modulo.db.crud.sso_provider.apply_updates"),
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.apply_updates"),
             _patch_audit() as audit,
         ):
-            from modulo.db.crud.sso_provider import update_provider
+            from farna.db.crud.sso_provider import update_provider
 
             audit.side_effect = Exception("audit down")
             result = await update_provider(
@@ -445,10 +445,10 @@ class TestDeleteAndToggle:
     async def test_delete_provider_success(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
             _patch_audit() as audit,
         ):
-            from modulo.db.crud.sso_provider import delete_provider
+            from farna.db.crud.sso_provider import delete_provider
 
             result = await delete_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID)
         assert result is True
@@ -456,8 +456,8 @@ class TestDeleteAndToggle:
         audit.assert_awaited_once()
 
     async def test_delete_provider_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
-            from modulo.db.crud.sso_provider import delete_provider
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
+            from farna.db.crud.sso_provider import delete_provider
 
             assert await delete_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID) is False
 
@@ -465,17 +465,17 @@ class TestDeleteAndToggle:
         provider = _make_provider(enabled=True)
         provider.enabled = True
         with (
-            patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
+            patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)),
             _patch_audit(),
         ):
-            from modulo.db.crud.sso_provider import toggle_provider
+            from farna.db.crud.sso_provider import toggle_provider
 
             result = await toggle_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID)
         assert result.enabled is False
 
     async def test_toggle_provider_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
-            from modulo.db.crud.sso_provider import toggle_provider
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
+            from farna.db.crud.sso_provider import toggle_provider
 
             assert await toggle_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID) is None
 
@@ -484,16 +484,16 @@ class TestSetGroupMappings:
     async def test_sets_mappings(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()
         mappings = [{"group": "admins", "role": "admin"}]
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
-            from modulo.db.crud.sso_provider import set_group_mappings
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=provider)):
+            from farna.db.crud.sso_provider import set_group_mappings
 
             result = await set_group_mappings(mock_session, _PROVIDER_ID, mappings, org_id=_ORG_ID)
         assert result.group_mappings == mappings
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_none_when_missing(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
-            from modulo.db.crud.sso_provider import set_group_mappings
+        with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
+            from farna.db.crud.sso_provider import set_group_mappings
 
             assert await set_group_mappings(mock_session, _PROVIDER_ID, [], org_id=_ORG_ID) is None
 
@@ -502,12 +502,12 @@ class TestValidateAllowedDomains:
     """FAR-855: the ``allowed_domains`` normaliser/validator."""
 
     def test_none_returns_empty_list(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         assert not validate_allowed_domains(None)
 
     def test_normalises_trims_and_dedupes(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         assert validate_allowed_domains(["  CORP.Example.COM ", "corp.example.com", "example.org."]) == [
             "corp.example.com",
@@ -515,31 +515,31 @@ class TestValidateAllowedDomains:
         ]
 
     def test_rejects_more_than_max_domains(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         with pytest.raises(ValueError, match="at most 50 domains"):
             validate_allowed_domains([f"d{i}.example.com" for i in range(51)])
 
     def test_rejects_empty_entry(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         with pytest.raises(ValueError, match="empty"):
             validate_allowed_domains(["   "])
 
     def test_rejects_email_like_entry(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         with pytest.raises(ValueError, match="no @, URL scheme"):
             validate_allowed_domains(["@example.com"])
 
     def test_rejects_wildcard_entry(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         with pytest.raises(ValueError, match="no @, URL scheme"):
             validate_allowed_domains(["*.example.com"])
 
     def test_rejects_dotless_entry(self) -> None:
-        from modulo.db.crud.sso_provider import validate_allowed_domains
+        from farna.db.crud.sso_provider import validate_allowed_domains
 
         with pytest.raises(ValueError, match="must contain a dot"):
             validate_allowed_domains(["localhost"])

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 from tests.bdd.conftest import make_connector_row, make_pipeline_row, session_client
 
 scenarios("../features/teams/cross_team_isolation.feature")
@@ -94,9 +94,9 @@ def i_view_pipelines(request) -> None:
     caller's context)."""
     with (
         session_client("admin") as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.list_pipelines",
+            "farna.api.routes.pipelines.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=[], total=0, page=1, page_size=20),
         ),
@@ -115,9 +115,9 @@ def user_requests_pipeline_list(username: str, request) -> None:
     """
     with (
         session_client("viewer") as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.list_pipelines",
+            "farna.api.routes.pipelines.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=[], total=0, page=1, page_size=20),
         ),
@@ -143,10 +143,10 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
     fetched_id = uuid.uuid4() if ci is None else ci.id
     with (
         session_client("viewer") as client,
-        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             new_callable=AsyncMock,
             return_value=ci,
         ),
@@ -183,19 +183,19 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
     connector_id = uuid.UUID(cpdata["id"])
     with (
         session_client("admin") as client,
-        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.pipelines.get_pipeline",
+            "farna.api.routes.pipelines.get_pipeline",
             new_callable=AsyncMock,
             return_value=make_pipeline_row(ppdata),
         ),
         patch(
-            "modulo.core.team_visibility._select_candidate_rows",
+            "farna.core.team_visibility._select_candidate_rows",
             new_callable=AsyncMock,
             return_value=[make_connector_row(cpdata, connector_name)],
         ),
         patch(
-            "modulo.db.crud.pipeline.create_snapshot_edit",
+            "farna.db.crud.pipeline.create_snapshot_edit",
             new_callable=AsyncMock,
             return_value=MagicMock(snapshot_version=1),
         ),

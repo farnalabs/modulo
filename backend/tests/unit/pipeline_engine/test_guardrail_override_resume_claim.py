@@ -4,7 +4,7 @@ Two independent proofs the pre-PR QA gate demanded:
 
 * **C1 (real Postgres)** — apply the REAL ``guardrail_override`` to a
   node-started (``first_node_dispatched``) eval-blocked run, then call the
-  REAL :func:`modulo.core.pipeline_execution.claim_resume_run_async` against
+  REAL :func:`farna.core.pipeline_execution.claim_resume_run_async` against
   the same throwaway Postgres and assert a claim token IS returned. Before
   the fix the flip left a FRESH block-time ``heartbeat_at``, so the claim's
   stale-running arm (``heartbeat_at < now() - run_claim_stale_seconds``)
@@ -40,17 +40,17 @@ import sqlalchemy as sa
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine.recovery import GuardrailOverrideNoCheckpointError, guardrail_override
-from modulo.core.pipeline_execution import claim_resume_run_async
-from modulo.db.crud.run import create_run
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine.recovery import GuardrailOverrideNoCheckpointError, guardrail_override
+from farna.core.pipeline_execution import claim_resume_run_async
+from farna.db.crud.run import create_run
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
 
 _PG_URL_ENV = "GUARDRAIL_OVERRIDE_TEST_PG_URL"
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.cost_component import (
+from farna.db.crud.cost_component import (
     _duplicate_exists,
     _is_last_enabled_calculated,
     count_active_components,
@@ -17,7 +17,7 @@ from modulo.db.crud.cost_component import (
     soft_delete_cost_component,
     update_cost_component,
 )
-from modulo.db.models.cost_component import CostComponentKind
+from farna.db.models.cost_component import CostComponentKind
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _COMPONENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

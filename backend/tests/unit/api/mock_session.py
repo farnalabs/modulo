@@ -114,7 +114,7 @@ def _is_rls_set_config_query(stmt: Any) -> bool:
 def configure_rls_preamble(session: AsyncMock) -> AsyncMock:
     """Make the RLS preamble's sync reads sync ``MagicMock`` methods.
 
-    ``set_rls_org`` (``backend/src/modulo/db/rls.py``) calls ``in_transaction()`` and
+    ``set_rls_org`` (``backend/src/farna/db/rls.py``) calls ``in_transaction()`` and
     ``get_bind()`` synchronously. On a bare ``AsyncMock`` those attributes are
     async mocks whose calls return never-awaited coroutines, leaking
     ``PytestUnraisableException`` noise (FAR-739). The sqlite dialect routes

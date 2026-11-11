@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.routes.errors import router as errors_router
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.organisation import SYSTEM_ORG_ID
+from farna.api.routes.errors import router as errors_router
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.organisation import SYSTEM_ORG_ID
 from tests.unit.api.plan_stubs import all_features
 from tests.unit.error_tracking._factories import make_event, make_group
 
@@ -81,11 +81,11 @@ def _make_app(*, is_system_admin: bool, with_principal: bool = True) -> FastAPI:
                 is_system_admin=is_system_admin,
             )
 
-        from modulo.auth.dependencies import get_current_user
+        from farna.auth.dependencies import get_current_user
 
         app.dependency_overrides[get_current_user] = _override_user
 
-    from modulo.api.dependencies import get_db_session, get_plan_context
+    from farna.api.dependencies import get_db_session, get_plan_context
 
     app.dependency_overrides[get_db_session] = _make_db_override()
     app.dependency_overrides[get_plan_context] = lambda: all_features()
@@ -95,10 +95,10 @@ def _make_app(*, is_system_admin: bool, with_principal: bool = True) -> FastAPI:
 class TestInstanceListRoute:
     def test_system_admin_reads_sentinel_partition(self):
         with (
-            patch("modulo.api.routes.errors.get_error_groups", AsyncMock(return_value=[_make_group()])) as gm,
-            patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=1)),
-            patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=None)),
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            patch("farna.api.routes.errors.get_error_groups", AsyncMock(return_value=[_make_group()])) as gm,
+            patch("farna.api.routes.errors.count_error_groups", AsyncMock(return_value=1)),
+            patch("farna.api.routes.errors._fetch_sample_event", AsyncMock(return_value=None)),
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
             TestClient(_make_app(is_system_admin=True)) as client,
         ):
             resp = client.get("/api/v1/errors/instance")
@@ -118,9 +118,9 @@ class TestInstanceListRoute:
 
     def test_tenant_principal_is_refused(self):
         with (
-            patch("modulo.api.routes.errors.get_error_groups", AsyncMock()) as gm,
-            patch("modulo.api.routes.errors.count_error_groups", AsyncMock()) as cm,
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            patch("farna.api.routes.errors.get_error_groups", AsyncMock()) as gm,
+            patch("farna.api.routes.errors.count_error_groups", AsyncMock()) as cm,
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
             TestClient(_make_app(is_system_admin=False)) as client,
         ):
             resp = client.get("/api/v1/errors/instance")
@@ -135,7 +135,7 @@ class TestInstanceListRoute:
 
     def test_unauthenticated_caller_is_refused(self):
         with (
-            patch("modulo.api.routes.errors.get_error_groups", AsyncMock()) as gm,
+            patch("farna.api.routes.errors.get_error_groups", AsyncMock()) as gm,
             TestClient(_make_app(is_system_admin=False, with_principal=False)) as client,
         ):
             resp = client.get("/api/v1/errors/instance")
@@ -147,9 +147,9 @@ class TestInstanceListRoute:
 class TestInstanceDetailAndEventsRoutes:
     def test_system_admin_reads_sentinel_group_detail(self):
         with (
-            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())) as gm,
-            patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=_make_event())),
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())) as gm,
+            patch("farna.api.routes.errors._fetch_sample_event", AsyncMock(return_value=_make_event())),
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()),
             TestClient(_make_app(is_system_admin=True)) as client,
         ):
             resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}")
@@ -161,8 +161,8 @@ class TestInstanceDetailAndEventsRoutes:
 
     def test_system_admin_detail_of_missing_group_is_404(self):
         with (
-            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=None)),
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.errors.get_error_group", AsyncMock(return_value=None)),
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()),
             TestClient(_make_app(is_system_admin=True)) as client,
         ):
             resp = client.get(f"/api/v1/errors/instance/{uuid.uuid4()}")
@@ -171,9 +171,9 @@ class TestInstanceDetailAndEventsRoutes:
 
     def test_tenant_is_refused_detail_and_events(self):
         with (
-            patch("modulo.api.routes.errors.get_error_group", AsyncMock()) as gm,
-            patch("modulo.api.routes.errors.get_error_events_by_group", AsyncMock()) as ge,
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            patch("farna.api.routes.errors.get_error_group", AsyncMock()) as gm,
+            patch("farna.api.routes.errors.get_error_events_by_group", AsyncMock()) as ge,
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
             TestClient(_make_app(is_system_admin=False)) as client,
         ):
             detail_resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}")
@@ -189,10 +189,10 @@ class TestInstanceDetailAndEventsRoutes:
     def test_system_admin_reads_sentinel_events(self):
         evts = [_make_event(id=uuid.uuid4()) for _ in range(2)]
         with (
-            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())),
-            patch("modulo.api.routes.errors.get_error_events_by_group", AsyncMock(return_value=evts)) as ge,
-            patch("modulo.api.routes.errors.count_error_events_by_group", AsyncMock(return_value=5)),
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())),
+            patch("farna.api.routes.errors.get_error_events_by_group", AsyncMock(return_value=evts)) as ge,
+            patch("farna.api.routes.errors.count_error_events_by_group", AsyncMock(return_value=5)),
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()),
             TestClient(_make_app(is_system_admin=True)) as client,
         ):
             resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}/events")
@@ -217,9 +217,9 @@ class TestRlsContextCorrectness:
             return []
 
         with (
-            patch("modulo.api.routes.errors.set_rls_org", _capture_rls),
-            patch("modulo.api.routes.errors.get_error_groups", _capture_query),
-            patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
+            patch("farna.api.routes.errors.set_rls_org", _capture_rls),
+            patch("farna.api.routes.errors.get_error_groups", _capture_query),
+            patch("farna.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
             TestClient(_make_app(is_system_admin=True)) as client,
         ):
             resp = client.get("/api/v1/errors/instance")
@@ -240,9 +240,9 @@ class TestRlsContextCorrectness:
             return []
 
         with (
-            patch("modulo.api.routes.errors.set_rls_org", _capture_rls),
-            patch("modulo.api.routes.errors.get_error_groups", _capture_query),
-            patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
+            patch("farna.api.routes.errors.set_rls_org", _capture_rls),
+            patch("farna.api.routes.errors.get_error_groups", _capture_query),
+            patch("farna.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
             TestClient(_make_app(is_system_admin=False)) as client,
         ):
             resp = client.get("/api/v1/errors")

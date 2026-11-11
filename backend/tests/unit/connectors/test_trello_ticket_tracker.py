@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.connectors.base import HealthResult
-from modulo.connectors.ticket_tracker.base import TicketFilter
-from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
+from farna.connectors.base import HealthResult
+from farna.connectors.ticket_tracker.base import TicketFilter
+from farna.connectors.ticket_tracker.trello import TrelloTicketTracker
 
 
 def _response(status_code: int, **kwargs: object) -> httpx.Response:

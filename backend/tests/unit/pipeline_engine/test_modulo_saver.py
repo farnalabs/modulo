@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from modulo.core.pipeline_engine.modulo_saver import (
+from farna.core.pipeline_engine.modulo_saver import (
     _AUTOVACUUM_TUNING_SQL,
     CHECKPOINT_AUTOVACUUM_TABLES,
     CHECKPOINT_AUTOVACUUM_TUNING,
@@ -23,7 +23,7 @@ from modulo.core.pipeline_engine.modulo_saver import (
 )
 
 #: The saver's own logger — MAJOR-1's fix must emit records HERE.
-_SAVER_LOGGER = "modulo.core.pipeline_engine.modulo_saver"
+_SAVER_LOGGER = "farna.core.pipeline_engine.modulo_saver"
 
 
 class _AsyncIter:
@@ -398,7 +398,7 @@ class TestCheckpointAutovacuumTwin:
     migration is a frozen historical artefact and may not import application
     constants (the rule documented inline in migrations 0192/0193/0215), and
     import-linter's ``db-does-not-import-core`` contract forbids a
-    ``modulo.db`` module importing ``modulo.core`` anyway. This class is what
+    ``farna.db`` module importing ``farna.core`` anyway. This class is what
     makes the duplication safe — it pins the copies equal, so an edit to one
     side alone fails here rather than shipping divergent tuning. The VALUES
     themselves are pinned against real Postgres by
@@ -818,7 +818,7 @@ class TestReconnect:
             import psycopg
 
             mp.setattr(psycopg, "AsyncConnection", type("C", (), {"connect": staticmethod(_fake_connect)}))
-            mp.setattr("modulo.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 5.0)
+            mp.setattr("farna.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 5.0)
             await saver._reconnect()
 
         assert saver.conn is new_conn
@@ -839,7 +839,7 @@ class TestReconnect:
             import psycopg
 
             mp.setattr(psycopg, "AsyncConnection", type("C", (), {"connect": staticmethod(_hanging_connect)}))
-            mp.setattr("modulo.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 0.01)
+            mp.setattr("farna.core.pipeline_engine.modulo_saver._RECONNECT_TIMEOUT_SECONDS", 0.01)
             with pytest.raises(asyncio.TimeoutError):
                 await saver._reconnect()
 
@@ -914,7 +914,7 @@ class TestFromConnString:
         async def _base_cm(_conn_string):
             yield base
 
-        with patch("modulo.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
+        with patch("farna.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
             async with ModuloPostgresSaver.from_conn_string(
                 "postgresql://user:pass@localhost/db",
                 organisation_id=_ORG_ID,
@@ -935,7 +935,7 @@ class TestFromConnString:
         async def _base_cm(_conn_string):
             yield base
 
-        with patch("modulo.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
+        with patch("farna.core.pipeline_engine.modulo_saver.AsyncPostgresSaver.from_conn_string", _base_cm):
             async with ModuloPostgresSaver.from_conn_string(
                 "postgresql://u:p@localhost/db",
                 organisation_id=_ORG_ID,

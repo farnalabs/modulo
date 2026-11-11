@@ -24,9 +24,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, normalise_discovery_output
-from modulo.core.eval_engine.execute_suite_run import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.discovery_eval import DISCOVERY_EVAL_FUNCTION, normalise_discovery_output
+from farna.core.eval_engine.execute_suite_run import (
     EVAL_WATCH_EVENT_FAMILIES,
     SuiteRunEmptyDatasetError,
     SuiteRunExecutionError,
@@ -43,18 +43,18 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used,
     suite_run_daily_spend_used_for_trigger,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
-from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
-from modulo.db.models import Base
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_dataset import EvalCase, EvalDataset
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.eval_suite import EvalSuite
-from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
-from modulo.db.models.model_backend import ModelBackend
-from modulo.db.models.run import Run
-from modulo.db.models.trigger_event import TriggerEvent
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from farna.core.system_maps_discovery import DiscoverySource, discover_draft
+from farna.db.models import Base
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.eval import Eval
+from farna.db.models.eval_dataset import EvalCase, EvalDataset
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.eval_suite import EvalSuite
+from farna.db.models.eval_suite_run import SuiteRun, SuiteRunState
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.run import Run
+from farna.db.models.trigger_event import TriggerEvent
 
 
 def _tables() -> list[Any]:
@@ -125,7 +125,7 @@ async def seed_suite(session, org_id: uuid.UUID) -> tuple[EvalSuite, EvalDataset
 async def seed_cases(
     session, org_id: uuid.UUID, dataset: EvalDataset, payloads: list[dict[str, Any]]
 ) -> list[EvalCase]:
-    from modulo.db.models.eval_dataset import compute_input_hash
+    from farna.db.models.eval_dataset import compute_input_hash
 
     cases = []
     for payload in payloads:
@@ -200,7 +200,7 @@ async def test_non_custom_definition_with_discovery_function_uses_declared_evalu
         raise AssertionError("discovery adapter must not handle non-custom definitions")
 
     monkeypatch.setattr(
-        "modulo.core.eval_engine.execute_suite_run.evaluate_discovery_case",
+        "farna.core.eval_engine.execute_suite_run.evaluate_discovery_case",
         _unexpected_discovery,
     )
 
@@ -231,7 +231,7 @@ async def test_execute_suite_run_completes_and_persists_results(session) -> None
     )
     assert run.state == SuiteRunState.PENDING.value
 
-    from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
+    from farna.core.eval_engine.execute_suite_run import _suite_run_transition
 
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
     await session.flush()
@@ -426,7 +426,7 @@ async def test_failure_sink_ingests_error_event(session, monkeypatch) -> None:
         def __init__(self, *a: Any, **k: Any) -> None:
             self.ingest = ingest
 
-    monkeypatch.setattr("modulo.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
+    monkeypatch.setattr("farna.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
 
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
@@ -509,7 +509,7 @@ async def test_suite_run_completion_writes_only_eval_results(session) -> None:
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
-    from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
+    from farna.core.eval_engine.execute_suite_run import _suite_run_transition
 
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
     stats = await execute_suite_run(session, run, eval_definition_version=1)
@@ -706,11 +706,11 @@ def test_suite_run_execution_jobs_are_registered_on_runs_worker() -> None:
     SuiteRun execution + per-item fire jobs so a dispatched SuiteRun actually
     runs.
     """
-    from modulo.core.saq_worker import _runs_functions
+    from farna.core.saq_worker import _runs_functions
 
     names = {n for n, _ in _runs_functions()}
-    assert "modulo.core.saq_worker.execute_suite_run" in names
-    assert "modulo.core.saq_worker.fire_suite_run_trigger" in names
+    assert "farna.core.saq_worker.execute_suite_run" in names
+    assert "farna.core.saq_worker.fire_suite_run_trigger" in names
 
 
 # --------------------------------------------------------------------------- #
@@ -734,7 +734,7 @@ async def test_saq_job_persists_orchestration_failure_across_rollback(monkeypatc
     """
     from datetime import UTC, datetime
 
-    import modulo.core.saq_worker as sw
+    import farna.core.saq_worker as sw
 
     org = await _org()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -780,7 +780,7 @@ async def test_saq_job_persists_orchestration_failure_across_rollback(monkeypatc
         async def ingest(self, *a: Any, **k: Any) -> None:
             return None
 
-    monkeypatch.setattr("modulo.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
+    monkeypatch.setattr("farna.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
     monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
 
     with pytest.raises(SuiteRunExecutionError, match="no active eval definitions"):
@@ -824,7 +824,7 @@ async def test_saq_job_persists_raw_db_error_as_failed(monkeypatch) -> None:
 
     from sqlalchemy.exc import ProgrammingError
 
-    import modulo.core.saq_worker as sw
+    import farna.core.saq_worker as sw
 
     org = await _org()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -859,7 +859,7 @@ async def test_saq_job_persists_raw_db_error_as_failed(monkeypatch) -> None:
     async def _raise_programming_error(*a: Any, **k: Any) -> None:
         raise ProgrammingError("SELECT ...", {}, Exception("boom"))
 
-    monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.load_suite_definitions", _raise_programming_error)
+    monkeypatch.setattr("farna.core.eval_engine.execute_suite_run.load_suite_definitions", _raise_programming_error)
 
     class _FakeIngestionService:
         def __init__(self, *a: Any, **k: Any) -> None:
@@ -868,7 +868,7 @@ async def test_saq_job_persists_raw_db_error_as_failed(monkeypatch) -> None:
         async def ingest(self, *a: Any, **k: Any) -> None:
             return None
 
-    monkeypatch.setattr("modulo.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
+    monkeypatch.setattr("farna.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
     monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
 
     with pytest.raises(SuiteRunExecutionError, match="501"):
@@ -894,7 +894,7 @@ async def test_saq_job_records_lifecycle_audit_events(monkeypatch) -> None:
     """
     from sqlalchemy import select
 
-    import modulo.core.saq_worker as sw
+    import farna.core.saq_worker as sw
 
     org = await _org()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -957,7 +957,7 @@ class TestFar1729SuiteLoaderSourcePin:
     def test_loader_compiles_against_evals_table(self) -> None:
         import asyncio
 
-        from modulo.core.eval_engine.execute_suite_run import load_suite_definitions
+        from farna.core.eval_engine.execute_suite_run import load_suite_definitions
 
         captured: list[str] = []
 

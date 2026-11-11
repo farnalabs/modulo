@@ -28,10 +28,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token, decode_principal
-from modulo.auth.passwords import hash_password
-from modulo.db.crud.org_membership import resolve_role_from_membership
-from modulo.settings import Settings, get_settings
+from farna.auth.jwt import create_access_token, decode_principal
+from farna.auth.passwords import hash_password
+from farna.db.crud.org_membership import resolve_role_from_membership
+from farna.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -163,8 +163,8 @@ async def _membership_state(engine: AsyncEngine, account_id: uuid.UUID, org_id: 
 
 @pytest_asyncio.fixture
 async def client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
 
     settings = Settings(
         database_url=db_url,

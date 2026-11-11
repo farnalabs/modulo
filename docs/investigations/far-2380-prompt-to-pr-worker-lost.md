@@ -107,7 +107,7 @@ handoff) runs after the cancelled task set unwinds - 13 seconds later at 12:01:3
 
 ### 3. Why the handoff terminalised instead of re-dispatching
 
-`worker_handoff._handback_decision` (backend/src/modulo/core/worker_handoff.py:427) applies the
+`worker_handoff._handback_decision` (backend/src/farna/core/worker_handoff.py:427) applies the
 durable-evidence gate **before** the zero-node, idempotency and retry-policy arms:
 
 ```python
@@ -119,7 +119,7 @@ if getattr(row, "observed_activity", False):
     )
 ```
 
-`observed_activity_expr` (backend/src/modulo/db/crud/run_node_outputs.py:1129) is `EXISTS` over
+`observed_activity_expr` (backend/src/farna/db/crud/run_node_outputs.py:1129) is `EXISTS` over
 `run_node_outputs` for any engine-observed evidence: output stream lengths, retained tails,
 artifact pointers, non-empty raw-output markers/artifacts/schema-enforcement. It deliberately
 excludes a self-reported agent return and a lifecycle-only telemetry envelope.
@@ -316,10 +316,10 @@ git ls-remote origin 'refs/heads/prompt-pr-1793792*'  # no lost-run branches
 Code trace:
 
 ```
-backend/src/modulo/core/worker_handoff.py:427        # _handback_decision durable-evidence gate
-backend/src/modulo/core/worker_handoff.py:629        # _terminalise_entry (fail in place + cost)
-backend/src/modulo/db/crud/run_node_outputs.py:1129  # observed_activity_expr
-backend/src/modulo/core/saq_worker.py:2504           # _shutdown_handoff_hook
+backend/src/farna/core/worker_handoff.py:427        # _handback_decision durable-evidence gate
+backend/src/farna/core/worker_handoff.py:629        # _terminalise_entry (fail in place + cost)
+backend/src/farna/db/crud/run_node_outputs.py:1129  # observed_activity_expr
+backend/src/farna/core/saq_worker.py:2504           # _shutdown_handoff_hook
 docs/architecture.md:371-395                         # FAR-1627 contract
 fly.toml:71-94                                       # kill_signal/kill_timeout=180 (FAR-2004)
 ```

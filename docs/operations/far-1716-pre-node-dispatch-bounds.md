@@ -11,7 +11,7 @@ defaults. Every claim below cites the exact code verified at HEAD.
 ## 1. `timeout_seconds` is per-node, measured from node start
 
 `execute_run`'s node-deadline watchdog tracks each in-flight node independently
-(`backend/src/modulo/core/pipeline_execution.py:1850-1876`). The deadline entry
+(`backend/src/farna/core/pipeline_execution.py:1850-1876`). The deadline entry
 is created only when a node **starts**:
 
 ```python

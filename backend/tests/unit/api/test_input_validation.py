@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -108,8 +108,8 @@ def test_pipeline_create_valid_minimal(client: TestClient) -> None:
     pipeline.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
     ):
         resp = client.post("/api/v1/pipelines", json={"name": "Test"})
     assert resp.status_code == 201
@@ -133,8 +133,8 @@ def test_schema_create_valid(client: TestClient) -> None:
     mock_schema.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
     with (
-        patch("modulo.api.routes.schemas.create_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post("/api/v1/schemas", json={"name": "Test"})
     assert resp.status_code == 201
@@ -175,7 +175,7 @@ def _valid_config_for(eval_type: str) -> dict:
 
 def test_eval_create_valid_eval_types(client: TestClient) -> None:
     for eval_type in ("model_judge", "regex", "json_schema", "custom_function"):
-        with patch("modulo.api.routes.evals.set_rls_org"):
+        with patch("farna.api.routes.evals.set_rls_org"):
             resp = client.post(
                 "/api/v1/evals",
                 json={
@@ -198,7 +198,7 @@ def test_eval_create_valid_eval_types(client: TestClient) -> None:
 def test_analyse_import_bundle_valid_shape(client: TestClient) -> None:
     """Valid body shape should not get 422 (may fail at handler level)."""
     bundle = {"pipeline": {"name": "Test"}}
-    with patch("modulo.api.routes.library.set_rls_org"):
+    with patch("farna.api.routes.library.set_rls_org"):
         resp = client.post("/api/v1/libraries/import/analyse", json={"bundle": bundle})
     assert resp.status_code != 422
 

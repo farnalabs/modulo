@@ -12,14 +12,14 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.environment_profile import (
+from farna.db.crud.environment_profile import (
     create_environment_profile,
     delete_environment_profile,
     get_environment_profile,
     list_environment_profiles,
     update_environment_profile,
 )
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

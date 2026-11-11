@@ -182,7 +182,7 @@ jobs:
           if printf '%s\n' "$FILES" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$|\.github/scripts/check_e2e_route_coverage\.py$)'; then
             FRONTEND=true
           fi
-          if printf '%s\n' "$FILES" | grep -qE '^(frontend/tests/e2e/|backend/src/modulo/api/|scripts/run_check_e2e_route_methods\.py$|\.github/workflows/ci\.yml$|\.pre-commit-config\.yaml$)'; then
+          if printf '%s\n' "$FILES" | grep -qE '^(frontend/tests/e2e/|backend/src/farna/api/|scripts/run_check_e2e_route_methods\.py$|\.github/workflows/ci\.yml$|\.pre-commit-config\.yaml$)'; then
             E2E_ROUTE_METHODS=true
           fi
           # docs-only: every file is markdown, or lives under docs/ (but not the
@@ -223,8 +223,8 @@ jobs:
       - run: uv run --no-build --no-sync ruff check .
       - name: Ruff format check
         run: uv run --no-build --no-sync ruff format --check .
-      - run: uv run --no-build --no-sync mypy src/modulo/
-      - run: uv run --no-build --no-sync bandit -r src/modulo/ -ll
+      - run: uv run --no-build --no-sync mypy src/farna/
+      - run: uv run --no-build --no-sync bandit -r src/farna/ -ll
       - name: Vulture (block new dead code)
         # BLOCKING: no continue-on-error, no `|| true`. The repo-root
         # .vulture_whitelist.py (framework-contract + test-referenced symbols)
@@ -253,7 +253,7 @@ jobs:
         # "dispatch.wait_timeout error") cannot false-trigger. We deliberately
         # do NOT fail on "Partially analyzed". On THIS step's invocation
         # (uv run --project backend --no-sync semgrep) the one reproducible
-        # per-file instance is backend/src/modulo/api/mcp_server.py:2111 (the
+        # per-file instance is backend/src/farna/api/mcp_server.py:2111 (the
         # PEP 695 generic `async def _run_db_shell[**TOOL_SHELL_P]`, a genuine
         # 1-line skip), so matching it would make CI permanently red. Semgrep's
         # aggregate partial-analysis summary is not stable across invocations /
@@ -655,7 +655,7 @@ jobs:
         if: needs.changes.outputs.backend_heavy != 'false'
       - name: Run architecture tests
         if: needs.changes.outputs.backend_heavy != 'false'
-        # The architecture suite scans all of src/modulo for structural
+        # The architecture suite scans all of src/farna for structural
         # violations (raw SQL f-strings, sensitive data logging, module-level
         # side effects, bare session.rollback, login-field drift, Dockerfile
         # Python version drift). It previously only ran via pre-commit for a
@@ -1732,7 +1732,7 @@ jobs:
     # FAILS if the committed schema differs from what the generator produces.
     # Any backend API change (routes, request/response models) therefore forces
     # `pnpm run generate:api` in the same PR. Mirrors scripts/run_generate_api_types.py:
-    # dump the OpenAPI JSON by importing modulo.api.main, then feed it to
+    # dump the OpenAPI JSON by importing farna.api.main, then feed it to
     # openapi-typescript. Runs on ALL events (PR + push to main + manual) so a
     # schema that drifts out of sync on main is caught immediately.
     name: Schema freshness
@@ -1769,7 +1769,7 @@ jobs:
           cat > /tmp/gen_openapi.py <<'EOF'
           import os, json, sys
           sys.tracebacklimit = 0
-          from modulo.api.main import app
+          from farna.api.main import app
           with open("/tmp/modulo_openapi.json", "w", encoding="utf-8") as f:
               json.dump(app.openapi(), f, ensure_ascii=False)
           print(f"Schema: {os.path.getsize('/tmp/modulo_openapi.json')} bytes")
@@ -1859,7 +1859,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          MIG_DIR="src/modulo/db/migrations/versions"
+          MIG_DIR="src/farna/db/migrations/versions"
           BASE="origin/$BASE_REF"
 
           # Migration files changed by this PR vs its merge-base.

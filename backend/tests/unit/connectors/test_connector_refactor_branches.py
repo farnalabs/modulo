@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.github import GitHubConnector
-from modulo.connectors.jira import _network_error_message
-from modulo.connectors.sharepoint import SharePointConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.github import GitHubConnector
+from farna.connectors.jira import _network_error_message
+from farna.connectors.sharepoint import SharePointConnector
 
 
 def _azure_connector() -> AzurePipelinesConnector:

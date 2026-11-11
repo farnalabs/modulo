@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import (
+from farna.db.crud.pipeline import (
     GraphWriteActor,
     archive_pipeline,
     get_pipeline,
@@ -26,11 +26,11 @@ from modulo.db.crud.pipeline import (
     soft_delete_pipeline,
     update_pipeline,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.soft_delete import include_soft_deleted
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.soft_delete import include_soft_deleted
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")

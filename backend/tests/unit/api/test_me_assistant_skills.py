@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -86,8 +86,8 @@ def _make_skill(**overrides: object) -> MagicMock:
 class TestListUserSkills:
     def test_list_user_skills_returns_empty_on_no_skills(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 200
@@ -96,8 +96,8 @@ class TestListUserSkills:
     def test_list_user_skills_returns_created_skills(self, client: TestClient) -> None:
         skill = _make_skill()
         with (
-            patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[skill]),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[skill]),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
         ):
             resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 200
@@ -108,8 +108,8 @@ class TestListUserSkills:
 
     def test_list_user_skills_calls_set_rls_org(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org,
+            patch("farna.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org,
         ):
             client.get("/api/v1/me/assistant/skills")
         mock_set_rls_org.assert_awaited_once()
@@ -118,7 +118,7 @@ class TestListUserSkills:
 class TestCreateUserSkill:
     def test_create_skill_returns_201(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch.object(client.mock_session, "add"),  # type: ignore[attr-defined]
             patch.object(client.mock_session, "flush", new_callable=AsyncMock),  # type: ignore[attr-defined]
         ):
@@ -134,7 +134,7 @@ class TestCreateUserSkill:
 
     def test_create_skill_calls_set_rls_org(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org,
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_set_rls_org,
             patch.object(client.mock_session, "add"),  # type: ignore[attr-defined]
             patch.object(client.mock_session, "flush", new_callable=AsyncMock),  # type: ignore[attr-defined]
         ):

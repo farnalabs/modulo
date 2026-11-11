@@ -10,31 +10,31 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.connector_instance import (
+from farna.db.crud.connector_instance import (
     clear_degraded_markers,
     list_connector_instances,
     mark_instances_degraded,
 )
-from modulo.db.crud.pagination import CursorPaginator
-from modulo.db.crud.pipeline_snapshot import (
+from farna.db.crud.pagination import CursorPaginator
+from farna.db.crud.pipeline_snapshot import (
     _apply_agent_fields,
     _build_parameter_binding,
     _collect_parameter_set_ids,
     _resolve_node_parameters,
 )
-from modulo.db.crud.rating import (
+from farna.db.crud.rating import (
     get_rating_aggregate,
     list_abuse_reports,
     list_ratings_for_primitive,
     submit_rating,
 )
-from modulo.db.crud.template import list_templates
-from modulo.db.crud.trigger import list_triggers
-from modulo.db.models.agent import Agent
-from modulo.db.models.parameter_schema import ParameterSchema
-from modulo.db.models.parameter_set import ParameterSet
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.repositories import RepositoryHub
+from farna.db.crud.template import list_templates
+from farna.db.crud.trigger import list_triggers
+from farna.db.models.agent import Agent
+from farna.db.models.parameter_schema import ParameterSchema
+from farna.db.models.parameter_set import ParameterSet
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.repositories import RepositoryHub
 
 
 def _result(*, scalar_one: object = None, rows: list[object] | None = None) -> MagicMock:

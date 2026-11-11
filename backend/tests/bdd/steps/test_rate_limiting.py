@@ -21,9 +21,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
-from modulo.settings import Settings
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.core.rate_limiter import RateLimiterRegistry, RateLimitRule
+from farna.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Register feature file
@@ -374,7 +374,7 @@ def when_send_requests(request: pytest.FixtureRequest, ctx: dict[str, Any], path
         resp = client.post(path)
         _store_response(request, ctx, resp)
     if not ctx.get("redis_available", True):
-        logging.getLogger("modulo.api.middleware.rate_limiter").warning("ratelimit.in_memory_mode")
+        logging.getLogger("farna.api.middleware.rate_limiter").warning("ratelimit.in_memory_mode")
 
 
 @when(parsers.parse("I send POST requests to {path}"))

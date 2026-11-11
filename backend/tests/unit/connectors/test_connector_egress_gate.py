@@ -35,26 +35,26 @@ from urllib.parse import urlparse
 
 import pytest
 
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.ci_runner.gitlab_ci import GitLabCIRunner
-from modulo.connectors.ci_runner.woodpecker import WoodpeckerCIRunner
-from modulo.connectors.confluence import ConfluenceConnector
-from modulo.connectors.gitea import GiteaConnector
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.grafana import GrafanaConnector
-from modulo.connectors.jenkins import JenkinsConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.n8n import N8NConnector
-from modulo.connectors.onepassword import OnePasswordConnector
-from modulo.connectors.plane import PlaneConnector
-from modulo.connectors.sentry import SentryConnector
-from modulo.connectors.sonarqube import SonarQubeConnector
-from modulo.connectors.teamcity import TeamCityConnector
-from modulo.connectors.youtrack import YouTrackConnector
-from modulo.core import ssrf
+from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.azure_repos import AzureReposConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.ci_runner.gitlab_ci import GitLabCIRunner
+from farna.connectors.ci_runner.woodpecker import WoodpeckerCIRunner
+from farna.connectors.confluence import ConfluenceConnector
+from farna.connectors.gitea import GiteaConnector
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.grafana import GrafanaConnector
+from farna.connectors.jenkins import JenkinsConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.n8n import N8NConnector
+from farna.connectors.onepassword import OnePasswordConnector
+from farna.connectors.plane import PlaneConnector
+from farna.connectors.sentry import SentryConnector
+from farna.connectors.sonarqube import SonarQubeConnector
+from farna.connectors.teamcity import TeamCityConnector
+from farna.connectors.youtrack import YouTrackConnector
+from farna.core import ssrf
 
 pytestmark = pytest.mark.real_ssrf_dns
 

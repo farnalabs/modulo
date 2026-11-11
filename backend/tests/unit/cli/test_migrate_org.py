@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.cli.migrate_org import (
+from farna.cli.migrate_org import (
     ENTITY_ORDER,
     PAGE_SIZE,
     _compute_hash,
@@ -27,7 +27,7 @@ from modulo.cli.migrate_org import (
     _write_bundle,
     main,
 )
-from modulo.db.models import Account, Team
+from farna.db.models import Account, Team
 from tests.unit.cli.conftest import MockModel
 
 # ── Pure function tests ─────────────────────────────────────────────────────
@@ -400,8 +400,8 @@ class TestWriteBundle:
 
 
 class TestExport:
-    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate_org._write_bundle")
+    @patch("farna.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._write_bundle")
     def test_export_basic(
         self,
         mock_write: MagicMock,
@@ -417,14 +417,14 @@ class TestExport:
         mock_write.assert_called_once()
         assert mock_write.call_args[0][1] == output
 
-    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._do_export", new_callable=AsyncMock)
     def test_export_org_not_found(self, mock_do_export: AsyncMock) -> None:
         mock_do_export.side_effect = SystemExit("Organisation 00000000-0000-0000-0000-000000000001 not found")
         with pytest.raises(SystemExit) as exc:
             main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", "out.json"])
         assert "not found" in str(exc.value)
 
-    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._do_export", new_callable=AsyncMock)
     def test_export_existing_output_without_force(self, mock_do_export: AsyncMock, tmp_path: Path) -> None:
         mock_do_export.return_value = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "abc"},
@@ -436,8 +436,8 @@ class TestExport:
             main(["export-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--output", str(output)])
         assert "already exists" in str(exc.value)
 
-    @patch("modulo.cli.migrate_org._do_export", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate_org._write_bundle")
+    @patch("farna.cli.migrate_org._do_export", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._write_bundle")
     def test_export_existing_output_with_force(
         self,
         mock_write: MagicMock,
@@ -471,7 +471,7 @@ class TestImport:
         bundle["__meta__"]["hash"] = _compute_hash(bundle)
         path.write_text(json.dumps(bundle, indent=2))
 
-    @patch("modulo.cli.migrate_org._do_import", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._do_import", new_callable=AsyncMock)
     def test_import_basic(self, mock_do_import: AsyncMock, tmp_path: Path) -> None:
         mock_do_import.return_value = {"created": 5, "overwritten": 0, "skipped": 0, "errors": 0}
         input_path = tmp_path / "bundle.json"
@@ -496,7 +496,7 @@ class TestImport:
             main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
         assert "hash verification failed" in str(exc.value).lower()
 
-    @patch("modulo.cli.migrate_org._do_import", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._do_import", new_callable=AsyncMock)
     def test_import_skips_existing(self, mock_do_import: AsyncMock, tmp_path: Path) -> None:
         mock_do_import.return_value = {"created": 0, "overwritten": 0, "skipped": 10, "errors": 0}
         input_path = tmp_path / "skip_bundle.json"
@@ -664,8 +664,8 @@ class TestExportOrganisation:
 
 
 class TestDoExport:
-    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_organisation", new_callable=AsyncMock)
     async def test_builds_hashed_bundle(
         self,
         mock_export_org: AsyncMock,
@@ -679,7 +679,7 @@ class TestDoExport:
         mock_local.__aenter__ = AsyncMock(return_value=session)
         mock_local.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             bundle = await _do_export(org_id, Path("out.json"))
 
         assert bundle["organisation"] == {"id": str(org_id), "name": "Acme", "slug": "acme"}
@@ -690,8 +690,8 @@ class TestDoExport:
         assert bundle["__meta__"]["hash"] == _compute_hash(bundle)
         assert mock_export_entity.call_count == len(ENTITY_ORDER)
 
-    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_organisation", new_callable=AsyncMock)
     async def test_db_connection_failure_exits(
         self,
         mock_export_org: AsyncMock,
@@ -703,14 +703,14 @@ class TestDoExport:
         mock_local.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(SystemExit) as exc,
         ):
             await _do_export(org_id, Path("out.json"))
         assert "Database connection failed" in str(exc.value)
 
-    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("farna.cli.migrate_org._export_organisation", new_callable=AsyncMock)
     async def test_cancellation_propagates(
         self,
         mock_export_org: AsyncMock,
@@ -726,7 +726,7 @@ class TestDoExport:
         mock_local.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(asyncio.CancelledError),
         ):
             await _do_export(org_id, Path("out.json"))
@@ -752,7 +752,7 @@ class TestDoImport:
     async def test_creates_new_records(self, org_id: uuid.UUID) -> None:
         session, mock_local = self._patched_session([_ScalarResult()])
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "skip")
         assert counts == {"created": 1, "overwritten": 0, "skipped": 0, "errors": 0}
         assert len(session.added) == 1
@@ -765,7 +765,7 @@ class TestDoImport:
         # path must not inject one (mirrors the guard in the click-based CLI).
         session, mock_local = self._patched_session([_ScalarResult()])
         bundle = {"users": [{"id": "u1", "email": "a@b.com", "display_name": "A"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "skip")
         assert counts["created"] == 1
         assert counts["errors"] == 0
@@ -776,7 +776,7 @@ class TestDoImport:
         existing = _Existing(id=uuid.uuid4(), name="Platform")
         session, mock_local = self._patched_session([_ScalarResult(first=existing)])
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "skip")
         assert counts == {"created": 0, "overwritten": 0, "skipped": 1, "errors": 0}
         assert not session.added
@@ -785,7 +785,7 @@ class TestDoImport:
         existing: Any = _Existing(id=uuid.uuid4(), name="Platform", description="old")
         _, mock_local = self._patched_session([_ScalarResult(first=existing)])
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "new desc"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "overwrite")
         assert counts == {"created": 0, "overwritten": 1, "skipped": 0, "errors": 0}
         assert existing.description == "new desc"
@@ -794,7 +794,7 @@ class TestDoImport:
         existing = _Existing(id=uuid.uuid4(), name="Platform")
         session, mock_local = self._patched_session([_ScalarResult(first=existing), _ScalarResult()])
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "rename")
         assert counts["created"] == 1
         assert counts["errors"] == 0
@@ -809,7 +809,7 @@ class TestDoImport:
         _, mock_local = self._patched_session(results)
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(SystemExit) as exc,
         ):
             await _do_import(bundle, org_id, "rename")
@@ -818,7 +818,7 @@ class TestDoImport:
     async def test_row_error_is_counted(self, org_id: uuid.UUID) -> None:
         session, mock_local = self._patched_session([_ScalarResult()], flush_error=RuntimeError("boom"))
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
-        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+        with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "skip")
         assert counts == {"created": 0, "overwritten": 0, "skipped": 0, "errors": 1}
         assert session.committed is True
@@ -829,7 +829,7 @@ class TestDoImport:
         _, mock_local = self._patched_session([_ScalarResult()], flush_error=asyncio.CancelledError())
         bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(asyncio.CancelledError),
         ):
             await _do_import(bundle, org_id, "skip")
@@ -842,7 +842,7 @@ class TestDoImport:
         mock_local.__aexit__ = AsyncMock(return_value=False)
         bundle: dict[str, Any] = {"teams": []}
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(asyncio.CancelledError),
         ):
             await _do_import(bundle, org_id, "skip")
@@ -853,7 +853,7 @@ class TestDoImport:
         mock_local.__aexit__ = AsyncMock(return_value=False)
         bundle: dict[str, Any] = {"teams": []}
         with (
-            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
             pytest.raises(SystemExit) as exc,
         ):
             await _do_import(bundle, org_id, "skip")
@@ -868,7 +868,7 @@ class TestModuleMain:
         # Running the module as __main__ with no subcommand must exit(2)
         # rather than traceback, exercising the `if __name__ == "__main__"`
         # guard.
-        from modulo.cli import migrate_org as _mod
+        from farna.cli import migrate_org as _mod
 
         with pytest.raises(SystemExit) as exc:
             runpy.run_path(str(Path(_mod.__file__)), run_name="__main__")

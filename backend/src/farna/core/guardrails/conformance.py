@@ -1,0 +1,1048 @@
+"""Mid-run capability re-check (FAR-215 T3).
+
+T1 ships the three-state conformance derivation (:func:`derive_conformance_state`)
+as a PURE helper with enforcement *planned*. This module wires that enforcement
+at NODE START against a LIVE manifest — the promise that a connector scope or
+sandbox/environment policy change between run-creation and a node actually
+executing is re-validated, not carved out.
+
+Behaviour on change (fail-closed for block-action guardrails, per
+``ConformanceDerivation`` semantics):
+  - ``absent`` or ``unknown`` on a ``block``-action guardrail -> BLOCK the node
+    and route to HITL (never silently abort, never fail open). The run pauses
+    ``awaiting_human`` with a machine-readable detail.
+  - ``absent`` or ``unknown`` on ``warn``/``observe`` guardrails -> log + audit
+    warning, continue (advisory never blocks).
+  - ``present`` (or no conformance claim) -> continue normally (fast path).
+  - Zero bound guardrails carrying a conformance claim -> fast path, no DB
+    round-trip for the manifest.
+
+The live manifest is built from CURRENT capability sources for the node's bound
+surfaces (connector scopes/allowed-operations, EnvironmentProfile capabilities,
+the bound agent's required environment capabilities, and — for a
+``sandbox_agent`` node — the mechanically-derived sandbox write/egress
+capability surface). A source that is absent or unreadable contributes ``None``
+(unknown) for its capabilities, so a ``block`` guardrail fails CLOSED (unknown
+blocks), never fail-open.
+
+All DB access is org-scoped (RLS via ``set_rls_org``). No credentials, no raw
+payloads, and no decrypted state ever enter the returned decision or audit
+payloads — only capability names and their confirmed state.
+
+FAR-1615 / FAR-1617 (type-binding invariant + legacy-claim detection):
+  * a TYPE-QUALIFIED claim (``github.read``) binds to a connector-typed
+    surface ONLY — a profile/agent declaration (or any non-connector surface)
+    of the literal qualified string is reduced to its bare capability and can
+    never satisfy the qualified claim;
+  * a blocked qualified claim REPORTS its qualified name (``github.write``,
+    not ``write``) so the operator can tell which binding failed;
+  * the FAR-1594 behaviour change means a LEGACY guardrail whose
+    ``required_capabilities`` uses a type-qualified spelling now resolves
+    ``unknown`` and BLOCKS block-action
+    guardrails where it previously loose-matched. That is deliberate and
+    fail-closed — the binding is NOT weakened. Operators can find such legacy
+    claims with :func:`type_qualified_claims` /
+    :func:`find_type_qualified_claim_guardrails` (save-time validation or a
+    rollout audit), and every unsatisfied qualified claim is logged as
+    ``guardrail.conformance.type_qualified_claim_unsatisfied`` so a
+    production rollout surfaces them without a stored-data change.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.connectors.base import (
+    ConnectorType,
+    canonical_capability,
+    canonical_capability_set,
+    qualified_capability,
+    unrestricted_allowed_operations,
+)
+from farna.core.guardrails import (
+    ConformanceDerivation,
+    ConformanceState,
+    GuardrailAction,
+    derive_conformance_state,
+)
+
+_log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Canonical capability vocabulary (FAR-1582, moved to the shared leaf in
+# FAR-1594)
+# ---------------------------------------------------------------------------
+#
+# ``canonical_capability`` / ``canonical_capability_set`` / ``qualified_capability``
+# now live in ``modulo.connectors.base`` — the stdlib-only leaf ``ConnectorACL``
+# lives in — and are imported here rather than kept as a private mapper: the ACL
+# and this reader must reduce a stored value to the SAME vocabulary or they give
+# opposite answers for it (FAR-1594 defect (a): a stored ``["github.read"]`` was
+# certified as ``read`` here while ``ConnectorACL.check`` denied the read).
+# ``canonical_capability`` stays re-exported under this module's name so
+# existing imports keep resolving.
+
+
+def _canonical_claim(value: str) -> str:
+    """Canonicalise a claim/manifest KEY, preserving a type binding (FAR-1594).
+
+    A type-qualified claim (``github.read``) is a BINDING REQUEST: it asks for
+    a github-typed surface, so the qualifier is kept (only the separator is
+    normalised, ``github:read`` -> ``github.read``) and it matches only the
+    qualified alias :func:`_register_connector_surface` stamps for that
+    surface's type.
+    Before FAR-1594 the qualifier was dropped here, so a claim requiring
+    ``github.read`` was satisfied by ANY bound surface declaring bare ``read``
+    (defect (b)).
+
+    A BARE capability (or a legacy spelling of one) canonicalises to its bare
+    form — the allowlist/manifest side always emits bare spellings, so a bare
+    claim matches any surface declaring the capability regardless of type.
+    Keys that are not capabilities at all (``sandbox.egress``, ``docker``, ...)
+    pass through untouched — their surfaces own their vocabulary.
+    """
+    qualified = qualified_capability(value)
+    if qualified is not None:
+        return f"{qualified[0]}.{qualified[1]}"
+    bare = canonical_capability(value)
+    return value if bare is None else bare
+
+
+def _reported(capability: str) -> str:
+    """Spell a claim the way this module REPORTS it.
+
+    A TYPE-QUALIFIED claim keeps its qualifier (``github.write`` stays
+    ``github.write``; only the separator is normalised, ``github:write`` ->
+    ``github.write``) so ``missing``/``unreadable`` tell the operator WHICH
+    type binding failed — before FAR-1615 a blocked ``github.read`` claim
+    reported as ``read``, indistinguishable from a bare-capability gap
+    (FAR-1615). A BARE claim reports as its canonical bare form — the name
+    the operator's capability vocabulary uses — while the MATCHING above kept
+    the qualifier for the lookup itself. Keys that are not capabilities at all
+    (``sandbox.egress``, ``docker``, ...) pass through untouched.
+    """
+    qualified = qualified_capability(capability)
+    if qualified is not None:
+        return f"{qualified[0]}.{qualified[1]}"
+    bare = canonical_capability(capability)
+    return capability if bare is None else bare
+
+
+@dataclass(frozen=True)
+class ConformanceRecheckResult:
+    """Outcome of a mid-run capability re-check at node start.
+
+    ``blocked`` is True when a block-action guardrail is absent/unknown and the
+    node must be blocked + routed to HITL. ``review_id`` is the HITL gate to open.
+    ``detail`` is a machine-readable reason. ``warned`` records that at least
+    one advisory (warn/observe) guardrail flagged a conformance gap.
+    """
+
+    blocked: bool
+    review_id: str | None
+    detail: str
+    state: ConformanceState
+    warned: bool
+    claimed: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Live manifest reader
+# ---------------------------------------------------------------------------
+
+
+def _capabilities_for_connector(row: Any) -> set[str]:
+    """Capability surface of a ConnectorInstance row (live), in ONE vocabulary.
+
+    The instance's ``allowed_operations`` is the authoritative declared scope
+    when it is a NON-EMPTY list; its entries are reduced to the canonical bare
+    ``Capability`` spelling by the SHARED :func:`canonical_capability_set`
+    (the same helper ``ConnectorACL`` builds its allowlist from — FAR-1594), so
+    the allowlisted branch and the unrestricted branch below emit the SAME
+    vocabulary and a canonical claim matches either identically (FAR-1582).
+    ``None``/``[]`` means the connector is UNRESTRICTED (FAR-1564) — the unset
+    value every connector created through REST/MCP/UI carries — so the surface
+    is then whatever the connector TYPE declares, which may legitimately be
+    EMPTY (``custom`` and any type id with no capability mapping contribute
+    nothing; see :func:`_type_capabilities`).
+
+    A MALFORMED non-list value is RESTRICTED and certifies nothing (fail
+    closed, logged) — never the full type set, because ``ConnectorACL`` reads
+    the same value restrictively. We never read credential material here
+    — only the declared operations and the connector type id (a non-secret).
+    """
+    allowed = row.allowed_operations if hasattr(row, "allowed_operations") else None
+    if unrestricted_allowed_operations(allowed):
+        return _type_capabilities(row)
+    if isinstance(allowed, list):
+        # FAR-1616: pass the row's OWN connector type so a mis-typed legacy
+        # entry (``github.write`` on a filesystem connector) is rejected here
+        # exactly as ``ConnectorACL`` rejects it at enforcement time — the two
+        # sides can never certify and deny different sets.
+        return canonical_capability_set(allowed, connector_type_id=_connector_type_id_of(row))
+    # Malformed (dict/str/int/...): fail CLOSED — certify nothing rather than
+    # the connector's FULL capability set.
+    _log.warning(
+        "guardrail.conformance.allowed_operations_malformed",
+        extra={"allowed_operations_type": type(allowed).__name__},
+    )
+    return set()
+
+
+def _connector_type_id_of(row: Any) -> str | None:
+    """The row's ``connector_type_id`` when it is a usable string, else ``None``.
+
+    A non-string / empty type id is treated as UNIDENTIFIABLE: a type-qualified
+    allowlist entry against it can never be verified (FAR-1616 rejects it, fail
+    closed) and the unrestricted branch certifies nothing (see
+    :func:`_type_capabilities`).
+    """
+    type_id = getattr(row, "connector_type_id", None)
+    return type_id if isinstance(type_id, str) and type_id else None
+
+
+def _type_capabilities(row: Any) -> set[str]:
+    """Capability set of the row's connector TYPE (FAR-1564 unrestricted).
+
+    An unknown/non-string type id contributes nothing (the claim then resolves
+    ``None``/absent and a block-action guardrail fails CLOSED) — we cannot
+    certify capabilities for a type we cannot identify. So does a KNOWN type
+    whose capability mapping is empty (``custom`` and any unmapped member):
+    the declared set is genuinely empty, and it is logged the same way an
+    unknown type id is so an empty surface is never silent.
+
+    ``ConnectorType.capabilities`` already yields bare ``Capability`` values,
+    so this branch and the allowlist branch above emit one vocabulary (FAR-1582).
+    """
+    type_id = row.connector_type_id if hasattr(row, "connector_type_id") else None
+    if not isinstance(type_id, str):
+        return set()
+    try:
+        connector_type = ConnectorType(type_id)
+    except ValueError:
+        _log.warning(
+            "guardrail.conformance.connector_type_unknown",
+            extra={"connector_type_id": type_id},
+        )
+        return set()
+    capabilities = connector_type.capabilities
+    if not capabilities:
+        _log.warning(
+            "guardrail.conformance.connector_type_no_capabilities",
+            extra={"connector_type_id": type_id},
+        )
+        return set()
+    return {str(cap) for cap in capabilities}
+
+
+def _bare_capability(value: str) -> str:
+    """Reduce a NON-CONNECTOR surface's declared capability to its bare form.
+
+    FAR-1615: a profile/agent/environment surface is not a connector surface,
+    so a legacy type-qualified spelling in its capability list (``github.read``)
+    is reduced to the bare capability (``read``) and can only ever satisfy a
+    BARE claim. Keys outside the connector capability vocabulary
+    (``sandbox.egress``, ``docker``, ...) pass through untouched — their
+    surfaces own their vocabulary.
+    """
+    return canonical_capability(value) or value
+
+
+def _capabilities_for_profile(row: Any) -> set[str]:
+    """Capability surface of an EnvironmentProfile row (live) — BARE capabilities only.
+
+    FAR-1615: profile ``capabilities_json`` is registered VERBATIM nowhere —
+    every spelling is reduced through :func:`_bare_capability`, so a profile
+    declaring the literal string ``github.read`` registers ``read`` and can
+    NEVER satisfy a type-qualified claim. A type-qualified claim requires a
+    connector-typed surface (:func:`_register_connector_surface` stamps the
+    ``<type>.<cap>`` alias); a profile is not one.
+    """
+    caps = row.capabilities_json if hasattr(row, "capabilities_json") else None
+    if isinstance(caps, list):
+        return {_bare_capability(c) for c in caps if isinstance(c, str)}
+    return set()
+
+
+def _capabilities_for_agent(row: Any) -> set[str]:
+    """Capability surface of an Agent row (live) — BARE capabilities only.
+
+    FAR-1615: same rule as :func:`_capabilities_for_profile` — an agent's
+    ``required_environment_capabilities`` is a NON-CONNECTOR surface, so a
+    legacy type-qualified spelling is reduced to its bare capability and
+    cannot satisfy a type-qualified connector claim.
+    """
+    caps = row.required_environment_capabilities if hasattr(row, "required_environment_capabilities") else None
+    if isinstance(caps, list):
+        return {_bare_capability(c) for c in caps if isinstance(c, str)}
+    return set()
+
+
+def _register_connector_surface(registered: dict[str, bool | None], row: Any, capabilities: set[str]) -> None:
+    """Stamp one connector surface: BARE capabilities plus its type aliases.
+
+    The manifest carries the per-surface connector TYPE only implicitly —
+    ``build_live_manifest`` flattens every bound surface into one
+    ``{capability: state}`` map, so the type had to be re-materialised here as
+    an ALIAS key ``<connector_type_id>.<capability>`` (FAR-1594 defect (b)):
+    a type-qualified claim (``github.read``) then matches ONLY a surface whose
+    ``connector_type_id`` is ``github``, instead of any surface declaring bare
+    ``read``. The bare keys are still registered, so a bare claim keeps its
+    existing "any surface declares it" semantics.
+
+    Aliases are stamped ONLY for a non-empty string type id and ONLY for bare
+    capabilities (a legacy spelling was already reduced by
+    :func:`canonical_capability_set`; a non-capability certifies nothing), so
+    an unknown/absent type — or an empty/malformed allowlist, which certifies
+    nothing at all (FAR-1564 fail closed) — contributes no alias and a
+    qualified claim against it fails CLOSED (unknown blocks).
+    """
+    for capability in capabilities:
+        registered[capability] = True
+    type_id = getattr(row, "connector_type_id", None)
+    if not isinstance(type_id, str) or not type_id:
+        return
+    for capability in capabilities:
+        if canonical_capability(capability) == capability:
+            registered[f"{type_id}.{capability}"] = True
+
+
+# Sandbox capabilities whose block-guarantee is a DENY/negative guarantee —
+# ``required_capabilities=["sandbox.write_files"]`` certifies writes are
+# IMPOSSIBLE and ``["sandbox.egress"]`` certifies no egress, so the RAW
+# mechanical polarity (True = risk present) would be INVERTED when stamped into
+# the manifest. ``sandbox.git_credentials`` is a POSITIVE guarantee (certifies
+# git credentials are scoped/limited) whose raw polarity already matches the
+# manifest, so it is never inverted. The set is resolved LAZILY from the
+# ``sandbox_mode`` vocabulary constants (never re-hard-coded literals) so a
+# renamed/removed capability can never drift silently from the polarity set.
+# NOTE (FAR-212 PR A): ``sandbox.write_files`` / ``sandbox.git_credentials``
+# today always derive None (no enforced read-only-mount / git-credential-surface
+# exists yet), so they fail CLOSED as unknown — only ``sandbox.egress`` is a
+# live certifyable surface.
+def _sandbox_deny_polarity_caps() -> frozenset[str]:
+    from farna.core.pipeline_engine.sandbox_mode import (
+        SANDBOX_CAPABILITY_EGRESS,
+        SANDBOX_CAPABILITY_WRITE_FILES,
+    )
+
+    return frozenset({SANDBOX_CAPABILITY_WRITE_FILES, SANDBOX_CAPABILITY_EGRESS})
+
+
+def _add_sandbox_surface(registered: dict[str, bool | None], sandbox_caps: dict[str, bool | None]) -> None:
+    """Stamp the mechanically-derived sandbox surface with CONFORMANCE polarity.
+
+    A block-action conformance claim on the sandbox surface is, for the
+    write/egress pair, a DENY/negative guarantee: ``["sandbox.write_files"]``
+    certifies that writes are IMPOSSIBLE, ``["sandbox.egress"]`` certifies no
+    egress. The mechanical derivation (:func:`derive_sandbox_capabilities`)
+    returns the RAW polarity (True = writable / egress allowed), so the
+    manifest INVERTS those two and the existing three-state derivation reads
+    them correctly:
+
+      mechanical False (confirmed absent) -> registered True  (guarantee holds)
+      mechanical True  (present)           -> registered False (claim violated)
+      None (unknown)                       -> registered None (fail-closed)
+
+    ``sandbox.git_credentials`` is a POSITIVE guarantee — ``["sandbox.git_credentials"]``
+    certifies the node's git credentials are SCOPED (limited) — so its raw
+    polarity already matches the manifest (scoped=True -> registered True) and
+    is stamped AS-IS, never inverted. Inverting it would certify the risky
+    state (unscoped/full-access) and block the safe state (scoped).
+
+    The sandbox surface is stamped LAST (overriding any earlier surface) — the
+    node's actual sandbox configuration is authoritative for the sandbox
+    surface. Never contains credentials — only capability names and their
+    confirmed state.
+    """
+    deny_polarity = _sandbox_deny_polarity_caps()
+    for capability, value in sandbox_caps.items():
+        if value is None:
+            registered[capability] = None
+        elif capability in deny_polarity:
+            registered[capability] = not value
+        else:
+            registered[capability] = value
+
+
+def _add_true(registered: dict[str, bool | None], surface: set[str]) -> None:
+    """Mark every capability in *surface* as confirmed present."""
+    for capability in surface:
+        registered[capability] = True
+
+
+async def _register_connector_surfaces(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    connector_instance_ids: list[uuid.UUID],
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surfaces of the bound connector instances."""
+    from farna.db.models.connector_instance import ConnectorInstance
+
+    try:
+        stmt = select(ConnectorInstance).where(ConnectorInstance.id.in_(connector_instance_ids))
+        rows = (await session.execute(stmt)).scalars().all()
+        found = {str(r.id) for r in rows}
+        for r in rows:
+            # A deactivated/archived connector no longer grants its scopes —
+            # the capability is absent from the live surface even though the
+            # row still exists. Never read credential material here.
+            if getattr(r, "status", "active") != "active":
+                _log.warning(
+                    "guardrail.conformance.connector_inactive",
+                    extra={"org_id": str(org_id), "connector_instance_id": str(r.id)},
+                )
+                continue
+            _register_connector_surface(registered, r, _capabilities_for_connector(r))
+        for cid in connector_instance_ids:
+            if str(cid) not in found:
+                _log.warning(
+                    "guardrail.conformance.connector_missing",
+                    extra={"org_id": str(org_id), "connector_instance_id": str(cid)},
+                )
+    except Exception:
+        _log.exception("guardrail.conformance.connector_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _register_profile_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    environment_profile_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surface of the bound environment profile."""
+    from farna.db.models.environment_profile import EnvironmentProfile
+
+    try:
+        profile = (
+            await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == environment_profile_id))
+        ).scalar_one_or_none()
+        if profile is None:
+            _log.warning(
+                "guardrail.conformance.profile_missing",
+                extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
+            )
+        elif getattr(profile, "status", "active") != "active":
+            # A deactivated profile no longer grants its capabilities.
+            _log.warning(
+                "guardrail.conformance.profile_inactive",
+                extra={"org_id": str(org_id), "environment_profile_id": str(environment_profile_id)},
+            )
+        else:
+            _add_true(registered, _capabilities_for_profile(profile))
+    except Exception:
+        _log.exception("guardrail.conformance.profile_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _register_agent_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    agent_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Register the live capability surface of the bound agent."""
+    from farna.db.models.agent import Agent
+
+    try:
+        agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+        if agent is None:
+            _log.warning("guardrail.conformance.agent_missing", extra={"org_id": str(org_id)})
+        else:
+            _add_true(registered, _capabilities_for_agent(agent))
+    except Exception:
+        _log.exception("guardrail.conformance.agent_surface_unreadable", extra={"org_id": str(org_id)})
+
+
+async def _sandbox_profile_params(
+    session: AsyncSession,
+    environment_profile_id: uuid.UUID | None,
+) -> tuple[str | None, str | None]:
+    """Read the profile's network policy and provider type for sandbox certification.
+
+    Both are ``None`` when the profile is absent or unreadable — the derivation
+    then falls back to its legacy reference defaults (unchanged behaviour).
+    """
+    if environment_profile_id is None:
+        return None, None
+
+    from farna.db.models.environment_profile import EnvironmentProfile as EpModel
+
+    try:
+        _ep_row = (
+            await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))
+        ).scalar_one_or_none()
+        if _ep_row is None:
+            return None, None
+        profile_network_policy: str | None = getattr(_ep_row, "network_policy", None)
+        # FAR-1051: the provider the profile resolves to decides the TIER the
+        # egress capability is certified under, so the certificate matches what
+        # dispatch actually enforces for this profile (previously the reference
+        # tier was hardcoded to e2b regardless of the bound provider). Only a
+        # genuine str is read — a row that does not carry one (including a
+        # MagicMock test double, whose auto-attribute is not a str) keeps the
+        # legacy reference tier.
+        provider_type: str | None = None
+        _row_provider_type = getattr(_ep_row, "provider_type", None)
+        if isinstance(_row_provider_type, str):
+            provider_type = _row_provider_type
+        return profile_network_policy, provider_type
+    except Exception:
+        _log.debug(
+            "guardrail.conformance.profile_network_policy_read_failed",
+            extra={"environment_profile_id": str(environment_profile_id)},
+            exc_info=True,
+        )
+        return None, None
+
+
+async def _register_sandbox_surface(
+    session: AsyncSession,
+    registered: dict[str, bool | None],
+    node_def: dict[str, Any],
+    environment_profile_id: uuid.UUID | None,
+) -> None:
+    """Stamp the mechanically-derived sandbox surface for a sandbox_agent node."""
+    # Lazy import keeps this module's import surface light: sandbox_mode itself
+    # is dependency-free, but the pipeline_engine package init (LangGraph,
+    # executor, DB) is heavy and must not be pulled in by guardrail consumers
+    # that never build a sandbox manifest.
+    from farna.core.pipeline_engine.sandbox_mode import derive_sandbox_capabilities
+
+    profile_network_policy, provider_type = await _sandbox_profile_params(session, environment_profile_id)
+    _add_sandbox_surface(
+        registered,
+        derive_sandbox_capabilities(
+            node_def,
+            profile_network_policy=profile_network_policy,
+            provider_type=provider_type,
+        ),
+    )
+
+
+async def build_live_manifest(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    connector_instance_ids: list[uuid.UUID],
+    environment_profile_id: uuid.UUID | None,
+    agent_id: uuid.UUID | None,
+    node_def: dict[str, Any] | None = None,
+) -> dict[str, bool | None]:
+    """Read CURRENT capability state for the node's bound surfaces.
+
+    Returns ``{capability: bool | None}``:
+      True  — confirmed present on at least one live surface.
+      False — the relevant surface is present but does not declare it.
+      None  — the surface could not be read (unknown) OR capability not seen.
+
+    A capability is marked True if ANY live surface declares it. It is marked
+    False when we confirmed a relevant surface but it does not declare it.
+    ``None`` (unknown) is recorded for a surface that could not be read (a
+    missing connector instance, profile, or agent, or a read failure) — a
+    block-action guardrail then fails CLOSED (unknown blocks).
+
+    For a ``sandbox_agent`` node, *node_def* additionally contributes the
+    sandbox capability surface (``sandbox.egress`` — mechanically certified
+    from the enforced egress policy; ``sandbox.write_files`` and
+    ``sandbox.git_credentials`` stay unknown until their enforcement surfaces
+    land in PR B), stamped with conformance polarity (FAR-212 PR A).
+
+    IMPORTANT: a capability that is absent from ``registered`` entirely also
+    resolves to ``None`` (unknown) in ``derive_conformance_state`` — a surface
+    that could not be read contributes nothing, and the derivation's
+    ``registered.get(capability)`` miss fails CLOSED. So an unreadable surface
+    needs no explicit ``None`` stamping; its claimed capabilities stay unknown.
+    """
+    registered: dict[str, bool | None] = {}
+
+    if connector_instance_ids:
+        await _register_connector_surfaces(session, registered, connector_instance_ids, org_id)
+
+    if environment_profile_id is not None:
+        await _register_profile_surface(session, registered, environment_profile_id, org_id)
+
+    if agent_id is not None:
+        await _register_agent_surface(session, registered, agent_id, org_id)
+
+    # FAR-212 PR A: the sandbox capability surface for a sandbox_agent node —
+    # mechanically derived from the node's ACTUAL config (egress_policy, the
+    # read-only workspace flag, git-credential scope), not a declared claim.
+    # FAR-1085: plumb the profile's network_policy so the certified capability
+    # matches the runtime outcome for every (node, profile, tier) combination.
+    if node_def is not None:
+        await _register_sandbox_surface(session, registered, node_def, environment_profile_id)
+
+    return registered
+
+
+# ---------------------------------------------------------------------------
+# Pure decision
+# ---------------------------------------------------------------------------
+
+
+def _action_of(config: dict[str, Any]) -> str:
+    action = config.get("action")
+    if isinstance(action, str):
+        return action
+    return GuardrailAction.OBSERVE.value
+
+
+def _required_of(config: dict[str, Any]) -> list[str]:
+    required = config.get("required_capabilities")
+    if isinstance(required, list):
+        return [str(c) for c in required if isinstance(c, str)]
+    return []
+
+
+def _merge_states(values: list[bool | None]) -> bool | None:
+    """Reduce the states a capability gathered under several spellings.
+
+    Confirmed-present wins (ANY live surface declaring it is the manifest's
+    contract), then confirmed-absent, then unknown — a capability is only
+    unknown when no surface took a position on it.
+    """
+    if any(v is True for v in values):
+        return True
+    if any(v is False for v in values):
+        return False
+    return None
+
+
+def decide_conformance(
+    required_capabilities: list[str],
+    registered: dict[str, bool | None],
+) -> ConformanceDerivation:
+    """Derive the conformance state for one guardrail's claim (reuses T1).
+
+    This is the single consumption point of the live manifest, so it is where
+    BOTH sides are canonicalised (FAR-1582) — with the two sides deliberately
+    treated differently (FAR-1594 defect (b)):
+
+    * a BARE claim (or a legacy spelling of one, ``github:read``) canonicalises
+      to its bare ``Capability`` form, so it matches identically whether the
+      bound connector is unrestricted or allowlisted (FAR-1582's guarantee);
+    * a TYPE-QUALIFIED claim keeps its qualifier (``github.read`` stays
+      ``github.read``) and therefore matches ONLY the qualified alias the
+      manifest stamped for a github-typed surface
+      (:func:`_register_connector_surface`) — it is never satisfied by an
+      unrelated surface that happens to declare bare ``read``.
+
+    Keys that are not capabilities (``sandbox.egress``, ``docker``, ...) pass
+    through untouched on both sides — their surfaces own their vocabulary. The
+    reported ``missing``/``unreadable`` names are spelled by ``_reported``,
+    which PRESERVES a type-qualified claim's qualifier (``github.read`` is
+    reported as ``github.read``, only the separator normalised) so the
+    operator can see WHICH type binding failed; bare claims report as their
+    canonical bare form (FAR-1615).
+    """
+    if not required_capabilities:
+        return derive_conformance_state(required_capabilities, registered)
+
+    claims: list[str] = []
+    for capability in required_capabilities:
+        canonical = _canonical_claim(str(capability))
+        if canonical not in claims:
+            claims.append(canonical)
+
+    buckets: dict[str, list[bool | None]] = {}
+    for key, state in registered.items():
+        buckets.setdefault(_canonical_claim(str(key)), []).append(state)
+    canonical_registered = {key: _merge_states(states) for key, states in buckets.items()}
+
+    derivation = derive_conformance_state(claims, canonical_registered)
+    return ConformanceDerivation(
+        state=derivation.state,
+        missing=tuple(_reported(capability) for capability in derivation.missing),
+        unreadable=tuple(_reported(capability) for capability in derivation.unreadable),
+        claimed=derivation.claimed,
+    )
+
+
+def worst_state(derivations: list[ConformanceDerivation]) -> ConformanceState:
+    """Order states worst-first: absent > unknown > present (no claim)."""
+    if any(d.state == "absent" for d in derivations):
+        return "absent"
+    if any(d.state == "unknown" for d in derivations):
+        return "unknown"
+    return "present"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1617: legacy type-qualified claim detection
+# ---------------------------------------------------------------------------
+#
+# FAR-1594 made a type-qualified claim bind to its connector type, so a
+# LEGACY claim that used a type-qualified spelling (``github.read``) now
+# resolves ``unknown`` and BLOCKS block-action guardrails where it previously
+# loose-matched to any surface declaring bare ``read``. Fail-closed and
+# deliberate — the binding is NOT weakened — but an existing guardrail relying
+# on the loose matching starts routing runs to HITL at rollout. The helpers
+# below are the DETECTION mechanism: they classify stored claims without
+# altering any stored data, so operators can find (and re-spell) legacy
+# claims before or at rollout. A production-DB audit additionally needs a
+# query over ``evals.config_json`` / pipeline graphs — not provided here; this
+# is the classification primitive such an audit (or a save-time validation
+# warning) calls.
+
+
+def type_qualified_claims(required_capabilities: Sequence[str]) -> list[str]:
+    """The TYPE-QUALIFIED capability claims in *required_capabilities* (FAR-1617).
+
+    Returns each spelling normalised to ``<connector-type>.<capability>``
+    (``github:read`` -> ``github.read``), de-duplicated, order-preserving.
+    These are the claims that resolve BY TYPE under FAR-1594 — satisfied only
+    by a bound connector-typed surface — and therefore the claims a legacy
+    configuration may carry unintentionally. Bare capabilities and
+    non-connector keys (``sandbox.egress``, ``docker``, ...) are not
+    included. Works on any capability-claim list; a routed connector binding's
+    operation is a bare verb (``query``/``write``/``dispatch``), so it carries
+    no type qualifier.
+    """
+    claims: list[str] = []
+    for capability in required_capabilities:
+        qualified = qualified_capability(str(capability))
+        if qualified is None:
+            continue
+        claim = f"{qualified[0]}.{qualified[1]}"
+        if claim not in claims:
+            claims.append(claim)
+    return claims
+
+
+def find_type_qualified_claim_guardrails(guardrails: Iterable[Any]) -> dict[str, list[str]]:
+    """Map each guardrail NAME to its type-qualified claims (FAR-1617 audit).
+
+    *guardrails* is any iterable of engine ``EvalDefinition`` DTOs (or objects
+    with ``.config`` and ``.name``). Guardrails with no type-qualified claim
+    are omitted, so a non-empty result means at least one legacy-shaped claim
+    exists. Detection only — stored data is never altered; the operator
+    decides whether to re-spell the claim to the bare vocabulary or to bind a
+    connector of the named type.
+    """
+    out: dict[str, list[str]] = {}
+    for gr in guardrails:
+        config = gr.config if hasattr(gr, "config") else {}
+        qualified = type_qualified_claims(_required_of(config))
+        if qualified:
+            out[str(getattr(gr, "name", gr))] = qualified
+    return out
+
+
+def _log_unsatisfied_type_qualified(gr: Any, derivation: ConformanceDerivation) -> None:
+    """Log a legacy type-qualified claim that no bound surface satisfies.
+
+    FAR-1617: a type-qualified claim that no bound surface of that type
+    satisfies is usually a LEGACY claim which loose-matched before FAR-1594 —
+    log it so a rollout surfaces such claims without altering any stored data
+    (detection only).
+    """
+    unsatisfied_qualified = [
+        name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None
+    ]
+    if unsatisfied_qualified:
+        _log.warning(
+            "guardrail.conformance.type_qualified_claim_unsatisfied",
+            extra={"guardrail": gr.name, "state": derivation.state, "claims": unsatisfied_qualified},
+        )
+
+
+def _record_guardrail_gap(
+    gr: Any,
+    required: list[str],
+    derivation: ConformanceDerivation,
+    action: str,
+    blocking_guardrails: list[str],
+    blocked_detail_parts: list[str],
+) -> bool:
+    """Record a non-present derivation; return True when the gap is advisory."""
+    if action == GuardrailAction.BLOCK.value:
+        blocking_guardrails.append(gr.name)
+        blocked_detail_parts.append(
+            f"guardrail {gr.name!r} requires capabilities {required} which are no longer present "
+            f"(state={derivation.state})"
+        )
+        return False
+    # warn / observe / redact-as-non-blocking: advisory only.
+    _log.warning(
+        "guardrail.conformance.advisory_gap",
+        extra={"guardrail": gr.name, "state": derivation.state, "missing": list(derivation.missing)},
+    )
+    return True
+
+
+def evaluate_conformance(
+    guardrails: list[Any],
+    registered: dict[str, bool | None],
+) -> ConformanceRecheckResult:
+    """Evaluate bound guardrails against the LIVE manifest (pure).
+
+    *guardrails* is a list of engine ``EvalDefinition`` DTOs (or objects with
+    ``.config`` and ``.name``) carrying a conformance claim. Returns the node
+    decision. Zero claims -> not blocked, fast path.
+    """
+    claimed: list[ConformanceDerivation] = []
+    advisory_warned = False
+    blocked_detail_parts: list[str] = []
+    blocking_guardrails: list[str] = []
+
+    for gr in guardrails:
+        config = gr.config if hasattr(gr, "config") else {}
+        required = _required_of(config)
+        if not required:
+            continue
+        derivation = decide_conformance(required, registered)
+        claimed.append(derivation)
+        if derivation.state == "present":
+            continue
+        _log_unsatisfied_type_qualified(gr, derivation)
+        if _record_guardrail_gap(
+            gr,
+            required,
+            derivation,
+            _action_of(config),
+            blocking_guardrails,
+            blocked_detail_parts,
+        ):
+            advisory_warned = True
+
+    if not claimed:
+        return ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False)
+
+    if blocking_guardrails:
+        return ConformanceRecheckResult(
+            blocked=True,
+            review_id=f"guardrail_conformance_{blocking_guardrails[0]}",
+            detail=("; ".join(blocked_detail_parts))[:5000],
+            state=worst_state(claimed),
+            warned=advisory_warned,
+            claimed=True,
+        )
+    return ConformanceRecheckResult(
+        blocked=False,
+        review_id=None,
+        detail="; ".join(blocked_detail_parts)[:5000],
+        state=worst_state(claimed),
+        warned=advisory_warned,
+        claimed=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node-start orchestration (async, DB-backed)
+# ---------------------------------------------------------------------------
+
+
+async def load_node_guardrails(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: str | None,
+) -> list[Any]:
+    """Load guardrails bound to the pipeline (org-level + node-bound).
+
+    Mirrors the run-creation interception seam's row-loading, scoped to this
+    node: org-level rows (``node_id IS NULL``) AND rows bound to *node_id*.
+    Returns engine DTOs via ``to_engine_definition``.
+    """
+    from farna.core.guardrails import to_engine_definition
+    from farna.db.models.eval import Eval
+
+    stmt = select(Eval).where(
+        Eval.pipeline_id == pipeline_id,
+        Eval.organisation_id == org_id,
+        Eval.eval_type == "guardrail",
+        Eval.deleted_at.is_(None),
+    )
+    if node_id:
+        node_uuid = uuid.UUID(node_id) if _is_uuid(node_id) else None
+        stmt = stmt.where((Eval.node_id.is_(None)) | (Eval.node_id == node_uuid))
+    else:
+        stmt = stmt.where(Eval.node_id.is_(None))
+    rows = (await session.execute(stmt)).scalars().all()
+    return [to_engine_definition(row) for row in rows]
+
+
+async def load_claimed_guardrails(
+    session_factory: Any,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+) -> tuple[list[Any], bool]:
+    """Hoisted run-start claim discovery for the conformance re-check (FAR-215).
+
+    Loads ALL guardrail rows bound to the pipeline (org-level AND node-bound)
+    ONCE per run and returns only those carrying a conformance claim (a
+    non-empty ``required_capabilities`` config). The executor seeds the result
+    into the run-scoped conformance context, so the per-node check pays zero
+    DB round-trips when there are no claims and one query per run when there
+    are.
+
+    Returns ``(claimed, load_failed)``. ``load_failed`` is True when the load
+    could not be completed — the caller MUST fail CLOSED (treat as unknown for
+    block-action claims), never silently skip claims.
+    """
+    from farna.core.guardrails import to_engine_definition
+    from farna.db.models.eval import Eval
+
+    try:
+        async with session_factory() as session, session.begin():
+            await _set_rls(session, org_id)
+            stmt = select(Eval).where(
+                Eval.pipeline_id == pipeline_id,
+                Eval.organisation_id == org_id,
+                Eval.eval_type == "guardrail",
+                Eval.deleted_at.is_(None),
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        guardrails = [to_engine_definition(row) for row in rows]
+    except Exception:
+        _log.exception("guardrail.conformance.run_start_load_failed", extra={"org_id": str(org_id)})
+        return [], True
+    claimed = [g for g in guardrails if _required_of(g.config if hasattr(g, "config") else {})]
+    return claimed, False
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _claims_for_node(claimed_guardrails: list[Any], node_id: str | None) -> list[Any]:
+    """Filter hoisted claimed guardrail DTOs down to THIS node's bindings.
+
+    Mirrors ``load_node_guardrails``'s node scoping in memory: org-level rows
+    (``node_id IS NULL``) apply to every node; node-bound rows apply only when
+    the node id is a UUID equal to the row's bound node.
+    """
+    org_level = [g for g in claimed_guardrails if getattr(g, "node_id", None) is None]
+    if node_id is None or not _is_uuid(node_id):
+        return org_level
+    return org_level + [g for g in claimed_guardrails if getattr(g, "node_id", None) == node_id]
+
+
+async def check_node_start(
+    session_factory: Any,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: str | None,
+    connector_instance_ids: list[uuid.UUID],
+    environment_profile_id: uuid.UUID | None,
+    agent_id: uuid.UUID | None,
+    node_def: dict[str, Any] | None = None,
+    claimed_guardrails: list[Any] | None = None,
+    claims_load_failed: bool = False,
+) -> ConformanceRecheckResult:
+    """Full node-start re-check: load guardrails, build live manifest, decide.
+
+    This is the single seam the node runner invokes at node start. It performs
+    its own short-lived, org-scoped DB session (RLS set inside the
+    transaction). A manifest/DB failure degrades to ``unknown`` for block
+    guardrails (fail CLOSED — never fail open) via ``build_live_manifest``'s
+    unreadable handling. A failure to LOAD guardrails entirely is also fail
+    CLOSED: we cannot confirm whether a block claim exists, so the node is
+    blocked with state ``unknown`` (deny on error) rather than silently
+    continuing. The reader never raises — the node decision is what matters,
+    and a broken reader must not crash the node into a terminal error.
+
+    *node_def* is the node's definition dict. For a ``sandbox_agent`` node it
+    contributes the mechanically-derived sandbox capability surface to the
+    manifest (FAR-212 PR A); for every other node type it is inert.
+
+    *claimed_guardrails* is the hoisted list of claimed guardrail DTOs the
+    executor precomputed ONCE at run start (one query per run). When provided,
+    the per-node guardrail-load query is skipped entirely — the node scoping
+    (org-level + node-bound) happens in memory. ``claims_load_failed`` marks a
+    run-start claim-discovery failure and fails CLOSED (unknown blocks). When
+    *claimed_guardrails* is ``None`` the legacy per-node DB load is used.
+    """
+    if claims_load_failed:
+        # Fail CLOSED on run-start claim-discovery failure: cannot confirm
+        # whether a block claim exists, so the node is blocked with state
+        # unknown (never fail open).
+        return ConformanceRecheckResult(
+            blocked=True,
+            review_id="guardrail_conformance_check_failed",
+            detail="mid-run capability re-check could not load bound guardrails; failing closed",
+            state="unknown",
+            warned=False,
+            claimed=True,
+        )
+
+    if claimed_guardrails is not None:
+        # Hoisted path: the executor precomputed the claimed DTOs at run start.
+        # Filter to THIS node's bindings in memory — no per-node DB round-trip.
+        claimed = _claims_for_node(claimed_guardrails, node_id)
+    else:
+        async with session_factory() as session, session.begin():
+            await _set_rls(session, org_id)
+            try:
+                guardrails = await load_node_guardrails(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    node_id=node_id,
+                )
+            except Exception:
+                _log.exception("guardrail.conformance.load_failed", extra={"org_id": str(org_id)})
+                # Fail CLOSED on load failure: cannot confirm conformance, so
+                # the node is blocked with state unknown (never fail open).
+                return ConformanceRecheckResult(
+                    blocked=True,
+                    review_id="guardrail_conformance_check_failed",
+                    detail="mid-run capability re-check could not load bound guardrails; failing closed",
+                    state="unknown",
+                    warned=False,
+                    claimed=True,
+                )
+            claimed = [g for g in guardrails if _required_of(g.config if hasattr(g, "config") else {})]
+
+    if not claimed:
+        # Zero-claim fast path — no manifest round-trip needed.
+        return ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False)
+
+    async with session_factory() as session, session.begin():
+        await _set_rls(session, org_id)
+        registered = await build_live_manifest(
+            session,
+            org_id=org_id,
+            connector_instance_ids=connector_instance_ids,
+            environment_profile_id=environment_profile_id,
+            agent_id=agent_id,
+            node_def=node_def,
+        )
+    return evaluate_conformance(claimed, registered)
+
+
+async def _set_rls(session: Any, org_id: uuid.UUID) -> None:
+    from farna.db.rls import set_rls_execution_context, set_rls_org
+
+    await set_rls_org(session, org_id)
+    await set_rls_execution_context(session)
+
+
+__all__ = [
+    "ConformanceRecheckResult",
+    "build_live_manifest",
+    "check_node_start",
+    "decide_conformance",
+    "evaluate_conformance",
+    "find_type_qualified_claim_guardrails",
+    "load_claimed_guardrails",
+    "load_node_guardrails",
+    "type_qualified_claims",
+    "worst_state",
+]

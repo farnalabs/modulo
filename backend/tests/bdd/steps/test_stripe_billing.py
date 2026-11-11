@@ -4,7 +4,7 @@ Wired into the executing BDD suite, closing the ``feat-license`` "stripe
 webhook cited as an adjacent but not behaviour-covered" gap
 (``docs/product-map/licensing/license.md``): ``stripe_billing.feature`` ships
 under ``tests/bdd/features/licensing/`` and drives the REAL
-``POST /api/v1/webhooks/stripe`` route (``modulo.api.routes.stripe_webhook``)
+``POST /api/v1/webhooks/stripe`` route (``farna.api.routes.stripe_webhook``)
 with only the outbound fulfilment seam patched (``fulfil_team_purchase`` runs
 as a FastAPI BackgroundTask) and the ``get_settings`` seam swapped for a
 stripe-configured Settings object — mirroring the hermetic-mock pattern of the
@@ -34,7 +34,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/stripe_billing.feature")
 
 _SECRET = "whsec_test_123"
-_FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_team_purchase"
+_FULFIL_MODULE = "farna.api.routes.stripe_webhook.fulfil_team_purchase"
 
 _FULFIL_MOCK_ATTR = "_stripe_fulfil_mock"
 
@@ -81,8 +81,8 @@ def _setup_client(ctx: dict[str, Any]) -> None:
     ``stripe_enabled`` False so the route refuses with 404 before any
     signature work.
     """
-    from modulo.api.main import app as _app
-    from modulo.settings import Settings, get_settings
+    from farna.api.main import app as _app
+    from farna.settings import Settings, get_settings
 
     configured = ctx.get("stripe_configured", True)
     _settings = Settings(
@@ -121,7 +121,7 @@ def _post(request: Any, ctx: dict[str, Any], body: bytes, signature: str | None)
     """
     from fastapi.testclient import TestClient
 
-    from modulo.api.main import app
+    from farna.api.main import app
 
     _setup_client(ctx)
     fulfil = getattr(request.node, _FULFIL_MOCK_ATTR, None)

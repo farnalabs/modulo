@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.core.system_map_persistence import (
+from farna.core.system_map_persistence import (
     _DISCOVERY_NAMESPACE,
     SystemMapDiscoveryRepository,
     SystemMapNameConflictError,
 )
-from modulo.db.models.system_map import SystemMap
+from farna.db.models.system_map import SystemMap
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

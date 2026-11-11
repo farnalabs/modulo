@@ -18,15 +18,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine.recovery import (
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
     GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     guardrail_override,
 )
-from modulo.db.crud.run import _input_hash
+from farna.db.crud.run import _input_hash
 
 _ORG_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
@@ -135,7 +135,7 @@ async def test_guardrail_override_clean_input_flips_to_pending():
     session = _mock_session()
     _session_execute_results(session, run=run, rows=[_guardrail_row()])
 
-    with patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
+    with patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
         result = await guardrail_override(
             session,
             org_id=_ORG_ID,
@@ -184,7 +184,7 @@ async def test_guardrail_override_still_violating_input_is_reblocked():
     session.execute = AsyncMock(side_effect=[run_result, pipeline_result, run_result, rows_result])
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         pytest.raises(GuardrailOverrideRejectedError) as exc_info,
     ):
         await guardrail_override(
@@ -270,7 +270,7 @@ async def test_guardrail_override_persists_post_redaction_payload():
     session = _mock_session()
     _session_execute_results(session, run=run, rows=[redact_row])
 
-    with patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()):
+    with patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()):
         result = await guardrail_override(
             session,
             org_id=_ORG_ID,
@@ -289,7 +289,7 @@ async def test_guardrail_override_destroy_mechanism_error_fails_closed():
     re-run pass must fail CLOSED (override rejected, run stays terminal), not
     surface as an unhandled 500 from the operator override endpoint.
     """
-    from modulo.core.guardrails import GuardrailRedactionMechanismError
+    from farna.core.guardrails import GuardrailRedactionMechanismError
 
     run = _make_run()
     session = _mock_session()
@@ -304,10 +304,10 @@ async def test_guardrail_override_destroy_mechanism_error_fails_closed():
 
     with (
         patch(
-            "modulo.core.guardrails.run_interception_pass_async",
+            "farna.core.guardrails.run_interception_pass_async",
             AsyncMock(side_effect=GuardrailRedactionMechanismError("guardrail_destroy_pepper unset")),
         ),
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         pytest.raises(GuardrailOverrideRejectedError) as exc_info,
     ):
         await guardrail_override(
@@ -351,7 +351,7 @@ async def test_guardrail_override_node_started_run_flips_to_running_for_resume()
     session = _mock_session()
     _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=True)
 
-    with patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
+    with patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
         result = await guardrail_override(
             session,
             org_id=_ORG_ID,
@@ -377,7 +377,7 @@ async def test_guardrail_override_node_started_run_flips_to_running_for_resume()
     # ``claim_resume_run_async``'s stale-running arm matches on the first try.
     from datetime import UTC, datetime
 
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     stale_seconds = int(get_settings().run_claim_stale_seconds)
     assert result.heartbeat_at is not None
@@ -402,7 +402,7 @@ async def test_guardrail_override_node_started_run_without_checkpoint_fails_clos
     _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=False)
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         pytest.raises(GuardrailOverrideNoCheckpointError),
     ):
         await guardrail_override(
@@ -440,7 +440,7 @@ async def test_guardrail_override_node_started_run_without_thread_id_fails_close
     _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=True)
 
     with (
-        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("farna.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
         pytest.raises(GuardrailOverrideNoCheckpointError),
     ):
         await guardrail_override(
@@ -465,7 +465,7 @@ def test_guardrail_override_job_type_follows_the_flip_target():
     """FAR-1711 (m1): the re-dispatch job type comes from the ONE shared
     predicate ``guardrail_override_job_type`` (owned by the module that owns
     the flip target), so the route never re-derives it from a magic status."""
-    from modulo.core.pipeline_engine.recovery import guardrail_override_job_type
+    from farna.core.pipeline_engine.recovery import guardrail_override_job_type
 
     node_started_run = _make_run(status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
     zero_node_run = _make_run(status="pending")

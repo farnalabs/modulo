@@ -21,10 +21,10 @@ from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import modulo.core.cron_helpers as ch
-import modulo.core.pipeline_execution as pe
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+import farna.core.cron_helpers as ch
+import farna.core.pipeline_execution as pe
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
 
 def _zero_progress_row(

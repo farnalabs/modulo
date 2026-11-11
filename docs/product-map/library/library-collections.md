@@ -3,12 +3,12 @@ id: feat-library-collections
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/library_service/install.py
-  - backend/src/modulo/core/library_service/uninstall.py
-  - backend/src/modulo/core/library_service/grant.py
-  - backend/src/modulo/core/library_service/runnability.py
-  - backend/src/modulo/core/library_service/upgrade.py
-  - backend/src/modulo/api/routes/library.py
+  - backend/src/farna/core/library_service/install.py
+  - backend/src/farna/core/library_service/uninstall.py
+  - backend/src/farna/core/library_service/grant.py
+  - backend/src/farna/core/library_service/runnability.py
+  - backend/src/farna/core/library_service/upgrade.py
+  - backend/src/farna/api/routes/library.py
 unit-tests:
   - backend/tests/unit/api/test_library_collection.py
   - backend/tests/integration/test_library_collection_lifecycle.py

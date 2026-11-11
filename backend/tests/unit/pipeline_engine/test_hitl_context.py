@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langgraph.graph import END
 
-from modulo.core.pipeline_engine import graph_cache, hitl_context
-from modulo.core.pipeline_engine.hitl_context import (
+from farna.core.pipeline_engine import graph_cache, hitl_context
+from farna.core.pipeline_engine.hitl_context import (
     _NAME_FIELD_MAX_CHARS,
     _TEXT_FIELD_MAX_CHARS,
     ARTIFACTS_BUDGET_CHARS,
@@ -34,7 +34,7 @@ from modulo.core.pipeline_engine.hitl_context import (
     serialize_value,
     slice_with_marker,
 )
-from modulo.db.crud.hitl_review_config import make_review_id
+from farna.db.crud.hitl_review_config import make_review_id
 
 _UUID_SRC = "550e8400-e29b-41d4-a716-446655440000"
 _UUID_TGT = "660e8400-e29b-41d4-a716-446655440001"
@@ -91,7 +91,7 @@ async def _build(
 ) -> dict[str, Any] | None:
     session = _make_session(graph_json)
     with (
-        patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=_run_mock(uuid.uuid4()))),
+        patch("farna.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=_run_mock(uuid.uuid4()))),
     ):
         return await build_hitl_review_context(
             session,
@@ -289,7 +289,7 @@ class TestLegacyFallback:
 
     async def test_missing_run_yields_none(self):
         session = _make_session({"nodes": [], "edges": []})
-        with patch("modulo.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=None)):
+        with patch("farna.core.pipeline_engine.hitl_context.get_run", AsyncMock(return_value=None)):
             context = await build_hitl_review_context(
                 session,
                 run_id=_RUN_ID,
@@ -305,7 +305,7 @@ class TestFailureIsolation:
     async def test_capture_failure_returns_none_and_never_raises(self):
         session = AsyncMock()
         with patch(
-            "modulo.core.pipeline_engine.hitl_context.get_run",
+            "farna.core.pipeline_engine.hitl_context.get_run",
             AsyncMock(side_effect=RuntimeError("db exploded")),
         ):
             context = await build_hitl_review_context(
@@ -322,7 +322,7 @@ class TestFailureIsolation:
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=RuntimeError("snapshot read failed"))
         with patch(
-            "modulo.core.pipeline_engine.hitl_context.get_run",
+            "farna.core.pipeline_engine.hitl_context.get_run",
             AsyncMock(return_value=_run_mock(uuid.uuid4())),
         ):
             context = await build_hitl_review_context(
@@ -363,10 +363,10 @@ class TestExtractionSeamContracts:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.hitl_context.get_run",
+                "farna.core.pipeline_engine.hitl_context.get_run",
                 AsyncMock(return_value=_run_mock(uuid.uuid4())),
             ),
-            patch("modulo.core.pipeline_engine.hitl_context.config_from_graph", _boom),
+            patch("farna.core.pipeline_engine.hitl_context.config_from_graph", _boom),
             caplog.at_level(logging.WARNING),
         ):
             context = await build_hitl_review_context(
@@ -395,7 +395,7 @@ class TestExtractionSeamContracts:
             seen_graphs.append(graph_json)
             return real_config_from_graph(graph_json, review_id)
 
-        with patch("modulo.core.pipeline_engine.hitl_context.config_from_graph", _spy):
+        with patch("farna.core.pipeline_engine.hitl_context.config_from_graph", _spy):
             context = await _build(snapshot_graph)
 
         assert context is not None
@@ -455,7 +455,7 @@ class TestExtractedHelperEdgePaths:
         ``unknown`` and no field is resolved from a nonexistent graph."""
         session = _make_session(None)
         with patch(
-            "modulo.core.pipeline_engine.hitl_context.get_run",
+            "farna.core.pipeline_engine.hitl_context.get_run",
             AsyncMock(return_value=_run_mock(None)),
         ):
             context = await build_hitl_review_context(
@@ -1305,7 +1305,7 @@ class TestRejectConsequenceAgreement:
             raise RuntimeError(msg)
 
         with (
-            patch("modulo.core.pipeline_engine.hitl_context._resolve_consequences", _boom),
+            patch("farna.core.pipeline_engine.hitl_context._resolve_consequences", _boom),
             caplog.at_level(logging.WARNING),
         ):
             context = await _build(graph)

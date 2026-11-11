@@ -48,8 +48,8 @@ def _count_result(value: int) -> MagicMock:
 
 class TestCreateNotification:
     async def test_sets_default_expiry_90_days_out(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.notifications.Notification", return_value=_make_notification()) as notif_cls:
-            from modulo.db.crud.notifications import create_notification
+        with patch("farna.db.crud.notifications.Notification", return_value=_make_notification()) as notif_cls:
+            from farna.db.crud.notifications import create_notification
 
             result = await create_notification(
                 mock_session,
@@ -69,8 +69,8 @@ class TestCreateNotification:
             mock_session.flush.assert_awaited_once()
 
     async def test_explicit_expiry_respected(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.notifications.Notification", return_value=_make_notification()) as notif_cls:
-            from modulo.db.crud.notifications import create_notification
+        with patch("farna.db.crud.notifications.Notification", return_value=_make_notification()) as notif_cls:
+            from farna.db.crud.notifications import create_notification
 
             expiry = datetime(2031, 1, 1, tzinfo=UTC)
             await create_notification(
@@ -101,20 +101,20 @@ class TestGetNotification:
         mock_session.execute = AsyncMock(
             return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=notification))
         )
-        from modulo.db.crud.notifications import get_notification
+        from farna.db.crud.notifications import get_notification
 
         assert await get_notification(mock_session, org_id=_ORG_ID, notification_id=_NOTIF_ID) is notification
 
     async def test_with_user_id_applies_visibility_clause(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        from modulo.db.crud.notifications import get_notification
+        from farna.db.crud.notifications import get_notification
 
         result = await get_notification(mock_session, org_id=_ORG_ID, notification_id=_NOTIF_ID, user_id=_USER_ID)
         assert result is None
 
     async def test_missing_notification_returns_none(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        from modulo.db.crud.notifications import get_notification
+        from farna.db.crud.notifications import get_notification
 
         assert await get_notification(mock_session, org_id=_ORG_ID, notification_id=uuid.uuid4()) is None
 
@@ -123,7 +123,7 @@ class TestDashboardNotifications:
     async def test_returns_visible_notifications(self, mock_session: AsyncMock) -> None:
         notifications = [_make_notification(), _make_notification(level="error")]
         mock_session.execute = AsyncMock(return_value=_listing_result(notifications))
-        from modulo.db.crud.notifications import get_dashboard_notifications
+        from farna.db.crud.notifications import get_dashboard_notifications
 
         result = await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
         assert result == notifications
@@ -139,7 +139,7 @@ class TestDashboardNotifications:
         """
         from sqlalchemy.dialects import sqlite
 
-        from modulo.db.crud.notifications import DASHBOARD_LIMIT_MAX, get_dashboard_notifications
+        from farna.db.crud.notifications import DASHBOARD_LIMIT_MAX, get_dashboard_notifications
 
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
 
@@ -163,7 +163,7 @@ class TestDashboardNotifications:
         """
         from sqlalchemy.dialects import sqlite
 
-        from modulo.db.crud.notifications import get_dashboard_notifications
+        from farna.db.crud.notifications import get_dashboard_notifications
 
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
 
@@ -175,13 +175,13 @@ class TestDashboardNotifications:
 
     async def test_min_level_filter_admits_lower_levels(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
-        from modulo.db.crud.notifications import get_dashboard_notifications
+        from farna.db.crud.notifications import get_dashboard_notifications
 
         assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, min_level="debug")
 
     async def test_programming_error_returns_empty_list(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.notifications import get_dashboard_notifications
+        from farna.db.crud.notifications import get_dashboard_notifications
 
         assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
 
@@ -189,7 +189,7 @@ class TestDashboardNotifications:
 class TestNotificationsForUser:
     async def test_all_filters_applied(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
-        from modulo.db.crud.notifications import get_notifications_for_user
+        from farna.db.crud.notifications import get_notifications_for_user
 
         result = await get_notifications_for_user(
             mock_session,
@@ -206,7 +206,7 @@ class TestNotificationsForUser:
 
     async def test_status_filters_apply(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
-        from modulo.db.crud.notifications import get_notifications_for_user
+        from farna.db.crud.notifications import get_notifications_for_user
 
         for status in ("active", "dismissed_self", "dismissed_scope"):
             result = await get_notifications_for_user(
@@ -226,7 +226,7 @@ class TestNotificationsForUser:
         if live.
         """
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
-        from modulo.db.crud.notifications import get_notifications_for_user
+        from farna.db.crud.notifications import get_notifications_for_user
 
         for bogus in ("nope", "", "unread", "all", "expired"):
             with pytest.raises(ValueError, match="Unknown notification status filter"):
@@ -243,7 +243,7 @@ class TestNotificationsForUser:
         """The count shares the filter, so list and total can never disagree —
         including on the error path."""
         mock_session.execute = AsyncMock(return_value=_count_result(0))
-        from modulo.db.crud.notifications import count_notifications_for_user
+        from farna.db.crud.notifications import count_notifications_for_user
 
         with pytest.raises(ValueError, match="Unknown notification status filter"):
             await count_notifications_for_user(
@@ -256,7 +256,7 @@ class TestNotificationsForUser:
 
     async def test_programming_error_returns_empty_list(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.notifications import get_notifications_for_user
+        from farna.db.crud.notifications import get_notifications_for_user
 
         assert not await get_notifications_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
 
@@ -264,7 +264,7 @@ class TestNotificationsForUser:
 class TestCountNotifications:
     async def test_counts_with_filters(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_count_result(4))
-        from modulo.db.crud.notifications import count_notifications_for_user
+        from farna.db.crud.notifications import count_notifications_for_user
 
         result = await count_notifications_for_user(
             mock_session,
@@ -279,7 +279,7 @@ class TestCountNotifications:
 
     async def test_programming_error_returns_zero(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
-        from modulo.db.crud.notifications import count_notifications_for_user
+        from farna.db.crud.notifications import count_notifications_for_user
 
         assert await count_notifications_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 0
 
@@ -296,7 +296,7 @@ class TestCountNotifications:
                 ProgrammingError("42P01", None, Exception("boom")),
             ]
         )
-        from modulo.db.crud.notifications import get_unread_count
+        from farna.db.crud.notifications import get_unread_count
 
         assert await get_unread_count(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 2
         assert await get_unread_count(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 0
@@ -305,7 +305,7 @@ class TestCountNotifications:
 class TestDismissNotification:
     async def test_not_found_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         with pytest.raises(ValueError, match="not found"):
             await dismiss_notification(
@@ -317,7 +317,7 @@ class TestDismissNotification:
 
     async def test_scope_dismiss_refused_for_user_only_strategy(self, mock_session: AsyncMock) -> None:
         self._patch_notification_lookup(mock_session)
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         with pytest.raises(ValueError, match="cannot be dismissed for all users"):
             await dismiss_notification(
@@ -333,7 +333,7 @@ class TestDismissNotification:
             mock_session,
             notification=_make_notification(dismiss_strategy="org_admin"),
         )
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         with pytest.raises(ValueError, match="Only admins"):
             await dismiss_notification(
@@ -353,7 +353,7 @@ class TestDismissNotification:
                 MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
             ]
         )
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         result = await dismiss_notification(
             mock_session,
@@ -377,7 +377,7 @@ class TestDismissNotification:
                 MagicMock(scalar_one_or_none=MagicMock(return_value=MagicMock())),
             ]
         )
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         with pytest.raises(ValueError, match="already dismissed by this user"):
             await dismiss_notification(
@@ -400,7 +400,7 @@ class TestDismissNotification:
                 MagicMock(scalar_one_or_none=MagicMock(return_value=existing)),
             ]
         )
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         result = await dismiss_notification(
             mock_session,
@@ -420,7 +420,7 @@ class TestDismissNotification:
     ) -> None:
         """The privilege gate runs BEFORE the escalation branch, so escalating
         through a gate the actor cannot pass is impossible."""
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         # org_admin strategy + non-admin actor -> refused even with an existing
         # self dismissal that would otherwise escalate.
@@ -444,7 +444,7 @@ class TestDismissNotification:
     async def test_identical_scope_duplicate_still_raises(self, mock_session: AsyncMock) -> None:
         """Escalation is self -> scope ONLY. Re-dismissing at the SAME scope
         keeps the pre-existing refusal (idempotent no-op, not an escalation)."""
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         existing = MagicMock()
         existing.dismiss_scope = "scope"
@@ -468,7 +468,7 @@ class TestDismissNotification:
     async def test_integrity_error_wrapped_as_value_error(self, mock_session: AsyncMock) -> None:
         self._patch_notification_lookup(mock_session)
         mock_session.flush = AsyncMock(side_effect=IntegrityError("dup", None, Exception("dup")))
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         with pytest.raises(ValueError, match="concurrent"):
             await dismiss_notification(
@@ -486,7 +486,7 @@ class TestDismissNotification:
                 MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
             ]
         )
-        from modulo.db.crud.notifications import dismiss_notification
+        from farna.db.crud.notifications import dismiss_notification
 
         result = await dismiss_notification(
             mock_session,
@@ -508,7 +508,7 @@ class TestDismissNotification:
                 MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
             ]
         )
-        from modulo.db.crud.notifications import review_later
+        from farna.db.crud.notifications import review_later
 
         result = await review_later(
             mock_session,
@@ -522,7 +522,7 @@ class TestDismissNotification:
 
     async def test_review_later_propagates_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        from modulo.db.crud.notifications import review_later
+        from farna.db.crud.notifications import review_later
 
         with pytest.raises(ValueError, match="not found"):
             await review_later(
@@ -550,12 +550,12 @@ class TestPreferences:
         scalars.all = MagicMock(return_value=["billing", "run"])
         result.scalars = MagicMock(return_value=scalars)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.notifications import get_opted_out_categories
+        from farna.db.crud.notifications import get_opted_out_categories
 
         assert await get_opted_out_categories(mock_session, org_id=_ORG_ID, account_id=_USER_ID) == {"billing", "run"}
 
     async def test_set_preferences_empty_is_noop(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import set_notification_preferences
+        from farna.db.crud.notifications import set_notification_preferences
 
         await set_notification_preferences(mock_session, org_id=_ORG_ID, account_id=_USER_ID, opt_outs={})
         mock_session.execute.assert_not_awaited()
@@ -568,7 +568,7 @@ class TestPreferences:
         existing_result.scalars = MagicMock(return_value=scalars)
         delete_result = MagicMock(rowcount=2)
         mock_session.execute = AsyncMock(side_effect=[existing_result, delete_result])
-        from modulo.db.crud.notifications import set_notification_preferences
+        from farna.db.crud.notifications import set_notification_preferences
 
         await set_notification_preferences(
             mock_session,
@@ -590,7 +590,7 @@ class TestLinkedRunState:
     """FAR-1234 — read-time resolution of a notification's linked run."""
 
     def test_linked_run_id_parses_run_deep_links(self) -> None:
-        from modulo.db.crud.notifications import linked_run_id
+        from farna.db.crud.notifications import linked_run_id
 
         run_id = uuid.uuid4()
         assert linked_run_id(f"/runs/{run_id}") == run_id
@@ -598,7 +598,7 @@ class TestLinkedRunState:
         assert linked_run_id(f"/runs/{run_id}#node-3") == run_id
 
     def test_linked_run_id_rejects_non_run_and_unresolved_links(self) -> None:
-        from modulo.db.crud.notifications import linked_run_id
+        from farna.db.crud.notifications import linked_run_id
 
         run_id = uuid.uuid4()
         assert linked_run_id(None) is None
@@ -612,7 +612,7 @@ class TestLinkedRunState:
         assert linked_run_id(f"https://evil.example/runs/{run_id}") is None
 
     async def test_no_run_link_short_circuits_without_a_query(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import get_linked_run_states
+        from farna.db.crud.notifications import get_linked_run_states
 
         notification = _make_notification()
         notification.action_url = "/evals"
@@ -623,7 +623,7 @@ class TestLinkedRunState:
         mock_session.execute.assert_not_awaited()
 
     async def test_resolves_terminal_run_state_and_cancel_reason(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import get_linked_run_states
+        from farna.db.crud.notifications import get_linked_run_states
 
         run_id = uuid.uuid4()
         notification = _make_notification()
@@ -646,7 +646,7 @@ class TestLinkedRunState:
         assert "runs" in where_clause
 
     async def test_non_terminal_run_is_not_marked_terminal(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import get_linked_run_states
+        from farna.db.crud.notifications import get_linked_run_states
 
         run_id = uuid.uuid4()
         notification = _make_notification()
@@ -663,7 +663,7 @@ class TestLinkedRunState:
 
     async def test_unreadable_run_degrades_to_no_metadata(self, mock_session: AsyncMock) -> None:
         """A deleted / invisible run row must not fail the notification read."""
-        from modulo.db.crud.notifications import get_linked_run_states
+        from farna.db.crud.notifications import get_linked_run_states
 
         notification = _make_notification()
         notification.action_url = f"/runs/{uuid.uuid4()}"
@@ -681,7 +681,7 @@ class TestMarkAllRead:
     """FAR-249 — bulk per-user self-dismissal ("mark all read")."""
 
     async def test_files_self_dismissals_for_every_live_visible_row(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import mark_all_read_for_user
+        from farna.db.crud.notifications import mark_all_read_for_user
 
         live_ids = [uuid.uuid4(), uuid.uuid4()]
         result = MagicMock()
@@ -705,7 +705,7 @@ class TestMarkAllRead:
         """The select must carry visibility, not-expired and not-dismissed."""
         from sqlalchemy.dialects import sqlite
 
-        from modulo.db.crud.notifications import mark_all_read_for_user
+        from farna.db.crud.notifications import mark_all_read_for_user
 
         result = MagicMock()
         result.all = MagicMock(return_value=[])
@@ -719,7 +719,7 @@ class TestMarkAllRead:
         assert "organisation_id" in sql
 
     async def test_no_live_rows_is_a_noop(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.notifications import mark_all_read_for_user
+        from farna.db.crud.notifications import mark_all_read_for_user
 
         result = MagicMock()
         result.all = MagicMock(return_value=[])
@@ -736,7 +736,7 @@ class TestMarkAllRead:
         ``ProgrammingError`` and ``return 0``, so a DB/RLS failure answered the
         route with HTTP 200 ``{marked: 0}`` instead of its intended 501. The
         read paths degrade to empty; the write path must fail loud."""
-        from modulo.db.crud.notifications import mark_all_read_for_user
+        from farna.db.crud.notifications import mark_all_read_for_user
 
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
 
@@ -745,7 +745,7 @@ class TestMarkAllRead:
 
     async def test_concurrent_duplicate_raises_value_error(self, mock_session: AsyncMock) -> None:
         """A concurrent self-dismissal of the same rows surfaces as ValueError."""
-        from modulo.db.crud.notifications import mark_all_read_for_user
+        from farna.db.crud.notifications import mark_all_read_for_user
 
         result = MagicMock()
         result.all = MagicMock(return_value=[(_NOTIF_ID,)])

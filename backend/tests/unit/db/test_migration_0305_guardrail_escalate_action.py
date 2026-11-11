@@ -28,10 +28,10 @@ from unittest.mock import MagicMock, patch
 
 from sqlalchemy import CheckConstraint
 
-from modulo.core.guardrails import GuardrailAction
-from modulo.core.guardrails.loop_intercept import LoopInterceptOutcome
-from modulo.db.models.policy_gate import PolicyGate
-from modulo.db.models.policy_gate_decision import (
+from farna.core.guardrails import GuardrailAction
+from farna.core.guardrails.loop_intercept import LoopInterceptOutcome
+from farna.db.models.policy_gate import PolicyGate
+from farna.db.models.policy_gate_decision import (
     RESOLVED_ACTION_VALUES,
     PolicyGateDecision,
 )
@@ -47,7 +47,7 @@ _GATES_ORIGINAL = "action IN ('warn', 'block')"
 _DECISIONS_WIDENED = "resolved_action IN ('continue', 'warn', 'block', 'escalate')"
 _DECISIONS_ORIGINAL = "resolved_action IN ('continue', 'warn', 'block')"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

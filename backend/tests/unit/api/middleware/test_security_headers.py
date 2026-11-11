@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.security_headers.SecurityHeadersMiddleware.
+"""Unit tests for farna.api.middleware.security_headers.SecurityHeadersMiddleware.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the security
 headers middleware. The happy-path headers were already covered; this pass
@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 EXPECTED_CSP = (
     "default-src 'self'; "
@@ -52,7 +52,7 @@ def _make_settings(**overrides: object) -> Settings:
 
 
 def _build_app(settings: Settings) -> FastAPI:
-    from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
+    from farna.api.middleware.security_headers import SecurityHeadersMiddleware
 
     app = FastAPI()
 
@@ -75,7 +75,7 @@ def _build_app(settings: Settings) -> FastAPI:
 @pytest.fixture
 def app() -> FastAPI:
     settings = _make_settings()
-    with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+    with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
         return _build_app(settings)
 
 
@@ -159,7 +159,7 @@ async def test_csp_defense_in_depth_directives(app: FastAPI) -> None:
 @pytest.mark.anyio
 async def test_debug_mode_appends_ws_to_csp_connect_src() -> None:
     settings = _make_settings(debug=True)
-    with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+    with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
         app = _build_app(settings)
         resp = await _get(app)
 
@@ -178,7 +178,7 @@ async def test_debug_mode_appends_ws_to_csp_connect_src() -> None:
 @pytest.mark.anyio
 async def test_hsts_not_sent_in_debug_mode() -> None:
     settings = _make_settings(debug=True)
-    with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+    with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
         app = _build_app(settings)
         resp = await _get(app)
 
@@ -189,7 +189,7 @@ async def test_hsts_not_sent_in_debug_mode() -> None:
 @pytest.mark.anyio
 async def test_monitor_domains_appended_to_csp_connect_src() -> None:
     settings = _make_settings(modulo_monitor_domains="https://monitor.internal *.ingest.modulo.dev")
-    with patch("modulo.api.middleware.security_headers.get_settings", return_value=settings):
+    with patch("farna.api.middleware.security_headers.get_settings", return_value=settings):
         app = _build_app(settings)
         resp = await _get(app)
 

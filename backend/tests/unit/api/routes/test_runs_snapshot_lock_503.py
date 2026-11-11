@@ -21,12 +21,12 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.exceptions import SnapshotLockNotAvailableError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -81,13 +81,13 @@ def test_post_runs_maps_snapshot_lock_contention_to_retryable_503(client: TestCl
     and states the contention, not a swallowed generic 500."""
     with (
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             new=AsyncMock(side_effect=SnapshotLockNotAvailableError("allocation lock busy")),
         ),
-        patch("modulo.api.routes.runs.get_pipeline", new=AsyncMock(return_value=MagicMock(id=_PIPELINE_ID))),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_user_context", new=AsyncMock()),
-        patch("modulo.db.settings_resolver.resolve_authz_enforce", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.runs.get_pipeline", new=AsyncMock(return_value=MagicMock(id=_PIPELINE_ID))),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_user_context", new=AsyncMock()),
+        patch("farna.db.settings_resolver.resolve_authz_enforce", new=AsyncMock(return_value=False)),
     ):
         resp = client.post(
             "/api/v1/runs",

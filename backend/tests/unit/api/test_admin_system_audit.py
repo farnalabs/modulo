@@ -19,12 +19,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.admin_system_audit import admin_list_system_audit_events
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.admin_system_audit import admin_list_system_audit_events
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import all_features
 
@@ -98,7 +98,7 @@ def _page_return_value() -> tuple[list[object], int]:
 
 def _patch_read(return_value: tuple[list[object], int] | None = None):
     return patch(
-        "modulo.api.routes.admin_system_audit.list_system_audit_events",
+        "farna.api.routes.admin_system_audit.list_system_audit_events",
         new=AsyncMock(return_value=return_value or _page_return_value()),
     )
 
@@ -251,7 +251,7 @@ class TestDbErrorMapping:
         session = _make_session()
         client = _build(session, _principal(system_admin=True))
         with patch(
-            "modulo.api.routes.admin_system_audit.list_system_audit_events",
+            "farna.api.routes.admin_system_audit.list_system_audit_events",
             new=AsyncMock(side_effect=ProgrammingError("", "", "")),
         ):
             resp = client.get(_URL)
@@ -262,7 +262,7 @@ class TestDbErrorMapping:
         session = _make_session()
         client = _build(session, _principal(system_admin=True))
         with patch(
-            "modulo.api.routes.admin_system_audit.list_system_audit_events",
+            "farna.api.routes.admin_system_audit.list_system_audit_events",
             new=AsyncMock(side_effect=SQLAlchemyError("connection lost")),
         ):
             resp = client.get(_URL)
@@ -273,7 +273,7 @@ class TestDbErrorMapping:
         session = _make_session()
         client = _build(session, _principal(system_admin=True))
         with patch(
-            "modulo.api.routes.admin_system_audit.list_system_audit_events",
+            "farna.api.routes.admin_system_audit.list_system_audit_events",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ):
             resp = client.get(_URL)
@@ -297,7 +297,7 @@ class TestExceptionPassthrough:
         exc = HTTPException(status_code=409, detail="conflict")
         with (
             patch(
-                "modulo.api.routes.admin_system_audit.list_system_audit_events",
+                "farna.api.routes.admin_system_audit.list_system_audit_events",
                 new=AsyncMock(side_effect=exc),
             ),
             pytest.raises(HTTPException) as raised,
@@ -314,7 +314,7 @@ class TestExceptionPassthrough:
         session = _make_session()
         with (
             patch(
-                "modulo.api.routes.admin_system_audit.list_system_audit_events",
+                "farna.api.routes.admin_system_audit.list_system_audit_events",
                 new=AsyncMock(side_effect=asyncio.CancelledError),
             ),
             pytest.raises(asyncio.CancelledError),

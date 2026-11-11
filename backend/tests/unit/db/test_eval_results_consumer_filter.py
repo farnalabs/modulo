@@ -25,17 +25,17 @@ from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.routes.admin import _eval_by_type, _eval_summary
-from modulo.api.routes.dashboard import _eval_rate_window
-from modulo.api.routes.variant_batches import _batch_load_eval_stats
-from modulo.db.crud.eval_run import get_run_evals
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from farna.api.routes.admin import _eval_by_type, _eval_summary
+from farna.api.routes.dashboard import _eval_rate_window
+from farna.api.routes.variant_batches import _batch_load_eval_stats
+from farna.db.crud.eval_run import get_run_evals
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -167,7 +167,7 @@ async def test_prompt_optimizer_feed_excludes_guardrail_rows(session: AsyncSessi
     guardrail's inverted passed semantics (regex matched = violation) would
     corrupt the optimizer's failure context. Distinct code path from the SQL
     clause: this filter runs in Python after the by-id fetch."""
-    from modulo.db.crud.agent import get_eval_results_with_defs
+    from farna.db.crud.agent import get_eval_results_with_defs
 
     run_id = await _seed_run(session)
     guardrail_id = await _seed_eval_def(session, eval_type="guardrail")

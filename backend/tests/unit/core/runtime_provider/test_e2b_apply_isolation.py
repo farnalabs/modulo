@@ -35,18 +35,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.sandbox_policy import (
+from farna.core.pipeline_engine.sandbox_policy import (
     apply_sandbox_policy,
     gh_pr_guard_marker_path,
 )
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     RuntimeProviderError,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 _FIXED_ALLOWLIST: list[dict[str, Any]] = [{"host": "api.example.com", "port": 443}]
 
@@ -417,7 +417,7 @@ async def test_apply_isolation_threads_guard_owner_into_the_run_ledger() -> None
     its own slot (a node retry), while a DIFFERENT node of the same run is
     denied — which is what makes the second flagged node install a
     pre-planted refusal instead of a fresh claimable marker."""
-    from modulo.core.pipeline_engine.sandbox_policy import (
+    from farna.core.pipeline_engine.sandbox_policy import (
         _GH_PR_GUARD_CLAIM_SENTINEL,
         acquire_run_pr_guard,
         reset_run_pr_guard_claims,

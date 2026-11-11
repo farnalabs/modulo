@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-from modulo.core import ssrf
+from farna.core import ssrf
 
 
 @pytest.mark.parametrize(

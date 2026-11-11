@@ -9,14 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
     ConnectorResult,
     ConnectorType,
 )
-from modulo.core.plugin_registry import (
+from farna.core.plugin_registry import (
     PluginHealth,
     PluginManifest,
     PluginNotFoundError,
@@ -24,7 +24,7 @@ from modulo.core.plugin_registry import (
     get_plugin_registry,
     reset_plugin_registry,
 )
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from farna.model_backends.base import HealthResult, ModelBackendBase
 
 # ---------------------------------------------------------------------------
 # Stub plugin implementations for testing
@@ -262,7 +262,7 @@ def test_register_connector_type_overwrite_logs_warning(caplog):
     m1 = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
     m2 = PluginManifest(PLUGIN_ID="p2", display_name="P2", description="", version="1")
     registry.register_connector_type("dup", _build_stub_connector, m1)
-    with caplog.at_level("WARNING", logger="modulo.core.plugin_registry"):
+    with caplog.at_level("WARNING", logger="farna.core.plugin_registry"):
         registry.register_connector_type("dup", _build_stub_connector, m2)
     assert any("Overwriting existing connector type 'dup'" in r.message for r in caplog.records)
     assert registry.has_connector_type("dup")
@@ -275,7 +275,7 @@ def test_register_model_backend_overwrite_logs_warning(caplog):
     m1 = PluginManifest(PLUGIN_ID="p1", display_name="P1", description="", version="1")
     m2 = PluginManifest(PLUGIN_ID="p2", display_name="P2", description="", version="1")
     registry.register_model_backend("dup", _build_stub_backend, m1)
-    with caplog.at_level("WARNING", logger="modulo.core.plugin_registry"):
+    with caplog.at_level("WARNING", logger="farna.core.plugin_registry"):
         registry.register_model_backend("dup", _build_stub_backend, m2)
     assert any("Overwriting existing model backend 'dup'" in r.message for r in caplog.records)
     assert registry.has_model_backend("dup")
@@ -292,7 +292,7 @@ def test_health_check_cancelled_error_propagates():
     registry.register_connector_type("t1", _build_stub_connector, manifest)
     with (
         patch(
-            "modulo.core.plugin_registry.importlib.metadata.metadata",
+            "farna.core.plugin_registry.importlib.metadata.metadata",
             side_effect=asyncio.CancelledError,
         ),
         pytest.raises(asyncio.CancelledError),
@@ -310,7 +310,7 @@ def test_health_check_unexpected_metadata_error_reports_unhealthy():
     )
     registry.register_connector_type("t1", _build_stub_connector, manifest)
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.metadata",
+        "farna.core.plugin_registry.importlib.metadata.metadata",
         side_effect=OSError("metadata blew up"),
     ):
         result = registry.health_check("pkg-odd")
@@ -321,13 +321,13 @@ def test_health_check_unexpected_metadata_error_reports_unhealthy():
 def test_entry_point_errors_recorded_on_load_failure():
     registry = PluginRegistry()
     fail_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "broken_con",
         dist_name="pkg-broken",
         load_side_effect=ImportError,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[fail_ep], [], [], []],
     ):
         registry.discover_plugins()
@@ -391,7 +391,7 @@ def test_health_check_registered_plugin_metadata_found():
         version="1.0.0",
     )
     registry.register_connector_type("stub", _build_stub_connector, manifest)
-    with patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
+    with patch("farna.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
         result = registry.health_check("modulo-plugin-stub")
     assert result["modulo-plugin-stub"].ok is True
     assert result["modulo-plugin-stub"].detail == "Package metadata found"
@@ -408,7 +408,7 @@ def test_health_check_registered_plugin_package_missing():
     )
     registry.register_connector_type("stub", _build_stub_connector, manifest)
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.metadata",
+        "farna.core.plugin_registry.importlib.metadata.metadata",
         side_effect=importlib_metadata.PackageNotFoundError,
     ):
         result = registry.health_check("modulo-plugin-stub")
@@ -425,7 +425,7 @@ def test_health_check_all_plugins():
         version="0.0.0",
     )
     registry.register_connector_type("t1", _build_stub_connector, manifest)
-    with patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
+    with patch("farna.core.plugin_registry.importlib.metadata.metadata", return_value=object()):
         results = registry.health_check()
     assert isinstance(results, dict)
     assert "test-pkg" in results
@@ -538,7 +538,7 @@ def _discovery_stub_builder(config: dict, creds: dict) -> ConnectorBase:
 
 def test_discover_plugins_no_plugins():
     registry = PluginRegistry()
-    with patch("modulo.core.plugin_registry.importlib.metadata.entry_points", return_value=[]):
+    with patch("farna.core.plugin_registry.importlib.metadata.entry_points", return_value=[]):
         discovered = registry.discover_plugins()
     assert not discovered
     assert not registry.list_plugins()
@@ -548,14 +548,14 @@ def test_load_entry_point_uses_metadata_defaults():
     """Missing dist metadata keys fall back to plugin_id / '' / '0.0.0'."""
     registry = PluginRegistry()
     bare_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "c1",
         dist_name="pkg-bare",
         metadata={},
         load_result=_discovery_stub_builder,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[bare_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -571,13 +571,13 @@ def test_discover_plugins_returns_deep_copies():
     """Mutating the returned manifests must not corrupt the registry state."""
     registry = PluginRegistry()
     mock_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "c1",
         dist_name="pkg-copy",
         load_result=_discovery_stub_builder,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -594,23 +594,23 @@ def test_entry_point_error_cleared_on_successful_reload():
     """A prior load failure for a plugin_id is forgotten once a later load succeeds."""
     registry = PluginRegistry()
     fail_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "c1",
         dist_name="pkg-retry",
         load_side_effect=ImportError,
     )
     ok_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "c1",
         dist_name="pkg-retry",
         load_result=_discovery_stub_builder,
     )
     with (
         patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            "farna.core.plugin_registry.importlib.metadata.entry_points",
             side_effect=[[fail_ep], [], [], [], [ok_ep], [], [], []],
         ),
-        patch("modulo.core.plugin_registry.importlib.metadata.metadata", return_value=object()),
+        patch("farna.core.plugin_registry.importlib.metadata.metadata", return_value=object()),
     ):
         registry.discover_plugins()
         assert "pkg-retry" in registry.entry_point_errors
@@ -628,7 +628,7 @@ def test_discover_plugins_propagates_cancelled_error():
     registry = PluginRegistry()
     with (
         patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            "farna.core.plugin_registry.importlib.metadata.entry_points",
             side_effect=asyncio.CancelledError,
         ),
         pytest.raises(asyncio.CancelledError),
@@ -639,7 +639,7 @@ def test_discover_plugins_propagates_cancelled_error():
 def test_discover_plugins_swallows_entry_point_query_error():
     registry = PluginRegistry()
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=ValueError("boom"),
     ):
         discovered = registry.discover_plugins()
@@ -650,7 +650,7 @@ def test_discover_plugins_swallows_unexpected_entry_point_query_error():
     """A metadata provider failure must not abort startup discovery."""
     registry = PluginRegistry()
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=RuntimeError("metadata provider unavailable"),
     ):
         discovered = registry.discover_plugins()
@@ -662,7 +662,7 @@ def test_discover_plugins_propagates_stop_iteration():
     registry = PluginRegistry()
     with (
         patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            "farna.core.plugin_registry.importlib.metadata.entry_points",
             side_effect=StopIteration("exhausted"),
         ),
         pytest.raises(StopIteration),
@@ -674,13 +674,13 @@ def test_load_entry_point_failure_variants_are_skipped():
     for exc_type in (ImportError, TypeError, AttributeError, SyntaxError):
         registry = PluginRegistry()
         fail_ep = _make_mock_entry_point(
-            "modulo.connectors",
+            "farna.connectors",
             "broken_con",
             dist_name=f"pkg-{exc_type.__name__}",
             load_side_effect=exc_type,
         )
         with patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            "farna.core.plugin_registry.importlib.metadata.entry_points",
             side_effect=[[fail_ep], [], [], []],
         ):
             discovered = registry.discover_plugins()
@@ -702,13 +702,13 @@ def test_load_entry_point_unexpected_exception_is_surfaced_not_raised(exc_type):
     registry = PluginRegistry()
     dist_name = f"pkg-{exc_type.__name__.lower()}"
     fail_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "broken_con",
         dist_name=dist_name,
         load_side_effect=exc_type,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -724,19 +724,19 @@ def test_discover_plugins_isolates_broken_plugin_from_healthy_ones():
     """One plugin failing to load must not prevent the others being discovered."""
     registry = PluginRegistry()
     bad_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "bad_con",
         dist_name="pkg-bad",
         load_side_effect=RuntimeError,
     )
     good_ep = _make_mock_entry_point(
-        "modulo.model_backends",
+        "farna.model_backends",
         "good_backend",
         dist_name="pkg-good",
         load_result=_build_stub_backend,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[bad_ep], [good_ep], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -759,14 +759,14 @@ def test_load_entry_point_cancelled_error_is_reraised():
     """
     registry = PluginRegistry()
     cancelled_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "cancelled_con",
         dist_name="pkg-cancelled",
         load_side_effect=asyncio.CancelledError,
     )
     with (
         patch(
-            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            "farna.core.plugin_registry.importlib.metadata.entry_points",
             side_effect=[[cancelled_ep], [], [], []],
         ),
         pytest.raises(asyncio.CancelledError),
@@ -779,12 +779,12 @@ def test_load_entry_point_cancelled_error_is_reraised():
 def test_discover_plugins_connector_entry_point():
     registry = PluginRegistry()
     mock_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "my_demo_connector",
         load_result=_discovery_stub_builder,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[mock_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -800,12 +800,12 @@ def test_discover_plugins_connector_entry_point():
 def test_discover_plugins_backend_entry_point():
     registry = PluginRegistry()
     mock_ep = _make_mock_entry_point(
-        "modulo.model_backends",
+        "farna.model_backends",
         "my_demo_backend",
         load_result=_build_stub_backend,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[], [mock_ep], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -825,7 +825,7 @@ def test_discover_plugins_eval_entry_point():
         load_result=eval_builder,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[], [], [mock_ep], []],
     ):
         discovered = registry.discover_plugins()
@@ -845,7 +845,7 @@ def test_discover_plugins_schema_type_entry_point():
         load_result=schema_builder,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[], [], [], [mock_ep]],
     ):
         discovered = registry.discover_plugins()
@@ -871,7 +871,7 @@ def test_discover_plugins_eval_and_schema_type_merge():
         load_result=lambda config: {"name": "s1"},
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[], [], [ep1], [ep2]],
     ):
         registry.discover_plugins()
@@ -884,10 +884,10 @@ def test_discover_plugins_eval_and_schema_type_merge():
 def test_discover_plugins_both_groups():
     """Discovering from both entry-point groups populates connectors and backends."""
     registry = PluginRegistry()
-    ep1 = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-a", load_result=_discovery_stub_builder)
-    ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend)
+    ep1 = _make_mock_entry_point("farna.connectors", "c1", dist_name="pkg-a", load_result=_discovery_stub_builder)
+    ep2 = _make_mock_entry_point("farna.model_backends", "b1", dist_name="pkg-b", load_result=_build_stub_backend)
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[ep1], [ep2], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -900,10 +900,10 @@ def test_discover_plugins_both_groups():
 def test_discover_plugins_duplicate_plugin_id():
     """When two entry points share the same dist name, capabilities are merged."""
     registry = PluginRegistry()
-    ep1 = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x", load_result=_discovery_stub_builder)
-    ep2 = _make_mock_entry_point("modulo.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
+    ep1 = _make_mock_entry_point("farna.connectors", "c1", dist_name="pkg-x", load_result=_discovery_stub_builder)
+    ep2 = _make_mock_entry_point("farna.model_backends", "b1", dist_name="pkg-x", load_result=_build_stub_backend)
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[ep1], [ep2], [], []],
     ):
         registry.discover_plugins()
@@ -917,10 +917,10 @@ def test_discover_plugins_duplicate_plugin_id():
 def test_discover_plugins_entry_point_no_dist():
     """An entry point without package metadata is registered as unhealthy, never skipped."""
     registry = PluginRegistry()
-    no_dist = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x")
+    no_dist = _make_mock_entry_point("farna.connectors", "c1", dist_name="pkg-x")
     no_dist.dist = None  # type: ignore[attr-defined]
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         return_value=[no_dist],
     ):
         discovered = registry.discover_plugins()
@@ -939,13 +939,13 @@ def test_discover_plugins_entry_point_load_failure():
     """If an entry point's load() raises, the plugin is marked unhealthy and skipped."""
     registry = PluginRegistry()
     fail_ep = _make_mock_entry_point(
-        "modulo.connectors",
+        "farna.connectors",
         "failing_con",
         dist_name="pkg-broken",
         load_side_effect=ImportError,
     )
     with patch(
-        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        "farna.core.plugin_registry.importlib.metadata.entry_points",
         side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
@@ -1005,7 +1005,7 @@ def test_empty_registry(method, args, expected):
 
 
 def test_reset_plugin_registry_invalidates_singleton():
-    from modulo.core import plugin_registry as registry_mod
+    from farna.core import plugin_registry as registry_mod
 
     before = get_plugin_registry()
     reset_plugin_registry()
@@ -1080,7 +1080,7 @@ def _exploding_function(config: dict[str, Any], creds: dict[str, Any]) -> Connec
 
 def test_callable_label_falls_back_to_type_qualname():
     # The helper the error handlers use.
-    from modulo.util import callable_label
+    from farna.util import callable_label
 
     assert callable_label(_exploding_function) == "_exploding_function"
     assert callable_label(_CallableObjectConnectorBuilder()) == "_CallableObjectConnectorBuilder"
@@ -1180,7 +1180,7 @@ def _entry_points_returning(eps: list[Any]) -> Any:
     """
 
     def _query(*, group: str) -> list[Any]:
-        return list(eps) if group == "modulo.connectors" else []
+        return list(eps) if group == "farna.connectors" else []
 
     return patch.object(importlib_metadata, "entry_points", side_effect=_query)
 

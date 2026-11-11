@@ -18,9 +18,9 @@ import pytest
 from sqlalchemy import NullPool, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from modulo.core import pipeline_execution as pe
-from modulo.core.pipeline_engine import PipelineExecutor
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.core import pipeline_execution as pe
+from farna.core.pipeline_engine import PipelineExecutor
+from farna.db.soft_delete import register_soft_delete_filter
 
 # The global soft-delete filter is registered by an IMPORT SIDE EFFECT; assert
 # the precondition in the module that depends on a plain ORM ``get_run`` read.

@@ -24,9 +24,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.api_keys import ApiKeyCreate, create_api_key_endpoint, revoke_api_key_endpoint
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings
+from farna.api.routes.api_keys import ApiKeyCreate, create_api_key_endpoint, revoke_api_key_endpoint
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings
 
 pytestmark = pytest.mark.integration
 
@@ -147,7 +147,7 @@ async def test_audit_append_without_org_context_is_rejected_under_rls(
     guarantee the positive test above could silently pass on a misconfigured
     Postgres where RLS was not actually enforced.
     """
-    from modulo.core.audit_logger import append_audit_event
+    from farna.core.audit_logger import append_audit_event
 
     with pytest.raises(SQLAlchemyError):
         async with rls_session.begin():

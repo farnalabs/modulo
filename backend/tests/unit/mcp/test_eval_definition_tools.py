@@ -9,7 +9,7 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     create_eval_definition,
     delete_eval_definition,
     update_eval_definition,
@@ -70,7 +70,7 @@ def _make_session_cm(return_obj: object, side_effect: list[object] | None = None
 
 
 def _set_context(role: str) -> None:
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_org_id,
@@ -86,7 +86,7 @@ def _set_context(role: str) -> None:
 
 
 def _clear_context() -> None:
-    from modulo.api.mcp_server import (
+    from farna.api.mcp_server import (
         _ctx_auth_token,
         _ctx_auth_type,
         _ctx_org_id,
@@ -113,8 +113,8 @@ class TestCreateEvalDefinition:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_create_persists_and_returns_dict(
         self,
         mock_session: AsyncMock,
@@ -136,8 +136,8 @@ class TestCreateEvalDefinition:
         assert result["config_json"] == {"k": "v"}
         assert result["version"] == 1
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_operator_can_create(
         self,
         mock_session: AsyncMock,
@@ -157,8 +157,8 @@ class TestCreateEvalDefinition:
         assert "error" not in result, result
         assert result["name"] == "my-eval"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_runner_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
@@ -175,8 +175,8 @@ class TestCreateEvalDefinition:
 
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_viewer_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
@@ -193,8 +193,8 @@ class TestCreateEvalDefinition:
 
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_eval_type_rejected(
         self,
         mock_session: AsyncMock,
@@ -210,8 +210,8 @@ class TestCreateEvalDefinition:
 
         assert result["error"] == "invalid_eval_type"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_unknown_pipeline_returns_not_found(
         self,
         mock_session: AsyncMock,
@@ -228,8 +228,8 @@ class TestCreateEvalDefinition:
 
         assert result["error"] == "pipeline_not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_eval_type_trailing_newline_rejected(
         self,
         mock_session: AsyncMock,
@@ -247,8 +247,8 @@ class TestCreateEvalDefinition:
 
         assert result["error"] == "invalid_eval_type"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_oversized_name_rejected(
         self,
         mock_session: AsyncMock,
@@ -277,8 +277,8 @@ class TestUpdateEvalDefinition:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_update_bumps_version_and_snapshots_pre_version_raw(
         self,
         mock_session: AsyncMock,
@@ -302,8 +302,8 @@ class TestUpdateEvalDefinition:
         # the persisted object was mutated in place
         assert existing.version == 2
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_operator_can_update(
         self,
         mock_session: AsyncMock,
@@ -323,8 +323,8 @@ class TestUpdateEvalDefinition:
         assert result["name"] == "new"
         assert result["version"] == 2
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_runner_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
@@ -337,8 +337,8 @@ class TestUpdateEvalDefinition:
 
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_viewer_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
@@ -364,9 +364,9 @@ class TestDeleteEvalDefinition:
     def teardown_method(self) -> None:
         _clear_context()
 
-    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_guardrail_soft_deletes_by_default(
         self,
         mock_session: AsyncMock,
@@ -392,9 +392,9 @@ class TestDeleteEvalDefinition:
             "purge": False,
         }
 
-    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_non_guardrail_hard_purges_with_audit(
         self,
         mock_session: AsyncMock,
@@ -413,9 +413,9 @@ class TestDeleteEvalDefinition:
         # Hard purge of a non-guardrail is not audited (only guardrails are).
         assert mock_audit.await_count == 0
 
-    @patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_guardrail_hard_purges_with_audit(
         self,
         mock_session: AsyncMock,
@@ -440,8 +440,8 @@ class TestDeleteEvalDefinition:
             "purge": True,
         }
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_operator_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
@@ -455,8 +455,8 @@ class TestDeleteEvalDefinition:
 
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_missing_eval_definition_returns_not_found(
         self,
         mock_session: AsyncMock,

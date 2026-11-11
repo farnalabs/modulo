@@ -47,13 +47,13 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
 _GITHUB = "github"
-_PREFIX = "modulo.api.routes.pipelines."
+_PREFIX = "farna.api.routes.pipelines."
 
 
 def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> dict[str, str]:
@@ -74,7 +74,7 @@ def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin")
 
 
 async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.UUID, label: str) -> uuid.UUID:
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -92,7 +92,7 @@ async def _seed_agent(
     *,
     connector_type_refs: list[dict[str, object]],
 ) -> uuid.UUID:
-    from modulo.db.crud.agent import create_agent
+    from farna.db.crud.agent import create_agent
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -110,7 +110,7 @@ async def _seed_agent(
 
 
 async def _seed_model_backend(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
-    from modulo.db.crud.model_backend import create_model_backend
+    from farna.db.crud.model_backend import create_model_backend
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -140,7 +140,7 @@ async def _seed_connector(
     """A TEAM-PRIVATE connector owned by ``owner_team_id`` (execution context so
     the team-visibility RLS WITH CHECK lets the row in - the same escape hatch
     the background machinery uses)."""
-    from modulo.db.crud.connector_instance import create_connector_instance
+    from farna.db.crud.connector_instance import create_connector_instance
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -592,7 +592,7 @@ async def test_scope_widening_binding_is_rejected_422(
 
 
 async def _seed_org_connector(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
-    from modulo.db.crud.connector_instance import create_connector_instance
+    from farna.db.crud.connector_instance import create_connector_instance
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

@@ -25,12 +25,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.cost_controller import check_pipeline_circuit_breaker
-from modulo.db.crud.pipeline import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.cost_controller import check_pipeline_circuit_breaker
+from farna.db.crud.pipeline import (
     CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
     CIRCUIT_BREAKER_THRESHOLD_CHANGED_EVENT,
     CircuitBreakerThresholdChangeDenied,
@@ -39,7 +39,7 @@ from modulo.db.crud.pipeline import (
     normalize_circuit_breaker_threshold,
     update_pipeline,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -47,8 +47,8 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE_ID = uuid.UUID("20000000-0000-0000-0000-000000000001")
 _NOW = datetime(2026, 9, 1, tzinfo=UTC)
-_CRUD = "modulo.db.crud.pipeline."
-_ROUTES = "modulo.api.routes.pipelines."
+_CRUD = "farna.db.crud.pipeline."
+_ROUTES = "farna.api.routes.pipelines."
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +441,7 @@ class TestRestSurface:
         tripped_at = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
         pipeline = _response_pipeline(Decimal("5.000000"), tripped=True, tripped_at=tripped_at)
         _enter(_route_patches(get_pipeline=AsyncMock(return_value=pipeline)))
-        with patch("modulo.api.team_scope.resolve_pipeline_team_scope", new=AsyncMock(return_value=None)):
+        with patch("farna.api.team_scope.resolve_pipeline_team_scope", new=AsyncMock(return_value=None)):
             resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}")
 
         assert resp.status_code == 200, resp.text
@@ -501,7 +501,7 @@ class TestRestThresholdPermission:
         )
         # Team-gate membership leg for non-admin principals (the gate's other
         # legs are stubbed by the strict session's pipeline-row default).
-        _enter([patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True))])
+        _enter([patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True))])
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"circuit_breaker_threshold": sent})
         return resp, update, denial_audit
 
@@ -634,7 +634,7 @@ def _session_cm(session: AsyncMock) -> AsyncMock:
 
 class TestMcpTools:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(_ORG_ID)
         _ctx_role.set("operator")
@@ -643,19 +643,19 @@ class TestMcpTools:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         for var in (_ctx_org_id, _ctx_role, _ctx_user_id, _ctx_auth_token, _ctx_auth_type):
             var.set(None)
 
     async def test_create_pipeline_forwards_threshold(self) -> None:
-        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+        from farna.api.mcp_server import create_pipeline as mcp_create_pipeline
 
         created = _response_pipeline(Decimal("30.000000"))
         db_create = AsyncMock(return_value=created)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(f"{_CRUD}create_pipeline", new=db_create),
         ):
             result = await mcp_create_pipeline(name="p", circuit_breaker_threshold=30)
@@ -664,10 +664,10 @@ class TestMcpTools:
         assert result["circuit_breaker_threshold"] == 30.0
 
     async def test_create_pipeline_rejects_invalid_threshold(self) -> None:
-        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+        from farna.api.mcp_server import create_pipeline as mcp_create_pipeline
 
         session_factory = MagicMock()
-        with patch("modulo.api.mcp_server._session", new=session_factory):
+        with patch("farna.api.mcp_server._session", new=session_factory):
             result = await mcp_create_pipeline(name="p", circuit_breaker_threshold=0)
 
         assert result["error"] == "validation_failed"
@@ -676,13 +676,13 @@ class TestMcpTools:
 
     async def test_create_pipeline_forwards_max_autonomy_level(self) -> None:
         """FAR-1163: a valid ceiling is validated and forwarded to the CRUD."""
-        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+        from farna.api.mcp_server import create_pipeline as mcp_create_pipeline
 
         created = _response_pipeline(Decimal("30.000000"))
         db_create = AsyncMock(return_value=created)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(f"{_CRUD}create_pipeline", new=db_create),
         ):
             result = await mcp_create_pipeline(
@@ -696,10 +696,10 @@ class TestMcpTools:
 
     async def test_create_pipeline_rejects_invalid_max_autonomy_level(self) -> None:
         """FAR-1163: a ceiling below the default is rejected before any DB work."""
-        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+        from farna.api.mcp_server import create_pipeline as mcp_create_pipeline
 
         session_factory = MagicMock()
-        with patch("modulo.api.mcp_server._session", new=session_factory):
+        with patch("farna.api.mcp_server._session", new=session_factory):
             result = await mcp_create_pipeline(
                 name="p",
                 default_autonomy_level="fully_autonomous",
@@ -711,7 +711,7 @@ class TestMcpTools:
         session_factory.assert_not_called()
 
     async def test_set_circuit_breaker_updates_with_audit_context(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         pipeline = _response_pipeline(Decimal("12.000000"))
         db_update = AsyncMock(return_value=pipeline)
@@ -719,9 +719,9 @@ class TestMcpTools:
         # check — stub the previous value (lowering 100 -> 12, operator-OK).
         db_get = AsyncMock(return_value=_response_pipeline(Decimal("100.000000")))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(f"{_CRUD}get_pipeline", new=db_get),
             patch(f"{_CRUD}update_pipeline", new=db_update),
         ):
@@ -737,19 +737,19 @@ class TestMcpTools:
         assert db_update.await_args.kwargs["org_id"] == _ORG_ID
 
     async def test_set_circuit_breaker_null_disables(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         db_update = AsyncMock(return_value=_response_pipeline(None))
         # FAR-1184: clearing requires cost.manage (admin) — model an active
         # threshold being cleared by an admin.
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         _ctx_role.set("admin")
         db_get = AsyncMock(return_value=_response_pipeline(Decimal("50.000000")))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(f"{_CRUD}get_pipeline", new=db_get),
             patch(f"{_CRUD}update_pipeline", new=db_update),
         ):
@@ -759,12 +759,12 @@ class TestMcpTools:
         assert db_update.await_args.args[2] == {"circuit_breaker_threshold": None}
 
     async def test_set_circuit_breaker_not_found(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(f"{_CRUD}get_pipeline", new=AsyncMock(return_value=None)),
             patch(f"{_CRUD}update_pipeline", new=AsyncMock(return_value=None)),
         ):
@@ -773,12 +773,12 @@ class TestMcpTools:
         assert result == {"error": "pipeline_not_found", "pipeline_id": str(_PIPELINE_ID)}
 
     async def test_set_circuit_breaker_rejects_invalid_threshold(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         session_factory = MagicMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", new=session_factory),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", new=session_factory),
         ):
             result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=-3)
 
@@ -786,24 +786,24 @@ class TestMcpTools:
         session_factory.assert_not_called()
 
     async def test_set_circuit_breaker_denied_below_operator(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, set_pipeline_circuit_breaker
+        from farna.api.mcp_server import _ctx_role, set_pipeline_circuit_breaker
 
         _ctx_role.set("viewer")
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
             result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
 
         assert result["error"] == "insufficient_scope"
 
     async def test_set_circuit_breaker_team_scope_mismatch(self) -> None:
-        from modulo.api.mcp_server import _ctx_team_id, set_pipeline_circuit_breaker
+        from farna.api.mcp_server import _ctx_team_id, set_pipeline_circuit_breaker
 
         db_update = AsyncMock()
         token = _ctx_team_id.set(uuid.uuid4())
         try:
             with (
-                patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-                patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-                patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
+                patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+                patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+                patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
                 patch(f"{_CRUD}update_pipeline", new=db_update),
             ):
                 result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
@@ -814,41 +814,41 @@ class TestMcpTools:
         db_update.assert_not_awaited()
 
     async def test_set_circuit_breaker_auth_failure(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
             result = await set_pipeline_circuit_breaker(pipeline_id=str(_PIPELINE_ID), circuit_breaker_threshold=5)
 
         assert result["error"] == "auth_expired"
 
     async def test_set_circuit_breaker_invalid_pipeline_id(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
             result = await set_pipeline_circuit_breaker(pipeline_id="not-a-uuid", circuit_breaker_threshold=5)
 
         assert result["error"] == "invalid_id"
         assert result["field"] == "pipeline_id"
 
     async def test_set_circuit_breaker_unparseable_id_without_error_dict(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._parse_uuid_param", return_value=(None, None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._parse_uuid_param", return_value=(None, None)),
         ):
             result = await set_pipeline_circuit_breaker(pipeline_id="whatever", circuit_breaker_threshold=5)
 
         assert result == {"error": "invalid_id", "detail": "UUID parse failed"}
 
     async def test_set_circuit_breaker_migration_required(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(
-                "modulo.api.mcp_server._pipeline_owner_team_id",
+                "farna.api.mcp_server._pipeline_owner_team_id",
                 new=AsyncMock(side_effect=ProgrammingError("SELECT 1", {}, Exception("missing column"))),
             ),
         ):
@@ -857,13 +857,13 @@ class TestMcpTools:
         assert result["error"] == "migration_required"
 
     async def test_set_circuit_breaker_unexpected_error(self) -> None:
-        from modulo.api.mcp_server import set_pipeline_circuit_breaker
+        from farna.api.mcp_server import set_pipeline_circuit_breaker
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(
-                "modulo.api.mcp_server._pipeline_owner_team_id",
+                "farna.api.mcp_server._pipeline_owner_team_id",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ),
         ):
@@ -883,7 +883,7 @@ class TestMcpTools:
         role: str | None = None,
     ) -> tuple[dict[str, Any], AsyncMock, AsyncMock]:
         """Run set_pipeline_circuit_breaker with a stubbed previous threshold."""
-        from modulo.api.mcp_server import _ctx_role, set_pipeline_circuit_breaker
+        from farna.api.mcp_server import _ctx_role, set_pipeline_circuit_breaker
 
         if role is not None:
             _ctx_role.set(role)
@@ -891,12 +891,12 @@ class TestMcpTools:
         db_get = AsyncMock(return_value=_response_pipeline(previous))
         denial_audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(f"{_CRUD}get_pipeline", new=db_get),
             patch(f"{_CRUD}update_pipeline", new=db_update),
-            patch("modulo.core.audit_logger.append_audit_event", new=denial_audit),
+            patch("farna.core.audit_logger.append_audit_event", new=denial_audit),
         ):
             result = await set_pipeline_circuit_breaker(
                 pipeline_id=str(_PIPELINE_ID),
@@ -963,14 +963,14 @@ class TestMcpTools:
         the denial audit and never reach the CRUD. Without the guard call
         site the tool would create the pipeline -> test fails.
         """
-        from modulo.api.mcp_server import create_pipeline as mcp_create_pipeline
+        from farna.api.mcp_server import create_pipeline as mcp_create_pipeline
 
         denial_audit = AsyncMock()
         db_create = AsyncMock(return_value=_response_pipeline(Decimal("30.000000")))
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.core.audit_logger.append_audit_event", new=denial_audit),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.core.audit_logger.append_audit_event", new=denial_audit),
             patch(
                 f"{_CRUD}circuit_breaker_threshold_change_allowed",
                 new=MagicMock(return_value=False),
@@ -997,7 +997,7 @@ class TestMcpThresholdDenialAuditBestEffort:
     """
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_user_id
+        from farna.api.mcp_server import _ctx_user_id
 
         _ctx_user_id.set(None)
 
@@ -1006,13 +1006,13 @@ class TestMcpThresholdDenialAuditBestEffort:
         return CircuitBreakerThresholdChangeDenied(previous=Decimal("50.000000"), new=Decimal("100.000000"))
 
     async def test_missing_user_context_audits_anonymously(self) -> None:
-        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit, _ctx_user_id
+        from farna.api.mcp_server import _append_mcp_threshold_denial_audit, _ctx_user_id
 
         _ctx_user_id.set(None)
         audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             await _append_mcp_threshold_denial_audit(_ORG_ID, None, self._denial())
 
@@ -1021,27 +1021,27 @@ class TestMcpThresholdDenialAuditBestEffort:
         assert audit.await_args.kwargs["payload_json"]["changed_by"] is None
 
     async def test_audit_failure_is_logged_not_raised(self) -> None:
-        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit
+        from farna.api.mcp_server import _append_mcp_threshold_denial_audit
 
         with (
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new=AsyncMock(side_effect=RuntimeError("audit backend down")),
             ),
-            patch("modulo.api.mcp_server._log") as log,
+            patch("farna.api.mcp_server._log") as log,
         ):
             await _append_mcp_threshold_denial_audit(_ORG_ID, _PIPELINE_ID, self._denial())
 
         log.exception.assert_called_once()
 
     async def test_cancellation_propagates(self) -> None:
-        from modulo.api.mcp_server import _append_mcp_threshold_denial_audit
+        from farna.api.mcp_server import _append_mcp_threshold_denial_audit
 
         with (
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new=AsyncMock(side_effect=asyncio.CancelledError),
             ),
             pytest.raises(asyncio.CancelledError),
@@ -1073,8 +1073,8 @@ class TestEnforcementRegression:
         session.in_transaction = MagicMock(return_value=True)
         session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result, MagicMock()])
         with (
-            patch("modulo.core.cost_controller.set_rls_execution_context", new=AsyncMock()),
-            patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()),
+            patch("farna.core.cost_controller.set_rls_execution_context", new=AsyncMock()),
+            patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()),
         ):
             approved, reason = await check_pipeline_circuit_breaker(
                 session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("6.00")
@@ -1098,7 +1098,7 @@ class TestEnforcementRegression:
         # contract typed explicitly.
         session.in_transaction = MagicMock(return_value=True)
         session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result])
-        with patch("modulo.core.cost_controller.set_rls_execution_context", new=AsyncMock()):
+        with patch("farna.core.cost_controller.set_rls_execution_context", new=AsyncMock()):
             approved, reason = await check_pipeline_circuit_breaker(
                 session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("5.00")
             )

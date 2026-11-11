@@ -9,9 +9,9 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.core.graph_validator.mask_sentinel import MASK_SENTINEL_ISSUE_CODE
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator.mask_sentinel import MASK_SENTINEL_ISSUE_CODE
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.unit.graph_validator._helpers import codes_of as _codes
 from tests.unit.graph_validator._helpers import (
     session_returning as _session_with_templates,

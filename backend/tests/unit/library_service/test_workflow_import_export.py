@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.workflow_import_export import (
+from farna.core.workflow_import_export import (
     BUNDLE_FORMAT_VERSION,
     MANIFEST_FILENAME,
     extract_bundle_json_from_zip,
@@ -131,23 +131,23 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_agent", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
-            patch("modulo.core.workflow_import_export.create_schema", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_schema_version", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_agent", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_schema", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_schema_version", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_library_primitive", AsyncMock()),
         ):
             mock_cp.return_value.id = uuid.uuid4()
             mock_cp.return_value.name = "Imported Pipeline"
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             result = await materialize_import(
                 mock_session,
@@ -187,23 +187,23 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_agent") as mock_ca,
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
-            patch("modulo.core.workflow_import_export.create_schema", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_schema_version", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_agent") as mock_ca,
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_schema", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_schema_version", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_library_primitive", AsyncMock()),
         ):
             mock_ca.return_value.id = uuid.uuid4()
             mock_cp.return_value.id = uuid.uuid4()
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             result = await materialize_import(
                 mock_session,
@@ -229,20 +229,20 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value={"Existing Pipeline"}),
             ),
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
-            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_library_primitive", AsyncMock()),
         ):
             mock_cp.return_value.id = uuid.uuid4()
             mock_cp.return_value.name = ""
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             result = await materialize_import(
                 mock_session,
@@ -277,23 +277,23 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_agent", AsyncMock()),
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
-            patch("modulo.core.workflow_import_export.create_schema") as mock_cs,
-            patch("modulo.core.workflow_import_export.create_schema_version") as mock_csv,
-            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_agent", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_schema") as mock_cs,
+            patch("farna.core.workflow_import_export.create_schema_version") as mock_csv,
+            patch("farna.core.workflow_import_export.create_library_primitive", AsyncMock()),
         ):
             mock_cp.return_value.id = uuid.uuid4()
             mock_cs.return_value.id = uuid.uuid4()
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             result = await materialize_import(
                 mock_session,
@@ -329,16 +329,16 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
         ):
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             with pytest.raises(ValueError, match="egress_policy"):
                 await materialize_import(
@@ -396,23 +396,23 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_schema") as mock_cs,
-            patch("modulo.core.workflow_import_export.create_schema_version") as mock_csv,
-            patch("modulo.core.workflow_import_export.create_agent") as mock_ca,
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_schema") as mock_cs,
+            patch("farna.core.workflow_import_export.create_schema_version") as mock_csv,
+            patch("farna.core.workflow_import_export.create_agent") as mock_ca,
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
         ):
             mock_cs.return_value.id = uuid.uuid4()
             mock_csv.return_value.id = uuid.uuid4()
             mock_ca.return_value.id = uuid.uuid4()
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             with pytest.raises(ValueError, match="egress_policy"):
                 await materialize_import(
@@ -457,20 +457,20 @@ class TestMaterializeImport:
 
         with (
             patch(
-                "modulo.core.workflow_import_export.get_existing_agent_names",
+                "farna.core.workflow_import_export.get_existing_agent_names",
                 AsyncMock(return_value=_empty_set()),
             ),
             patch(
-                "modulo.core.workflow_import_export.get_existing_pipeline_names",
+                "farna.core.workflow_import_export.get_existing_pipeline_names",
                 AsyncMock(return_value=_empty_set()),
             ),
-            patch("modulo.core.workflow_import_export.create_pipeline") as mock_cp,
-            patch("modulo.core.workflow_import_export.create_library_primitive", AsyncMock()),
+            patch("farna.core.workflow_import_export.create_pipeline") as mock_cp,
+            patch("farna.core.workflow_import_export.create_library_primitive", AsyncMock()),
         ):
             mock_cp.return_value.id = uuid.uuid4()
             mock_cp.return_value.name = "Egress Pipeline"
 
-            from modulo.core.workflow_import_export import materialize_import
+            from farna.core.workflow_import_export import materialize_import
 
             result = await materialize_import(
                 mock_session,

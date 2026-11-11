@@ -19,28 +19,28 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import guardrails as guardrails_module
-from modulo.core.guardrails import (
+from farna.core import guardrails as guardrails_module
+from farna.core.guardrails import (
     GuardrailInterceptionOutcome,
     GuardrailSkip,
     fingerprint_guardrail_pins,
     serialize_guardrail_pin,
 )
-from modulo.db.crud.run import create_run
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
+from farna.db.crud.run import create_run
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -358,7 +358,7 @@ async def test_create_run_emits_fired_signature_log(session: AsyncSession, caplo
     """The per-pattern fired-signature regression log fires per clean detection."""
     await _seed(session)
     await _seed_guardrail(session, name="no-secrets", action="block")
-    caplog.set_level(logging.INFO, logger="modulo.core.guardrails")
+    caplog.set_level(logging.INFO, logger="farna.core.guardrails")
     run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
     assert run.status == "eval_failed"
     records = [r for r in caplog.records if r.message == "guardrails.fired_signature"]

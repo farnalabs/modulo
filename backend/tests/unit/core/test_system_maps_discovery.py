@@ -1,4 +1,4 @@
-from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
+from farna.core.system_maps_discovery import DiscoverySource, discover_draft
 
 
 def test_discovery_is_deterministic_and_marks_every_edge_suggested() -> None:

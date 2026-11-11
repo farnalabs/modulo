@@ -29,11 +29,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.bundled_runner.profile import (
+from farna.core.bundled_runner.profile import (
     TEMPLATE_CONFIG_JSON,
     is_placeholder_bundled_runner_image_ref,
 )
-from modulo.core.bundled_runner.runner_dispatch import (
+from farna.core.bundled_runner.runner_dispatch import (
     RunnerDispatchRoute,
     SandboxDispatchTimeoutValidationError,
     SandboxDispatchUnboundError,
@@ -42,10 +42,10 @@ from modulo.core.bundled_runner.runner_dispatch import (
     resolve_sandbox_dispatch_route,
     validate_e2b_dispatch_timeout,
 )
-from modulo.core.pipeline_engine import node_runner
-from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-from modulo.util import WorkspaceNetworkValidationError
+from farna.core.pipeline_engine import node_runner
+from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.util import WorkspaceNetworkValidationError
 from tests.unit.db.test_pipeline_snapshot import (
     _allocation_lock_result,
     _bind_lock_connection,
@@ -177,7 +177,7 @@ async def test_runner_docker_route_resolves_hub_provider(monkeypatch: pytest.Mon
         assert route.profile is not None
         assert route.provider is not None
         assert route.hub is not None
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         assert isinstance(route.provider, DockerRuntimeProvider)
     finally:
@@ -220,7 +220,7 @@ async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.Monk
         # node_runner's sandbox spec uses the same image the bundled-runner
         # mapper maps, instead of the node's E2B template_id.
         assert route.image_ref_override == "modulo-runner:opencode@sha256:" + "a" * 64
-        from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+        from farna.core.runtime_provider.k8s import KubernetesRuntimeProvider
 
         assert isinstance(route.provider, KubernetesRuntimeProvider)
     finally:
@@ -257,8 +257,8 @@ async def test_kubernetes_route_new_family_error_propagates_unwrapped() -> None:
     """Error-family site map A: the route's config-error handler maps ONLY the
     config family — a new-family error (rate limit, workspace gone) from the
     hub must escape as itself, never flattened into a config error."""
-    from modulo.core.bundled_runner import runner_dispatch
-    from modulo.core.runtime_provider import RateLimitedError
+    from farna.core.bundled_runner import runner_dispatch
+    from farna.core.runtime_provider import RateLimitedError
 
     def _boom_hub(**_kwargs: object) -> object:
         raise RateLimitedError("substrate rate limit / quota exceeded")
@@ -516,7 +516,7 @@ def test_workspace_spec_selected_maps_losslessly_when_resolution_succeeds(
     see the test above), so this exercises the defence-in-depth mapping
     branch directly.
     """
-    from modulo.core.pipeline_engine.egress import EgressResolution
+    from farna.core.pipeline_engine.egress import EgressResolution
 
     selected_with_allowlist = EgressResolution(
         policy="selected",
@@ -524,7 +524,7 @@ def test_workspace_spec_selected_maps_losslessly_when_resolution_succeeds(
         refusal=None,
     )
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.egress.resolve_egress",
+        "farna.core.pipeline_engine.egress.resolve_egress",
         lambda **_kwargs: selected_with_allowlist,
     )
 
@@ -544,10 +544,10 @@ def test_workspace_spec_unknown_canonical_policy_fails_closed(
 ) -> None:
     """An unrecognised canonical policy must map to the deny value, never to
     the permissive 'outbound'."""
-    from modulo.core.pipeline_engine.egress import EgressResolution
+    from farna.core.pipeline_engine.egress import EgressResolution
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.egress.resolve_egress",
+        "farna.core.pipeline_engine.egress.resolve_egress",
         lambda **_kwargs: EgressResolution(policy="bogus_policy", allowlist=None, refusal=None),
     )
 
@@ -931,8 +931,8 @@ async def test_run_dispatch_refuses_a_drifted_team_mismatched_binding() -> None:
     of raising (the ``pytest.raises`` sees no exception, and
     ``build_hub`` is called).
     """
-    from modulo.core.bundled_runner import runner_dispatch
-    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+    from farna.core.bundled_runner import runner_dispatch
+    from farna.core.pipeline_engine.node_runner import set_conformance_ctx
 
     org_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
@@ -985,7 +985,7 @@ async def test_run_dispatch_same_team_binding_resolves_through_the_real_chain() 
     widening, Postgres RLS would hide the row and this binding would silently
     resolve the DEFAULT route).
     """
-    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+    from farna.core.pipeline_engine.node_runner import set_conformance_ctx
 
     org_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
@@ -1022,8 +1022,8 @@ async def test_run_dispatch_same_team_binding_resolves_through_the_real_chain() 
 
 async def test_sandbox_impl_runner_docker_validates_profile_timeout_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-E2B providers (runner_docker) validate sandbox_timeout against profile effective cap."""
-    from modulo.core.pipeline_engine import node_runner
-    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+    from farna.core.pipeline_engine import node_runner
+    from farna.core.pipeline_engine.node_runner import set_conformance_ctx
 
     org_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
@@ -1087,7 +1087,7 @@ async def test_sandbox_impl_runner_docker_validates_profile_timeout_cap(monkeypa
 
     fake_hub = MagicMock()
     fake_hub.resolve.return_value = MagicMock()
-    monkeypatch.setattr("modulo.core.bundled_runner.runner_dispatch.build_hub", lambda **_: fake_hub)
+    monkeypatch.setattr("farna.core.bundled_runner.runner_dispatch.build_hub", lambda **_: fake_hub)
     monkeypatch.setattr(node_runner, "_run_conformance_gate", AsyncMock())
     monkeypatch.setattr(node_runner, "_resolve_schema_validator_mode", AsyncMock(return_value="lenient"))
 

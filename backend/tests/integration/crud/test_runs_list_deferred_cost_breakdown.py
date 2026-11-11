@@ -28,8 +28,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.run import get_run_cost_breakdowns
-from modulo.db.crud.run import list_runs as db_list_runs
+from farna.db.crud.run import get_run_cost_breakdowns
+from farna.db.crud.run import list_runs as db_list_runs
 
 pytestmark = [
     pytest.mark.integration,

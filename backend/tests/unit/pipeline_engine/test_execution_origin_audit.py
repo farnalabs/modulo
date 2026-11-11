@@ -39,7 +39,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -88,10 +88,10 @@ async def _run_started_payload(run: MagicMock) -> dict[str, Any]:
     pipeline = MagicMock()
     pipeline.name = "PR Reviewer Agent"
     with (
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
     ):
         await executor._claim_run_and_audit(
             session=AsyncMock(),
@@ -146,10 +146,10 @@ class TestRunStartedExecutionOrigin:
 async def _eval_blocked_payload(run: MagicMock) -> dict[str, Any]:
     executor = _executor_with_session(_mock_session())
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
     ):
         await executor._record_eval_blocked_audit(
             org_id=_ORG_ID,
@@ -198,13 +198,13 @@ class TestEvalBlockedOriginReadFailure:
     async def test_a_read_failure_degrades_to_null_and_still_audits(self) -> None:
         executor = _executor_with_session(_mock_session())
         with (
-            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch("farna.core.pipeline_engine.executor.set_rls_org"),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
             patch(
-                "modulo.core.pipeline_engine.executor.get_run",
+                "farna.core.pipeline_engine.executor.get_run",
                 new=AsyncMock(side_effect=RuntimeError("origin row read failed")),
             ),
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
+            patch("farna.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
         ):
             await executor._record_eval_blocked_audit(
                 org_id=_ORG_ID,
@@ -218,13 +218,13 @@ class TestEvalBlockedOriginReadFailure:
     async def test_a_cancelled_origin_read_propagates(self) -> None:
         executor = _executor_with_session(_mock_session())
         with (
-            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch("farna.core.pipeline_engine.executor.set_rls_org"),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
             patch(
-                "modulo.core.pipeline_engine.executor.get_run",
+                "farna.core.pipeline_engine.executor.get_run",
                 new=AsyncMock(side_effect=asyncio.CancelledError),
             ),
-            patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()),
             pytest.raises(asyncio.CancelledError),
         ):
             await executor._record_eval_blocked_audit(

@@ -15,7 +15,7 @@ import json
 import time
 from typing import Any
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     RECOVERED_TOKEN_USAGE_ATTR,
     RECOVERED_TOKEN_USAGE_PROVENANCE,
     SandboxNodeFailedError,

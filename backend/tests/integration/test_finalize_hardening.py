@@ -31,13 +31,13 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _ledger_block,
     _LedgerEscapeContext,
     _reduced_escape,
     finalize_cost,
 )
-from modulo.db.models.run import Run
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
@@ -272,7 +272,7 @@ async def test_reduced_escape_bounds_lock_timeout_before_status_write(
     )
 
     with patch(
-        "modulo.core.cost_controller.finalize.update_run_status",
+        "farna.core.cost_controller.finalize.update_run_status",
         new=_capturing_update_run_status,
     ):
         await _reduced_escape(db_session, ctx)
@@ -310,7 +310,7 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue(
         await _set_org_rls(db_session, org_id)
         run = (await db_session.execute(select(Run).where(Run.id == run_id))).scalar_one()
         with patch(
-            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            "farna.core.cost_controller.finalize.check_and_record_spend",
             new=AsyncMock(side_effect=RuntimeError("ledger write failed")),
         ):
             await _ledger_block(
@@ -338,10 +338,10 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue(
         run = (await db_session.execute(select(Run).where(Run.id == run_id))).scalar_one()
         with (
             patch(
-                "modulo.core.cost_controller.finalize.check_and_record_spend",
+                "farna.core.cost_controller.finalize.check_and_record_spend",
                 new=AsyncMock(return_value=(True, None)),
             ),
-            patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+            patch("farna.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
         ):
             await _ledger_block(
                 db_session,

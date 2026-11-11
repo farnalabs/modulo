@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.main`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.main`` (FAR-573).
 
 Complements test_main.py (which covers ``_verify_db_connectivity``) by
 exercising the boot path the existing suite leaves uncovered: the migration
@@ -20,9 +20,9 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
 
-import modulo.api.main as main
-from modulo.db import capacity as db_capacity
-from modulo.settings import Settings
+import farna.api.main as main
+from farna.db import capacity as db_capacity
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 
@@ -36,7 +36,7 @@ def _audit_append_spy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     use (``tests/unit/db/test_seed_users.py``).
     """
     spy = AsyncMock(return_value=MagicMock())
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", spy)
     return spy
 
 
@@ -67,7 +67,7 @@ async def test_seed_modulo_users_new_user(monkeypatch: pytest.MonkeyPatch) -> No
     org = SimpleNamespace(id=uuid.uuid4())
     session = _session_with_results([_result(scalar_one_or_none=org), _result(scalar_one_or_none=None)])
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await main._seed_modulo_users(settings)
     assert session.add.call_count == 2
 
@@ -76,7 +76,7 @@ async def test_seed_modulo_users_new_user(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_seed_modulo_user_admin_email_gets_admin_role(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await main._seed_modulo_user(session, org, "admin:secret1")
     added_membership = session.add.call_args_list[1].args[0]
     assert added_membership.role == "admin"
@@ -86,7 +86,7 @@ async def test_seed_modulo_user_admin_email_gets_admin_role(monkeypatch: pytest.
 async def test_seed_modulo_user_runner_role(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
-    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+    monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await main._seed_modulo_user(session, org, "user@example.com:secret1")
     added_membership = session.add.call_args_list[1].args[0]
     assert added_membership.role == "runner"
@@ -207,7 +207,7 @@ async def test_seed_system_schemas_no_accounts(monkeypatch: pytest.MonkeyPatch) 
     session = _mock_session(_result(scalars=[], scalar_one_or_none=None))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     seed = AsyncMock()
-    monkeypatch.setattr("modulo.db.seed.seed_system_schemas", seed)
+    monkeypatch.setattr("farna.db.seed.seed_system_schemas", seed)
     await main._seed_system_schemas(_make_settings())
     assert seed.await_count == 0
 
@@ -225,7 +225,7 @@ async def test_seed_system_schemas_admin_found(monkeypatch: pytest.MonkeyPatch) 
     session.execute = AsyncMock(side_effect=_execute)
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     seed = AsyncMock()
-    monkeypatch.setattr("modulo.db.seed.seed_system_schemas", seed)
+    monkeypatch.setattr("farna.db.seed.seed_system_schemas", seed)
     await main._seed_system_schemas(_make_settings())
     assert seed.await_count == 2
 
@@ -235,7 +235,7 @@ async def test_seed_environment_profiles_no_org(monkeypatch: pytest.MonkeyPatch)
     session = _mock_session(_result(scalar_one_or_none=None))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     create_profile = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.environment_profile.create_environment_profile", create_profile)
+    monkeypatch.setattr("farna.db.crud.environment_profile.create_environment_profile", create_profile)
     await main._seed_environment_profiles(_make_settings())
     assert create_profile.await_count == 0
 
@@ -252,7 +252,7 @@ async def test_seed_environment_profiles_already_exists(monkeypatch: pytest.Monk
     session.execute = AsyncMock(side_effect=_execute)
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     create_profile = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.environment_profile.create_environment_profile", create_profile)
+    monkeypatch.setattr("farna.db.crud.environment_profile.create_environment_profile", create_profile)
     await main._seed_environment_profiles(_make_settings())
     assert create_profile.await_count == 0
 
@@ -274,7 +274,7 @@ async def test_seed_environment_profiles_creates_profile(monkeypatch: pytest.Mon
     session.execute = AsyncMock(side_effect=_execute)
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     create_profile = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.environment_profile.create_environment_profile", create_profile)
+    monkeypatch.setattr("farna.db.crud.environment_profile.create_environment_profile", create_profile)
     await main._seed_environment_profiles(_make_settings())
     assert create_profile.await_count == 1
 
@@ -297,7 +297,7 @@ async def test_seed_environment_profiles_first_account_fallback(monkeypatch: pyt
     session.execute = AsyncMock(side_effect=_execute)
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     create_profile = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.environment_profile.create_environment_profile", create_profile)
+    monkeypatch.setattr("farna.db.crud.environment_profile.create_environment_profile", create_profile)
     await main._seed_environment_profiles(_make_settings())
     assert create_profile.await_count == 1
 
@@ -319,7 +319,7 @@ def _checkpointer_mock() -> MagicMock:
 @pytest.mark.anyio
 async def test_init_checkpointer_success(monkeypatch: pytest.MonkeyPatch) -> None:
     cls = _checkpointer_mock()
-    monkeypatch.setattr("modulo.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", cls)
+    monkeypatch.setattr("farna.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", cls)
     await main._init_checkpointer("postgresql://u:p@h/db", _FERNET_KEY, "")
     assert cls.from_conn_string.call_count == 1
 
@@ -328,7 +328,7 @@ async def test_init_checkpointer_success(monkeypatch: pytest.MonkeyPatch) -> Non
 async def test_init_checkpointer_failure_is_non_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
     cls = MagicMock()
     cls.from_conn_string = MagicMock(side_effect=RuntimeError("conn refused"))
-    monkeypatch.setattr("modulo.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", cls)
+    monkeypatch.setattr("farna.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", cls)
     await main._init_checkpointer("postgresql://u:p@h/db", _FERNET_KEY, "")
     assert cls.from_conn_string.call_count == 1
 
@@ -338,7 +338,7 @@ async def test_run_retention_loop_logs_and_exits_on_cancel(monkeypatch: pytest.M
     session = _mock_session()
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     batch = AsyncMock(side_effect=[RuntimeError("blip"), 3])
-    monkeypatch.setattr("modulo.db.crud.run.batch_delete_old_terminal_runs", batch)
+    monkeypatch.setattr("farna.db.crud.run.batch_delete_old_terminal_runs", batch)
 
     sleep_calls = {"n": 0}
 
@@ -359,7 +359,7 @@ async def test_run_retention_loop_logs_and_exits_on_cancel(monkeypatch: pytest.M
 def test_configure_license_and_otel_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     setup_otel = MagicMock()
     monkeypatch.setattr(main, "setup_otel", setup_otel)
-    monkeypatch.setattr("modulo.core.license.check_production_public_key", MagicMock())
+    monkeypatch.setattr("farna.core.license.check_production_public_key", MagicMock())
     main._configure_license_and_otel(_make_settings())
     assert setup_otel.call_count == 1
 
@@ -368,8 +368,8 @@ def test_configure_license_sets_public_key(monkeypatch: pytest.MonkeyPatch) -> N
     setup_otel = MagicMock()
     monkeypatch.setattr(main, "setup_otel", setup_otel)
     set_public_key = MagicMock()
-    monkeypatch.setattr("modulo.core.license.set_public_key", set_public_key)
-    monkeypatch.setattr("modulo.core.license.check_production_public_key", MagicMock())
+    monkeypatch.setattr("farna.core.license.set_public_key", set_public_key)
+    monkeypatch.setattr("farna.core.license.check_production_public_key", MagicMock())
     settings = _make_settings(modulo_license_public_key="test-public-key")
     main._configure_license_and_otel(settings)
     assert set_public_key.call_count == 1
@@ -378,7 +378,7 @@ def test_configure_license_sets_public_key(monkeypatch: pytest.MonkeyPatch) -> N
 def test_configure_license_production_check_failure_is_non_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main, "setup_otel", MagicMock())
     check = MagicMock(side_effect=RuntimeError("bad key"))
-    monkeypatch.setattr("modulo.core.license.check_production_public_key", check)
+    monkeypatch.setattr("farna.core.license.check_production_public_key", check)
     main._configure_license_and_otel(_make_settings())
     assert check.call_count == 1
 
@@ -386,7 +386,7 @@ def test_configure_license_production_check_failure_is_non_fatal(monkeypatch: py
 def test_configure_license_sqlite_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     setup_otel = MagicMock()
     monkeypatch.setattr(main, "setup_otel", setup_otel)
-    monkeypatch.setattr("modulo.core.license.check_production_public_key", MagicMock())
+    monkeypatch.setattr("farna.core.license.check_production_public_key", MagicMock())
     main._configure_license_and_otel(_make_settings(modulo_db="sqlite"))
     assert setup_otel.call_count == 1
 
@@ -402,7 +402,7 @@ def test_configure_license_requires_redis() -> None:
 
 def test_discover_plugins_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     get_registry = MagicMock()
-    monkeypatch.setattr("modulo.core.plugin_registry.get_plugin_registry", get_registry)
+    monkeypatch.setattr("farna.core.plugin_registry.get_plugin_registry", get_registry)
     main._discover_plugins(_make_settings(modulo_plugin_discovery=False))
     assert get_registry.call_count == 0
 
@@ -410,7 +410,7 @@ def test_discover_plugins_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_discover_plugins_none_found(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = MagicMock()
     registry.discover_plugins = MagicMock(return_value=[])
-    monkeypatch.setattr("modulo.core.plugin_registry.get_plugin_registry", MagicMock(return_value=registry))
+    monkeypatch.setattr("farna.core.plugin_registry.get_plugin_registry", MagicMock(return_value=registry))
     main._discover_plugins(_make_settings(modulo_plugin_discovery=True))
     assert registry.discover_plugins.call_count == 1
 
@@ -420,7 +420,7 @@ def test_discover_plugins_found(monkeypatch: pytest.MonkeyPatch) -> None:
     plugin.PLUGIN_ID = "p1"
     registry = MagicMock()
     registry.discover_plugins = MagicMock(return_value=[plugin])
-    monkeypatch.setattr("modulo.core.plugin_registry.get_plugin_registry", MagicMock(return_value=registry))
+    monkeypatch.setattr("farna.core.plugin_registry.get_plugin_registry", MagicMock(return_value=registry))
     main._discover_plugins(_make_settings(modulo_plugin_discovery=True))
     assert registry.discover_plugins.call_count == 1
 
@@ -442,7 +442,7 @@ def test_register_shutdown_manager_failure_is_non_fatal(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(main, "get_or_create_engine", MagicMock(side_effect=RuntimeError("boom")))
-    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         main._register_shutdown_manager(_make_settings())
     assert any("shutdown_manager_init_failed" in rec.message for rec in caplog.records)
 
@@ -454,9 +454,9 @@ async def test_start_and_teardown_background_tasks_with_watchdog(monkeypatch: py
     async def _fake_watchdog(_settings: object) -> None:
         await asyncio.sleep(3600)
 
-    monkeypatch.setattr("modulo.core.watchdog.worker_liveness.run_worker_liveness_watchdog", _fake_watchdog)
+    monkeypatch.setattr("farna.core.watchdog.worker_liveness.run_worker_liveness_watchdog", _fake_watchdog)
     monkeypatch.setattr(main, "configure_event_bus", AsyncMock())
-    monkeypatch.setattr("modulo.core.events.redis_broker.RedisEventBroker", MagicMock())
+    monkeypatch.setattr("farna.core.events.redis_broker.RedisEventBroker", MagicMock())
 
     expiry_instance = MagicMock()
     expiry_instance.start = MagicMock()
@@ -482,22 +482,20 @@ def _patch_lifespan_seams(monkeypatch: pytest.MonkeyPatch, settings: Settings) -
     _patch_db_seams(monkeypatch, engine, _mock_factory(session))
     monkeypatch.setattr(main, "get_settings", lambda: settings)
     monkeypatch.setattr(main, "_db_is_at_migration_head", AsyncMock(return_value=True))
-    monkeypatch.setattr("modulo.settings.validate_break_glass_boot", MagicMock())
+    monkeypatch.setattr("farna.settings.validate_break_glass_boot", MagicMock())
     monkeypatch.setattr(main, "setup_otel", MagicMock())
-    monkeypatch.setattr("modulo.core.license.check_production_public_key", MagicMock())
-    monkeypatch.setattr("modulo.core.license.set_public_key", MagicMock())
-    monkeypatch.setattr("modulo.db.seed_demo.seed_demo_runtime", AsyncMock(return_value=None))
-    monkeypatch.setattr("modulo.core.seed_data.cost_components.seed_cost_components", AsyncMock())
-    monkeypatch.setattr("modulo.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", _checkpointer_mock())
-    monkeypatch.setattr(
-        "modulo.core.runtime_config.store.get_runtime_config_store", MagicMock(return_value=MagicMock())
-    )
+    monkeypatch.setattr("farna.core.license.check_production_public_key", MagicMock())
+    monkeypatch.setattr("farna.core.license.set_public_key", MagicMock())
+    monkeypatch.setattr("farna.db.seed_demo.seed_demo_runtime", AsyncMock(return_value=None))
+    monkeypatch.setattr("farna.core.seed_data.cost_components.seed_cost_components", AsyncMock())
+    monkeypatch.setattr("farna.core.pipeline_engine.modulo_saver.ModuloPostgresSaver", _checkpointer_mock())
+    monkeypatch.setattr("farna.core.runtime_config.store.get_runtime_config_store", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(main, "configure_event_bus", AsyncMock())
-    monkeypatch.setattr("modulo.core.events.redis_broker.RedisEventBroker", MagicMock())
+    monkeypatch.setattr("farna.core.events.redis_broker.RedisEventBroker", MagicMock())
     expiry_instance = MagicMock()
     expiry_instance.start = MagicMock()
     expiry_instance.stop = AsyncMock()
-    monkeypatch.setattr("modulo.core.hitl_manager.expiry_job.ClaimExpiryJob", MagicMock(return_value=expiry_instance))
+    monkeypatch.setattr("farna.core.hitl_manager.expiry_job.ClaimExpiryJob", MagicMock(return_value=expiry_instance))
     monkeypatch.setattr("sqlalchemy.ext.asyncio.AsyncSession", _FakeAsyncSession)
 
 
@@ -515,7 +513,7 @@ async def test_lifespan_seeds_demo_orgs_when_enabled(monkeypatch: pytest.MonkeyP
     settings = _make_settings(modulo_seed_demo_orgs=True)
     _patch_lifespan_seams(monkeypatch, settings)
     seed_demo_orgs = AsyncMock()
-    monkeypatch.setattr("modulo.core.seed_data.demo_data.seed_demo_orgs", seed_demo_orgs)
+    monkeypatch.setattr("farna.core.seed_data.demo_data.seed_demo_orgs", seed_demo_orgs)
     async with main._lifespan(main.app):
         assert main.app.title == "Modulo"
     assert seed_demo_orgs.await_count == 1
@@ -532,10 +530,10 @@ async def test_lifespan_is_fail_open_when_stall_attribution_install_fails(
     settings = _make_settings()
     _patch_lifespan_seams(monkeypatch, settings)
     monkeypatch.setattr(
-        "modulo.core.health_alerts.install_event_loop_stall_attribution",
+        "farna.core.health_alerts.install_event_loop_stall_attribution",
         MagicMock(side_effect=RuntimeError("install boom")),
     )
-    with caplog.at_level(logging.ERROR, logger="modulo.api.main"):
+    with caplog.at_level(logging.ERROR, logger="farna.api.main"):
         async with main._lifespan(main.app):
             pass
 
@@ -557,7 +555,7 @@ async def test_lifespan_installs_the_capacity_platform_probe(monkeypatch: pytest
     _patch_lifespan_seams(monkeypatch, settings)
     probe = object()
     factory = MagicMock(return_value=probe)
-    monkeypatch.setattr("modulo.core.capacity_providers.build_platform_capacity_probe", factory)
+    monkeypatch.setattr("farna.core.capacity_providers.build_platform_capacity_probe", factory)
     monkeypatch.setattr(db_capacity, "_platform_probe", None)
 
     async with main._lifespan(main.app):
@@ -574,12 +572,12 @@ async def test_lifespan_is_fail_open_when_the_capacity_probe_factory_raises(
     settings = _make_settings()
     _patch_lifespan_seams(monkeypatch, settings)
     monkeypatch.setattr(
-        "modulo.core.capacity_providers.build_platform_capacity_probe",
+        "farna.core.capacity_providers.build_platform_capacity_probe",
         MagicMock(side_effect=RuntimeError("factory boom")),
     )
     monkeypatch.setattr(db_capacity, "_platform_probe", None)
 
-    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         async with main._lifespan(main.app):
             pass
 
@@ -677,8 +675,8 @@ def _mock_factory(session: AsyncMock) -> MagicMock:
 def _patch_db_seams(monkeypatch: pytest.MonkeyPatch, engine: MagicMock, factory: MagicMock) -> None:
     """Patch the engine/factory seams both at module level and function-local."""
     monkeypatch.setattr(main, "get_or_create_engine", lambda _settings: engine)
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_engine", lambda _settings: engine)
-    monkeypatch.setattr("modulo.api.dependencies.get_or_create_session_factory", lambda _engine: factory)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", lambda _settings: engine)
+    monkeypatch.setattr("farna.api.dependencies.get_or_create_session_factory", lambda _engine: factory)
 
 
 class _FakeAsyncSession:
@@ -773,10 +771,10 @@ async def test_alembic_head_guard_single_head_logs_info(
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value=["abc123"])
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
-    with caplog.at_level(logging.INFO, logger="modulo.api.main"):
+    with caplog.at_level(logging.INFO, logger="farna.api.main"):
         await main._assert_single_alembic_head(_make_settings())
 
     assert any("startup.single_alembic_head" in rec.message for rec in caplog.records)
@@ -792,10 +790,10 @@ async def test_alembic_head_guard_multiple_heads_logs_warning(
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value=["head_a", "head_b"])
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
-    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         await main._assert_single_alembic_head(_make_settings())
 
     assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
@@ -815,10 +813,10 @@ async def test_alembic_head_guard_get_heads_returns_list_not_string(
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value=["head_a", "head_b", "head_c"])
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
-    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         await main._assert_single_alembic_head(_make_settings())
 
     assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
@@ -831,10 +829,10 @@ async def test_alembic_head_guard_exception_logs_error_not_warning(
 ) -> None:
     """When the guard itself fails, the error must be observable at ERROR level."""
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(side_effect=RuntimeError("broken")))
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
-    with caplog.at_level(logging.ERROR, logger="modulo.api.main"):
+    with caplog.at_level(logging.ERROR, logger="farna.api.main"):
         await main._assert_single_alembic_head(_make_settings())
 
     assert any("startup.alembic_head_check_failed" in rec.message for rec in caplog.records)
@@ -864,10 +862,10 @@ async def test_alembic_head_guard_get_heads_returns_string(
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value="head_a,head_b")
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(return_value=script_dir))
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
-    with caplog.at_level(logging.WARNING, logger="modulo.api.main"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         await main._assert_single_alembic_head(_make_settings())
 
     assert any("startup.multiple_alembic_heads" in rec.message for rec in caplog.records)
@@ -885,7 +883,7 @@ async def test_alembic_head_guard_reraises_cancelled(monkeypatch: pytest.MonkeyP
         "alembic.script.ScriptDirectory.from_config",
         MagicMock(side_effect=asyncio.CancelledError()),
     )
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
     monkeypatch.setattr("alembic.config.Config", MagicMock())
 
     with pytest.raises(asyncio.CancelledError):
@@ -898,8 +896,8 @@ async def test_alembic_head_guard_reraises_cancelled(monkeypatch: pytest.MonkeyP
 def _patch_migration_env(monkeypatch: pytest.MonkeyPatch, engine: MagicMock) -> None:
     _patch_db_seams(monkeypatch, engine, _mock_factory(_mock_session()))
     monkeypatch.setattr("alembic.command.upgrade", MagicMock())
-    monkeypatch.setattr("modulo.db.migrations.env._to_sync_url", lambda url: url)
-    monkeypatch.setattr("modulo.db.migrations.env.set_lock_held_by_caller", MagicMock())
+    monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
+    monkeypatch.setattr("farna.db.migrations.env.set_lock_held_by_caller", MagicMock())
 
 
 @pytest.mark.anyio
@@ -909,7 +907,7 @@ async def test_run_migrations_bootstraps_even_when_already_at_head(monkeypatch: 
     The head fast-path skips the alembic run and the migration lock — but the
     bootstrap sits BEFORE it so a warm boot that later adds
     MODULO_SYSTEM_DATABASE_URL reconciles the modulo_system password without a
-    manual ``python -m modulo.db.bootstrap_role`` step.
+    manual ``python -m farna.db.bootstrap_role`` step.
     """
     monkeypatch.setattr(main, "_db_is_at_migration_head", AsyncMock(return_value=True))
     bootstrap = AsyncMock()
@@ -989,7 +987,7 @@ async def test_migration_advisory_lock_times_out(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.anyio
 async def test_run_bootstrap_success(monkeypatch: pytest.MonkeyPatch) -> None:
     bootstrap_roles = AsyncMock()
-    monkeypatch.setattr("modulo.db.bootstrap_role.bootstrap_roles", bootstrap_roles)
+    monkeypatch.setattr("farna.db.bootstrap_role.bootstrap_roles", bootstrap_roles)
     await main._run_bootstrap(_make_settings())
     assert bootstrap_roles.await_count == 1
 
@@ -999,7 +997,7 @@ async def test_run_bootstrap_break_glass_posture_is_non_fatal(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(
-        "modulo.db.bootstrap_role.bootstrap_roles",
+        "farna.db.bootstrap_role.bootstrap_roles",
         AsyncMock(side_effect=RuntimeError("Break-glass role posture assertion FAILED: superuser")),
     )
     await main._run_bootstrap(_make_settings())
@@ -1009,7 +1007,7 @@ async def test_run_bootstrap_break_glass_posture_is_non_fatal(
 @pytest.mark.anyio
 async def test_run_bootstrap_generic_failure_is_non_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
     bootstrap_roles = AsyncMock(side_effect=RuntimeError("db blip"))
-    monkeypatch.setattr("modulo.db.bootstrap_role.bootstrap_roles", bootstrap_roles)
+    monkeypatch.setattr("farna.db.bootstrap_role.bootstrap_roles", bootstrap_roles)
     await main._run_bootstrap(_make_settings())
     assert bootstrap_roles.await_count == 1
 
@@ -1017,7 +1015,7 @@ async def test_run_bootstrap_generic_failure_is_non_fatal(monkeypatch: pytest.Mo
 @pytest.mark.anyio
 async def test_run_break_glass_watchdog_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     validate = MagicMock()
-    monkeypatch.setattr("modulo.settings.validate_break_glass_boot", validate)
+    monkeypatch.setattr("farna.settings.validate_break_glass_boot", validate)
     await main._run_break_glass_watchdog(_make_settings())
     assert validate.call_count == 1
 
@@ -1025,7 +1023,7 @@ async def test_run_break_glass_watchdog_ok(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.anyio
 async def test_run_break_glass_watchdog_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "modulo.settings.validate_break_glass_boot", MagicMock(side_effect=RuntimeError("missing config"))
+        "farna.settings.validate_break_glass_boot", MagicMock(side_effect=RuntimeError("missing config"))
     )
     with pytest.raises(RuntimeError, match="missing config"):
         await main._run_break_glass_watchdog(_make_settings())
@@ -1065,7 +1063,7 @@ async def test_ensure_default_org_creates(monkeypatch: pytest.MonkeyPatch) -> No
     session = _mock_session(_result(scalar_one_or_none=None))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     seed_components = AsyncMock()
-    monkeypatch.setattr("modulo.core.seed_data.cost_components.seed_cost_components_for_org", seed_components)
+    monkeypatch.setattr("farna.core.seed_data.cost_components.seed_cost_components_for_org", seed_components)
     await main._ensure_default_org(_make_settings())
     assert session.add.call_count == 1
     assert seed_components.await_count == 1
@@ -1076,7 +1074,7 @@ async def test_ensure_default_org_seed_failure_is_non_fatal(monkeypatch: pytest.
     session = _mock_session(_result(scalar_one_or_none=None))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     monkeypatch.setattr(
-        "modulo.core.seed_data.cost_components.seed_cost_components_for_org",
+        "farna.core.seed_data.cost_components.seed_cost_components_for_org",
         AsyncMock(side_effect=RuntimeError("seed blip")),
     )
     await main._ensure_default_org(_make_settings())
@@ -1119,7 +1117,7 @@ async def test_seed_cost_components(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _mock_session()
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     seed_cost_components = AsyncMock()
-    monkeypatch.setattr("modulo.core.seed_data.cost_components.seed_cost_components", seed_cost_components)
+    monkeypatch.setattr("farna.core.seed_data.cost_components.seed_cost_components", seed_cost_components)
     await main._seed_cost_components(_make_settings())
     assert seed_cost_components.await_count == 1
 
@@ -1129,7 +1127,7 @@ async def test_seed_demo_orgs(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _mock_session()
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     seed_demo_orgs = AsyncMock()
-    monkeypatch.setattr("modulo.core.seed_data.demo_data.seed_demo_orgs", seed_demo_orgs)
+    monkeypatch.setattr("farna.core.seed_data.demo_data.seed_demo_orgs", seed_demo_orgs)
     await main._seed_demo_orgs(_make_settings())
     assert seed_demo_orgs.await_count == 1
 
@@ -1138,19 +1136,19 @@ async def test_seed_demo_orgs(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_seed_demo_login_success(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _mock_session()
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
-    monkeypatch.setattr("modulo.db.seed_demo.seed_demo_runtime", AsyncMock(return_value="demo seeded"))
+    monkeypatch.setattr("farna.db.seed_demo.seed_demo_runtime", AsyncMock(return_value="demo seeded"))
     result = await main._seed_demo_login(_make_settings())
     assert result == "demo seeded"
 
 
 @pytest.mark.anyio
 async def test_seed_demo_login_failure_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.db.seed_demo import DemoSeedError
+    from farna.db.seed_demo import DemoSeedError
 
     session = _mock_session()
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     monkeypatch.setattr(
-        "modulo.db.seed_demo.seed_demo_runtime",
+        "farna.db.seed_demo.seed_demo_runtime",
         AsyncMock(side_effect=RuntimeError("INSERT failed [parameters: (...)]")),
     )
     with pytest.raises(DemoSeedError):

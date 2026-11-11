@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.filesystem import FilesystemConnector, PathTraversalError
 from tests.connectors._conformance import assert_result_shape, assert_write_result_shape
 
 

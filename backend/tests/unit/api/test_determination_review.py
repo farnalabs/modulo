@@ -17,20 +17,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.determination.models import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.determination.models import (
     DeterminationAttempt,
     ProposalContract,
     ProposalFact,
     SourceInventoryItem,
     UnresolvedAssumption,
 )
-from modulo.determination.review import ProposalReviewRequest
-from modulo.settings import Settings, get_settings
+from farna.determination.review import ProposalReviewRequest
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -182,10 +182,10 @@ def audits() -> Generator[dict[str, list[dict[str, Any]]], None, None]:
         coarse_calls.append(kwargs)
 
     with (
-        patch("modulo.api.routes.determination.append_audit_event", new=fake_rich_audit),
-        patch("modulo.core.audit_logger.append_audit_event", new=fake_coarse_audit),
-        patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.determination.append_audit_event", new=fake_rich_audit),
+        patch("farna.core.audit_logger.append_audit_event", new=fake_coarse_audit),
+        patch("farna.api.routes.determination.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.determination.set_rls_user_context", new=AsyncMock()),
     ):
         yield {"rich": rich_calls, "coarse": coarse_calls}
 
@@ -406,9 +406,9 @@ class TestNoActivation:
             raise RuntimeError("audit chain unavailable")
 
         with (
-            patch("modulo.api.routes.determination.append_audit_event", new=failing_audit),
-            patch("modulo.api.routes.determination.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.determination.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.determination.append_audit_event", new=failing_audit),
+            patch("farna.api.routes.determination.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.determination.set_rls_user_context", new=AsyncMock()),
         ):
             resp = client.post(
                 "/api/v1/determination/review",

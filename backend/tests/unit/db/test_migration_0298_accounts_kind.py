@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0298_accounts_kind.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0298_accounts_kind.py"
 )
 
 

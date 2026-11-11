@@ -6,8 +6,8 @@ eval definitions with eval_type='guardrail'.
 
 import pytest
 
-from modulo.core.eval import mute_policy as eval_mute_policy
-from modulo.core.guardrails import mute_policy as guardrail_mute_policy
+from farna.core.eval import mute_policy as eval_mute_policy
+from farna.core.guardrails import mute_policy as guardrail_mute_policy
 
 EXPECTED_EXPORTS = [
     "DEFAULT_MUTE_WINDOW_DAYS",

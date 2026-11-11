@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.models.error import SessionKeyResponse
+from farna.api.models.error import SessionKeyResponse
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -33,13 +33,13 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_app():
     """Build a minimal FastAPI app with the errors router and overridden DB dependency."""
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.routes.errors import router as errors_router
+    from farna.api.dependencies import get_db_session
+    from farna.api.routes.errors import router as errors_router
 
     app = FastAPI()
     app.include_router(errors_router)
@@ -72,7 +72,7 @@ def _valid_payload(event_overrides: dict | None = None) -> dict:
 @pytest.fixture(autouse=True)
 def _clear_rate_limit_state():
     """Clear the module-level rate-limit and daily-cap state before each test."""
-    import modulo.api.routes.errors as err_mod
+    import farna.api.routes.errors as err_mod
 
     err_mod._public_rate_limit.clear()
     err_mod._public_daily_event_count.clear()
@@ -91,7 +91,7 @@ class TestPublicIngestEndpoint:
 
     def test_valid_frontend_warning_event_returns_201(self, client):
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -133,7 +133,7 @@ class TestPublicIngestEndpoint:
         """Test boundary: payload just under 10,000 bytes is acceptable."""
         message = "x" * 9800
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp = client.post(
@@ -158,7 +158,7 @@ class TestPublicIngestEndpoint:
 
     def test_programming_error_returns_501(self, client):
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(side_effect=ProgrammingError("mock", "mock", "mock")),
         ):
             resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -169,7 +169,7 @@ class TestPublicIngestEndpoint:
     def test_rate_limit_exceeded(self, client):
         """First request passes, second within 60s is rate-limited."""
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp1 = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -187,10 +187,10 @@ class TestPublicIngestEndpoint:
         def _fake_time():
             return fake_time[0]
 
-        monkeypatch.setattr("modulo.api.routes.errors._time.time", _fake_time)
+        monkeypatch.setattr("farna.api.routes.errors._time.time", _fake_time)
 
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp1 = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -203,14 +203,14 @@ class TestPublicIngestEndpoint:
 
     def test_daily_cap_exceeded_returns_429(self, client):
         """A client already at the daily event cap is refused with 429."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         # The TestClient's requests arrive from the "testclient" host.
         err_mod._public_daily_event_count["testclient"] = {today: 100}
 
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -230,8 +230,8 @@ class TestPublicIngestEndpoint:
         """
         ingest_mock = AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}])
         with (
-            patch("modulo.api.routes.errors._service.ingest_batch", ingest_mock),
-            patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock) as rls_mock,
+            patch("farna.api.routes.errors._service.ingest_batch", ingest_mock),
+            patch("farna.api.routes.errors.set_rls_org", new_callable=AsyncMock) as rls_mock,
         ):
             resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
 
@@ -248,7 +248,7 @@ class TestPublicIngestEndpoint:
         orphan-org FK missing), the route must raise 500 instead of acking a
         false-success 201 with an empty results list."""
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[]),
         ):
             resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
@@ -259,7 +259,7 @@ class TestPublicIngestEndpoint:
     def test_partial_persist_stays_201(self, client):
         """Partial success (some events persisted) still acks 201."""
         with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
+            "farna.api.routes.errors._service.ingest_batch",
             AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
         ):
             resp = client.post(
@@ -287,7 +287,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_stale_clients_are_swept_and_key_set_stays_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Many stale keys must be evicted so the tracked set does not grow forever."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 10)
@@ -309,7 +309,7 @@ class TestPublicRateLimiterBoundedState:
         This is the case the sweep alone cannot handle: all keys are live, so
         the sweep frees nothing. The LRU eviction backstop must still bound it.
         """
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 3)
@@ -331,7 +331,7 @@ class TestPublicRateLimiterBoundedState:
         and later admitted fresh (LRU is best-effort, not a per-client
         guarantee).
         """
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 4)
@@ -347,7 +347,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_eviction_spares_the_most_recently_used_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Eviction must drop the least-recently-used key, not the client seen most recently."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 2)
@@ -367,7 +367,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_eviction_does_not_weaken_a_limited_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Admitting a new client at cap must not reset an actively-limited client's window."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 2)
@@ -388,7 +388,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_cap_of_one_still_admits_a_new_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A cap of 1 must hard-evict the single live key to admit a new client."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 1)
@@ -403,7 +403,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_empty_timestamp_list_is_swept(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A key holding an empty list carries no rate-limit information and is swept."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 1)
@@ -416,7 +416,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_rate_limit_still_trips_after_eviction(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The hardening must not weaken the limiter: a second request still 429s."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         now = 1000.0
@@ -434,7 +434,7 @@ class TestPublicRateLimiterBoundedState:
         O(n) CPU amplification this bound removes. Only the first
         ``_PUBLIC_SWEEP_BATCH`` (LRU-oldest) keys may be inspected.
         """
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_PUBLIC_SWEEP_BATCH", 2)
@@ -462,7 +462,7 @@ class TestPublicRateLimiterBoundedState:
         front scan. This pins that documented contract: the sweep reclaims what
         it can and the LRU backstop — not the sweep — is the hard bound.
         """
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_PUBLIC_SWEEP_BATCH", 1)
@@ -484,7 +484,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_capacity_warning_is_interval_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The at-capacity WARNING must fire at most once per interval, not per request."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         warn_spy = MagicMock()
         monkeypatch.setattr(err_mod, "_public_rate_limit_capacity_warning_at", 0.0)
@@ -500,7 +500,7 @@ class TestPublicRateLimiterBoundedState:
 
     def test_detail_message_derives_from_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The 429 detail must be derived from the window constant, not hardcoded."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
         monkeypatch.setattr(err_mod, "_PUBLIC_RATE_LIMIT_WINDOW_SECONDS", 45.0)
@@ -530,7 +530,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_stale_daily_clients_are_swept_and_key_set_stays_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Many stale keys must be evicted so the tracked set does not grow forever."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 10)
@@ -547,7 +547,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_in_window_daily_clients_are_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The map must stay at/below the cap even when every tracked client is in-window."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 3)
@@ -562,7 +562,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_distinct_ip_daily_flood_stays_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A flood of distinct new in-window IPs must not grow the map past the cap."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 4)
@@ -578,7 +578,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_daily_eviction_spares_most_recently_used_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Eviction must drop the least-recently-used key, not the client seen most recently."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 2)
@@ -596,7 +596,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_daily_eviction_keeps_an_active_clients_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Admitting at cap must not drop or reset an actively-seen client's today count."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 2)
@@ -615,7 +615,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_cap_of_one_daily_map_still_admits_a_new_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A cap of 1 must hard-evict the single live key to admit a new client."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 1)
@@ -630,7 +630,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_admitted_client_drops_stale_dates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A long-lived client's entry must not retain dated counters outside the window."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
         today = self._today()
@@ -643,7 +643,7 @@ class TestPublicDailyCapBoundedState:
 
     def test_daily_capacity_warning_is_interval_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The daily-cap at-capacity WARNING must fire at most once per interval."""
-        import modulo.api.routes.errors as err_mod
+        import farna.api.routes.errors as err_mod
 
         warn_spy = MagicMock()
         monkeypatch.setattr(err_mod, "_public_daily_capacity_warning_at", 0.0)

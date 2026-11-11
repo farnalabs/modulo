@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.request_timeout.RequestTimeoutMiddleware.
+"""Unit tests for farna.api.middleware.request_timeout.RequestTimeoutMiddleware.
 
 QA lens pass (correctness, maintainability) on the request-timeout middleware.
 Previously untested, this suite locks the full contract:
@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
+from farna.api.middleware.request_timeout import RequestTimeoutMiddleware
 
 
 @pytest.fixture
@@ -91,7 +91,7 @@ class TestDispatch:
 
     @pytest.mark.anyio
     async def test_timeout_logs_structured_warning(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level("WARNING", logger="modulo.api.middleware.request_timeout"):
+        with caplog.at_level("WARNING", logger="farna.api.middleware.request_timeout"):
             async with _client(app) as client:
                 await client.get("/slow-override")
         assert any(rec.message == "middleware.request_timeout" for rec in caplog.records)
@@ -153,7 +153,7 @@ class TestProductionTimeoutConfig:
         probe intermittently 504'd under CI load. That surfaced as
         ``KeyError: 'checks'`` in tests/unit/api/test_health.py because the
         timeout body is a ProblemDetail, not a ReadinessResponse."""
-        from modulo.api.main import (
+        from farna.api.main import (
             _HEALTHZ_READY_TIMEOUT_SECONDS,
             _HEALTHZ_TIMEOUT_SECONDS,
             app,

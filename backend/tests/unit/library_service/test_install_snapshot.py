@@ -1,7 +1,7 @@
 """Unit tests for the FAR-759 install-time provenance snapshot helpers.
 
 Covers ``compute_entity_fingerprint``, ``snapshot_entity_fingerprints`` and
-``_map_pin_entity_ids`` in ``modulo.core.library_service.install`` — the
+``_map_pin_entity_ids`` in ``farna.core.library_service.install`` — the
 snapshot the collection upgrade flow consumes.  Unit tier: no DB.
 """
 
@@ -11,7 +11,7 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from modulo.core.library_service.install import (
+from farna.core.library_service.install import (
     _map_pin_entity_ids,
     agent_entity_fingerprint,
     compute_entity_fingerprint,
@@ -110,7 +110,7 @@ class TestSnapshotEntityFingerprints:
         async def _fp(_s, _o, etype, _eid):
             return "fp" if etype == "schema" else None
 
-        with patch("modulo.core.library_service.install.compute_entity_fingerprint", side_effect=_fp):
+        with patch("farna.core.library_service.install.compute_entity_fingerprint", side_effect=_fp):
             out = await snapshot_entity_fingerprints(AsyncMock(), org, entities)
 
         assert out == {schema_id: "fp"}
@@ -124,7 +124,7 @@ class TestSnapshotEntityFingerprints:
             {"entity_type": "agent", "entity_id": agent_id},
         ]
         with patch(
-            "modulo.core.library_service.install.compute_entity_fingerprint",
+            "farna.core.library_service.install.compute_entity_fingerprint",
             new_callable=AsyncMock,
             return_value="fp",
         ):

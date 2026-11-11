@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories.locks import (
+from farna.db.repositories.locks import (
     GenericLock,
     LockAcquireError,
     PostgresLock,

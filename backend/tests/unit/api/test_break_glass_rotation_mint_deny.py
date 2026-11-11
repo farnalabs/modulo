@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -125,7 +125,7 @@ def test_denied_break_glass_cannot_rotate_key(client: TestClient) -> None:
 
 
 def test_normal_admin_can_rotate_key(client: TestClient) -> None:
-    from modulo.api.routes import admin_rotation
+    from farna.api.routes import admin_rotation
 
     admin_rotation._rotation_owner = None
     _configure_auth(
@@ -134,8 +134,8 @@ def test_normal_admin_can_rotate_key(client: TestClient) -> None:
         principal=_make_principal(is_break_glass=False, is_system_admin=True),
     )
     with (
-        patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()),
+        patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin_rotation._run_rotation_background", new=AsyncMock()),
     ):
         resp = client.post(_ROTATE_KEY_URL, json={"new_fernet_key": _VALID_32})
     assert resp.status_code == 202
@@ -150,7 +150,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
     back to the NOBYPASSRLS app role and rotate zero rows. The route must
     refuse rather than silently accept a hollow rotation.
     """
-    from modulo.api.routes import admin_rotation
+    from farna.api.routes import admin_rotation
 
     admin_rotation._rotation_owner = None
 
@@ -189,8 +189,8 @@ async def test_run_rotation_background_uses_system_factory() -> None:
     asserts the re-encryption actually ran on the session the system factory
     produced.
     """
-    from modulo.api.routes import admin_rotation
-    from modulo.core.fernet_rotation import RotationResult
+    from farna.api.routes import admin_rotation
+    from farna.core.fernet_rotation import RotationResult
 
     admin_rotation._rotation_owner = None
 
@@ -223,16 +223,16 @@ async def test_run_rotation_background_uses_system_factory() -> None:
 
     with (
         patch(
-            "modulo.api.routes.admin_rotation._make_system_session_factory",
+            "farna.api.routes.admin_rotation._make_system_session_factory",
             side_effect=fake_factory,
         ),
         patch(
-            "modulo.api.routes.admin_rotation.rotate_all_encrypted_data",
+            "farna.api.routes.admin_rotation.rotate_all_encrypted_data",
             side_effect=fake_rotate,
         ),
-        patch("modulo.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
         patch(
-            "modulo.api.routes.admin_rotation.get_settings",
+            "farna.api.routes.admin_rotation.get_settings",
             return_value=Settings(modulo_system_database_url="postgresql+asyncpg://localhost/system"),
         ),
     ):
@@ -292,27 +292,27 @@ def test_normal_admin_can_rotate_identity_secret(client: TestClient) -> None:
     )
     with (
         patch(
-            "modulo.api.routes.product_analytics_identity.get_or_create_instance_identity",
+            "farna.api.routes.product_analytics_identity.get_or_create_instance_identity",
             new=AsyncMock(return_value=(_ORG_ID, "current-secret")),
         ),
         patch(
-            "modulo.api.routes.product_analytics_identity._constant_time_equal",
+            "farna.api.routes.product_analytics_identity._constant_time_equal",
             return_value=True,
         ),
         patch(
-            "modulo.api.routes.product_analytics_identity.verify_hmac",
+            "farna.api.routes.product_analytics_identity.verify_hmac",
             return_value=True,
         ),
         patch(
-            "modulo.api.routes.product_analytics_identity._get_last_sequence",
+            "farna.api.routes.product_analytics_identity._get_last_sequence",
             new=AsyncMock(return_value=0),
         ),
         patch(
-            "modulo.api.routes.product_analytics_identity._set_last_sequence",
+            "farna.api.routes.product_analytics_identity._set_last_sequence",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.api.routes.product_analytics_identity.rotate_secret",
+            "farna.api.routes.product_analytics_identity.rotate_secret",
             new=AsyncMock(return_value="new-secret"),
         ),
     ):

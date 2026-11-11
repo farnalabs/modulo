@@ -20,11 +20,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _resolve_provider_id_from_agent,
     make_sandbox_agent_fn,
 )
-from modulo.core.schema_registry.contract import ContractWriteResult
+from farna.core.schema_registry.contract import ContractWriteResult
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_ID = str(uuid.uuid4())
@@ -130,7 +130,7 @@ async def test_script_mode_uploads_contract_files_and_sets_env() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
     ):
         result = await fn(_run_state())
 
@@ -158,7 +158,7 @@ async def test_llm_mode_injects_schema_paths_into_prompt() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
     ):
         result = await fn(_run_state())
 
@@ -179,9 +179,9 @@ async def test_contract_write_failure_is_best_effort() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.node_runner.write_schema_contract",
+            "farna.core.pipeline_engine.node_runner.write_schema_contract",
             side_effect=RuntimeError("disk full"),
         ),
     ):
@@ -207,7 +207,7 @@ async def test_contract_temp_dir_cleaned_up_without_output_schema(tmp_path: Path
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch("tempfile.mkdtemp", return_value=str(contract_tmp)),
     ):
         result = await fn(_run_state())
@@ -231,9 +231,9 @@ async def test_contract_write_warnings_are_logged_but_do_not_fail() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.node_runner.write_schema_contract",
+            "farna.core.pipeline_engine.node_runner.write_schema_contract",
             return_value=writer_result,
         ),
     ):

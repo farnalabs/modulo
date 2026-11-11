@@ -11,10 +11,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.auth.jwt import create_access_token
-from modulo.core.rate_limiter import RateLimiterRegistry
-from modulo.settings import Settings
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.auth.jwt import create_access_token
+from farna.core.rate_limiter import RateLimiterRegistry
+from farna.settings import Settings
 
 API_KEY_HEADER = "mk_abcdefgh_test1234567890123456789012"
 API_KEY_ALT_HEADER = "mk_zyxwvuts_test1234567890123456789012"

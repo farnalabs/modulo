@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.workflow_import_export — the portable workflow-bundle
+"""Unit tests for farna.core.workflow_import_export — the portable workflow-bundle
 import/export service (v1 ZIP bundles + v2 YAML bundles).
 
 Covers the service's pure helper contracts, the archive/name/retry-policy
@@ -42,9 +42,9 @@ import pytest
 import yaml
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
-import modulo.core.workflow_import_export as mod
-from modulo.core.pipeline_engine.git_content import GitContentRefError
-from modulo.core.workflow_import_export import (
+import farna.core.workflow_import_export as mod
+from farna.core.pipeline_engine.git_content import GitContentRefError
+from farna.core.workflow_import_export import (
     _get_existing_names,
     _get_latest_published_version,
     _safe_uuid,
@@ -345,7 +345,7 @@ def test_sanitize_retry_policy_unexpected_schedule_exception_degrades_to_schedul
     drop, core kept) — a malformed bundled schedule must never break the
     import. The CORE check keeps its semantics (only unexpected-exception
     containment is broadened here)."""
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     policy = {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}}
 
@@ -366,7 +366,7 @@ def test_sanitize_retry_policy_canonicalise_valueerror_degrades_to_schedule_faul
     ValueError (e.g. an un-representable value the validator let through) is
     classified as the SCHEDULE fault (nested drop, core kept) — never an import
     break."""
-    from modulo.core.pipeline_engine import retry_compensation
+    from farna.core.pipeline_engine import retry_compensation
 
     policy = {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}}
 
@@ -387,7 +387,7 @@ def test_sanitize_retry_policy_containment_logs_warning(
     genuine validator defect is separable from malformed bundled data."""
     import logging
 
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     policy = {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}}
 
@@ -395,7 +395,7 @@ def test_sanitize_retry_policy_containment_logs_warning(
         raise RuntimeError("simulated validator defect")
 
     monkeypatch.setattr(GraphValidator, "check_retry_policy_schedule", _boom)
-    with caplog.at_level(logging.WARNING, logger="modulo.core.workflow_import_export"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.workflow_import_export"):
         _sanitized, fault = _sanitize_retry_policy(policy)
     assert fault == "schedule"
     assert "workflow_import.retry_policy_schedule_check_failed" in caplog.text
@@ -418,7 +418,7 @@ def test_sanitize_retry_policy_canonicalization_only_delta_does_not_fault() -> N
 def test_apply_imported_retry_policy_schedule_fault_emits_schedule_warning() -> None:
     """The warning site derives warnings from the fault class: a nested drop
     emits the schedule-specific message, NOT the 'dropped to {}' message."""
-    from modulo.core.workflow_import_export import _apply_imported_retry_policy
+    from farna.core.workflow_import_export import _apply_imported_retry_policy
 
     pipeline = MagicMock()
     pipeline_info = {"retry_policy": {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"nope": 1}}}
@@ -431,7 +431,7 @@ def test_apply_imported_retry_policy_schedule_fault_emits_schedule_warning() -> 
 
 
 def test_apply_imported_retry_policy_core_fault_emits_legacy_warning() -> None:
-    from modulo.core.workflow_import_export import _apply_imported_retry_policy
+    from farna.core.workflow_import_export import _apply_imported_retry_policy
 
     pipeline = MagicMock()
     pipeline_info = {"retry_policy": {"on": ["bogus"], "max_retries": 2}}
@@ -442,7 +442,7 @@ def test_apply_imported_retry_policy_core_fault_emits_legacy_warning() -> None:
 
 
 def test_apply_imported_retry_policy_canonicalization_only_no_warning() -> None:
-    from modulo.core.workflow_import_export import _apply_imported_retry_policy
+    from farna.core.workflow_import_export import _apply_imported_retry_policy
 
     pipeline = MagicMock()
     pipeline_info = {"retry_policy": {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45.0}}}
@@ -455,7 +455,7 @@ def test_apply_imported_retry_policy_canonicalization_only_no_warning() -> None:
 def test_apply_imported_retry_policy_absent_policy_no_warning() -> None:
     """A pipeline WITHOUT a retry_policy imports silently: the legacy behaviour
     never warned for an absent policy — only for a PRESENT malformed one."""
-    from modulo.core.workflow_import_export import _apply_imported_retry_policy
+    from farna.core.workflow_import_export import _apply_imported_retry_policy
 
     pipeline = MagicMock()
     warnings: list[str] = []

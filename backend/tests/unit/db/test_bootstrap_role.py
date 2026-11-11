@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.bootstrap_role — the break-glass role bootstrap.
+"""Unit tests for farna.db.bootstrap_role — the break-glass role bootstrap.
 
 Hermetic suite: no Postgres required. A fake asyncpg connection routes
 responses by SQL shape — role-existence probes, to_regclass guards,
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import asyncpg
 import pytest
 
-from modulo.db.bootstrap_role import (
+from farna.db.bootstrap_role import (
     _MIGRATE_ROLE,
     _SYSTEM_ROLE,
     ACCOUNTS_WRITABLE_COLUMNS,
@@ -397,7 +397,7 @@ class TestUnconfiguredPasswordPreserve:
         fake = _clean_posture_conn()
         monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
                 "postgres://modulo_app:apppw@db:5432/modulo",
@@ -410,7 +410,7 @@ class TestUnconfiguredPasswordPreserve:
         fake = _clean_posture_conn()
         monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "postgres://modulo_system:syspw@db:5432/modulo")
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
                 "postgres://modulo_app:apppw@db:5432/modulo",
@@ -789,7 +789,7 @@ class TestBootstrap:
         }
 
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
                 "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
@@ -822,7 +822,7 @@ class TestBootstrap:
             "MODULO_BREAK_GLASS_DATABASE_URL",
             "postgresql://my_bg:bgpw@db:5432/modulo",
         )
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
                 "postgres://modulo_app:apppw@db:5432/modulo",
@@ -844,7 +844,7 @@ class TestBootstrap:
         fake.sql_hook = _hook
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
         with (
-            patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
+            patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
             pytest.raises(RuntimeError, match="boom"),
         ):
             await _bootstrap(
@@ -871,7 +871,7 @@ class TestConcurrentBootstrap:
     async def test_serialises_ddl_behind_advisory_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _fresh_db_posture_conn()
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
                 "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
@@ -908,8 +908,8 @@ class TestConcurrentBootstrap:
                     raise asyncpg.InternalServerError("tuple concurrently updated")
 
         fake.sql_hook = _hook
-        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
                 "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
@@ -934,7 +934,7 @@ class TestConcurrentBootstrap:
         """
         fake = _fresh_db_posture_conn()
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_RETRY_BACKOFF_SECONDS", 0)
+        monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_RETRY_BACKOFF_SECONDS", 0)
         target = 'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"'
         attempts = {"count": 0}
 
@@ -944,9 +944,9 @@ class TestConcurrentBootstrap:
                 raise asyncpg.InternalServerError("tuple concurrently updated")
 
         fake.sql_hook = _hook
-        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
+        caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
         with (
-            patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
+            patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
             pytest.raises(asyncpg.InternalServerError, match="tuple concurrently updated"),
         ):
             await bootstrap_roles(
@@ -975,7 +975,7 @@ class TestConcurrentBootstrap:
 
         fake.sql_hook = _hook
         with (
-            patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
+            patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
             pytest.raises(asyncpg.InternalServerError, match="some other internal failure"),
         ):
             await bootstrap_roles(
@@ -996,10 +996,10 @@ class TestConcurrentBootstrap:
         fake = _fresh_db_posture_conn()
         fake.lock_available = False
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
-        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_ATTEMPTS", 3)
-        monkeypatch.setattr("modulo.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_INTERVAL", 0)
-        caplog.set_level("WARNING", logger="modulo.db.bootstrap_role")
-        with patch("modulo.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
+        monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_ATTEMPTS", 3)
+        monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_INTERVAL", 0)
+        caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
+        with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
                 "postgresql+asyncpg://modulo_app:apppw@db:5432/modulo",
@@ -1041,7 +1041,7 @@ class TestMain:
         async def _fail(admin_url: str, app_url: str) -> None:
             raise RuntimeError("boom")
 
-        with patch("modulo.db.bootstrap_role._bootstrap", new=_fail), pytest.raises(SystemExit) as exc_info:
+        with patch("farna.db.bootstrap_role._bootstrap", new=_fail), pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
         assert "Role bootstrap failed: boom" in caplog.text
@@ -1051,7 +1051,7 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        caplog.set_level("INFO", logger="modulo.db.bootstrap_role")
+        caplog.set_level("INFO", logger="farna.db.bootstrap_role")
         monkeypatch.setenv("DATABASE_ADMIN_URL", "postgres://admin:secret@db:5432/modulo")
         monkeypatch.setenv("DATABASE_URL", "postgres://modulo_app:apppw@db:5432/modulo")
         monkeypatch.setenv("MODULO_BREAK_GLASS_DATABASE_URL", "")
@@ -1059,6 +1059,6 @@ class TestMain:
         async def _ok(admin_url: str, app_url: str) -> None:
             assert "modulo" in admin_url
 
-        with patch("modulo.db.bootstrap_role._bootstrap", new=_ok):
+        with patch("farna.db.bootstrap_role._bootstrap", new=_ok):
             main()
         assert "Role bootstrap complete" in caplog.text

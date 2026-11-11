@@ -36,13 +36,13 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.connectors.base import CompensationOutcome, CompensationResult
-from modulo.core.guardrails.compensation import compensate_blocked_run
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.core.trigger_engine import is_guardrail_blocked_run
-from modulo.db.crud.run import create_run
-from modulo.db.crud.run_node_outputs import replace_run_node_outputs
-from modulo.db.rls import set_rls_org
+from farna.connectors.base import CompensationOutcome, CompensationResult
+from farna.core.guardrails.compensation import compensate_blocked_run
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.trigger_engine import is_guardrail_blocked_run
+from farna.db.crud.run import create_run
+from farna.db.crud.run_node_outputs import replace_run_node_outputs
+from farna.db.rls import set_rls_org
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration
@@ -266,7 +266,7 @@ class TestCompensateBlockedRunAgainstRealDB:
                 telemetry=None,
             )
             # Reload the run row and drive compensation through the real path.
-            from modulo.db.crud.run import get_run
+            from farna.db.crud.run import get_run
 
             run = await get_run(session, run_id)
             assert run is not None
@@ -550,7 +550,7 @@ class TestDependentTriggerSuppression:
                 },
             )
 
-        from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+        from farna.core.trigger_engine.agent_signal import fire_agent_signal
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session, session.begin():

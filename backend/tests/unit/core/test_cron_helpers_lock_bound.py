@@ -48,8 +48,8 @@ import pytest
 from asyncpg import exceptions as asyncpg_exceptions
 from sqlalchemy.exc import OperationalError
 
-from modulo.core import cron_helpers as ch
-from modulo.db.sqlstates import sqlstate_of
+from farna.core import cron_helpers as ch
+from farna.db.sqlstates import sqlstate_of
 
 ORG = uuid.uuid4()
 RUN_ID = uuid.uuid4()
@@ -219,7 +219,7 @@ class TestOrgTransactionLockBound:
         lock, before even the RLS GUCs), is transaction-local, precedes the
         terminalizers' ``UPDATE runs``, and its value is the operator knob."""
         session = _OrgSession()
-        with patch("modulo.db.crud.row_lock.get_settings", return_value=_row_lock_settings()):
+        with patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()):
             await _run_org_pass(session)
 
         sqls = session.statements
@@ -267,7 +267,7 @@ class TestOrgTransactionLockBound:
 
         with (
             patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, side_effect=_row_loop_writers),
-            patch("modulo.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
+            patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
         ):
             await _run_org_pass(session, summary=summary)
 
@@ -298,10 +298,10 @@ class TestLockTimeoutContract:
         (rolling the org transaction back at the ``async with``) so the
         reconcile body can apply the org-level skip + WARNING contract."""
         session = _OrgSession(raise_on_update=_lock_timeout_error("UPDATE runs SET ..."))
-        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.WARNING, logger="farna.core.cron_helpers")
 
         with (
-            patch("modulo.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
+            patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
             pytest.raises(OperationalError) as excinfo,
         ):
             await _run_org_pass(session)
@@ -316,9 +316,9 @@ class TestLockTimeoutContract:
         pre-existing contract — logged ``read failed``, the org skipped, no
         exception escaping — and is never routed through the 55P03 skip."""
         session = _OrgSession(raise_on_update=_non_lock_timeout_error("UPDATE runs SET ..."))
-        caplog.set_level(logging.ERROR, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.ERROR, logger="farna.core.cron_helpers")
 
-        with patch("modulo.db.crud.row_lock.get_settings", return_value=_row_lock_settings()):
+        with patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()):
             got = await _run_org_pass(session)
 
         assert got == 0
@@ -337,7 +337,7 @@ class TestLockTimeoutContract:
             patch.object(
                 ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=asyncio.CancelledError()
             ),
-            patch("modulo.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
+            patch("farna.db.crud.row_lock.get_settings", return_value=_row_lock_settings()),
             pytest.raises(asyncio.CancelledError),
         ):
             await _run_org_pass(session)
@@ -374,7 +374,7 @@ async def _drive_body(
         sweeps = stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", record_facts))
         stack.enter_context(patch.object(ch, "_record_terminalisation_audits", new_callable=AsyncMock))
-        stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+        stack.enter_context(patch("farna.core.cron_helpers.AsyncRedis"))
         summary_out = await ch._dispatcher_reconcile_body(
             _settings=settings,
             factory=MagicMock(),
@@ -423,7 +423,7 @@ class TestOrgLockTimeoutSkip:
             summary["scanned"] += 1
             return 0
 
-        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.WARNING, logger="farna.core.cron_helpers")
         summary_out, sweeps = await _drive_body(
             [timeout_org, good_org],
             fake_reconcile_org,
@@ -468,7 +468,7 @@ class TestOrgLockTimeoutSkip:
         async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
             raise _non_lock_timeout_error("UPDATE runs SET ...")
 
-        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.WARNING, logger="farna.core.cron_helpers")
         with pytest.raises(OperationalError):
             await _drive_body(
                 [org],
@@ -496,7 +496,7 @@ class TestOrgLockTimeoutSkip:
         async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
             raise asyncio.CancelledError
 
-        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        caplog.set_level(logging.WARNING, logger="farna.core.cron_helpers")
         with pytest.raises(asyncio.CancelledError):
             await _drive_body(
                 [org],

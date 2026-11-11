@@ -21,17 +21,17 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.db.crud.run_node_outputs import (
+from farna.db.crud.run_node_outputs import (
     _MARKER_KEY_PREFIX_LEN as REPO_MARKER_KEY_PREFIX_LEN,
 )
-from modulo.db.crud.run_node_outputs import (
+from farna.db.crud.run_node_outputs import (
     _MARKER_KEY_RE as REPO_MARKER_KEY_RE,
 )
-from modulo.db.crud.run_node_outputs import parse_marker_node_id
-from modulo.db.models.run import TERMINAL_STATUSES
-from modulo.db.models.run_node_outputs import UNKNOWN_NODE_ID
+from farna.db.crud.run_node_outputs import parse_marker_node_id
+from farna.db.models.run import TERMINAL_STATUSES
+from farna.db.models.run_node_outputs import UNKNOWN_NODE_ID
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0192_run_node_outputs"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -256,7 +256,7 @@ def test_quarantine_docstrings_do_not_claim_default_revoke_posture() -> None:
     modulo_system) — the old 'no app-role grant / default REVOKE' claims
     drifted from the shipped ceremony."""
     retention_src = (
-        Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "crud" / "run_retention.py"
+        Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "crud" / "run_retention.py"
     ).read_text(encoding="utf-8")
     assert "no app-role grant on Postgres (default" not in retention_src
     assert "migration 0192 grants" in retention_src, "the docstring names the explicit grants"

@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from modulo.api.routes.agents import AgentResponse
+from farna.api.routes.agents import AgentResponse
 
 
 def _row(connector_type_refs: object) -> SimpleNamespace:

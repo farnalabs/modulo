@@ -8,14 +8,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.db.crud.connector_instance import (
+from farna.db.crud.connector_instance import (
     clear_degraded_markers,
     create_connector_instance,
     list_connector_instances,
     mark_instances_degraded,
 )
-from modulo.db.crud.eval_run import get_evals_for_runs, get_run_evals
-from modulo.db.crud.org_membership import (
+from farna.db.crud.eval_run import get_evals_for_runs, get_run_evals
+from farna.db.crud.org_membership import (
     get_membership_by_account_and_org,
     list_memberships_for_account,
     list_memberships_for_org,
@@ -23,13 +23,13 @@ from modulo.db.crud.org_membership import (
     resolve_role_from_membership,
     update_membership_role,
 )
-from modulo.db.crud.template import (
+from farna.db.crud.template import (
     _agent_count_from_content,
     _preview_data_from_content,
     get_template,
     list_templates,
 )
-from modulo.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.library_primitive import LibraryPrimitive
 
 pytestmark = pytest.mark.integration
 

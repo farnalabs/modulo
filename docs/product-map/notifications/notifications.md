@@ -3,15 +3,15 @@ id: feat-notifications
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/notifier
-  - backend/src/modulo/core/hitl_manager/deadline_warning.py
-  - backend/src/modulo/api/routes/admin_notifications.py
-  - backend/src/modulo/api/routes/notifications.py
-  - backend/src/modulo/api/routes/in_app_notifications.py
-  - backend/src/modulo/core/email_service.py
-  - backend/src/modulo/db/models/notification.py
-  - backend/src/modulo/db/models/notification_delivery.py
-  - backend/src/modulo/db/models/notification_endpoint.py
+  - backend/src/farna/core/notifier
+  - backend/src/farna/core/hitl_manager/deadline_warning.py
+  - backend/src/farna/api/routes/admin_notifications.py
+  - backend/src/farna/api/routes/notifications.py
+  - backend/src/farna/api/routes/in_app_notifications.py
+  - backend/src/farna/core/email_service.py
+  - backend/src/farna/db/models/notification.py
+  - backend/src/farna/db/models/notification_delivery.py
+  - backend/src/farna/db/models/notification_endpoint.py
 unit-tests:
   - backend/tests/unit/notifier/test_notifier.py
   - backend/tests/unit/notifier/test_event_mapper.py

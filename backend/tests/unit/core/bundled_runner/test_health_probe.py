@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
 
-from modulo.core.bundled_runner import runner_reconciler
-from modulo.core.bundled_runner.health_probe import (
+from farna.core.bundled_runner import runner_reconciler
+from farna.core.bundled_runner.health_probe import (
     NOTIFICATION_ACTION_URL,
     NOTIFICATION_CATEGORY,
     EngineProbeOutcome,
@@ -29,8 +29,8 @@ from modulo.core.bundled_runner.health_probe import (
     scrub_url_credentials,
     strip_state_for_row,
 )
-from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
-from modulo.db.crud.runner_probe import (
+from farna.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+from farna.db.crud.runner_probe import (
     PROBE_INTERVAL_SECONDS,
     PROBE_RETENTION_SECONDS,
     PROBE_STALENESS_THRESHOLD_SECONDS,
@@ -303,7 +303,7 @@ def _real_boundary(client: _FakeAioDockerClient) -> _EngineBoundary:
 @pytest.fixture(autouse=True)
 def _engine_configured() -> Any:
     """Default to a configured engine so results do not depend on the host."""
-    with patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=True):
+    with patch("farna.core.bundled_runner.health_probe.docker_engine_configured", return_value=True):
         yield
 
 
@@ -313,11 +313,11 @@ class TestRunRunnerHealthProbe:
         session = _make_session()
         boundary = _fake_boundary(reachable=True, image_ok=True)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -337,11 +337,11 @@ class TestRunRunnerHealthProbe:
         session = _make_session()
         boundary = _fake_boundary(reachable=False)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()),
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()),
         ):
             await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -358,11 +358,11 @@ class TestRunRunnerHealthProbe:
         previous = MagicMock()
         previous.engine_reachable = True
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -375,12 +375,12 @@ class TestRunRunnerHealthProbe:
         session = _make_session()
         boundary = _fake_boundary(reachable=False)
         with (
-            patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=False),
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+            patch("farna.core.bundled_runner.health_probe.docker_engine_configured", return_value=False),
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -394,11 +394,11 @@ class TestRunRunnerHealthProbe:
         session = _make_session()
         boundary = _fake_boundary(reachable=False)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -413,11 +413,11 @@ class TestRunRunnerHealthProbe:
         previous = MagicMock()
         previous.engine_reachable = False
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
-            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -443,11 +443,11 @@ class TestRunRunnerHealthProbe:
             calls["n"] += 1
 
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
         ):
             result = await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -465,10 +465,10 @@ class TestRunRunnerHealthProbe:
         boundary = _fake_boundary(reachable=True)
         placeholder_ref = "modulo-runner:opencode@sha256:" + "0" * 64
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[placeholder_ref])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[placeholder_ref])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
             await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -486,10 +486,10 @@ class TestRunRunnerHealthProbe:
         boundary = _fake_boundary(reachable=True)
         boundary.image_present = AsyncMock(return_value=None)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[_IMAGE_REF])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
             await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -505,11 +505,11 @@ class TestRunRunnerHealthProbe:
         session = _make_session()
         boundary = _fake_boundary(reachable=True)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
-            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
         ):
             await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -525,13 +525,13 @@ class TestRunRunnerHealthProbe:
         placeholder_ref = "modulo-runner:opencode@sha256:" + "0" * 64
         real_ref = _IMAGE_REF
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
             patch(
-                "modulo.db.crud.runner_probe.list_org_image_refs",
+                "farna.db.crud.runner_probe.list_org_image_refs",
                 new=AsyncMock(return_value=[placeholder_ref, real_ref]),
             ),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
             await run_runner_health_probe(
                 _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -628,11 +628,11 @@ class TestRunRunnerHealthProbeSystemSessionFactory:
 
         boundary = _fake_boundary(reachable=True, image_ok=True)
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(side_effect=_read_refs)),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(side_effect=_read_refs)),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
             result = await run_runner_health_probe(
                 _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -655,11 +655,11 @@ class TestRunRunnerHealthProbeSystemSessionFactory:
             return [_ORG_ID]
 
         with (
-            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
-            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
-            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_read_orgs)),
+            patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+            patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
             result = await run_runner_health_probe(
                 _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
@@ -753,8 +753,8 @@ class TestEmitUnreachableTransitionReal:
         emit = AsyncMock()
         notify = AsyncMock()
         with (
-            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
-            patch("modulo.db.crud.notifications.create_notification", new=notify),
+            patch("farna.core.error_tracking.emit_signal_event", new=emit),
+            patch("farna.db.crud.notifications.create_notification", new=notify),
         ):
             await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
         emit.assert_awaited_once()
@@ -769,8 +769,8 @@ class TestEmitUnreachableTransitionReal:
         emit = AsyncMock(side_effect=RuntimeError("event store down"))
         notify = AsyncMock()
         with (
-            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
-            patch("modulo.db.crud.notifications.create_notification", new=notify),
+            patch("farna.core.error_tracking.emit_signal_event", new=emit),
+            patch("farna.db.crud.notifications.create_notification", new=notify),
         ):
             # Must not raise — both emit paths are fail-open.
             await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
@@ -782,8 +782,8 @@ class TestEmitUnreachableTransitionReal:
         emit = AsyncMock()
         notify = AsyncMock(side_effect=RuntimeError("notify store down"))
         with (
-            patch("modulo.core.error_tracking.emit_signal_event", new=emit),
-            patch("modulo.db.crud.notifications.create_notification", new=notify),
+            patch("farna.core.error_tracking.emit_signal_event", new=emit),
+            patch("farna.db.crud.notifications.create_notification", new=notify),
         ):
             await _emit_unreachable_transition(session, _ORG_ID, "machine-1", "boom")
         emit.assert_awaited_once()
@@ -809,11 +809,11 @@ async def test_poisoned_org_infra_error_isolates_and_reraises() -> None:
             raise SQLAlchemyError("statement poisoned")
 
     with (
-        patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
-        patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-        patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-        patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
-        patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+        patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+        patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+        patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+        patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+        patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
         pytest.raises(SQLAlchemyError),
     ):
         await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
@@ -843,12 +843,12 @@ async def test_multiple_org_infra_errors_keep_the_first_and_count_each() -> None
         log_exceptions.append(msg % args)
 
     with (
-        patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
-        patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
-        patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
-        patch("modulo.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
-        patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
-        patch("modulo.core.bundled_runner.health_probe._log.exception", new=_record_failure),
+        patch("farna.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(side_effect=_list_orgs)),
+        patch("farna.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+        patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+        patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
+        patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
+        patch("farna.core.bundled_runner.health_probe._log.exception", new=_record_failure),
         pytest.raises(SQLAlchemyError) as excinfo,
     ):
         await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)

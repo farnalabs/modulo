@@ -15,23 +15,23 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.api.routes import runs as runs_module
-from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
-from modulo.core.pipeline_engine.recovery import (
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.api.routes import runs as runs_module
+from farna.api.routes.runs import RunNotFoundError, _validate_run_input_basics
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
+from farna.core.pipeline_engine.recovery import (
     GuardrailOverrideError,
     GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     GuardrailOverrideRequiredError,
 )
-from modulo.core.rate_limiter import TokenBucketRegistry
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.settings import Settings, get_settings
+from farna.core.rate_limiter import TokenBucketRegistry
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -163,7 +163,7 @@ def _stub_gate_fired(monkeypatch: pytest.MonkeyPatch) -> None:
     The stub re-derives from the run the test patched into ``_do_get_run``,
     with the markers stub serving the run's raw_output_markers exactly as the
     real reader reassembles them."""
-    import modulo.api.routes.runs as runs_module
+    import farna.api.routes.runs as runs_module
 
     async def _detail(factory: Any, principal: Any, run_id: Any) -> tuple[Any, bool]:
         run = await runs_module._do_get_run(factory, principal, run_id)
@@ -316,14 +316,14 @@ def test_trigger_run_returns_202(client: TestClient) -> None:
     run = _make_run()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
-        patch("modulo.api.routes.runs.create_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org") as set_org,
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.create_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org") as set_org,
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -344,14 +344,14 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
     run = _make_run()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ) as create_snapshot,
-        patch("modulo.api.routes.runs.create_run", return_value=run) as create_run_mock,
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.create_run", return_value=run) as create_run_mock,
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -374,8 +374,8 @@ def test_trigger_run_body_includes_thread_id(client: TestClient) -> None:
 
 def test_trigger_run_pipeline_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=None),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_pipeline", return_value=None),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -394,16 +394,16 @@ def test_trigger_run_deleted_org_returns_409(client: TestClient) -> None:
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
         patch(
-            "modulo.api.routes.runs.create_run",
+            "farna.api.routes.runs.create_run",
             side_effect=OrgDeletedError(org_id=_ORG_ID, deleted=True),
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -418,16 +418,16 @@ def test_trigger_run_missing_org_returns_404(client: TestClient) -> None:
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
         patch(
-            "modulo.api.routes.runs.create_run",
+            "farna.api.routes.runs.create_run",
             side_effect=OrgDeletedError(org_id=_ORG_ID, deleted=False),
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -449,16 +449,16 @@ def test_trigger_run_non_runnable_pipeline_returns_409(client: TestClient, state
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
         patch(
-            "modulo.api.routes.runs.create_run",
+            "farna.api.routes.runs.create_run",
             side_effect=PipelineNotRunnableError(pipeline_id=_PIPELINE_ID, state=state),
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -490,16 +490,16 @@ def test_trigger_run_rate_limit_conflict_returns_429(client: TestClient) -> None
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
         patch(
-            "modulo.api.routes.runs.create_run",
+            "farna.api.routes.runs.create_run",
             side_effect=RateLimitConflictError(pipeline_id=_PIPELINE_ID, rate_limit_key="key:abc"),
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -541,8 +541,8 @@ def test_get_run_returns_200(client: TestClient) -> None:
     run = _make_run(status="running")
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -557,8 +557,8 @@ def test_get_run_returns_current_status(client: TestClient) -> None:
     run = _make_run(status="complete")
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -585,8 +585,8 @@ def test_get_run_exposes_blocked_partial_summary(client: TestClient) -> None:
     run.blocked_partial_summary = summary
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -603,8 +603,8 @@ def test_get_run_blocked_partial_summary_non_dict_returns_null(client: TestClien
     run.blocked_partial_summary = "not-a-dict"
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -636,8 +636,8 @@ def test_get_run_exposes_warnings_from_cost_breakdown(client: TestClient) -> Non
     run = _make_run(status="complete", cost_breakdown=breakdown)
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -653,8 +653,8 @@ def test_get_run_warnings_is_empty_when_no_breakdown(client: TestClient) -> None
     run = _make_run(status="complete", cost_breakdown=None)
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -669,8 +669,8 @@ def test_get_run_warnings_is_empty_when_no_breakdown(client: TestClient) -> None
 
 def test_get_run_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs._do_get_run", side_effect=RunNotFoundError(uuid.uuid4())),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", side_effect=RunNotFoundError(uuid.uuid4())),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{uuid.uuid4()}")
 
@@ -696,9 +696,9 @@ def test_cancel_run_returns_202(client: TestClient) -> None:
     run = _make_run(status="running")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
-        patch("modulo.api.routes.runs.request_cancellation") as mock_cancel,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run", return_value=run),
+        patch("farna.api.routes.runs.request_cancellation") as mock_cancel,
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
@@ -710,8 +710,8 @@ def test_cancel_run_already_terminal_returns_409(client: TestClient) -> None:
     run = _make_run(status="complete")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
@@ -722,8 +722,8 @@ def test_cancel_run_budget_exceeded_returns_409(client: TestClient) -> None:
     run = _make_run(status="budget_exceeded")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
@@ -732,8 +732,8 @@ def test_cancel_run_budget_exceeded_returns_409(client: TestClient) -> None:
 
 def test_cancel_run_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=None),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run", return_value=None),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/runs/{uuid.uuid4()}/cancel")
 
@@ -751,9 +751,9 @@ def test_cancel_run_records_reason_and_actor(client: TestClient) -> None:
     run = _make_run(status="running")
 
     with (
-        patch("modulo.api.routes.runs.get_run", return_value=run),
-        patch("modulo.api.routes.runs.request_cancellation") as mock_cancel,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run", return_value=run),
+        patch("farna.api.routes.runs.request_cancellation") as mock_cancel,
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
@@ -776,8 +776,8 @@ def test_run_response_serializes_error_detail(client: TestClient) -> None:
         error_code="rate_limited",
     )
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -790,8 +790,8 @@ def test_run_response_serializes_error_detail(client: TestClient) -> None:
 def test_run_response_error_detail_none_when_run_succeeded(client: TestClient) -> None:
     run = _make_run(status="complete", error_detail=None, error_code=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -809,8 +809,8 @@ def test_run_response_exposes_cancel_reason_and_actor(client: TestClient) -> Non
     """The detail response carries WHY/WHO the run was cancelled."""
     run = _make_run(status="cancelled", cancel_reason="hitl_review_expired", cancelled_by="system")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -825,8 +825,8 @@ def test_run_response_cancel_reason_null_when_not_recorded(client: TestClient) -
     serves NULL and the UI renders the neutral fallback — never a 500."""
     run = _make_run(status="cancelled", cancel_reason=None, cancelled_by=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -844,8 +844,8 @@ def test_run_response_cancel_reason_rejects_a_non_string_value(client: TestClien
     run = _make_run(status="cancelled")
     run.cancel_reason = object()
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -865,8 +865,8 @@ def test_run_response_exposes_execution_origin(client: TestClient) -> None:
     run.execution_origin = "dispatched"
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -881,8 +881,8 @@ def test_run_response_execution_origin_null_for_executed_run(client: TestClient)
     run.execution_origin = None
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -899,8 +899,8 @@ def test_run_response_execution_origin_rejects_a_non_string_value(client: TestCl
     run.execution_origin = object()
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -916,21 +916,21 @@ def test_list_runs_includes_execution_origin(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
         patch(
-            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            "farna.api.routes.runs.get_run_cost_breakdowns",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -947,21 +947,21 @@ def test_list_runs_execution_origin_null_when_absent(client: TestClient) -> None
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
         patch(
-            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            "farna.api.routes.runs.get_run_cost_breakdowns",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -978,7 +978,7 @@ def test_cancel_reason_contract_matches_generated_frontend_schema() -> None:
     it, so the assertion below is the fast local half of that gate: a rename
     on either side fails here before review.
     """
-    from modulo.api.routes.runs import RunResponse
+    from farna.api.routes.runs import RunResponse
 
     repo_root = Path(__file__).resolve().parents[4]
     props = RunResponse.model_json_schema()["properties"]
@@ -1000,8 +1000,8 @@ def test_run_response_gate_fired_false_for_plain_complete(client: TestClient) ->
     run.raw_output_markers = {}
     run.run_classification = {"value": "no_delivery", "reason": "no_work"}
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1019,7 +1019,7 @@ async def test_run_detail_with_gate_derives_flag_in_one_transaction(monkeypatch:
     by (a) the helper's absence, (b) the gate derivation receiving the SAME
     session the loader opened, and (c) exactly ONE run SELECT in the loader.
     """
-    import modulo.api.routes.runs as runs_module
+    import farna.api.routes.runs as runs_module
 
     # Helper removal pin: the single-transaction loader replaced it.
     with pytest.raises(AttributeError):
@@ -1082,8 +1082,8 @@ def test_run_response_populates_guardrail_summary(client: TestClient) -> None:
         "unexpected_skips": 0,
     }
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1107,8 +1107,8 @@ def test_run_response_guardrail_summary_none_when_absent(client: TestClient) -> 
     run = _make_run(status="complete")
     run.guardrail_summary_json = None
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1120,8 +1120,8 @@ def test_run_response_guardrail_summary_malformed_is_none(client: TestClient) ->
     run = _make_run(status="complete")
     run.guardrail_summary_json = {"bound": "not-an-int"}
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1156,8 +1156,8 @@ def test_run_response_populates_seam_coverage(client: TestClient) -> None:
         },
     ]
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1184,8 +1184,8 @@ def test_run_response_seam_coverage_none_when_absent(client: TestClient) -> None
     run = _make_run(status="complete")
     run.seam_coverage_json = None
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1199,8 +1199,8 @@ def test_run_response_seam_coverage_malformed_degrades_safely(client: TestClient
     run = _make_run(status="complete")
     run.seam_coverage_json = {"not": "a list"}
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1230,8 +1230,8 @@ def test_run_response_seam_coverage_runtime_loop_cannot_be_enforced(client: Test
         }
     ]
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1251,8 +1251,8 @@ def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClien
     run.raw_output_markers = {}
     run.run_classification = None
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1267,8 +1267,8 @@ def test_run_response_gate_fired_true_on_raw_idempotency_gate_code(client: TestC
     run.raw_output_markers = {}
     run.run_classification = None
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1282,8 +1282,8 @@ def test_run_response_gate_fired_true_on_email_classification(client: TestClient
     run.raw_output_markers = {}
     run.run_classification = {"value": "delivered", "reason": "email_delivered"}
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1303,8 +1303,8 @@ def test_run_response_gate_fired_true_on_marker_delivery_done(client: TestClient
         }
     }
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1332,8 +1332,8 @@ def test_run_response_gate_fired_true_on_success_path_marker(client: TestClient)
         }
     }
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1343,8 +1343,8 @@ def test_run_response_gate_fired_true_on_success_path_marker(client: TestClient)
 def test_run_response_populates_total_cost(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("1.234567"))
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1355,8 +1355,8 @@ def test_run_response_populates_total_cost(client: TestClient) -> None:
 def test_run_response_total_cost_none_when_not_available(client: TestClient) -> None:
     run = _make_run(status="pending", total_cost_usd=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1367,8 +1367,8 @@ def test_run_response_total_cost_none_when_not_available(client: TestClient) -> 
 def test_run_response_populates_token_consumption(client: TestClient) -> None:
     run = _make_run(status="complete", total_tokens=1500)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1379,8 +1379,8 @@ def test_run_response_populates_token_consumption(client: TestClient) -> None:
 def test_run_response_token_consumption_none_when_no_tokens(client: TestClient) -> None:
     run = _make_run(status="pending", total_tokens=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1397,8 +1397,8 @@ def test_run_response_populates_node_token_usage(client: TestClient) -> None:
         },
     )
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1416,8 +1416,8 @@ def test_run_response_populates_node_token_usage(client: TestClient) -> None:
 def test_run_response_node_token_usage_none_when_not_available(client: TestClient) -> None:
     run = _make_run(status="pending", node_token_usage=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1435,8 +1435,8 @@ def test_run_response_node_token_usage_fails_closed_on_non_dict(client: TestClie
     """
     run = _make_run(status="complete", node_token_usage="not-a-dict")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1448,8 +1448,8 @@ def test_run_response_node_token_usage_fails_closed_on_non_dict(client: TestClie
 def test_run_response_populates_trace_id(client: TestClient) -> None:
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1463,8 +1463,8 @@ def test_run_response_populates_trace_id(client: TestClient) -> None:
 def test_run_response_trace_id_deterministic(client: TestClient) -> None:
     run = _make_run(status="complete")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp1 = client.get(f"/api/v1/runs/{_RUN_ID}")
         resp2 = client.get(f"/api/v1/runs/{_RUN_ID}")
@@ -1475,13 +1475,13 @@ def test_run_response_trace_id_deterministic(client: TestClient) -> None:
 def test_run_response_trace_url_populated_when_endpoint_configured(client: TestClient) -> None:
     run = _make_run(status="complete")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs._do_get_otel_endpoint",
+            "farna.api.routes.runs._do_get_otel_endpoint",
             new_callable=AsyncMock,
             return_value="https://otel.example.com",
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1493,9 +1493,9 @@ def test_run_response_trace_url_populated_when_endpoint_configured(client: TestC
 def test_run_response_trace_url_absent_without_endpoint(client: TestClient) -> None:
     run = _make_run(status="complete")
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1510,13 +1510,13 @@ def test_run_response_trace_url_absent_without_endpoint(client: TestClient) -> N
 def test_get_run_includes_child_cost_rollup(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("1.000000"))
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={_RUN_ID: (Decimal("0.500000"), 3)},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1531,13 +1531,13 @@ def test_get_run_includes_child_cost_rollup(client: TestClient) -> None:
 def test_get_run_child_cost_zero_when_no_children(client: TestClient) -> None:
     run = _make_run(status="complete", total_cost_usd=Decimal("2.000000"))
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1551,13 +1551,13 @@ def test_get_run_child_cost_zero_when_no_children(client: TestClient) -> None:
 def test_get_run_aggregate_zero_when_no_own_or_child_cost(client: TestClient) -> None:
     run = _make_run(status="pending", total_cost_usd=None)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1590,21 +1590,21 @@ def test_list_runs_includes_warnings_count(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
         patch(
-            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            "farna.api.routes.runs.get_run_cost_breakdowns",
             new_callable=AsyncMock,
             return_value={run_id: breakdown},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1621,21 +1621,21 @@ def test_list_runs_warnings_count_zero_without_missing_self_report(client: TestC
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
         patch(
-            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            "farna.api.routes.runs.get_run_cost_breakdowns",
             new_callable=AsyncMock,
             return_value={run_id: []},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1679,16 +1679,16 @@ def test_list_runs_includes_child_cost_rollup(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([parent, child], 2),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={parent_id: (Decimal("0.500000"), 2)},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1715,16 +1715,16 @@ def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1746,16 +1746,16 @@ def test_list_runs_passes_cursor_param_through_to_crud(client: TestClient) -> No
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=page,
         ) as mock_list,
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs", params={"cursor": "Y3Vyc29yLXRva2Vu"})
 
@@ -1773,16 +1773,16 @@ def test_list_runs_without_cursor_leaves_cursor_none(client: TestClient) -> None
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ) as mock_list,
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1798,11 +1798,11 @@ def test_list_runs_invalid_cursor_returns_422(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             side_effect=_raise_invalid_cursor,
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs", params={"cursor": "not-a-valid-cursor"})
 
@@ -1824,11 +1824,11 @@ def test_list_runs_value_error_without_cursor_is_not_mapped_to_422(client: TestC
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             side_effect=_raise_unrelated_value_error,
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1844,16 +1844,16 @@ def test_list_runs_includes_truncated_error_detail_preview(client: TestClient) -
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1870,16 +1870,16 @@ def test_list_runs_error_detail_none_for_success(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1896,16 +1896,16 @@ def test_list_runs_includes_masked_input_payload(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1922,16 +1922,16 @@ def test_list_runs_input_payload_none_when_absent(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.runs.db_list_runs",
+            "farna.api.routes.runs.db_list_runs",
             new_callable=AsyncMock,
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_run_rollup",
+            "farna.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get("/api/v1/runs")
 
@@ -1946,8 +1946,8 @@ def test_get_run_includes_masked_input_payload(client: TestClient) -> None:
     run.input_payload = {"task": "fix bug", "api_key": "sk-secret"}
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1962,8 +1962,8 @@ def test_get_run_input_payload_none_when_absent(client: TestClient) -> None:
     run.input_payload = None
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1978,8 +1978,8 @@ def test_get_run_input_payload_non_dict_defensive_none(client: TestClient) -> No
     run.input_payload = "not-a-dict"
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -1992,14 +1992,14 @@ def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestCli
     run = _make_run(status="pending")
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             return_value=_make_snapshot(),
         ),
-        patch("modulo.api.routes.runs.create_run", return_value=run),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.create_run", return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -2037,9 +2037,9 @@ def test_trigger_run_input_validation_cycle_detected(client: TestClient) -> None
     }
 
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.runs.create_snapshot_from_live_graph", return_value=snapshot),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.runs.create_snapshot_from_live_graph", return_value=snapshot),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -2070,13 +2070,13 @@ def test_diff_node_output_success(client: TestClient) -> None:
     run_b.outputs_json = {"coder": {"result": "world"}}
 
     with (
-        patch("modulo.api.routes.runs.get_run") as mock_get_run,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run") as mock_get_run,
+        patch("farna.api.routes.runs.set_rls_org"),
         # FAR-583: the diff endpoint reassembles both runs' blobs through
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs",
+            "farna.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
@@ -2122,13 +2122,13 @@ def test_diff_node_output_identical(client: TestClient) -> None:
     run_b.outputs_json = {"coder": {"result": "hello"}}
 
     with (
-        patch("modulo.api.routes.runs.get_run") as mock_get_run,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run") as mock_get_run,
+        patch("farna.api.routes.runs.set_rls_org"),
         # FAR-583: the diff endpoint reassembles both runs' blobs through
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs",
+            "farna.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
@@ -2161,8 +2161,8 @@ def test_diff_node_output_run_not_found(client: TestClient) -> None:
     run_b.outputs_json = {"coder": {"result": "world"}}
 
     with (
-        patch("modulo.api.routes.runs.get_run") as mock_get_run,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run") as mock_get_run,
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         mock_get_run.side_effect = [None, run_b]
         resp = client.post(
@@ -2192,13 +2192,13 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
     run_b.outputs_json = {"coder": {"result": "world"}}
 
     with (
-        patch("modulo.api.routes.runs.get_run") as mock_get_run,
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_run") as mock_get_run,
+        patch("farna.api.routes.runs.set_rls_org"),
         # FAR-583: the diff endpoint reassembles both runs' blobs through
         # the repo reader — stub the two reads in call order (the mocked
         # session cannot serve the real queries).
         patch(
-            "modulo.api.routes.runs.read_run_blobs",
+            "farna.api.routes.runs.read_run_blobs",
             new=AsyncMock(
                 side_effect=[
                     RunBlobs(outputs=run_a.outputs_json, telemetry=run_a.node_telemetry_json, markers=None),
@@ -2232,10 +2232,10 @@ def test_recover_node_enqueued_returns_200(client: TestClient) -> None:
     when input_data is supplied)."""
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
@@ -2255,10 +2255,10 @@ def test_recover_node_skip_without_input_data_returns_200(client: TestClient) ->
     """Omitted input_data selects skip mode and still resumes the run."""
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("deduped", "job-id"),
         ),
@@ -2281,10 +2281,10 @@ def test_recover_node_enqueue_failed_surfaces_500(client: TestClient) -> None:
     would re-execute from scratch instead of resuming at the recovered node)."""
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueue_failed", None),
         ),
@@ -2303,10 +2303,10 @@ def test_recover_node_capacity_deferred_surfaces_500(client: TestClient) -> None
     500 so the recovery is never silently dropped."""
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("deferred", None),
         ),
@@ -2325,9 +2325,9 @@ def test_recover_node_refuses_guardrail_blocked_run(client: TestClient) -> None:
     resurrected through the generic recover endpoint — it 409s and directs the
     caller to the guardrail-override endpoint (MAJOR-1)."""
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs.recover_node",
+            "farna.api.routes.runs.recover_node",
             new_callable=AsyncMock,
             side_effect=GuardrailOverrideRequiredError(_RUN_ID),
         ),
@@ -2347,7 +2347,7 @@ def test_recover_node_refuses_gate_node_prefix_with_422(client: TestClient) -> N
     unstamped decisions (the resume would bounce the run back to
     awaiting_human). A HITL gate target (``hitl_review_<source>_<target>``) is
     refused up front with an explicit 422."""
-    with patch("modulo.api.routes.runs.set_rls_org"):
+    with patch("farna.api.routes.runs.set_rls_org"):
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/nodes/hitl_review_source_target/recover",
             json={"input_data": {"answer": 42}},
@@ -2365,7 +2365,7 @@ def test_recover_node_refuses_pending_gate_target_with_422(client: TestClient, m
     gate_result = MagicMock()
     gate_result.scalars.return_value.all.return_value = ["hitl_review_a_b"]
     mock_session.execute = AsyncMock(return_value=gate_result)
-    with patch("modulo.api.routes.runs.set_rls_org"):
+    with patch("farna.api.routes.runs.set_rls_org"):
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/nodes/node-b/recover",
             json={},
@@ -2390,10 +2390,10 @@ def test_recover_node_stamps_manual_target_from_undecided_row(client: TestClient
     undecided.scalars.return_value.all.return_value = ["manual-node-1"]
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2422,10 +2422,10 @@ def test_recover_node_stamps_conformance_target_from_undecided_row(client: TestC
     undecided.scalars.return_value.all.return_value = ["guardrail_conformance_g1"]
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2453,10 +2453,10 @@ def test_recover_node_without_undecided_row_dispatches_unstamped(client: TestCli
     undecided.scalars.return_value.all.return_value = []
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2486,10 +2486,10 @@ def test_recover_node_prefers_matching_node_row_over_stale_undecided_rows(
     undecided.scalars.return_value.all.return_value = ["node-old-stale", "manual-node-1", ""]
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2516,10 +2516,10 @@ def test_recover_node_without_matching_row_picks_deterministically(client: TestC
     undecided.scalars.return_value.all.return_value = ["fresh-guardrail-row", "stale-manual-row"]
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2544,10 +2544,10 @@ def test_recover_node_undecided_rows_query_orders_matching_then_newest(
     undecided.scalars.return_value.all.return_value = ["manual-node-1"]
     mock_session.execute = AsyncMock(return_value=undecided)
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
@@ -2575,10 +2575,10 @@ def test_guardrail_override_clean_input_dispatches_execute_run(client: TestClien
     re-dispatches it from run start (execute_run, no resume data)."""
     run = _make_run(status="pending")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2610,10 +2610,10 @@ def test_guardrail_override_node_started_run_dispatches_resume_run(client: TestC
     execute_run)."""
     run = _make_run(status="running")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2642,14 +2642,14 @@ def test_guardrail_override_no_checkpoint_conflicts_409(client: TestClient) -> N
     endpoint returns the same 409 (the checkpoint never appears), so the
     remediation is a NEW run, not another override attempt."""
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs.guardrail_override",
+            "farna.api.routes.runs.guardrail_override",
             new_callable=AsyncMock,
             side_effect=GuardrailOverrideNoCheckpointError(_RUN_ID),
         ),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2670,13 +2670,13 @@ def test_guardrail_override_still_violating_input_rejected_422(client: TestClien
     """A still-violating supplied input is refused (422, re-block safe default)
     and never dispatched."""
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs.guardrail_override",
+            "farna.api.routes.runs.guardrail_override",
             new_callable=AsyncMock,
             side_effect=GuardrailOverrideRejectedError(_RUN_ID, "no-secrets", "still has SECRET_ABC12345"),
         ),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
     ):
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/guardrail-override",
@@ -2691,13 +2691,13 @@ def test_guardrail_override_still_violating_input_rejected_422(client: TestClien
 def test_guardrail_override_non_guardrail_run_rejected_409(client: TestClient) -> None:
     """An override against a run that is NOT guardrail-blocked terminal 409s."""
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs.guardrail_override",
+            "farna.api.routes.runs.guardrail_override",
             new_callable=AsyncMock,
             side_effect=GuardrailOverrideError(_RUN_ID, "status='failed' error_code='agent.failed'"),
         ),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock) as mock_dispatch,
     ):
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/guardrail-override",
@@ -2713,10 +2713,10 @@ def test_guardrail_override_dispatch_deferred_surfaces_500(client: TestClient) -
     recovery is never silently dropped."""
     run = _make_run(status="pending")
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueue_failed", None),
         ),
@@ -2754,10 +2754,10 @@ def test_guardrail_override_within_rate_limit_succeeds(client: TestClient) -> No
     run = _make_run(status="pending")
     with (
         _patch_override_rate_limiter(burst=3),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
@@ -2775,10 +2775,10 @@ def test_guardrail_override_rate_limit_fires_429(client: TestClient) -> None:
     run = _make_run(status="pending")
     with (
         _patch_override_rate_limiter(burst=2),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
@@ -2810,10 +2810,10 @@ def test_guardrail_override_429_prevents_dispatch(client: TestClient) -> None:
     run = _make_run(status="pending")
     with (
         _patch_override_rate_limiter(burst=1),
-        patch("modulo.api.routes.runs.set_rls_org"),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ) as mock_dispatch,
@@ -2887,8 +2887,8 @@ class TestGetRunIO:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -2920,8 +2920,8 @@ class TestGetRunIO:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -2947,8 +2947,8 @@ class TestGetRunIO:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -2970,8 +2970,8 @@ class TestGetRunIO:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -3002,8 +3002,8 @@ class TestGetRunIO:
         mock_session.execute.return_value = exec_result
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -3023,8 +3023,8 @@ class TestGetRunIO:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -3058,14 +3058,14 @@ class TestGetRunObservability:
         child_runs = [{"run_id": str(uuid.uuid4()), "run_number": 2, "status": "complete", "pipeline_name": "P"}]
 
         with (
-            patch("modulo.api.routes.runs._do_get_run", return_value=run),
-            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
-            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch("farna.api.routes.runs._do_get_run", return_value=run),
+            patch("farna.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("farna.api.routes.runs._do_get_otel_endpoint", return_value=""),
             patch(
-                "modulo.api.routes.runs._do_get_run_observability",
+                "farna.api.routes.runs._do_get_run_observability",
                 return_value=("duncan@modulo.run", capacity, child_runs),
             ),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -3086,11 +3086,11 @@ class TestGetRunObservability:
         run.trigger_id = None
 
         with (
-            patch("modulo.api.routes.runs._do_get_run", return_value=run),
-            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
-            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
-            patch("modulo.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs._do_get_run", return_value=run),
+            patch("farna.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("farna.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch("farna.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -3110,11 +3110,11 @@ class TestGetRunObservability:
         run.snapshot_id = uuid.uuid4()
 
         with (
-            patch("modulo.api.routes.runs._do_get_run", return_value=run),
-            patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
-            patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=""),
-            patch("modulo.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs._do_get_run", return_value=run),
+            patch("farna.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal(0), 0)),
+            patch("farna.api.routes.runs._do_get_otel_endpoint", return_value=""),
+            patch("farna.api.routes.runs._do_get_run_observability", return_value=(None, None, None)),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -3135,8 +3135,8 @@ class TestResolveCapacityAdmissionGate:
         run = _make_run(status="pending")
         count = AsyncMock(return_value=2)
         with (
-            patch("modulo.api.routes.runs.count_active_runs_for_org", count),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.count_active_runs_for_org", count),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
         ):
             capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
 
@@ -3146,8 +3146,8 @@ class TestResolveCapacityAdmissionGate:
     async def test_pending_run_waiting_when_at_limit(self, mock_session: AsyncMock) -> None:
         run = _make_run(status="pending")
         with (
-            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
         ):
             capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
 
@@ -3157,8 +3157,8 @@ class TestResolveCapacityAdmissionGate:
     async def test_running_run_never_waiting(self, mock_session: AsyncMock) -> None:
         run = _make_run(status="running")
         with (
-            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
         ):
             capacity = await runs_module._resolve_capacity(mock_session, _ORG_ID, run)
 
@@ -3183,9 +3183,9 @@ class TestGetRunEventsLifecycle:
         registry.get.return_value = broker
 
         with (
-            patch("modulo.api.routes.runs._do_get_run", return_value=run),
-            patch("modulo.api.routes.runs.get_registry", return_value=registry),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs._do_get_run", return_value=run),
+            patch("farna.api.routes.runs.get_registry", return_value=registry),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/events")
 
@@ -3211,9 +3211,9 @@ class TestGetRunEventsLifecycle:
         registry.get.return_value = broker
 
         with (
-            patch("modulo.api.routes.runs._do_get_run", return_value=run),
-            patch("modulo.api.routes.runs.get_registry", return_value=registry),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs._do_get_run", return_value=run),
+            patch("farna.api.routes.runs.get_registry", return_value=registry),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/events?node_id=a")
 
@@ -3235,8 +3235,8 @@ class TestListRunsObservability:
         )
         page = MagicMock(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False)
         with (
-            patch("modulo.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=page) as list_runs,
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=page) as list_runs,
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get("/api/v1/runs")
 
@@ -3256,11 +3256,11 @@ class TestListRunsObservability:
         page.has_more = False
 
         with (
-            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
-            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
-            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=0)),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=5)),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.db_list_runs", return_value=page),
+            patch("farna.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("farna.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=0)),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=5)),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get("/api/v1/runs")
 
@@ -3287,11 +3287,11 @@ class TestListRunsObservability:
         page.has_more = False
 
         with (
-            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
-            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
-            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=2)),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.db_list_runs", return_value=page),
+            patch("farna.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("farna.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=2)),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get("/api/v1/runs")
 
@@ -3315,11 +3315,11 @@ class TestListRunsObservability:
         page.has_more = False
 
         with (
-            patch("modulo.api.routes.runs.db_list_runs", return_value=page),
-            patch("modulo.api.routes.runs.get_child_run_rollup", return_value={}),
-            patch("modulo.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
-            patch("modulo.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.db_list_runs", return_value=page),
+            patch("farna.api.routes.runs.get_child_run_rollup", return_value={}),
+            patch("farna.api.routes.runs.count_active_runs_for_org", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.get_org_run_concurrency_limit", AsyncMock(return_value=3)),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get("/api/v1/runs")
 
@@ -3365,7 +3365,7 @@ async def test_do_get_workspace_inputs_returns_list_when_present() -> None:
     inputs = [{"url": "https://example.com", "ref": "abc123"}]
     session = _session_with_row(SimpleNamespace(outputs_json={"workspace_inputs": inputs}))
     factory = _factory_for(session)
-    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock):
         out = await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID)
     assert out == inputs
 
@@ -3373,21 +3373,21 @@ async def test_do_get_workspace_inputs_returns_list_when_present() -> None:
 async def test_do_get_workspace_inputs_none_when_no_audit_row() -> None:
     session = _session_with_row(None)
     factory = _factory_for(session)
-    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock):
         assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
 
 
 async def test_do_get_workspace_inputs_none_when_outputs_not_dict() -> None:
     session = _session_with_row(SimpleNamespace(outputs_json="not-a-dict"))
     factory = _factory_for(session)
-    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock):
         assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
 
 
 async def test_do_get_workspace_inputs_none_when_inputs_not_list() -> None:
     session = _session_with_row(SimpleNamespace(outputs_json={"workspace_inputs": "nope"}))
     factory = _factory_for(session)
-    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock):
         assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
 
 
@@ -3395,7 +3395,7 @@ async def test_do_get_workspace_inputs_none_on_db_error() -> None:
     session = _make_mock_session()
     session.execute = AsyncMock(side_effect=RuntimeError("boom"))
     factory = _factory_for(session)
-    with patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock):
         assert await runs_module._do_get_workspace_inputs(factory, _principal(), _RUN_ID) is None
 
 
@@ -3406,7 +3406,7 @@ async def test_do_get_workspace_inputs_propagates_cancelled() -> None:
     factory = _factory_for(session)
     with (
         patch(
-            "modulo.api.routes.runs.set_rls_org",
+            "farna.api.routes.runs.set_rls_org",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError,
         ),
@@ -3419,13 +3419,13 @@ def test_get_run_status_includes_workspace_inputs(client: TestClient) -> None:
     run = _make_run(status="complete")
     inputs = [{"url": "https://example.com", "ref": "abc123"}]
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs._do_get_workspace_inputs",
+            "farna.api.routes.runs._do_get_workspace_inputs",
             new_callable=AsyncMock,
             return_value=inputs,
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -3586,8 +3586,8 @@ async def test_do_get_deadline_triage_returns_entries() -> None:
 
     factory = _factory_for(session)
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.read_run_markers", new_callable=AsyncMock, side_effect=_markers),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.read_run_markers", new_callable=AsyncMock, side_effect=_markers),
     ):
         out = await runs_module._do_get_deadline_triage(factory, _principal(), _RUN_ID)
     assert out is not None
@@ -3599,9 +3599,9 @@ async def test_do_get_deadline_triage_none_on_db_error() -> None:
     session = _make_mock_session()
     factory = _factory_for(session)
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.runs.read_run_markers",
+            "farna.api.routes.runs.read_run_markers",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ),
@@ -3616,7 +3616,7 @@ async def test_do_get_deadline_triage_propagates_cancelled() -> None:
     factory = _factory_for(session)
     with (
         patch(
-            "modulo.api.routes.runs.set_rls_org",
+            "farna.api.routes.runs.set_rls_org",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError,
         ),
@@ -3642,13 +3642,13 @@ def test_get_run_status_includes_deadline_triage(client: TestClient) -> None:
         }
     ]
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs._do_get_deadline_triage",
+            "farna.api.routes.runs._do_get_deadline_triage",
             new_callable=AsyncMock,
             return_value=entries,
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
@@ -3676,13 +3676,13 @@ def test_get_run_status_surfaces_the_node_deadline_known_fix(client: TestClient)
     )
     run = _make_run(status="failed", error_code="node_deadline_exceeded", error_detail=detail)
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("farna.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs._do_get_deadline_triage",
+            "farna.api.routes.runs._do_get_deadline_triage",
             new_callable=AsyncMock,
             return_value=[],
         ),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 

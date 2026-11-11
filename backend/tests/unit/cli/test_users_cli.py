@@ -44,13 +44,13 @@ import pytest
 from click.testing import CliRunner
 from sqlalchemy import select
 
-import modulo.cli.main as cli_main
-import modulo.cli.users as users_module
-import modulo.launcher.entry as launcher_entry_module
-import modulo.settings as settings_module
-from modulo.launcher.config_source import LauncherConfigError
-from modulo.launcher.state import STATE_FILENAME
-from modulo.settings import get_settings
+import farna.cli.main as cli_main
+import farna.cli.users as users_module
+import farna.launcher.entry as launcher_entry_module
+import farna.settings as settings_module
+from farna.launcher.config_source import LauncherConfigError
+from farna.launcher.state import STATE_FILENAME
+from farna.settings import get_settings
 
 PASSWORD = "Sup3r-Secret!Pass"
 NEW_PASSWORD = "N3w-Secret!Pass"
@@ -102,7 +102,7 @@ def _hermetic_tables() -> list[Any]:
     """
     import sqlalchemy as sa
 
-    from modulo.db.models.base import Base
+    from farna.db.models.base import Base
 
     wanted = {"accounts", "organisations", "org_memberships", "token_families"}
     hermetic = sa.MetaData()
@@ -126,7 +126,7 @@ def _hermetic_tables() -> list[Any]:
 async def _setup_tables_and_org(db_url: str) -> None:
     import sqlalchemy as sa
 
-    from modulo.db.models.organisation import Organisation
+    from farna.db.models.organisation import Organisation
 
     tables = _hermetic_tables()
     engine = create_engine_for(db_url)
@@ -171,7 +171,7 @@ def seeded_db(db_url: str) -> str:
 
 
 async def _fetch_account(db_url: str, email: str) -> Any:
-    from modulo.db.models.account import Account
+    from farna.db.models.account import Account
 
     engine = create_engine_for(db_url)
     try:
@@ -188,7 +188,7 @@ def _invoke(*args: str, input: str | None = None):
 
 class TestUsersAdd:
     def test_add_creates_user_through_boot_seeder_path(self, seeded_db: str) -> None:
-        from modulo.auth.passwords import verify_password
+        from farna.auth.passwords import verify_password
 
         result = _invoke("add", "ops@example.com", "--password", PASSWORD)
         assert result.exit_code == 0, result.output
@@ -197,8 +197,8 @@ class TestUsersAdd:
 
         def read() -> Any:
             async def go() -> Any:
-                from modulo.db.models.account import Account
-                from modulo.db.models.org_membership import OrgMembership
+                from farna.db.models.account import Account
+                from farna.db.models.org_membership import OrgMembership
 
                 engine = create_engine_for(seeded_db)
                 try:
@@ -221,7 +221,7 @@ class TestUsersAdd:
         assert verified is True
 
     def test_add_admin_grants_admin_role(self, seeded_db: str) -> None:
-        from modulo.db.models.org_membership import OrgMembership
+        from farna.db.models.org_membership import OrgMembership
 
         result = _invoke("add", "chief@example.com", "--admin", "--password", PASSWORD)
         assert result.exit_code == 0, result.output
@@ -283,7 +283,7 @@ class TestUsersAddAdminEscalationAudit:
         seam the seeder's own audit tests use.
         """
         spy = AsyncMock(return_value=MagicMock())
-        monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+        monkeypatch.setattr("farna.core.audit_logger.append_audit_event", spy)
         return spy
 
     def _event_types(self, spy: Any) -> list[str]:
@@ -368,8 +368,8 @@ class TestUsersList:
         assert PASSWORD not in result.output
 
     def test_list_annotates_org_less_rows(self, seeded_db: str) -> None:
-        from modulo.auth.passwords import hash_password
-        from modulo.db.models.account import Account
+        from farna.auth.passwords import hash_password
+        from farna.db.models.account import Account
 
         assert _invoke("add", "member@example.com", "--password", PASSWORD).exit_code == 0
 
@@ -407,8 +407,8 @@ class TestUsersList:
 
 class TestListReadOnly:
     def test_launcher_inputs_readonly_reads_without_creating(self, tmp_path: Path) -> None:
-        from modulo.launcher.secrets_file import LauncherSecrets
-        from modulo.launcher.state import LauncherState, save_state
+        from farna.launcher.secrets_file import LauncherSecrets
+        from farna.launcher.state import LauncherState, save_state
 
         data_dir = tmp_path / "launcher"
         data_dir.mkdir()
@@ -460,9 +460,9 @@ class TestListReadOnly:
 
 class TestUsersResetPassword:
     def test_reset_changes_hash_and_signs_out_sessions(self, seeded_db: str) -> None:
-        from modulo.auth.passwords import verify_password
-        from modulo.db.crud.token_family import create_family
-        from modulo.db.models.organisation import Organisation
+        from farna.auth.passwords import verify_password
+        from farna.db.crud.token_family import create_family
+        from farna.db.models.organisation import Organisation
 
         assert _invoke("add", "rotates@example.com", "--password", PASSWORD).exit_code == 0
         account = run_db(lambda: _fetch_account(seeded_db, "rotates@example.com"))
@@ -493,8 +493,8 @@ class TestUsersResetPassword:
         assert not verify_password(PASSWORD, reloaded.password_hash)
 
     def test_reset_refuses_break_glass_accounts(self, seeded_db: str) -> None:
-        from modulo.auth.passwords import hash_password, verify_password
-        from modulo.db.models.account import Account
+        from farna.auth.passwords import hash_password, verify_password
+        from farna.db.models.account import Account
 
         def make_break_glass() -> None:
             async def go() -> None:
@@ -621,7 +621,7 @@ def _make_state_json(launcher_root: Path) -> None:
 
 
 async def _account_exists_or_not(db_url: str, email: str) -> bool:
-    from modulo.db.models.account import Account
+    from farna.db.models.account import Account
 
     engine = create_engine_for(db_url)
     try:
@@ -638,8 +638,8 @@ def _account_exists(db_url: str, email: str) -> bool:
 
 
 def _account_role(db_url: str, email: str) -> str:
-    from modulo.db.models.account import Account
-    from modulo.db.models.org_membership import OrgMembership
+    from farna.db.models.account import Account
+    from farna.db.models.org_membership import OrgMembership
 
     async def go() -> str:
         engine = create_engine_for(db_url)

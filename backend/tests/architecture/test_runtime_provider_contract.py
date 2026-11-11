@@ -18,14 +18,14 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 PACKAGE = SRC / "core" / "runtime_provider"
 
 _CONCRETE_MODULES = {
-    "modulo.core.runtime_provider.docker",
-    "modulo.core.runtime_provider.e2b",
-    "modulo.core.runtime_provider.local",
-    "modulo.core.runtime_provider.local_docker",
+    "farna.core.runtime_provider.docker",
+    "farna.core.runtime_provider.e2b",
+    "farna.core.runtime_provider.local",
+    "farna.core.runtime_provider.local_docker",
 }
 
 # The public surface hub consumers are allowed to call: the hub's own methods
@@ -114,12 +114,12 @@ def test_hub_consumers_call_only_abc_methods() -> None:
         except (SyntaxError, UnicodeDecodeError):
             continue
         imported = _imported_modules(tree)
-        if not any(m.startswith("modulo.core.runtime_provider") for m in imported):
+        if not any(m.startswith("farna.core.runtime_provider") for m in imported):
             continue
 
         # Seed with names imported from the runtime_provider package itself.
         provider_names: set[str] = set()
-        prefix = "modulo.core.runtime_provider"
+        prefix = "farna.core.runtime_provider"
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(prefix):
                 provider_names.update(alias.asname or alias.name for alias in node.names)

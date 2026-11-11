@@ -17,21 +17,21 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.account import Account
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import RunDailyFact
-from modulo.db.models.system_map import (
+from farna.db.models.account import Account
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.system_map import (
     SystemMap,
     SystemMapLoopAdmissionAttempt,
     SystemMapLoopConfig,
     SystemMapLoopReservation,
     SystemMapRevision,
 )
-from modulo.db.repositories.system_map import SystemMapRepository
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.db.repositories.system_map import SystemMapRepository
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

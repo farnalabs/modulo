@@ -12,7 +12,7 @@ from sqlalchemy import insert as sa_insert
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.db.crud.variant_group import (
+from farna.db.crud.variant_group import (
     check_pipeline_run_quota,
     create_variant_group,
     get_batch_compare,
@@ -24,8 +24,8 @@ from modulo.db.crud.variant_group import (
     update_variant_group,
     validate_batch_ownership,
 )
-from modulo.db.models.run import Run
-from modulo.db.models.variant_group import VariantGroup
+from farna.db.models.run import Run
+from farna.db.models.variant_group import VariantGroup
 
 pytestmark = [
     pytest.mark.integration,
@@ -98,7 +98,7 @@ async def _insert_run(
     may still pass ``run_number`` for a dedicated (fresh) org where no collision
     is possible.
     """
-    from modulo.db.crud.run import _allocate_run_number
+    from farna.db.crud.run import _allocate_run_number
 
     run_id = uuid.uuid4()
     if run_number is None:
@@ -629,7 +629,7 @@ async def test_create_group_persists_minted_variant_ids(
     db_engine: AsyncEngine,
 ) -> None:
     """FAR-332 3b: variants supplied without an id persist with a minted id (round-trip)."""
-    from modulo.api.routes.variants import _mint_variant_ids
+    from farna.api.routes.variants import _mint_variant_ids
 
     pipeline_id = await _create_test_pipeline(db_engine, test_org, test_user)
     pre_minted_id = str(uuid.uuid4())

@@ -21,7 +21,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 
 def _load_migration(revision: str) -> ModuleType:
@@ -60,7 +60,7 @@ class TestMigration0216AuditEventsSweepDetectionIndex:
     def test_model_declares_the_composite_index(self) -> None:
         import sqlalchemy as sa
 
-        from modulo.db.models.audit_event import AuditEvent
+        from farna.db.models.audit_event import AuditEvent
 
         index = next((i for i in AuditEvent.__table__.indexes if i.name == "ix_audit_events_org_type_actor_time"), None)
         assert index is not None, "AuditEvent must declare the 0216 composite index"
@@ -94,7 +94,7 @@ class TestMigration0217HitlClaimsDecidedBy:
         assert 'op.drop_column("hitl_claims", "decided_by")' in code
 
     def test_model_declares_the_column(self) -> None:
-        from modulo.db.models.hitl_claim import HitlClaim
+        from farna.db.models.hitl_claim import HitlClaim
 
         assert "decided_by" in HitlClaim.__table__.columns
         column = HitlClaim.__table__.c.decided_by

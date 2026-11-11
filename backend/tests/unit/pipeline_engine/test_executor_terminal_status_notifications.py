@@ -27,13 +27,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.notifier.event_mapper import (
+from farna.core.notifier.event_mapper import (
     _ACTION_URL_TEMPLATES,
     _BODY_TEMPLATES,
     _TITLE_TEMPLATES,
     NotificationEventMapper,
 )
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -112,8 +112,8 @@ async def _drive_finalize(
         patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch.object(executor, "_record_eval_blocked_audit", new=AsyncMock()),
         patch.object(executor, "_compensate_blocked_run_best_effort", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=final_run)),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=final_run)),
     ):
         returned = await executor._finalize_run_after_stream(
             **_finalize_args(run_id, _ORG_ID, pipeline_id, final_status=final_status, error_code=error_code)
@@ -288,7 +288,7 @@ async def test_dispatch_failure_is_isolated_and_logged() -> None:
     notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("boom"))
     executor = _executor_with_notifier(notifier)
 
-    with patch("modulo.core.pipeline_engine.executor._log.exception") as mock_exc:
+    with patch("farna.core.pipeline_engine.executor._log.exception") as mock_exc:
         await executor._dispatch_terminal_status_notification(
             org_id=_ORG_ID,
             run_id=uuid.uuid4(),

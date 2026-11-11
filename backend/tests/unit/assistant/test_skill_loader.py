@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.assistant.config_service import AssistantConfig
-from modulo.core.assistant.skill_loader import SkillEntry, SkillLoader
-from modulo.db.models.assistant_skill import AssistantSkill
+from farna.core.assistant.config_service import AssistantConfig
+from farna.core.assistant.skill_loader import SkillEntry, SkillLoader
+from farna.db.models.assistant_skill import AssistantSkill
 
 
 def _mock_skill(
@@ -379,7 +379,7 @@ class TestSkillLoaderBuildSystemPrompt:
         ctx_stub = _CtxSourceStub(overrides=ctx_overrides)
         with (
             patch.object(loader, "_config_service", cfg_stub),
-            patch("modulo.core.assistant.skill_loader.AssistantContextSourceService", return_value=ctx_stub),
+            patch("farna.core.assistant.skill_loader.AssistantContextSourceService", return_value=ctx_stub),
         ):
             return await loader.build_system_prompt(
                 org_id=org_id,

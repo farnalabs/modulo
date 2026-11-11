@@ -14,17 +14,17 @@ from typing import Literal
 
 import pytest
 
-from modulo.determination.inference import build_proposal_contract
-from modulo.determination.models import (
+from farna.determination.inference import build_proposal_contract
+from farna.determination.models import (
     DeterminationAttempt,
     EvidenceReference,
     ProposalContract,
     ProposalFact,
     SourceInventoryItem,
 )
-from modulo.determination.rerun import ElementChange, RerunError, rerun_proposal
-from modulo.determination.review import DerivedElementEdit
-from modulo.determination.scanner import ScanSample
+from farna.determination.rerun import ElementChange, RerunError, rerun_proposal
+from farna.determination.review import DerivedElementEdit
+from farna.determination.scanner import ScanSample
 
 from .helpers import make_sample
 

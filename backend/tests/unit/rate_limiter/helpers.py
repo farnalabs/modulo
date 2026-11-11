@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.settings import Settings
+from farna.core.rate_limiter import AuthRateLimiter
+from farna.settings import Settings
 
 # FAR-856: pre-auth anonymous GET endpoints and the GET_RULES prefix that must
 # resolve them. Shared by test_middleware_internals (``_rule_for``) and

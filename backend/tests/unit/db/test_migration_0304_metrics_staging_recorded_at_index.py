@@ -33,10 +33,10 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from modulo.db.models.metrics_staging import MetricsStaging
+from farna.db.models.metrics_staging import MetricsStaging
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0303_feedback_records_lookup_indexes"

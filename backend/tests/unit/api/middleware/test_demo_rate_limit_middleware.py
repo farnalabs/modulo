@@ -29,14 +29,14 @@ import pytest
 from fastapi import FastAPI
 from starlette.responses import Response
 
-from modulo.api.middleware.rate_limiter import (
+from farna.api.middleware.rate_limiter import (
     DEMO_RULE_PREFIX,
     RateLimitMiddleware,
     _demo_floor_buckets,
     _NoopRateLimiter,
 )
-from modulo.core.rate_limiter import TokenBucket
-from modulo.settings import Settings
+from farna.core.rate_limiter import TokenBucket
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 

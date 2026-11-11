@@ -19,10 +19,10 @@ rules:
   # Residuals (documented, same class as ``no-raw-httpx-client``):
   # * Rebound aliases (``import pinned_async_client_sync as X``) are not
   #   matched — semgrep matches the literal callee name. All current connector
-  #   sites use the direct ``from modulo.core.ssrf import pinned_async_client_sync``
+  #   sites use the direct ``from farna.core.ssrf import pinned_async_client_sync``
   #   / ``pinned_async_transport_sync`` form.
   # * ``core/ssrf.py`` itself is deliberately out of scope (the paths filter pins
-  #   this rule to ``backend/src/modulo/connectors/**``): inside the factory,
+  #   this rule to ``backend/src/farna/connectors/**``): inside the factory,
   #   ``pinned_async_client_sync`` legitimately delegates to
   #   ``pinned_async_transport_sync(verify=verify, ...)`` — a delegation with an
   #   explicit verify, which is exactly the invariant this rule protects.
@@ -40,9 +40,9 @@ rules:
       Without one the pinned transport silently builds a fresh TLS context on
       every call (the CA-bundle load FAR-1650's per-instance cache removes) and
       verify policy can drift between connectors. Pass
-      `verify=egress_ssl_context(self)` (imported from modulo.connectors._egress)
+      `verify=egress_ssl_context(self)` (imported from farna.connectors._egress)
       so every client reuses the connector instance's cached TLS context with
-      the trust_env resolved by the shared modulo.core.ssrf.default_trust_env
+      the trust_env resolved by the shared farna.core.ssrf.default_trust_env
       resolver. A deliberate operator-controlled override (e.g. the REST
       connector's `self._verify_tls`) satisfies the rule — the invariant is an
       EXPLICIT verify, never an omitted one.
@@ -50,4 +50,4 @@ rules:
     severity: ERROR
     paths:
       include:
-        - "**/backend/src/modulo/connectors/**"
+        - "**/backend/src/farna/connectors/**"

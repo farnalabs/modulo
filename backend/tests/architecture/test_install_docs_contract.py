@@ -54,7 +54,7 @@ def test_production_docs_document_a_first_run_user() -> None:
     text = _read(_DEPLOYMENT_DOC)
     assert "modulo users add" in text
     # Only the exact email ``admin`` (or ``admin@modulo.run``) is seeded with
-    # the admin role (modulo.db.seed); any other address lands as ``runner``.
+    # the admin role (farna.db.seed); any other address lands as ``runner``.
     assert "MODULO_USERS=admin:<password>" in text
 
 
@@ -74,7 +74,7 @@ def test_documented_first_run_command_exists() -> None:
     """The docs name a command that must actually exist on the ``modulo`` CLI."""
     from click.testing import CliRunner
 
-    from modulo.cli.users import users
+    from farna.cli.users import users
 
     assert "add" in users.commands
     result = CliRunner().invoke(users, ["add", "--help"])

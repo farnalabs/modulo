@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 from tests.integration.test_hitl_review_window_terminalize import _seed_claim
 from tests.integration.test_org_sandbox_capacity import (
     _SANDBOX_GRAPH,
@@ -72,7 +72,7 @@ _GRACE_SECONDS = 3600
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 
@@ -150,7 +150,7 @@ async def _install_deployed_constraint(engine: AsyncEngine) -> None:
 
 async def _sweep(engine: AsyncEngine, org_id: uuid.UUID) -> int:
     """Run the FAR-648 terminalizer directly; returns the terminalized count."""
-    from modulo.core.cron_helpers import _terminalize_expired_hitl_reviews
+    from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session, session.begin():

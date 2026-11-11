@@ -22,12 +22,12 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     WorkspaceSpec,
 )
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 _HOSTNAME = "api.e2b.app"
 
@@ -264,7 +264,7 @@ async def test_primitive_fails_open_on_network_failure(monkeypatch: pytest.Monke
 
 
 def test_hostname_confined_to_the_provider_module() -> None:
-    from modulo.core.pipeline_engine import node_runner as nr
+    from farna.core.pipeline_engine import node_runner as nr
 
     node_runner_path = Path(nr.__file__)
     file_src = node_runner_path.read_text(encoding="utf-8")

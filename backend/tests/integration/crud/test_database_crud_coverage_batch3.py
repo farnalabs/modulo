@@ -8,14 +8,14 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.core.trigger_engine import TriggerConfigInvalidError, TriggerNotFoundError
-from modulo.db.crud.connector_instance import (
+from farna.core.trigger_engine import TriggerConfigInvalidError, TriggerNotFoundError
+from farna.db.crud.connector_instance import (
     clear_degraded_markers,
     create_connector_instance,
     list_connector_instances,
     mark_instances_degraded,
 )
-from modulo.db.crud.error_tracking import (
+from farna.db.crud.error_tracking import (
     count_error_events_by_group,
     count_error_groups,
     create_error_event,
@@ -25,10 +25,10 @@ from modulo.db.crud.error_tracking import (
     update_error_group,
     upsert_error_group,
 )
-from modulo.db.crud.eval_run import get_evals_for_runs
-from modulo.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
-from modulo.db.crud.node_observation import observe_node
-from modulo.db.crud.trigger import (
+from farna.db.crud.eval_run import get_evals_for_runs
+from farna.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
+from farna.db.crud.node_observation import observe_node
+from farna.db.crud.trigger import (
     list_triggers,
     load_trigger_and_org_global,
     restore_trigger,
@@ -126,7 +126,7 @@ async def test_connector_cursor_and_org_filtering(
     )
     assert page.items
     assert page.total >= 2
-    from modulo.db.crud.pagination import CursorPaginator
+    from farna.db.crud.pagination import CursorPaginator
 
     cursor_row = page.items[0]
     cursor = CursorPaginator.encode_cursor(cursor_row.created_at, cursor_row.id)
@@ -279,7 +279,7 @@ async def test_trigger_crud_and_global_bootstrap_paths(
     assert len(listed.items) >= 2
     assert listed.has_more is False
 
-    from modulo.db.crud.pagination import CursorPaginator
+    from farna.db.crud.pagination import CursorPaginator
 
     cursor = CursorPaginator.encode_cursor(listed.items[0].created_at, listed.items[0].id)
     cursor_result = await list_triggers(rls_session, test_org, cursor=cursor, limit=10)

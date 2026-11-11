@@ -11,11 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -74,9 +74,9 @@ def _cost_state_store_cm(store: dict[str, Any]):
     async def _upsert(session, org_id, *, provided):
         store.update(provided)
 
-    stack.enter_context(patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)))
-    stack.enter_context(patch("modulo.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)))
-    stack.enter_context(patch("modulo.api.routes.costs.lock_org_cost_state", new=AsyncMock()))
+    stack.enter_context(patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)))
+    stack.enter_context(patch("farna.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)))
+    stack.enter_context(patch("farna.api.routes.costs.lock_org_cost_state", new=AsyncMock()))
     return stack
 
 
@@ -182,10 +182,10 @@ class TestGetCostsReport:
     def test_returns_cost_report(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_report",
+                "farna.api.routes.costs.get_cost_report",
                 return_value=self.ROWS,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs?group_by=team&period=month")
 
@@ -199,10 +199,10 @@ class TestGetCostsReport:
     def test_default_params(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_report",
+                "farna.api.routes.costs.get_cost_report",
                 return_value=self.ROWS,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs")
 
@@ -242,14 +242,14 @@ class TestGetSpendLimits:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.costs.list_teams",
+                "farna.api.routes.costs.list_teams",
                 return_value=page_result,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/limits")
 
@@ -270,14 +270,14 @@ class TestGetSpendLimits:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.costs.list_teams",
+                "farna.api.routes.costs.list_teams",
                 return_value=page_result,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/limits")
 
@@ -304,10 +304,10 @@ class TestSetOrgSpendLimit:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 250.0})
 
@@ -322,10 +322,10 @@ class TestSetOrgSpendLimit:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": None})
 
@@ -336,10 +336,10 @@ class TestSetOrgSpendLimit:
     def test_org_not_found_returns_404(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=None,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 100.0})
 
@@ -365,10 +365,10 @@ class TestSetTeamSpendLimit:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=team,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 75.0})
 
@@ -384,10 +384,10 @@ class TestSetTeamSpendLimit:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=team,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": None})
 
@@ -398,10 +398,10 @@ class TestSetTeamSpendLimit:
     def test_team_not_found_returns_404(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=None,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 50.0})
 
@@ -417,10 +417,10 @@ class TestSetTeamSpendLimit:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=team,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"daily_spend_limit": 75.0})
 
@@ -457,10 +457,10 @@ class TestExportCosts:
     def test_export_csv(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_export_rows",
+                "farna.api.routes.costs.get_cost_export_rows",
                 return_value=self.ROWS,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/export?period=this_month&group_by=team&format=csv")
 
@@ -475,8 +475,8 @@ class TestExportCosts:
     def test_export_forwards_group_by_to_aggregator(self, client: TestClient) -> None:
         for group_by in ("team", "pipeline", "model"):
             with (
-                patch("modulo.api.routes.costs.get_cost_export_rows", new=AsyncMock(return_value=[])),
-                patch("modulo.api.routes.costs.set_rls_org"),
+                patch("farna.api.routes.costs.get_cost_export_rows", new=AsyncMock(return_value=[])),
+                patch("farna.api.routes.costs.set_rls_org"),
             ):
                 resp = client.get(f"/api/v1/admin/costs/export?period=this_month&group_by={group_by}&format=csv")
             assert resp.status_code == 200, f"group_by={group_by}: {resp.text}"
@@ -493,10 +493,10 @@ class TestExportCosts:
         ]
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_export_rows",
+                "farna.api.routes.costs.get_cost_export_rows",
                 return_value=pipeline_rows,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/export?period=30d&group_by=pipeline&format=csv")
 
@@ -515,10 +515,10 @@ class TestExportCosts:
         ]
         with (
             patch(
-                "modulo.api.routes.costs.get_cost_export_rows",
+                "farna.api.routes.costs.get_cost_export_rows",
                 return_value=model_rows,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/export?period=90d&group_by=model&format=csv")
 
@@ -557,10 +557,10 @@ class TestCreateReport:
 
         with (
             patch(
-                "modulo.api.routes.costs.create_scheduled_report",
+                "farna.api.routes.costs.create_scheduled_report",
                 return_value=mock_report,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.post(self.ENDPOINT, json=self.PAYLOAD)
 
@@ -599,10 +599,10 @@ class TestListReports:
 
         with (
             patch(
-                "modulo.api.routes.costs.list_scheduled_reports",
+                "farna.api.routes.costs.list_scheduled_reports",
                 return_value=[mock_report],
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -615,10 +615,10 @@ class TestListReports:
     def test_list_reports_empty(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.list_scheduled_reports",
+                "farna.api.routes.costs.list_scheduled_reports",
                 return_value=[],
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -632,10 +632,10 @@ class TestDeleteReport:
     def test_deletes_report(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.delete_scheduled_report",
+                "farna.api.routes.costs.delete_scheduled_report",
                 return_value=True,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.delete(self.ENDPOINT)
 
@@ -644,10 +644,10 @@ class TestDeleteReport:
     def test_delete_report_not_found(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.delete_scheduled_report",
+                "farna.api.routes.costs.delete_scheduled_report",
                 return_value=False,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.delete(self.ENDPOINT)
 
@@ -695,10 +695,10 @@ class TestGetAnomalies:
 
         with (
             patch(
-                "modulo.api.routes.costs.list_anomalies",
+                "farna.api.routes.costs.list_anomalies",
                 return_value=[mock_anomaly],
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = anomaly_client.get(self.ENDPOINT)
 
@@ -709,10 +709,10 @@ class TestGetAnomalies:
     def test_returns_empty_when_no_anomalies(self, anomaly_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.list_anomalies",
+                "farna.api.routes.costs.list_anomalies",
                 return_value=[],
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = anomaly_client.get(self.ENDPOINT)
 
@@ -730,10 +730,10 @@ class TestDismissAnomaly:
     def test_dismisses_anomaly(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.dismiss_anomaly",
+                "farna.api.routes.costs.dismiss_anomaly",
                 return_value=True,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.post(self.ENDPOINT)
 
@@ -742,10 +742,10 @@ class TestDismissAnomaly:
     def test_dismiss_anomaly_not_found(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.costs.dismiss_anomaly",
+                "farna.api.routes.costs.dismiss_anomaly",
                 return_value=False,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.post(self.ENDPOINT)
 
@@ -774,9 +774,9 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -791,10 +791,10 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(
                 self.ENDPOINT,
@@ -820,10 +820,10 @@ class TestCostControlsCurrency:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         patch_mock = AsyncMock(return_value={})
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=patch_mock),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=patch_mock),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
         assert resp.status_code == 200
@@ -836,12 +836,12 @@ class TestCostControlsCurrency:
         not the generic 503 the ``except SQLAlchemyError`` arm still answers."""
         org = self._org()
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
             patch(
-                "modulo.api.routes.costs.update_org_settings_patch",
+                "farna.api.routes.costs.update_org_settings_patch",
                 side_effect=_lock_timeout_operational(),
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
         assert resp.status_code == 409, resp.text
@@ -851,10 +851,10 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 75, 90]})
 
@@ -866,9 +866,9 @@ class TestCostControlsCurrency:
         org = self._org({"cost_controls": {"alert_thresholds": [50, 90]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -879,9 +879,9 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "ABC"})
 
@@ -891,9 +891,9 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"billing_period": "yearly"})
 
@@ -903,10 +903,10 @@ class TestCostControlsCurrency:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             put_resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
             assert put_resp.status_code == 200
@@ -922,10 +922,10 @@ class TestCostControlsCurrency:
         org = self._org({"cost_controls": {"currency": "USD", "billing_period": "monthly"}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "EUR", "budget": 250.0})
 
@@ -938,9 +938,9 @@ class TestCostControlsCurrency:
     def test_update_org_not_found_returns_404(self, client: TestClient) -> None:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=None),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=None),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
 
@@ -963,9 +963,9 @@ class TestCostControlsAlertThresholds:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -976,9 +976,9 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"alert_thresholds": "not-a-list"}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -989,9 +989,9 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"alert_thresholds": [50, "high"]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1002,9 +1002,9 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"alert_thresholds": [50, 1000]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1015,9 +1015,9 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"alert_thresholds": [50, int("1" + "0" * 400)]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1029,9 +1029,9 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"alert_thresholds": [50, bad]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1042,10 +1042,10 @@ class TestCostControlsAlertThresholds:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 75, 90, 100]})
 
@@ -1056,10 +1056,10 @@ class TestCostControlsAlertThresholds:
         org = self._org()
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             put_resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 100]})
             assert put_resp.status_code == 200
@@ -1072,10 +1072,10 @@ class TestCostControlsAlertThresholds:
         org = self._org({"cost_controls": {"currency": "EUR", "alert_thresholds": [75]}})
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.update_org_settings_patch", new=_in_memory_settings_patch(org)),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
 
@@ -1117,8 +1117,8 @@ class TestOrgSettingsCurrency:
     def test_returns_default_when_unset(self, client: TestClient) -> None:
         org = self._org()
         with (
-            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
-            patch("modulo.api.routes.org_settings.set_rls_org"),
+            patch("farna.api.routes.org_settings.get_organisation", return_value=org),
+            patch("farna.api.routes.org_settings.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1128,8 +1128,8 @@ class TestOrgSettingsCurrency:
     def test_returns_persisted_currency(self, client: TestClient) -> None:
         org = self._org({"cost_controls": {"currency": "EUR", "billing_period": "quarterly"}})
         with (
-            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
-            patch("modulo.api.routes.org_settings.set_rls_org"),
+            patch("farna.api.routes.org_settings.get_organisation", return_value=org),
+            patch("farna.api.routes.org_settings.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1139,8 +1139,8 @@ class TestOrgSettingsCurrency:
     def test_non_admin_tenant_member_can_read(self, operator_client: TestClient) -> None:
         org = self._org({"cost_controls": {"currency": "GBP"}})
         with (
-            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
-            patch("modulo.api.routes.org_settings.set_rls_org"),
+            patch("farna.api.routes.org_settings.get_organisation", return_value=org),
+            patch("farna.api.routes.org_settings.set_rls_org"),
         ):
             resp = operator_client.get(self.ENDPOINT)
 
@@ -1153,8 +1153,8 @@ class TestOrgSettingsCurrency:
 
     def test_missing_org_returns_default(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.org_settings.get_organisation", return_value=None),
-            patch("modulo.api.routes.org_settings.set_rls_org"),
+            patch("farna.api.routes.org_settings.get_organisation", return_value=None),
+            patch("farna.api.routes.org_settings.set_rls_org"),
         ):
             resp = client.get(self.ENDPOINT)
 
@@ -1171,9 +1171,9 @@ class TestSpendCeilingEndpoints:
         state = _cost_state(max_run_cost_cents=1234, spend_ceiling_cents=10000, org_cumulative_spend_cents=4000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/ceiling")
 
@@ -1190,9 +1190,9 @@ class TestSpendCeilingEndpoints:
         state = _cost_state(max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulative_spend_cents=0)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/ceiling")
 
@@ -1212,8 +1212,8 @@ class TestSpendCeilingEndpoints:
         }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.set_rls_org"),
             _cost_state_store_cm(store),
         ):
             resp = client.put(
@@ -1240,8 +1240,8 @@ class TestSpendCeilingEndpoints:
         }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("farna.api.routes.costs.set_rls_org"),
             _cost_state_store_cm(store),
         ):
             resp = client.put(
@@ -1264,8 +1264,8 @@ class TestSpendCeilingEndpoints:
         }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("farna.api.routes.costs.set_rls_org"),
             _cost_state_store_cm(store),
         ):
             resp = client.put(
@@ -1291,8 +1291,8 @@ class TestSpendCeilingEndpoints:
         }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("farna.api.routes.costs.set_rls_org"),
             _cost_state_store_cm(store),
         ):
             resp = client.put(
@@ -1316,8 +1316,8 @@ class TestSpendCeilingEndpoints:
         }
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("farna.api.routes.costs.set_rls_org"),
             _cost_state_store_cm(store),
         ):
             resp = client.put(
@@ -1335,9 +1335,9 @@ class TestSpendCeilingEndpoints:
         state = _cost_state(max_run_cost_cents=0, spend_ceiling_cents=0, org_cumulative_spend_cents=0)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
-            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs/ceiling")
 
@@ -1361,7 +1361,7 @@ class TestRollingAnomalyDetection:
         return [(date(2025, 1, 1 + index), spend) for index, spend in enumerate(spends)]
 
     def test_flags_a_day_above_twice_the_prior_week_average(self) -> None:
-        from modulo.api.routes.costs import _build_rolling_anomalies
+        from farna.api.routes.costs import _build_rolling_anomalies
 
         anomalies = _build_rolling_anomalies(self._series([100.0] * 7 + [250.0]))
 
@@ -1374,18 +1374,18 @@ class TestRollingAnomalyDetection:
 
     def test_exactly_twice_the_average_is_not_flagged(self) -> None:
         """The rule is strictly ``> 2x`` — a day at exactly 2x stays quiet."""
-        from modulo.api.routes.costs import _build_rolling_anomalies
+        from farna.api.routes.costs import _build_rolling_anomalies
 
         assert not _build_rolling_anomalies(self._series([100.0] * 7 + [200.0]))
 
     def test_zero_baseline_never_flags(self) -> None:
         """A week of zero spend gives no ratio to compare against (no division by zero)."""
-        from modulo.api.routes.costs import _build_rolling_anomalies
+        from farna.api.routes.costs import _build_rolling_anomalies
 
         assert not _build_rolling_anomalies(self._series([0.0] * 7 + [50.0]))
 
     def test_first_seven_days_have_no_baseline_and_are_skipped(self) -> None:
         """Days without a full prior week cannot be judged, however large they are."""
-        from modulo.api.routes.costs import _build_rolling_anomalies
+        from farna.api.routes.costs import _build_rolling_anomalies
 
         assert not _build_rolling_anomalies(self._series([1000.0] * 7))

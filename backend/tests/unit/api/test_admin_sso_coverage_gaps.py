@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin_sso`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin_sso`` (FAR-573).
 
 Complements test_admin_sso.py by exercising the error-mapping branches the
 existing suite leaves uncovered (DB errors on every endpoint, the 400
@@ -20,13 +20,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes.admin_sso as admin_sso
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+import farna.api.routes.admin_sso as admin_sso
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

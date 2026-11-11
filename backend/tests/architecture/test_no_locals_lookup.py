@@ -18,7 +18,7 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 
 def _is_locals_call(node: ast.AST) -> bool:

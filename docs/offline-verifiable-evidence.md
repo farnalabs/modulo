@@ -40,7 +40,7 @@ independently true.
 
 ## How a pack is produced
 
-`build_evidence_pack` (in `backend/src/modulo/core/evidence_pack/`) assembles a
+`build_evidence_pack` (in `backend/src/farna/core/evidence_pack/`) assembles a
 pack:
 
 1. The organization's audit events are written into the bundle file

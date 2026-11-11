@@ -2,7 +2,7 @@
 
 Wires ``features/pipelines/validation.feature`` into the executing BDD
 suite by driving the REAL
-``modulo.core.graph_validator.GraphValidator.validate_definition`` against a
+``farna.core.graph_validator.GraphValidator.validate_definition`` against a
 mocked sqlalchemy session — the save-time surface the pipelines graph PUT
 route calls via ``_validate_graph_save``. Mirrors the DB-free pattern of
 ``backend/tests/unit/graph_validator/`` so the executing BDD coverage locks the
@@ -44,7 +44,7 @@ def _session_returning(rows: list[Any]) -> AsyncMock:
 
 
 def _validate(graph: dict[str, Any], session: AsyncMock) -> Any:
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     return asyncio.run(GraphValidator().validate_definition(graph, session))
 

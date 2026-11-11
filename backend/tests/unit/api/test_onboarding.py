@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.models.onboarding_progress import OnboardingProgress
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.models.onboarding_progress import OnboardingProgress
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -104,8 +104,8 @@ def _make_progress(
 
 def test_get_status_first_run(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
-        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding._check_auto_completion") as mock_auto,
     ):
         mock_get_progress.return_value = _make_progress()
         mock_auto.return_value = set()
@@ -126,8 +126,8 @@ def test_get_status_first_run(client: TestClient, mock_session: AsyncMock) -> No
 
 def test_get_status_with_completed_actions(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
-        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding._check_auto_completion") as mock_auto,
     ):
         mock_get_progress.return_value = _make_progress(completed=["login", "add_ai_model"])
         mock_auto.return_value = set()
@@ -144,8 +144,8 @@ def test_get_status_with_completed_actions(client: TestClient, mock_session: Asy
 
 def test_get_status_with_auto_detection(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
-        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding._check_auto_completion") as mock_auto,
     ):
         mock_get_progress.return_value = _make_progress()
         mock_auto.return_value = {"login", "has_pipelines"}
@@ -160,8 +160,8 @@ def test_get_status_with_auto_detection(client: TestClient, mock_session: AsyncM
 
 def test_get_status_dismissed(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
-        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding._check_auto_completion") as mock_auto,
     ):
         mock_get_progress.return_value = _make_progress(completed=["login"], dismissed=True)
         mock_auto.return_value = set()
@@ -176,8 +176,8 @@ def test_get_status_dismissed(client: TestClient, mock_session: AsyncMock) -> No
 
 def test_get_status_skipped_actions(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
-        patch("modulo.api.routes.onboarding._check_auto_completion") as mock_auto,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding._check_auto_completion") as mock_auto,
     ):
         mock_get_progress.return_value = _make_progress(skipped=["add_ai_model", "create_first_agent"])
         mock_auto.return_value = set()
@@ -202,7 +202,7 @@ def test_get_status_requires_auth(unauth_client: TestClient) -> None:
 
 
 def test_mark_action_complete_valid(client: TestClient, mock_session: AsyncMock) -> None:
-    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+    with patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
         progress = _make_progress()
         mock_get_progress.return_value = progress
 
@@ -216,7 +216,7 @@ def test_mark_action_complete_valid(client: TestClient, mock_session: AsyncMock)
 
 
 def test_mark_action_complete_already_done(client: TestClient, mock_session: AsyncMock) -> None:
-    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+    with patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
         progress = _make_progress(completed=["login"])
         mock_get_progress.return_value = progress
 
@@ -239,7 +239,7 @@ def test_mark_action_complete_invalid(client: TestClient) -> None:
 
 
 def test_mark_action_skip_valid(client: TestClient, mock_session: AsyncMock) -> None:
-    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+    with patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
         progress = _make_progress()
         mock_get_progress.return_value = progress
 
@@ -263,7 +263,7 @@ def test_mark_action_skip_invalid(client: TestClient) -> None:
 
 
 def test_dismiss_onboarding(client: TestClient, mock_session: AsyncMock) -> None:
-    with patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
+    with patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress:
         progress = _make_progress()
         mock_get_progress.return_value = progress
 
@@ -298,12 +298,12 @@ def test_seed_examples(client: TestClient, mock_session: AsyncMock) -> None:
     mock_model_backend.id = uuid.uuid4()
 
     with (
-        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
-        patch("modulo.api.routes.onboarding.create_schema_version") as mock_create_sv,
-        patch("modulo.api.routes.onboarding.create_agent", return_value=mock_agent),
-        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
-        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.onboarding.create_schema_version") as mock_create_sv,
+        patch("farna.api.routes.onboarding.create_agent", return_value=mock_agent),
+        patch("farna.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("farna.api.routes.onboarding.replace_pipeline_graph"),
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
     ):
         progress = _make_progress()
         mock_get_progress.return_value = progress
@@ -327,10 +327,10 @@ def test_seed_examples(client: TestClient, mock_session: AsyncMock) -> None:
 
 def test_seed_examples_no_model_backend(client: TestClient, mock_session: AsyncMock) -> None:
     with (
-        patch("modulo.api.routes.onboarding.create_schema") as mock_create_schema,
-        patch("modulo.api.routes.onboarding.create_schema_version"),
-        patch("modulo.api.routes.onboarding.create_pipeline") as mock_create_pipeline,
-        patch("modulo.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
+        patch("farna.api.routes.onboarding.create_schema") as mock_create_schema,
+        patch("farna.api.routes.onboarding.create_schema_version"),
+        patch("farna.api.routes.onboarding.create_pipeline") as mock_create_pipeline,
+        patch("farna.api.routes.onboarding._get_or_create_progress") as mock_get_progress,
     ):
         progress = _make_progress()
         mock_get_progress.return_value = progress
@@ -366,9 +366,9 @@ def test_create_starter_pipeline(client: TestClient, mock_session: AsyncMock) ->
     mock_pipeline.snapshot_count = 0
 
     with (
-        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
-        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
-        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
+        patch("farna.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("farna.api.routes.onboarding.replace_pipeline_graph"),
     ):
         resp = client.post("/api/v1/onboarding/starter-pipeline")
 

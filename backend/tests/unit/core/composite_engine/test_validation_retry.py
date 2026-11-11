@@ -4,13 +4,13 @@ import uuid
 
 import pytest
 
-from modulo.core.composite_engine.composite_binding import (
+from farna.core.composite_engine.composite_binding import (
     CompositeValidationError,
     EvalDefinitionConfig,
     OutputValidation,
     ValidationResult,
 )
-from modulo.core.composite_engine.expander import (
+from farna.core.composite_engine.expander import (
     _validate_model_judge_eval,
     execute_composite_with_retry,
     run_output_validation,

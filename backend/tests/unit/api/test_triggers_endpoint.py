@@ -13,12 +13,12 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -27,7 +27,7 @@ _TRIGGER_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 # FAR-1732: the conftest FERNET_KEY is not a valid Fernet key, so at-rest
-# encryption assertions patch ``modulo.api.routes.triggers.get_settings``
+# encryption assertions patch ``farna.api.routes.triggers.get_settings``
 # with a fake carrying a REAL key through this helper.
 _VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
 
@@ -124,14 +124,14 @@ def _stub_team_gate_in_txn() -> Generator[None, None, None]:
     the mocked sessions here do not model. The gate's allow/deny matrix is
     exercised by test_team_scope_dependencies.py and the integration team-gate
     suite, so stub it for this file's endpoint-behaviour tests."""
-    with patch("modulo.api.routes.triggers._require_team_gate_in_txn", new_callable=AsyncMock):
+    with patch("farna.api.routes.triggers._require_team_gate_in_txn", new_callable=AsyncMock):
         yield
 
 
 def test_list_triggers_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -155,7 +155,7 @@ def test_list_triggers_includes_pause_state(client: TestClient) -> None:
     org column-level read. The read is (triggers_paused, triggers_paused_at,
     status) — the full predicate the create_run gate applies."""
     trigger = _make_mock_trigger()
-    with patch("modulo.api.routes.triggers.set_rls_org"):
+    with patch("farna.api.routes.triggers.set_rls_org"):
         session = _make_mock_session()
         trigger_result = _make_trigger_result([trigger])
         org_result = MagicMock()
@@ -186,7 +186,7 @@ def test_list_triggers_paused_via_non_active_org_status(client: TestClient) -> N
     False) must surface as triggers_paused=True — the SAME predicate the gate
     uses (org_row_is_paused), so the banner and toggle match server truth."""
     trigger = _make_mock_trigger()
-    with patch("modulo.api.routes.triggers.set_rls_org"):
+    with patch("farna.api.routes.triggers.set_rls_org"):
         session = _make_mock_session()
         trigger_result = _make_trigger_result([trigger])
         org_result = MagicMock()
@@ -213,7 +213,7 @@ def test_list_triggers_paused_via_non_active_org_status(client: TestClient) -> N
 
 def test_list_triggers_empty_returns_200(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
@@ -241,9 +241,9 @@ def test_list_triggers_unauthenticated_returns_4xx(client: TestClient) -> None:
 def test_update_cron_config_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value=None),
+        patch("farna.api.routes.triggers.compute_next_fire", return_value=_NOW),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -267,7 +267,7 @@ def test_update_cron_config_returns_200(client: TestClient) -> None:
 def test_update_cron_config_non_cron_returns_400(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -289,8 +289,8 @@ def test_update_cron_config_non_cron_returns_400(client: TestClient) -> None:
 def test_update_cron_config_invalid_cron_returns_422(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -310,7 +310,7 @@ def test_update_cron_config_invalid_cron_returns_422(client: TestClient) -> None
 
 def test_update_cron_config_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
@@ -330,7 +330,7 @@ def test_update_cron_config_not_found_returns_404(client: TestClient) -> None:
 
 def test_preview_cron_schedule_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
@@ -353,9 +353,9 @@ def test_preview_cron_schedule_not_found_returns_404(client: TestClient) -> None
 def test_create_trigger_returns_201(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value=None),
+        patch("farna.api.routes.triggers.compute_next_fire", return_value=_NOW),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -378,8 +378,8 @@ def test_create_trigger_returns_201(client: TestClient) -> None:
 
 def test_create_trigger_invalid_cron_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value="bad cron"),
     ):
         session = _make_mock_session()
 
@@ -399,10 +399,10 @@ def test_create_trigger_invalid_cron_returns_422(client: TestClient) -> None:
 def test_delete_trigger_returns_204(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         # FAR-1513: deletion pre-reads the trigger for its pipeline team gate.
-        patch("modulo.api.routes.triggers._load_trigger_for_update", new=AsyncMock(return_value=trigger)),
-        patch("modulo.db.crud.trigger.soft_delete_trigger", return_value=trigger),
+        patch("farna.api.routes.triggers._load_trigger_for_update", new=AsyncMock(return_value=trigger)),
+        patch("farna.db.crud.trigger.soft_delete_trigger", return_value=trigger),
     ):
         resp = client.delete(f"/api/v1/triggers/{_TRIGGER_ID}")
 
@@ -411,8 +411,8 @@ def test_delete_trigger_returns_204(client: TestClient) -> None:
 
 def test_delete_trigger_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.db.crud.trigger.soft_delete_trigger", return_value=None),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.db.crud.trigger.soft_delete_trigger", return_value=None),
     ):
         resp = client.delete(f"/api/v1/triggers/{uuid.uuid4()}")
 
@@ -430,8 +430,8 @@ def test_restore_trigger_returns_200(client: TestClient) -> None:
         yield session
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.db.crud.trigger.restore_trigger", return_value=trigger),
     ):
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
@@ -441,8 +441,8 @@ def test_restore_trigger_returns_200(client: TestClient) -> None:
 
 def test_restore_trigger_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.db.crud.trigger.restore_trigger", return_value=None),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.db.crud.trigger.restore_trigger", return_value=None),
     ):
         resp = client.post(f"/api/v1/triggers/{uuid.uuid4()}/restore")
     assert resp.status_code == 404
@@ -451,7 +451,7 @@ def test_restore_trigger_not_found_returns_404(client: TestClient) -> None:
 def test_toggle_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(active=True)
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -479,7 +479,7 @@ def test_trigger_events_returns_200(client: TestClient) -> None:
     event.error_detail = None
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         # require_permission kill-switch read consumes the first execute
@@ -507,7 +507,7 @@ def test_trigger_events_returns_200(client: TestClient) -> None:
 
 def test_trigger_events_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
@@ -525,9 +525,9 @@ def test_trigger_events_not_found_returns_404(client: TestClient) -> None:
 def test_update_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="cron")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value=None),
+        patch("farna.api.routes.triggers.compute_next_fire", return_value=_NOW),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -552,7 +552,7 @@ def test_update_trigger_preserves_secret_when_masked_config_round_tripped(client
     the literal SENSITIVE_VALUE_MASK as the stored secret."""
     trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "real-secret"})
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -580,7 +580,7 @@ def test_update_trigger_updates_secret_with_new_value(client: TestClient) -> Non
     """A genuinely new secret value must still be written through."""
     trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "old-secret"})
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -609,7 +609,7 @@ def test_update_trigger_null_secret_clears_key(client: TestClient) -> None:
     """An explicit null for a sensitive key clears it from the stored config."""
     trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "real-secret"})
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -637,7 +637,7 @@ def test_update_trigger_merges_masked_secret_but_updates_other_keys(client: Test
         config_json={"hmac_secret": "real-secret", "work_item_ref_paths": [".agents"]},
     )
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -665,9 +665,9 @@ def test_update_trigger_merges_masked_secret_but_updates_other_keys(client: Test
 def test_test_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
-        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
+        patch("farna.api.routes.triggers.create_run", new_callable=AsyncMock),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -693,9 +693,9 @@ def test_test_trigger_manual_run_stamps_account_id(client: TestClient) -> None:
     site — pinned here so it cannot regress to the unstamped old form)."""
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
-        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock),
+        patch("farna.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -723,9 +723,9 @@ def test_test_trigger_webhook_creates_no_run_null_asymmetry(client: TestClient) 
     trigger-delivery path. run_id=None in the response pins it."""
     trigger = _make_mock_trigger(trigger_type="webhook")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
-        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("farna.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -775,15 +775,15 @@ def test_test_trigger_storage_exhausted_returns_503(client: TestClient) -> None:
     }
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.create_snapshot_from_live_graph",
+            "farna.api.routes.triggers.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=snapshot),
         ),
-        patch("modulo.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
-        patch("modulo.db.capacity.get_settings", return_value=capacity_settings),
+        patch("farna.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
+        patch("farna.db.capacity.get_settings", return_value=capacity_settings),
         patch(
-            "modulo.db.capacity.db_capacity_status",
+            "farna.db.capacity.db_capacity_status",
             new=AsyncMock(return_value=over_hard_stop),
         ),
     ):
@@ -808,16 +808,16 @@ def test_test_trigger_snapshot_lock_busy_returns_503(client: TestClient) -> None
     """FAR-527 parity: losing the per-pipeline snapshot advisory lock race while
     creating the manual test run's snapshot must surface an honest, retryable
     503 — never a generic 500 (matches the webhook + MCP trigger paths)."""
-    from modulo.core.exceptions import SnapshotLockNotAvailableError
+    from farna.core.exceptions import SnapshotLockNotAvailableError
 
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.create_snapshot_from_live_graph",
+            "farna.api.routes.triggers.create_snapshot_from_live_graph",
             new=AsyncMock(side_effect=SnapshotLockNotAvailableError("busy")),
         ),
-        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+        patch("farna.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -843,7 +843,7 @@ def test_test_trigger_snapshot_lock_busy_returns_503(client: TestClient) -> None
 def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -864,9 +864,9 @@ def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:
 def test_update_cron_config_sets_input_template(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.validate_cron_expression", return_value=None),
+        patch("farna.api.routes.triggers.compute_next_fire", return_value=_NOW),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -889,7 +889,7 @@ def test_update_cron_config_sets_input_template(client: TestClient) -> None:
 def test_preview_cron_schedule_returns_fire_times(client: TestClient) -> None:
     trigger = _make_mock_trigger(cron_expression="0 * * * *")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -910,7 +910,7 @@ def test_preview_cron_schedule_returns_fire_times(client: TestClient) -> None:
 def test_preview_cron_schedule_no_expression_returns_400(client: TestClient) -> None:
     trigger = _make_mock_trigger(cron_expression=None)
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -933,11 +933,11 @@ def test_preview_cron_schedule_no_expression_returns_400(client: TestClient) -> 
 
 def test_create_trigger_with_daily_spend_limit_returns_201(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.Trigger") as mock_trigger_cls,
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.Trigger") as mock_trigger_cls,
         # The class is mocked out, so the duplicate-name probe cannot build its
         # ``select(Trigger.id)``; it is covered by the dedicated name tests.
-        patch("modulo.api.routes.triggers._require_unique_trigger_name", new=AsyncMock()),
+        patch("farna.api.routes.triggers._require_unique_trigger_name", new=AsyncMock()),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
@@ -974,7 +974,7 @@ def test_create_trigger_with_daily_spend_limit_returns_201(client: TestClient) -
 
 def test_create_trigger_negative_daily_spend_limit_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
 
@@ -994,7 +994,7 @@ def test_create_trigger_negative_daily_spend_limit_returns_422(client: TestClien
 def test_update_trigger_daily_spend_limit_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1018,7 +1018,7 @@ def test_update_trigger_daily_spend_limit_returns_200(client: TestClient) -> Non
 def test_update_trigger_clears_daily_spend_limit_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal(50))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1042,7 +1042,7 @@ def test_update_trigger_clears_daily_spend_limit_returns_200(client: TestClient)
 def test_update_polling_config_daily_spend_limit_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1066,7 +1066,7 @@ def test_update_polling_config_daily_spend_limit_returns_200(client: TestClient)
 def test_update_polling_config_clears_daily_spend_limit_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal(10))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1093,7 +1093,7 @@ def test_update_polling_config_interval_below_60_returns_422(client: TestClient)
     always >= 60s)."""
     trigger = _make_mock_trigger(trigger_type="polling")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1134,7 +1134,7 @@ def test_update_polling_config_interval_60_returns_200(client: TestClient) -> No
     """FAR-169: the 60s floor is the inclusive lower bound — 60 is accepted."""
     trigger = _make_mock_trigger(trigger_type="polling")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1156,7 +1156,7 @@ def test_update_polling_config_interval_60_returns_200(client: TestClient) -> No
 def test_list_triggers_returns_daily_spend_limit(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal("15.25"))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1176,7 +1176,7 @@ def test_list_triggers_returns_daily_spend_limit(client: TestClient) -> None:
 def test_list_pipeline_triggers_returns_daily_spend_limit(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal("7.5"))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1219,7 +1219,7 @@ def _ongoing_create_payload(**overrides):
 
 def test_create_ongoing_without_spend_limit_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=_pipeline_cap(10))
@@ -1240,7 +1240,7 @@ def test_create_ongoing_without_spend_limit_returns_422(client: TestClient) -> N
 
 def test_create_ongoing_target_above_20_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
 
@@ -1260,7 +1260,7 @@ def test_create_ongoing_target_above_20_returns_422(client: TestClient) -> None:
 
 def test_create_ongoing_target_above_pipeline_cap_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=_pipeline_cap(2))
@@ -1281,7 +1281,7 @@ def test_create_ongoing_target_above_pipeline_cap_returns_422(client: TestClient
 
 def test_create_ongoing_scan_interval_below_60_returns_422(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=_pipeline_cap(10))
@@ -1302,7 +1302,7 @@ def test_create_ongoing_scan_interval_below_60_returns_422(client: TestClient) -
 
 def test_create_ongoing_valid_returns_201_with_next_fire_at(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.get = AsyncMock(return_value=_pipeline_cap(10))
@@ -1329,7 +1329,7 @@ def test_create_ongoing_valid_returns_201_with_next_fire_at(client: TestClient) 
 def test_update_ongoing_cannot_clear_spend_limit_returns_422(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1351,7 +1351,7 @@ def test_update_ongoing_cannot_clear_spend_limit_returns_422(client: TestClient)
 def test_update_ongoing_target_above_pipeline_cap_returns_422(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="ongoing", max_concurrent_runs=3, daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1379,7 +1379,7 @@ def test_update_ongoing_merges_config_json(client: TestClient) -> None:
         config_json={"scan_interval_seconds": 300, "input_template": {"a": 1}},
     )
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1414,7 +1414,7 @@ def test_patch_ongoing_updates_scan_interval_and_recomputes_next_fire_at(client:
         next_fire_at=_NOW,
     )
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1438,7 +1438,7 @@ def test_patch_ongoing_updates_scan_interval_and_recomputes_next_fire_at(client:
 def test_patch_ongoing_invalid_interval_returns_422(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1459,7 +1459,7 @@ def test_patch_ongoing_invalid_interval_returns_422(client: TestClient) -> None:
 def test_patch_ongoing_on_non_ongoing_returns_400(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="cron")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1481,7 +1481,7 @@ def test_patch_ongoing_on_non_ongoing_returns_400(client: TestClient) -> None:
 def test_toggle_on_ongoing_resets_next_fire_at(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1501,7 +1501,7 @@ def test_toggle_on_ongoing_resets_next_fire_at(client: TestClient) -> None:
 def test_list_triggers_includes_in_flight_for_ongoing(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1550,9 +1550,9 @@ def test_list_triggers_includes_full_streak_status_for_ongoing(client: TestClien
     trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
     streak_status = _full_streak_status(streak=5, state="deactivated", deactivated_reason="no_delivery_streak")
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             return_value=streak_status,
         ) as get_status,
@@ -1590,9 +1590,9 @@ def test_list_triggers_streak_status_uniform_shape_for_non_ongoing(client: TestC
         "last_outcomes": [],
     }
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             return_value=base_status,
         ) as get_status,
@@ -1641,9 +1641,9 @@ def test_list_triggers_streak_reads_run_inside_rls_transaction(client: TestClien
         return streak_status
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             side_effect=_streak_status,
         ),
@@ -1669,9 +1669,9 @@ def test_list_pipeline_triggers_includes_streak_status(client: TestClient) -> No
     trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
     streak_status = _full_streak_status()
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             return_value=streak_status,
         ),
@@ -1706,9 +1706,9 @@ def test_list_pipeline_triggers_streak_reads_run_inside_rls_transaction(client: 
         return streak_status
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             side_effect=_streak_status,
         ),
@@ -1737,7 +1737,7 @@ def test_toggle_deactivated_trigger_viewer_returns_403(client: TestClient) -> No
     reachable by a runner/viewer (FAR-191 spec item 3)."""
     trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.set_rls_org"),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
@@ -1764,11 +1764,11 @@ def test_toggle_deactivated_trigger_operator_reenables(client: TestClient) -> No
     trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
     streak_status = _full_streak_status(streak=0, state="ok", deactivated_reason=None, last_outcomes=[])
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.anchor_trigger_streak_epoch", new_callable=AsyncMock) as anchor,
-        patch("modulo.api.routes.triggers.clear_trigger_streak_after_reenable", new_callable=AsyncMock) as clear,
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.api.routes.triggers.anchor_trigger_streak_epoch", new_callable=AsyncMock) as anchor,
+        patch("farna.api.routes.triggers.clear_trigger_streak_after_reenable", new_callable=AsyncMock) as clear,
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             return_value=streak_status,
         ),
@@ -1804,10 +1804,10 @@ def test_restore_trigger_returns_streak_status(client: TestClient) -> None:
         yield session
 
     with (
-        patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
+        patch("farna.api.routes.triggers.set_rls_org"),
+        patch("farna.db.crud.trigger.restore_trigger", return_value=trigger),
         patch(
-            "modulo.api.routes.triggers.get_trigger_streak_status",
+            "farna.api.routes.triggers.get_trigger_streak_status",
             new_callable=AsyncMock,
             return_value=streak_status,
         ),
@@ -1822,7 +1822,7 @@ def test_restore_trigger_returns_streak_status(client: TestClient) -> None:
 def test_trigger_type_regex_accepts_ongoing_and_agent_signal() -> None:
     from pydantic import ValidationError
 
-    from modulo.api.routes.triggers import TriggerCreate
+    from farna.api.routes.triggers import TriggerCreate
 
     assert TriggerCreate(name="t", trigger_type="ongoing").trigger_type == "ongoing"
     assert TriggerCreate(name="t", trigger_type="agent_signal").trigger_type == "agent_signal"
@@ -1849,9 +1849,9 @@ def _post_create(client: TestClient, session: AsyncMock, body: dict[str, object]
     client.app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.triggers.set_rls_org"),
-            patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
-            patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+            patch("farna.api.routes.triggers.set_rls_org"),
+            patch("farna.api.routes.triggers.validate_cron_expression", return_value=None),
+            patch("farna.api.routes.triggers.compute_next_fire", return_value=_NOW),
         ):
             return client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers", json=body)
     finally:
@@ -1904,7 +1904,7 @@ def _put_update(client: TestClient, session: AsyncMock, body: dict[str, object])
 
     client.app.dependency_overrides[get_db_session] = override_session
     try:
-        with patch("modulo.api.routes.triggers.set_rls_org"):
+        with patch("farna.api.routes.triggers.set_rls_org"):
             return client.put(f"/api/v1/triggers/{_TRIGGER_ID}", json=body)
     finally:
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]

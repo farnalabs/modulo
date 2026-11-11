@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.artifacts.gc (FAR-811).
+"""Unit tests for farna.core.artifacts.gc (FAR-811).
 
 Tests delete_orphaned_run_artifacts: orphan detection, batched DB lookups,
 best-effort error handling, and the iter_run_ids / delete_run integration.
@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.artifacts.gc import delete_orphaned_run_artifacts
-from modulo.core.artifacts.store import LocalArtifactStore, _encode_segment
+from farna.core.artifacts.gc import delete_orphaned_run_artifacts
+from farna.core.artifacts.store import LocalArtifactStore, _encode_segment
 
 
 def _make_store(tmp_path) -> LocalArtifactStore:
@@ -93,7 +93,7 @@ async def test_empty_store_returns_empty(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_batched_lookup_splits_large_store(tmp_path) -> None:
     """More than _GC_BATCH_SIZE runs are checked in multiple DB queries."""
-    from modulo.core.artifacts.gc import _GC_BATCH_SIZE
+    from farna.core.artifacts.gc import _GC_BATCH_SIZE
 
     store = _make_store(tmp_path)
     org_id = "org-c"
@@ -208,7 +208,7 @@ async def test_default_store_is_imported() -> None:
     mock_store = MagicMock()
     mock_store.iter_run_ids.return_value = []
 
-    with patch("modulo.core.artifacts.store.get_store", return_value=mock_store):
+    with patch("farna.core.artifacts.store.get_store", return_value=mock_store):
         session = _make_session()
         result = await delete_orphaned_run_artifacts(session)
 

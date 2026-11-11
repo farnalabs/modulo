@@ -1,6 +1,6 @@
 """Unit tests for RuntimeProvider ABC and data classes."""
 
-from modulo.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
+from farna.core.runtime_provider import ExecResult, RuntimeProvider, WorkspaceSpec
 
 
 def test_workspace_spec_defaults() -> None:

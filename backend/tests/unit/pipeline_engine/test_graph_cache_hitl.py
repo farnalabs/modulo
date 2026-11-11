@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 
 def test_build_graph_with_nodes_succeeds() -> None:
-    from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
+    from farna.core.pipeline_engine.graph_cache import build_graph_from_json
 
     graph_json = {
         "nodes": [
@@ -21,7 +21,7 @@ def test_build_graph_with_nodes_succeeds() -> None:
         ],
     }
 
-    with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
+    with patch("farna.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
         mock_make.return_value = MagicMock()
         compiled = build_graph_from_json(graph_json)
         assert compiled is not None

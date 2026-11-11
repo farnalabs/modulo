@@ -9,11 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -136,8 +136,8 @@ class TestListCompositeTemplates:
     def test_returns_200(self, client: TestClient) -> None:
         page_result = MagicMock(items=[_make_template()], total=1, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.composite_templates.list_composite_templates", return_value=page_result),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.list_composite_templates", return_value=page_result),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get("/api/v1/composite-templates")
         assert resp.status_code == 200
@@ -148,8 +148,8 @@ class TestListCompositeTemplates:
     def test_returns_empty_when_none(self, client: TestClient) -> None:
         page_result = MagicMock(items=[], total=0, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.composite_templates.list_composite_templates", return_value=page_result),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.list_composite_templates", return_value=page_result),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get("/api/v1/composite-templates")
         assert resp.status_code == 200
@@ -163,8 +163,8 @@ class TestListCompositeTemplates:
 class TestRestoreCompositeTemplate:
     def test_restore_returns_200(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=_make_template()),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.restore_composite_template", return_value=_make_template()),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
         assert resp.status_code == 200
@@ -172,8 +172,8 @@ class TestRestoreCompositeTemplate:
 
     def test_restore_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.restore_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/composite-templates/{uuid.uuid4()}/restore")
         assert resp.status_code == 404
@@ -183,8 +183,8 @@ class TestCreateCompositeTemplate:
     def test_returns_201(self, client: TestClient) -> None:
         template = _make_template(name="Test Composite")
         with (
-            patch("modulo.api.routes.composite_templates.create_composite_template", return_value=template) as create,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.create_composite_template", return_value=template) as create,
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 "/api/v1/composite-templates",
@@ -206,8 +206,8 @@ class TestCreateCompositeTemplate:
             parameter_ports_json=[{"id": "p1", "name": "prompt", "type": "string"}],
         )
         with (
-            patch("modulo.api.routes.composite_templates.create_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.create_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 "/api/v1/composite-templates",
@@ -245,10 +245,10 @@ class TestCreateCompositeTemplate:
         template = _make_template(name="Odd Shape", sub_pipeline_graph_json=graph)
         with (
             patch(
-                "modulo.api.routes.composite_templates.create_composite_template",
+                "farna.api.routes.composite_templates.create_composite_template",
                 return_value=template,
             ) as create,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 "/api/v1/composite-templates",
@@ -290,8 +290,8 @@ class TestCreateCompositeTemplate:
 class TestGetCompositeTemplate:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=_make_template()),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=_make_template()),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
         assert resp.status_code == 200
@@ -299,8 +299,8 @@ class TestGetCompositeTemplate:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -310,8 +310,8 @@ class TestUpdateCompositeTemplate:
     def test_returns_200(self, client: TestClient) -> None:
         template = _make_template(name="Updated Name")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"name": "Updated Name"})
         assert resp.status_code == 200
@@ -320,8 +320,8 @@ class TestUpdateCompositeTemplate:
     def test_partial_update(self, client: TestClient) -> None:
         template = _make_template(name="Test", version="2.0.0")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(f"/api/v1/composite-templates/{_TEMPLATE_ID}", json={"version": "2.0.0"})
         assert resp.status_code == 200
@@ -329,8 +329,8 @@ class TestUpdateCompositeTemplate:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(f"/api/v1/composite-templates/{uuid.uuid4()}", json={"name": "x"})
         assert resp.status_code == 404
@@ -339,17 +339,15 @@ class TestUpdateCompositeTemplate:
 class TestDeleteCompositeTemplate:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch(
-                "modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=_make_template()
-            ),
+            patch("farna.api.routes.composite_templates.soft_delete_composite_template", return_value=_make_template()),
         ):
             resp = client.delete(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
         assert resp.status_code == 204
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.soft_delete_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.soft_delete_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.delete(f"/api/v1/composite-templates/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -401,7 +399,7 @@ class TestDBErrorHandlers:
 
     def test_list_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -410,7 +408,7 @@ class TestDBErrorHandlers:
 
     def test_list_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("connection lost"),
         ):
@@ -419,7 +417,7 @@ class TestDBErrorHandlers:
 
     def test_list_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -428,7 +426,7 @@ class TestDBErrorHandlers:
 
     def test_create_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -440,7 +438,7 @@ class TestDBErrorHandlers:
 
     def test_create_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -452,7 +450,7 @@ class TestDBErrorHandlers:
 
     def test_create_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -464,7 +462,7 @@ class TestDBErrorHandlers:
 
     def test_get_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -473,7 +471,7 @@ class TestDBErrorHandlers:
 
     def test_get_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -482,7 +480,7 @@ class TestDBErrorHandlers:
 
     def test_get_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -491,7 +489,7 @@ class TestDBErrorHandlers:
 
     def test_update_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -500,7 +498,7 @@ class TestDBErrorHandlers:
 
     def test_update_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -509,7 +507,7 @@ class TestDBErrorHandlers:
 
     def test_update_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -518,7 +516,7 @@ class TestDBErrorHandlers:
 
     def test_delete_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -527,7 +525,7 @@ class TestDBErrorHandlers:
 
     def test_delete_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -536,7 +534,7 @@ class TestDBErrorHandlers:
 
     def test_delete_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -545,7 +543,7 @@ class TestDBErrorHandlers:
 
     def test_restore_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -554,7 +552,7 @@ class TestDBErrorHandlers:
 
     def test_restore_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -563,7 +561,7 @@ class TestDBErrorHandlers:
 
     def test_restore_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("kaboom"),
         ):
@@ -583,8 +581,8 @@ class TestCompositeEditor:
         graph = {"nodes": [{"id": "n1"}], "edges": [{"source": "n1", "target": "n2"}]}
         template = _make_template(sub_pipeline_graph_json=graph)
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
         assert resp.status_code == 200
@@ -595,8 +593,8 @@ class TestCompositeEditor:
     def test_get_editor_empty_graph(self, client: TestClient) -> None:
         template = _make_template(sub_pipeline_graph_json={})
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
         assert resp.status_code == 200
@@ -605,15 +603,15 @@ class TestCompositeEditor:
 
     def test_get_editor_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{uuid.uuid4()}/editor")
         assert resp.status_code == 404
 
     def test_get_editor_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -622,7 +620,7 @@ class TestCompositeEditor:
 
     def test_get_editor_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -633,9 +631,9 @@ class TestCompositeEditor:
         existing = _make_template(sub_pipeline_graph_json={"nodes": [], "edges": []})
         updated = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": []})
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=updated),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=updated),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
@@ -648,9 +646,9 @@ class TestCompositeEditor:
         existing = _make_template(sub_pipeline_graph_json={"nodes": [], "edges": [], "extra_field": "kept"})
         updated = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": [], "extra_field": "kept"})
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=updated),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", side_effect=[existing, updated]),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=updated),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
@@ -660,8 +658,8 @@ class TestCompositeEditor:
 
     def test_put_editor_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{uuid.uuid4()}/editor",
@@ -671,7 +669,7 @@ class TestCompositeEditor:
 
     def test_put_editor_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -683,7 +681,7 @@ class TestCompositeEditor:
 
     def test_put_editor_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -695,7 +693,7 @@ class TestCompositeEditor:
 
     def test_put_editor_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -710,11 +708,11 @@ class TestCompositeEditor:
         existing = _make_template()
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 side_effect=[existing, None],
             ),
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
@@ -732,8 +730,8 @@ class TestPublishCompositeTemplate:
     def test_publish_returns_200_with_version(self, client: TestClient) -> None:
         template = _make_template(version="2.0.0")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
@@ -747,8 +745,8 @@ class TestPublishCompositeTemplate:
     def test_publish_default_version(self, client: TestClient) -> None:
         template = _make_template(version="1.0.0")
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/publish",
@@ -759,8 +757,8 @@ class TestPublishCompositeTemplate:
 
     def test_publish_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/composite-templates/{uuid.uuid4()}/publish",
@@ -777,7 +775,7 @@ class TestPublishCompositeTemplate:
 
     def test_publish_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
         ):
@@ -789,7 +787,7 @@ class TestPublishCompositeTemplate:
 
     def test_publish_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -801,7 +799,7 @@ class TestPublishCompositeTemplate:
 
     def test_publish_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates.set_rls_org",
+            "farna.api.routes.composite_templates.set_rls_org",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -879,7 +877,7 @@ class TestDetectParams:
 
     def test_detect_params_unexpected_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.composite_templates._detect_parameter_ports",
+            "farna.api.routes.composite_templates._detect_parameter_ports",
             side_effect=RuntimeError("boom"),
         ):
             resp = client.post(
@@ -896,7 +894,7 @@ class TestDetectParams:
 
 class TestDetectParameterPorts:
     def test_finds_placeholders_in_prompt_template(self) -> None:
-        from modulo.api.routes.composite_templates import _detect_parameter_ports
+        from farna.api.routes.composite_templates import _detect_parameter_ports
 
         nodes = [{"id": "n1", "prompt_template": "Use {{parameter.style}} and {{parameter.tone}}"}]
         ports = _detect_parameter_ports(nodes)
@@ -904,14 +902,14 @@ class TestDetectParameterPorts:
         assert names == {"style", "tone"}
 
     def test_ignores_non_prompt_fields(self) -> None:
-        from modulo.api.routes.composite_templates import _detect_parameter_ports
+        from farna.api.routes.composite_templates import _detect_parameter_ports
 
         nodes = [{"id": "n1", "name": "not a prompt {{parameter.x}}"}]
         ports = _detect_parameter_ports(nodes)
         assert not ports
 
     def test_returns_empty_for_empty_nodes(self) -> None:
-        from modulo.api.routes.composite_templates import _detect_parameter_ports
+        from farna.api.routes.composite_templates import _detect_parameter_ports
 
         assert not _detect_parameter_ports([])
 
@@ -939,8 +937,8 @@ class TestUpdateParameterPortsJson:
             ]
         )
         with (
-            patch("modulo.api.routes.composite_templates.update_composite_template", return_value=template) as upd,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template", return_value=template) as upd,
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}",
@@ -996,12 +994,12 @@ class TestCompositeTemplateMasking:
         }
 
     def test_get_template_masks_secret_env_and_context_files(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template = _make_template(sub_pipeline_graph_json=self._graph())
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}")
         assert resp.status_code == 200
@@ -1013,13 +1011,13 @@ class TestCompositeTemplateMasking:
         assert node["context_files"] == {"/tmp/staging/creds.txt": "token=" + SENSITIVE_VALUE_MASK}
 
     def test_list_templates_masks_graph_nodes(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template = _make_template(sub_pipeline_graph_json=self._graph())
         page_result = MagicMock(items=[template], total=1, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.composite_templates.list_composite_templates", return_value=page_result),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.list_composite_templates", return_value=page_result),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get("/api/v1/composite-templates")
         assert resp.status_code == 200
@@ -1028,12 +1026,12 @@ class TestCompositeTemplateMasking:
         assert "https://example.com" in node["env_vars"]["APP_URL"]
 
     def test_restore_masks_graph_nodes(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template = _make_template(sub_pipeline_graph_json=self._graph())
         with (
-            patch("modulo.api.routes.composite_templates.restore_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.restore_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.post(f"/api/v1/composite-templates/{_TEMPLATE_ID}/restore")
         assert resp.status_code == 200
@@ -1041,12 +1039,12 @@ class TestCompositeTemplateMasking:
         assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
 
     def test_get_editor_masks_secret_env(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template = _make_template(sub_pipeline_graph_json=self._graph())
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor")
         assert resp.status_code == 200
@@ -1054,19 +1052,19 @@ class TestCompositeTemplateMasking:
         assert node["env_vars"]["GITHUB_TOKEN"] == SENSITIVE_VALUE_MASK
 
     def test_editor_put_resolves_mask_echo_and_masks_response(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template = _make_template(sub_pipeline_graph_json=self._graph())
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template,
             ),
             patch(
-                "modulo.api.routes.composite_templates.update_composite_template",
+                "farna.api.routes.composite_templates.update_composite_template",
                 return_value=template,
             ) as upd,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             # The editor round-trips the masked GET: GITHUB_TOKEN comes back
             # as the mask literal; APP_URL and the non-sensitive string are
@@ -1112,20 +1110,20 @@ class TestCompositeTemplateMasking:
         resolvable GITHUB_TOKEN echo in the same payload is not the problem -
         NEW_VAR and the context file 'p' are, so the write never persists.
         """
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         graph = self._graph()
         template = _make_template(sub_pipeline_graph_json=graph)
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template,
             ),
             patch(
-                "modulo.api.routes.composite_templates.update_composite_template",
+                "farna.api.routes.composite_templates.update_composite_template",
                 return_value=template,
             ) as upd,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}/editor",
@@ -1161,9 +1159,9 @@ class TestCompositeTemplateMasking:
         in the submitted sub-graph is always fresh - rejected 422, never
         silently dropped, never persisted.
         """
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
-        with patch("modulo.api.routes.composite_templates.set_rls_org"):
+        with patch("farna.api.routes.composite_templates.set_rls_org"):
             resp = client.post(
                 "/api/v1/composite-templates",
                 json={
@@ -1192,16 +1190,16 @@ class TestCompositeTemplateMasking:
         ``test_patch_resolves_mask_echoes_before_storing_graph``); a FRESH
         sentinel - one the stored graph cannot answer - is refused 422.
         """
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template_before = _make_template(sub_pipeline_graph_json=self._graph())
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template_before,
             ),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
-            patch("modulo.api.routes.composite_templates.update_composite_template") as upd,
+            patch("farna.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template") as upd,
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}",
@@ -1233,7 +1231,7 @@ class TestCompositeTemplateMasking:
         re-persisting the degraded value or silently dropping the key. This is
         the editor-re-entry repair loop: submit the real value to clear it.
         """
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         degraded_graph = {
             "nodes": [
@@ -1248,11 +1246,11 @@ class TestCompositeTemplateMasking:
         template_before = _make_template(sub_pipeline_graph_json=degraded_graph)
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template_before,
             ),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
-            patch("modulo.api.routes.composite_templates.update_composite_template") as upd,
+            patch("farna.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.update_composite_template") as upd,
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}",
@@ -1274,20 +1272,20 @@ class TestCompositeTemplateMasking:
         upd.assert_not_called()
 
     def test_patch_resolves_mask_echoes_before_storing_graph(self, client: TestClient) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         template_after = _make_template(sub_pipeline_graph_json=self._graph())
         template_before = _make_template(sub_pipeline_graph_json=self._graph())
         with (
             patch(
-                "modulo.api.routes.composite_templates.get_composite_template",
+                "farna.api.routes.composite_templates.get_composite_template",
                 return_value=template_before,
             ),
             patch(
-                "modulo.api.routes.composite_templates.update_composite_template",
+                "farna.api.routes.composite_templates.update_composite_template",
                 return_value=template_after,
             ) as upd,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}",
@@ -1321,7 +1319,7 @@ class TestCompositeTemplateMasking:
 
     def test_mask_sub_pipeline_graph_non_dict_returns_empty(self) -> None:
         """A missing / non-dict graph masks to an empty graph, never echoes it."""
-        from modulo.api.routes.composite_templates import _mask_sub_pipeline_graph
+        from farna.api.routes.composite_templates import _mask_sub_pipeline_graph
 
         assert not _mask_sub_pipeline_graph(None)
         assert not _mask_sub_pipeline_graph("not-a-graph")  # type: ignore[arg-type]
@@ -1334,8 +1332,8 @@ class TestCompositeTemplateMasking:
         the request must fail rather than persist a mask literal.
         """
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=None),
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=None),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{uuid.uuid4()}",
@@ -1353,12 +1351,12 @@ class TestCompositeTemplateMasking:
         stored = _make_template(sub_pipeline_graph_json=None)
         stored_after = _make_template(sub_pipeline_graph_json={"nodes": [{"id": "n1"}], "edges": []})
         with (
-            patch("modulo.api.routes.composite_templates.get_composite_template", return_value=stored),
+            patch("farna.api.routes.composite_templates.get_composite_template", return_value=stored),
             patch(
-                "modulo.api.routes.composite_templates.update_composite_template",
+                "farna.api.routes.composite_templates.update_composite_template",
                 return_value=stored_after,
             ) as upd,
-            patch("modulo.api.routes.composite_templates.set_rls_org"),
+            patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.patch(
                 f"/api/v1/composite-templates/{_TEMPLATE_ID}",

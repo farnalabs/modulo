@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.schema_registry.contract import (
+from farna.core.schema_registry.contract import (
     SCHEMA_CONTRACT_VERSION,
     _atomic_write_json,
     _check_bounds,
@@ -217,7 +217,7 @@ class TestAtomicityAndRollback:
         """When active.json write fails, canonical.json is rolled back."""
         call_count = 0
         original_atomic = __import__(
-            "modulo.core.schema_registry.contract", fromlist=["_atomic_write_json"]
+            "farna.core.schema_registry.contract", fromlist=["_atomic_write_json"]
         )._atomic_write_json
 
         def mock_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -228,7 +228,7 @@ class TestAtomicityAndRollback:
                 raise OSError("simulated write failure")
             original_atomic(path, data)
 
-        with patch("modulo.core.schema_registry.contract._atomic_write_json", side_effect=mock_atomic):
+        with patch("farna.core.schema_registry.contract._atomic_write_json", side_effect=mock_atomic):
             result = write_schema_contract(
                 tmp_path,
                 node_id="n1",
@@ -245,7 +245,7 @@ class TestAtomicityAndRollback:
     def test_rollback_failure_is_logged(self, tmp_path: Path) -> None:
         """When the rollback unlink itself fails, the failure is swallowed."""
         original_atomic = __import__(
-            "modulo.core.schema_registry.contract", fromlist=["_atomic_write_json"]
+            "farna.core.schema_registry.contract", fromlist=["_atomic_write_json"]
         )._atomic_write_json
         call_count = 0
 
@@ -257,7 +257,7 @@ class TestAtomicityAndRollback:
             original_atomic(path, data)
 
         with (
-            patch("modulo.core.schema_registry.contract._atomic_write_json", side_effect=mock_atomic),
+            patch("farna.core.schema_registry.contract._atomic_write_json", side_effect=mock_atomic),
             patch.object(Path, "unlink", side_effect=OSError("simulated unlink failure")),
         ):
             result = write_schema_contract(
@@ -287,7 +287,7 @@ class TestAtomicityAndRollback:
     def test_orphan_cleanup_exception_is_swallowed(self, tmp_path: Path) -> None:
         """A throwing cleanup must not propagate out of the writer."""
         with patch(
-            "modulo.core.schema_registry.contract._cleanup_orphan_tmps",
+            "farna.core.schema_registry.contract._cleanup_orphan_tmps",
             side_effect=RuntimeError("simulated cleanup failure"),
         ):
             result = write_schema_contract(
@@ -331,7 +331,7 @@ class TestAtomicityAndRollback:
         target = tmp_path / "out.json"
         with (
             patch(
-                "modulo.core.schema_registry.contract.os.fdopen",
+                "farna.core.schema_registry.contract.os.fdopen",
                 side_effect=OSError("simulated fdopen failure"),
             ),
             pytest.raises(OSError, match="simulated fdopen failure"),
@@ -594,7 +594,7 @@ class TestActiveVsCanonical:
     def test_render_error_falls_back_to_canonical(self, tmp_path: Path) -> None:
         """A renderer exception falls back to sanitised canonical and warns."""
         with patch(
-            "modulo.core.schema_registry.contract.render_for_profile",
+            "farna.core.schema_registry.contract.render_for_profile",
             side_effect=RuntimeError("simulated render failure"),
         ):
             result = write_schema_contract(
@@ -674,7 +674,7 @@ class TestArchitectureAssertion:
     """
 
     def test_contract_module_has_no_jsonschema_import(self) -> None:
-        import modulo.core.schema_registry.contract as contract_mod
+        import farna.core.schema_registry.contract as contract_mod
 
         source = inspect.getsource(contract_mod)
         tree = ast.parse(source)
@@ -693,7 +693,7 @@ class TestArchitectureAssertion:
     def test_contract_module_has_no_validate_call(self) -> None:
         import ast
 
-        import modulo.core.schema_registry.contract as contract_mod
+        import farna.core.schema_registry.contract as contract_mod
 
         source = inspect.getsource(contract_mod)
         tree = ast.parse(source)

@@ -1,6 +1,6 @@
 """Integration tests for the pipeline-state gate's VISIBILITY semantics (FAR-1528).
 
-The gate (``modulo.db.crud.run._enforce_pipeline_state_gate``) reads
+The gate (``farna.db.crud.run._enforce_pipeline_state_gate``) reads
 ``archived_at``/``deleted_at`` with a raw ``text()`` statement. On Postgres
 that read is scoped by the ``rls_team_isolation`` policy on ``pipelines``
 (migration 0124 dropped the org-only policy on team-scoped tables, so the
@@ -36,13 +36,13 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.jwt import create_access_token
-from modulo.core.exceptions import PipelineNotRunnableError
-from modulo.db.crud.run import _enforce_pipeline_state_gate, create_run
-from modulo.db.rls import set_rls_execution_context, set_rls_org, set_rls_user_context
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.jwt import create_access_token
+from farna.core.exceptions import PipelineNotRunnableError
+from farna.db.crud.run import _enforce_pipeline_state_gate, create_run
+from farna.db.rls import set_rls_execution_context, set_rls_org, set_rls_user_context
+from farna.settings import Settings, get_settings
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -126,7 +126,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
 
 
 async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.UUID, name: str) -> uuid.UUID:
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -141,7 +141,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
 async def _seed_team_membership(
     db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID
 ) -> None:
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -280,7 +280,7 @@ async def state_gate_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenera
 @pytest.fixture(autouse=True)
 def _stub_run_dispatch() -> AsyncGenerator[None, None]:
     """Stub the background dispatch so an unexpected 202 needs no Redis/SAQ."""
-    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock):
         yield
 
 
@@ -382,7 +382,7 @@ class TestPipelineStateGateVisibility:
             await set_rls_org(session, org)
             await set_rls_user_context(session, non_member_user, "runner")
 
-            with caplog.at_level(logging.WARNING, logger="modulo.db.crud.run"):
+            with caplog.at_level(logging.WARNING, logger="farna.db.crud.run"):
                 await _enforce_pipeline_state_gate(session, archived_team_private_pipeline, org)
 
         assert any("pipeline_row_absent" in message for message in caplog.messages)

@@ -93,7 +93,7 @@ uv run alembic upgrade heads
 ## 3. Start the backend
 
 ```bash
-uv run uvicorn modulo.api.main:app --reload --port 8000
+uv run uvicorn farna.api.main:app --reload --port 8000
 ```
 
 The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhost:8000/docs`.
@@ -114,10 +114,10 @@ Then start the host workers:
 
 ```bash
 # Runs worker: executes run jobs (queue: runs)
-uv run python -m saq modulo.core.saq_worker.runs_settings
+uv run python -m saq farna.core.saq_worker.runs_settings
 
 # System worker: scheduler (fire_due_triggers) + reconcile + system crons
-SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq_worker
+SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m farna.core.saq_worker
 ```
 
 Notes:
@@ -203,7 +203,7 @@ Everything above gets you a running stack. Now you'll build and run your first r
 2. Click **Add Model Backend** and fill in the form: a name, a display name, a **Provider** (e.g. `openai` or `anthropic`), a **Model ID**, and the provider's **API key**.
 3. Click **Create**. The new backend runs a best-effort health check on save and shows a **Configured** badge once its credentials are stored.
 
-No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/modulo/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`. The API authenticates with Bearer tokens, so log in first (the seeded `admin` account from `MODULO_USERS` in your `.env`):
+No API key handy? The codebase ships a deterministic test double, `StubModelBackend` (`backend/src/farna/model_backends/stub/backend.py`), that returns responses keyed by its input. It is not exposed in the UI's provider dropdown; it is reachable only through the API as the `custom` provider, with a `fixture_map` in `default_params`. The API authenticates with Bearer tokens, so log in first (the seeded `admin` account from `MODULO_USERS` in your `.env`):
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \

@@ -16,16 +16,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.runtime_provider import ProviderNotConfiguredError
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.db.crud.base import PageResult
-from modulo.db.models.environment_profile import PROVIDER_TYPES
-from modulo.settings import Settings, get_settings
-from modulo.util import WorkspaceNetworkValidationError
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.runtime_provider import ProviderNotConfiguredError
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.db.crud.base import PageResult
+from farna.db.models.environment_profile import PROVIDER_TYPES
+from farna.settings import Settings, get_settings
+from farna.util import WorkspaceNetworkValidationError
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -33,7 +33,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
-_ROUTES = "modulo.api.routes.environment_profiles"
+_ROUTES = "farna.api.routes.environment_profiles"
 
 
 def _make_settings() -> Settings:
@@ -860,7 +860,7 @@ class TestSandboxStreamHelpers:
     async def test_cleanup_failed_sandbox_reraises_http_exception(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.environment_profiles import _cleanup_failed_sandbox
+        from farna.api.routes.environment_profiles import _cleanup_failed_sandbox
 
         provider = MagicMock()
         provider.destroy_workspace = AsyncMock(side_effect=HTTPException(status_code=503, detail="boom"))
@@ -871,7 +871,7 @@ class TestSandboxStreamHelpers:
     async def test_cleanup_failed_sandbox_logs_and_swallows_other_errors(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        from modulo.api.routes.environment_profiles import _cleanup_failed_sandbox
+        from farna.api.routes.environment_profiles import _cleanup_failed_sandbox
 
         provider = MagicMock()
         provider.destroy_workspace = AsyncMock(side_effect=RuntimeError("teardown exploded"))
@@ -881,12 +881,12 @@ class TestSandboxStreamHelpers:
         assert "Failed to clean up sandbox ws-ref after error" in caplog.text
 
     async def test_close_runtime_hub_with_no_hub_is_a_noop(self) -> None:
-        from modulo.api.routes.environment_profiles import _close_runtime_hub
+        from farna.api.routes.environment_profiles import _close_runtime_hub
 
         assert await _close_runtime_hub(None) is None
 
     async def test_close_runtime_hub_logs_a_close_failure(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.api.routes.environment_profiles import _close_runtime_hub
+        from farna.api.routes.environment_profiles import _close_runtime_hub
 
         hub = MagicMock()
         hub.aclose = AsyncMock(side_effect=RuntimeError("close exploded"))
@@ -898,7 +898,7 @@ class TestSandboxStreamHelpers:
 
 def test_get_hub_builds_fresh_hub() -> None:
     """_get_hub() returns a live RuntimeProviderHub built from process settings."""
-    from modulo.api.routes.environment_profiles import _get_hub
+    from farna.api.routes.environment_profiles import _get_hub
 
     hub = _get_hub()
 
@@ -913,7 +913,7 @@ def test_egress_tier_for_provider_type_sources_aliases_and_fails_closed() -> Non
     (FAR-1051) so it resolves to 'kubernetes'; an empty or unknown provider
     type resolves to ``None`` so the caller fails closed.
     """
-    from modulo.api.routes.environment_profiles import _egress_tier_for_provider_type
+    from farna.api.routes.environment_profiles import _egress_tier_for_provider_type
 
     assert _egress_tier_for_provider_type("e2b") == "e2b"
     assert _egress_tier_for_provider_type("runner_docker") == "docker"
@@ -935,12 +935,12 @@ def test_egress_tier_for_provider_type_skips_unimportable_provider(monkeypatch: 
     """
     import importlib
 
-    from modulo.api.routes.environment_profiles import _egress_tier_for_provider_type
+    from farna.api.routes.environment_profiles import _egress_tier_for_provider_type
 
     real_import_module = importlib.import_module
 
     def _import_module(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name == "modulo.core.runtime_provider.e2b":
+        if name == "farna.core.runtime_provider.e2b":
             raise ImportError("e2b extra not installed")
         return real_import_module(name, *args, **kwargs)
 
@@ -971,8 +971,8 @@ def test_spec_egress_for_canonical_is_lossless(
 ) -> None:
     """FAR-1050 regression: canonical 'selected' must NOT collapse into the
     permissive 'outbound' (the ADR 040 fail-open defect class)."""
-    from modulo.core.pipeline_engine.egress import spec_egress_for_canonical
-    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+    from farna.core.pipeline_engine.egress import spec_egress_for_canonical
+    from farna.core.runtime_provider.e2b import _egress_allows_internet
 
     mapped = spec_egress_for_canonical(canonical)
 
@@ -982,8 +982,8 @@ def test_spec_egress_for_canonical_is_lossless(
 
 def test_build_workspace_spec_profile_none_denies_internet() -> None:
     """profile network_policy='none' -> canonical deny_all -> spec 'none' -> E2B denies internet."""
-    from modulo.api.routes.environment_profiles import _build_workspace_spec
-    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+    from farna.api.routes.environment_profiles import _build_workspace_spec
+    from farna.core.runtime_provider.e2b import _egress_allows_internet
 
     spec = _build_workspace_spec(_fake_profile(network_policy="none", provider_type="e2b"))
 
@@ -993,8 +993,8 @@ def test_build_workspace_spec_profile_none_denies_internet() -> None:
 
 def test_build_workspace_spec_profile_outbound_allows_internet() -> None:
     """profile network_policy='outbound' -> canonical None -> spec 'outbound' -> E2B allows internet."""
-    from modulo.api.routes.environment_profiles import _build_workspace_spec
-    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+    from farna.api.routes.environment_profiles import _build_workspace_spec
+    from farna.core.runtime_provider.e2b import _egress_allows_internet
 
     spec = _build_workspace_spec(_fake_profile(network_policy="outbound", provider_type="e2b"))
 
@@ -1014,8 +1014,8 @@ def test_build_workspace_spec_timeout_default_matches_template_constant() -> Non
     the constant-pinning tests in
     ``tests/unit/core/bundled_runner/test_profile.py``.
     """
-    from modulo.api.routes.environment_profiles import _build_workspace_spec
-    from modulo.core.bundled_runner.profile import TEMPLATE_CONFIG_JSON
+    from farna.api.routes.environment_profiles import _build_workspace_spec
+    from farna.core.bundled_runner.profile import TEMPLATE_CONFIG_JSON
 
     spec = _build_workspace_spec(_fake_profile(provider_type="e2b", config_json={"memory_mb": 1024}))
 
@@ -1036,16 +1036,16 @@ def test_build_workspace_spec_selected_produces_deny_internet_spec(
     refusal behaviour itself is asserted separately by
     test_build_workspace_spec_selected_refuses_without_allowlist.
     """
-    from modulo.api.routes.environment_profiles import _build_workspace_spec
-    from modulo.core.pipeline_engine.egress import EgressResolution
-    from modulo.core.runtime_provider.e2b import _egress_allows_internet
+    from farna.api.routes.environment_profiles import _build_workspace_spec
+    from farna.core.pipeline_engine.egress import EgressResolution
+    from farna.core.runtime_provider.e2b import _egress_allows_internet
 
     selected_with_allowlist = EgressResolution(
         policy="selected",
         allowlist=[{"host": "api.github.com", "port": 443}],
         refusal=None,
     )
-    monkeypatch.setattr("modulo.core.pipeline_engine.egress.resolve_egress", lambda **_kwargs: selected_with_allowlist)
+    monkeypatch.setattr("farna.core.pipeline_engine.egress.resolve_egress", lambda **_kwargs: selected_with_allowlist)
 
     spec = _build_workspace_spec(_fake_profile(network_policy="selected", provider_type="e2b"))
 
@@ -1064,8 +1064,8 @@ def test_build_workspace_spec_selected_refuses_without_allowlist() -> None:
     """Current real-path behaviour: with no profile-level allowlist the
     upstream resolver refuses 'selected' BEFORE the mapper runs � a loud
     refusal, never a silently permissive spec."""
-    from modulo.api.routes.environment_profiles import _build_workspace_spec
-    from modulo.core.pipeline_engine.sandbox_errors import SandboxTierRefusedError
+    from farna.api.routes.environment_profiles import _build_workspace_spec
+    from farna.core.pipeline_engine.sandbox_errors import SandboxTierRefusedError
 
     with pytest.raises(SandboxTierRefusedError, match="non-empty allowlist"):
         _build_workspace_spec(_fake_profile(network_policy="selected", provider_type="e2b"))

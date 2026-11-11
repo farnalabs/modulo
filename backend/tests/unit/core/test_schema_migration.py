@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.schema_registry.migration import (
+from farna.core.schema_registry.migration import (
     MigrationPlan,
     MigrationRegistry,
     MissingMigrationError,

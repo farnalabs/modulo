@@ -59,7 +59,7 @@ import SkeletonBlock from '../shared/SkeletonBlock.vue'
 import Button from 'primevue/button'
 import type { components } from '../../lib/api/client'
 
-export type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse']
+export type SchemaItem = components['schemas']['farna__api__routes__schemas__SchemaResponse']
 
 defineProps<{
   schemas: SchemaItem[]

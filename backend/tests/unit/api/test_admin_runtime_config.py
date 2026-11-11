@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, is_sensitive_env_key
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_config.store import get_runtime_config_store
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, is_sensitive_env_key
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.runtime_config.store import get_runtime_config_store
+from farna.settings import Settings, get_settings
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -31,8 +31,8 @@ def _make_settings() -> Settings:
 def _purge_store() -> Generator[None, None, None]:
     import logging
 
-    import modulo.core.runtime_config.key_bridge as key_bridge
-    import modulo.core.runtime_config.store as store_mod
+    import farna.core.runtime_config.key_bridge as key_bridge
+    import farna.core.runtime_config.store as store_mod
 
     store_mod._store = None
     key_bridge._BOOT_LOG_LEVEL = None
@@ -238,7 +238,7 @@ class TestRuntimeConfigRoute:
     ) -> None:
         """FAR-1135: the override is committed before the hook runs — a hook
         failure must be logged, not rolled into a 500 (commit-then-error)."""
-        import modulo.api.routes.admin_runtime_config as route_mod
+        import farna.api.routes.admin_runtime_config as route_mod
 
         def _explode() -> None:
             raise RuntimeError("hook blew up")

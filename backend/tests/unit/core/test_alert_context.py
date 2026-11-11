@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.core.alert_context import (
+from farna.core.alert_context import (
     MAX_CONTEXT_LINE_CHARS,
     MAX_CONTEXT_LINES,
     alert_context_html,
@@ -31,7 +31,7 @@ from modulo.core.alert_context import (
     alert_context_text,
     alert_environment_line,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 
 def _make_settings(**overrides: Any) -> Settings:

@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.connector_instance import list_connector_instances
-from modulo.db.crud.error_tracking import (
+from farna.db.crud.connector_instance import list_connector_instances
+from farna.db.crud.error_tracking import (
     count_error_events_by_group,
     count_error_groups,
     get_error_events_by_group,
@@ -24,14 +24,14 @@ from modulo.db.crud.error_tracking import (
     update_error_group,
     upsert_error_group,
 )
-from modulo.db.crud.last_admin_guard import (
+from farna.db.crud.last_admin_guard import (
     LastAdminLockoutUnavailableError,
     _acquire_org_lock,
     _dialect_name,
 )
-from modulo.db.crud.node_observation import observe_node
-from modulo.db.crud.trigger import apply_trigger_event_cursor
-from modulo.db.models.error_group import ErrorGroup
+from farna.db.crud.node_observation import observe_node
+from farna.db.crud.trigger import apply_trigger_event_cursor
+from farna.db.models.error_group import ErrorGroup
 
 _ORG_ID = uuid.uuid4()
 
@@ -197,8 +197,8 @@ async def test_last_admin_lock_retries_until_success() -> None:
     succeeded.scalar_one.return_value = True
     session.execute.side_effect = [failed, succeeded]
     with (
-        patch("modulo.db.crud.last_admin_guard._POLL_INTERVAL", 0),
-        patch("modulo.db.crud.last_admin_guard._LOCK_TIMEOUT_SECONDS", 1),
+        patch("farna.db.crud.last_admin_guard._POLL_INTERVAL", 0),
+        patch("farna.db.crud.last_admin_guard._LOCK_TIMEOUT_SECONDS", 1),
     ):
         await _acquire_org_lock(session, _ORG_ID)
     assert session.execute.await_count == 2
@@ -210,8 +210,8 @@ async def test_last_admin_lock_timeout_raises() -> None:
     failed.scalar_one.return_value = False
     session.execute.return_value = failed
     with (
-        patch("modulo.db.crud.last_admin_guard._POLL_INTERVAL", 0),
-        patch("modulo.db.crud.last_admin_guard._LOCK_TIMEOUT_SECONDS", 0),
+        patch("farna.db.crud.last_admin_guard._POLL_INTERVAL", 0),
+        patch("farna.db.crud.last_admin_guard._LOCK_TIMEOUT_SECONDS", 0),
         pytest.raises(LastAdminLockoutUnavailableError),
     ):
         await _acquire_org_lock(session, _ORG_ID)
@@ -238,7 +238,7 @@ async def test_node_observation_constructor_path_is_exercised() -> None:
 
 
 def test_trigger_cursor_boundary_and_malformed_cursor() -> None:
-    from modulo.db.models.trigger_event import TriggerEvent
+    from farna.db.models.trigger_event import TriggerEvent
 
     select_for_test = select(TriggerEvent)
     query = apply_trigger_event_cursor(select_for_test, None)

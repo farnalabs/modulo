@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.mcp_server import create_connector, delete_connector
+from farna.api.mcp_server import create_connector, delete_connector
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import FERNET_KEY, AuthContext, make_session_context
 
@@ -37,31 +37,31 @@ class _StubVaultBackend:
 
 
 class TestCreateConnectorErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_connector(name="gh", connector_type_id="github", credentials="sk-secret")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_connector(name="gh", connector_type_id="github", credentials="sk-secret")
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
     async def test_migration_required_on_programming_error(
         self,
         mock_create: AsyncMock,
@@ -73,14 +73,14 @@ class TestCreateConnectorErrors(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(name="gh", connector_type_id="github", credentials="sk-secret")
 
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
     async def test_generic_error_returns_internal_error(
         self,
         mock_create: AsyncMock,
@@ -92,16 +92,16 @@ class TestCreateConnectorErrors(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(name="gh", connector_type_id="github", credentials="sk-secret")
 
         assert result["error"] == "server_error"
 
 
 class TestCreateConnectorSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
     async def test_returns_created_connector_with_encrypted_credentials(
         self,
         mock_create: AsyncMock,
@@ -118,7 +118,7 @@ class TestCreateConnectorSuccess(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(
                 name="github-primary",
                 connector_type_id="github",
@@ -147,10 +147,10 @@ class TestCreateConnectorSuccess(AuthContext):
 class TestCreateConnectorCredentialResolution(AuthContext):
     """FAR-1640: a secretref:// credential is resolved server-side before encryption."""
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
-    @patch("modulo.api.mcp_server.create_secrets_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.create_secrets_backend")
     async def test_resolves_secretref_credentials(
         self,
         mock_backend_factory: MagicMock,
@@ -170,7 +170,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(
                 name="vault-connector",
                 connector_type_id="rest",
@@ -182,10 +182,10 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         ciphertext = mock_create.call_args.kwargs["credentials_ciphertext"]
         assert Fernet(FERNET_KEY.encode()).decrypt(ciphertext).decode() == "sk-from-vault"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
-    @patch("modulo.api.mcp_server.create_secrets_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.create_secrets_backend")
     async def test_missing_vault_key_fails_closed_naming_the_key(
         self,
         mock_backend_factory: MagicMock,
@@ -198,7 +198,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(
                 name="vault-connector",
                 connector_type_id="rest",
@@ -210,10 +210,10 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         assert "kv/missing" in result["detail"]
         mock_create.assert_not_awaited()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
-    @patch("modulo.api.mcp_server.create_secrets_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.create_secrets_backend")
     async def test_literal_does_not_construct_secrets_backend(
         self,
         mock_backend_factory: MagicMock,
@@ -231,7 +231,7 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         settings = MagicMock()
         settings.fernet_key = FERNET_KEY
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+        with patch("farna.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(
                 name="literal-connector",
                 connector_type_id="rest",
@@ -241,10 +241,10 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         assert result["status"] == "created"
         mock_backend_factory.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.create_connector_instance")
-    @patch("modulo.api.mcp_server.create_secrets_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.create_connector_instance")
+    @patch("farna.api.mcp_server.create_secrets_backend")
     async def test_external_backend_refused_in_multi_org(
         self,
         mock_backend_factory: MagicMock,
@@ -260,8 +260,8 @@ class TestCreateConnectorCredentialResolution(AuthContext):
         settings.fernet_key = FERNET_KEY
 
         with (
-            patch("modulo.api.mcp_server.get_settings", return_value=settings),
-            patch("modulo.core.secrets_backend.references._multi_org_enabled", lambda: True),
+            patch("farna.api.mcp_server.get_settings", return_value=settings),
+            patch("farna.core.secrets_backend.references._multi_org_enabled", lambda: True),
         ):
             result = await create_connector(
                 name="vault-connector",
@@ -281,30 +281,30 @@ class TestCreateConnectorCredentialResolution(AuthContext):
 
 
 class TestDeleteConnectorErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await delete_connector(connector_id=str(uuid.uuid4()))
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await delete_connector(connector_id=str(uuid.uuid4()))
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -317,9 +317,9 @@ class TestDeleteConnectorErrors(AuthContext):
         assert result["error"] == "invalid_id"
         assert result["field"] == "connector_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.delete_connector_instance", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.delete_connector_instance", return_value=False)
     async def test_not_found_when_connector_missing(
         self,
         mock_delete: AsyncMock,
@@ -332,9 +332,9 @@ class TestDeleteConnectorErrors(AuthContext):
 
         assert result["error"] == "connector_not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.delete_connector_instance")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.delete_connector_instance")
     async def test_migration_required_on_programming_error(
         self,
         mock_delete: AsyncMock,
@@ -350,9 +350,9 @@ class TestDeleteConnectorErrors(AuthContext):
 
 
 class TestDeleteConnectorSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.connector_instance.delete_connector_instance", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.connector_instance.delete_connector_instance", return_value=True)
     async def test_returns_deleted(
         self,
         mock_delete: AsyncMock,

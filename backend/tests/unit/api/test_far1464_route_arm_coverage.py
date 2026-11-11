@@ -2,7 +2,7 @@
 surface an ``InvalidRequestError`` (a client-side session-contract violation)
 as HTTP 500, never the arm's own 503 ``db_transient``.
 
-The PR sweeps ~430 arms across the ``modulo.api`` route layer.  A handful of
+The PR sweeps ~430 arms across the ``farna.api`` route layer.  A handful of
 representative arms are exercised end-to-end in
 ``test_far1464_session_contract_guard.py``; this module drives the REMAINING
 converted arms so the changed-lines coverage gate measures the new guard call
@@ -26,9 +26,9 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from sqlalchemy.exc import InvalidRequestError
 
-from modulo.api import dependencies as deps
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.api.routes import (
+from farna.api import dependencies as deps
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.routes import (
     admin_email,
     admin_feature_flags,
     admin_housekeeping,
@@ -58,8 +58,8 @@ from modulo.api.routes import (
     sso,
     viewmodel,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -759,7 +759,7 @@ async def test_runs_arms_guard_session_contract(monkeypatch: pytest.MonkeyPatch)
             principal=_tenant(),
         )
     )
-    monkeypatch.setattr("modulo.core.artifacts.store.get_store", lambda: MagicMock())
+    monkeypatch.setattr("farna.core.artifacts.store.get_store", lambda: MagicMock())
     await _assert_500(
         runs.get_run_artifact(
             run_id=uuid.uuid4(),
@@ -820,8 +820,8 @@ class _FormRequest:
 
 
 async def test_sso_arms_guard_session_contract() -> None:
-    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
-    from modulo.auth.sso import sign_state
+    from farna.api.routes.sso import _OIDC_FLOW_COOKIE
+    from farna.auth.sso import sign_state
 
     settings = _settings()
     raw_state = "arm-state"

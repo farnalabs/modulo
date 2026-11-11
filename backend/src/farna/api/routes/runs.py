@@ -1,0 +1,5007 @@
+"""POST /api/v1/runs — manual pipeline trigger and run lifecycle endpoints."""
+
+import asyncio
+import json
+import logging
+import re
+import uuid
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import Select, select, text
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as SA_TimeoutError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import InstanceState, selectinload
+from sqlalchemy.orm.base import LoaderCallableStatus
+from tenacity import before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+from farna.api.constants import (
+    MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+    MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+    MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_UNEXPECTED_ERROR,
+)
+from farna.api.db_error_handling import (
+    handle_db_errors,
+    raise_lock_timeout_conflict_if,
+    raise_session_contract_error,
+)
+from farna.api.db_error_reporting import log_service_unavailable
+from farna.api.dependencies import (
+    _get_engine,
+    _get_session_factory,
+    get_db_session,
+    require_permission,
+    require_permission_any_credential,
+    require_team_membership_or_admin_any_credential,
+)
+from farna.api.middleware.sensitive_mask import (
+    is_sensitive_key,
+    mask_sensitive_value,
+)
+from farna.api.routes.pipelines import _masked_snapshot_graph
+from farna.api.team_scope import resolve_trigger_run_team_scope
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.core.audit_coverage import audited
+from farna.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
+from farna.core.dispatch import dispatch_run
+from farna.core.exceptions import (
+    OrgDeletedError,
+    PipelineNotRunnableError,
+    RateLimitConflictError,
+    SnapshotLockNotAvailableError,
+)
+from farna.core.guardrails import GuardrailSummary
+from farna.core.guardrails.coverage import SeamCoverageStatement, parse_seam_coverage
+from farna.core.line_diff import iter_line_diffs
+from farna.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
+from farna.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
+from farna.core.pipeline_engine.error_codes import (
+    map_legacy_code,
+    match_known_fixes,
+    present_error,
+    sanitize_error_text,
+)
+from farna.core.pipeline_engine.event_broker import get_registry
+from farna.core.pipeline_engine.recovery import (
+    ConcurrentRecoveryError,
+    GuardrailOverrideError,
+    GuardrailOverrideNoCheckpointError,
+    GuardrailOverrideRejectedError,
+    GuardrailOverrideRequiredError,
+    NodeAlreadyCompletedError,
+    NodeNotFoundInGraphError,
+    RecoveryNotAllowedError,
+    guardrail_override,
+    guardrail_override_job_type,
+    recover_node,
+)
+from farna.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from farna.core.rate_limiter import TokenBucketRegistry
+from farna.core.run_log_correlation import RunLogEntry, correlate_run_logs
+from farna.core.run_provenance import run_provenance_fields
+from farna.core.secret_patterns import mask_secret_values_in_text
+from farna.core.trigger_engine import TriggerEngine
+from farna.core.work_item_enrichment import derive_pr_targets, enrich_pr_targets
+from farna.db.capacity import StorageExhaustedError
+from farna.db.crud.node_observation import observe_node
+from farna.db.crud.observability import get_otel_config
+from farna.db.crud.pipeline import get_pipeline
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+from farna.db.crud.run import (
+    WorkItemRefsRequiredError,
+    count_active_runs_for_org,
+    create_run,
+    get_child_run_rollup,
+    get_org_run_concurrency_limit,
+    get_run,
+    get_run_cost_breakdowns,
+    get_run_heatmap,
+    get_run_stats,
+    request_cancellation,
+)
+from farna.db.crud.run import (
+    list_runs as db_list_runs,
+)
+from farna.db.crud.run_attempts import list_attempts as db_list_attempts
+from farna.db.crud.run_node_outputs import (
+    OutputsRlsMismatch,
+    RunBlobs,
+    marker_attempt_suffix,
+    read_run_blobs,
+    read_run_markers,
+    read_run_outputs_map,
+    read_run_telemetry,
+)
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES, Run
+from farna.db.models.run_node_outputs import RunNodeOutput
+from farna.db.models.trigger import Trigger
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+from farna.otel_bridge import trace_id_for_thread
+from farna.settings import Settings, get_settings
+
+_CODE_ROUTE_DB_ERROR = "route.db_error"
+_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR = "pipeline_execution.unexpected_error"
+_MSG_RUN_NOT_FOUND = "Run not found"
+_CODE_RUN_OUTPUT = "run.output"
+_MASKED_PLACEHOLDER = "••••••"
+_CODE_RUNS_OBSERVE_RUN_NODE = "runs.observe_run_node"
+_DEFAULT_FLOAT_DISPLAY = "0.000000"
+_CODE_RUN_LIST = "run.list"
+_CODE_RUNS_TRIGGER_RUN = "runs.trigger_run"
+_CODE_RUNS_TRIGGER_RERUN = "runs.trigger_rerun"
+_CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
+
+_CODE_RUNS_GET_RUN_STATUS = "runs.get_run_status"
+_CODE_RUNS_CANCEL_RUN = "runs.cancel_run"
+_CODE_RUNS_GET_RUN_IO_ENDPOINT = "runs.get_run_io_endpoint"
+_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT = "runs.get_run_work_item_enrichment"
+_CODE_RUNS_EXPORT_RUN_FIXTURE = "runs.export_run_fixture"
+_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS = "runs.get_run_workspace_events"
+_CODE_RUNS_GET_RUN_LOGS = "runs.get_run_logs"
+_CODE_RUNS_GET_RUN_NODE_OUTPUT = "runs.get_run_node_output"
+_CODE_RUNS_RECOVER_RUN_NODE = "runs.recover_run_node"
+_CODE_RUNS_DIFF_NODE_OUTPUT = "runs.diff_node_output"
+_CODE_RUNS_LIST_RUN_ATTEMPTS = "runs.list_run_attempts"
+_CODE_RUN_STATUS = "run.status"
+
+
+_log = logging.getLogger(__name__)
+
+# Guardrail-override rate limit (FAR-223 PR C gap). The override re-runs the
+# guardrail pass and re-dispatches the run, so an operator must not be able to
+# hammer it. ~10 overrides per 60s window per (org, actor). Uses the in-memory
+# TokenBucketRegistry (per-process) which fails open -- the override keeps
+# working if Redis is unavailable, which is the established best-effort pattern.
+_GUARDRAIL_OVERRIDE_RATE_LIMIT = 10
+_GUARDRAIL_OVERRIDE_RATE_PER_SEC = _GUARDRAIL_OVERRIDE_RATE_LIMIT / 60.0
+_guardrail_override_rate_limiter = TokenBucketRegistry(
+    rate=_GUARDRAIL_OVERRIDE_RATE_PER_SEC,
+    burst=_GUARDRAIL_OVERRIDE_RATE_LIMIT,
+)
+
+_RETRY_TRANSIENT = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception(
+        lambda e: isinstance(e, (TimeoutError, ConnectionResetError, OSError, SA_TimeoutError, OperationalError))
+    ),
+    reraise=True,
+    before_sleep=before_sleep_log(_log, logging.WARNING),
+)
+
+
+router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
+
+# Child-run cost rollup. `total_cost_usd` keeps its own-run semantics; the
+# aggregate is a derived display value and never mutates the stored field.
+_COST_ROLLUP_ZERO = Decimal(_DEFAULT_FLOAT_DISPLAY)
+_COST_ROLLUP_QUANTUM = Decimal("0.000001")
+
+
+def _quantize_cost_rollup(value: Decimal) -> Decimal:
+    """Normalise a cost rollup value to 6 decimal places (Numeric(14, 6) scale)."""
+    return value.quantize(_COST_ROLLUP_QUANTUM)
+
+
+def _extract_legacy_agent_verdict(outputs_json: dict[str, Any] | None) -> str | None:
+    """Extract an agent's self-reported verdict from a run's outputs_json.
+
+    Applies to any run whose node outputs carry the self-reported fields
+    ``agent_status`` or ``agent_outcome`` (the legacy agent-return shape);
+    it is not restricted to runs recorded before Phase 1. Each node output is
+    scanned directly and through its nested ``output`` object, and the first
+    ``"failed"`` self-reported value is returned (otherwise ``None``).
+
+    This is a read-only projection: it reports the agent's own claim and never
+    asserts anything about the run's outcome. It does not re-classify the run
+    as failed, does not affect ``work_intact``, and does not change the run's
+    official status.
+    """
+    if not isinstance(outputs_json, dict):
+        return None
+    for node_output in outputs_json.values():
+        if not isinstance(node_output, dict):
+            continue
+        candidates = [node_output]
+        inner = node_output.get("output")
+        if isinstance(inner, dict):
+            candidates.append(inner)
+        for candidate in candidates:
+            # Only explicitly self-reported fields are verdict evidence. The
+            # generic ``status`` field belongs to the engine/node envelope and
+            # can be ``failed`` without the agent reporting a verdict.
+            if any(candidate.get(key) == "failed" for key in ("agent_status", "agent_outcome")):
+                return "failed"
+    return None
+
+
+class RunNotFoundError(KeyError):
+    """Raised when a run is not found."""
+
+
+@_RETRY_TRANSIENT
+async def _run_with_retry[R](
+    fn: Callable[[], Awaitable[R]],
+) -> R:
+    """Execute fn with retry on transient connection errors."""
+    return await fn()
+
+
+def _run_detail_statement(principal: TenantPrincipal, run_id: uuid.UUID) -> Select[Run]:
+    """The org-scoped run SELECT shared by the detail/with-gate loaders."""
+    return (
+        select(Run)
+        .options(selectinload(Run.pipeline))
+        .where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
+    )
+
+
+async def _do_get_run(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> Run:
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        run = (await session.execute(_run_detail_statement(principal, run_id))).scalar_one_or_none()
+        if run is None:
+            raise RunNotFoundError(run_id)
+        return run
+
+
+async def _do_get_run_with_gate(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> tuple[Run, bool]:
+    """Load the run AND derive its FAR-228 gate-fired flag in ONE transaction.
+
+    qa M15: the removed ``_do_get_run_gate_fired`` helper re-opened a session
+    and re-SELECTed the run on every GET /runs/{id} — a TOCTOU window against
+    terminalize (the flag could be derived from a DIFFERENT row revision than
+    the response served) plus an extra read. The flag now derives from the
+    SAME transaction the run row is loaded in, computed after the load and
+    before the session closes.
+    """
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        # FAR-1838: eager-load ONLY the referenced snapshot's version column
+        # alongside the run (one extra narrow SELECT — never the snapshot's
+        # graph_json, which can be megabytes), so `_build_run_response` can
+        # surface `snapshot_version` from the loaded relationship without a
+        # lazy load (the factory runs autobegin=False). Applied HERE rather
+        # than on the shared `_run_detail_statement` so the events /
+        # schema-enforcement readers of `_do_get_run` do not pay for it.
+        run = (
+            await session.execute(
+                _run_detail_statement(principal, run_id).options(
+                    selectinload(Run.snapshot).load_only(PipelineSnapshot.snapshot_version)
+                )
+            )
+        ).scalar_one_or_none()
+        if run is None:
+            raise RunNotFoundError(run_id)
+        return run, await _run_gate_fired(session, run)
+
+
+async def _do_get_child_run_rollup(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> tuple[Decimal, int]:
+    """(child cost, child count) rollup for a single run (0.000000, 0 if none)."""
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        rollup = await get_child_run_rollup(session, [run_id])
+        cost, count = rollup.get(run_id, (_COST_ROLLUP_ZERO, 0))
+        return _quantize_cost_rollup(cost), count
+
+
+async def _do_get_otel_endpoint(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+) -> str:
+    """Return the org's configured OTLP endpoint, or ``""`` when unset.
+
+    Best-effort enrichment (FAR-198 trace_url deep-link): a DB failure must
+    never turn a run-detail request into an error — the run response is valid
+    without a trace_url.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            config = await get_otel_config(session, org_id)
+        return config.get("otlp_endpoint") or ""
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("runs.otel_endpoint_unavailable", extra={"org_id": str(org_id)}, exc_info=True)
+        return ""
+
+
+async def _do_get_workspace_inputs(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[dict[str, Any]] | None:
+    """Load workspace input audit records for a run (FAR-802).
+
+    Reads the ``run_node_outputs`` row keyed by ``(run_id, _mwi_audit,
+    <attempt_key>)`` and returns the ``workspace_inputs`` list from the
+    stored payload.  Returns None when no audit record exists (run had no
+    workspace inputs configured).  Best-effort: a DB failure degrades to
+    None (the run response is valid without workspace inputs).
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            # One audit row per (run_id, node_id, attempt_key): take the LATEST
+            # attempt so a per-attempt re-run cannot raise MultipleResultsFound
+            # (the table PK is (run_id, node_id, attempt_key)) and silently
+            # degrade workspace inputs to None on the run detail response.
+            row = (
+                await session.execute(
+                    select(RunNodeOutput)
+                    .where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == AUDIT_NODE_ID,
+                    )
+                    .order_by(RunNodeOutput.attempt_key.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if row is None or not isinstance(row.outputs_json, dict):
+            return None
+        inputs = row.outputs_json.get("workspace_inputs")
+        return inputs if isinstance(inputs, list) else None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "runs.workspace_inputs_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
+async def _do_get_run_outputs(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Load the narrow outputs projection for a run's legacy verdict (FAR-147).
+
+    Uses ``read_run_outputs_map`` so only ``run_id`` / ``node_id`` /
+    ``outputs_json`` are fetched — the telemetry, markers and artifacts blobs
+    are never loaded for a verdict read.
+
+    Fail-open applies to TRANSIENT database failures only (``OperationalError``
+    and the pool ``TimeoutError``): such an error degrades to ``None`` (the run
+    response is valid without the verdict). Tenant-integrity and query-shape
+    failures are never swallowed: :class:`OutputsRlsMismatch` (the session org
+    disagrees with the row org) and :class:`ProgrammingError` (a schema/query
+    defect) propagate to the route's existing error contract, and every other
+    non-transient error surfaces instead of silently deleting the verdict.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            outputs_map = await read_run_outputs_map(
+                session,
+                run_ids=[run_id],
+                organisation_id=principal.organisation_id,
+            )
+            return outputs_map.get(run_id)
+    except asyncio.CancelledError:
+        raise
+    except OutputsRlsMismatch:
+        raise
+    except ProgrammingError:
+        raise
+    except (OperationalError, SA_TimeoutError):
+        _log.warning(
+            "runs.outputs_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
+# FAR-704: display-side bounds for the triage tails. The stored marker's
+# raw_output is capped at the node's retention cap (up to 512 KB) and the
+# log tail at 6 KB — a run-detail response must carry a bounded display
+# slice, never the full retained blob.
+#
+# The head slice exists because a node-deadline kill's most useful evidence
+# is printed in the FIRST seconds (the agent command's own budget
+# breadcrumb, e.g. "timeout 2880s, 2400s of budget left"), while the tail
+# only shows how it died. Both slices are bounded display data — the
+# retained marker stays authoritative in the store.
+_TRIAGE_RAW_OUTPUT_TAIL_CHARS = 4000
+_TRIAGE_RAW_OUTPUT_HEAD_CHARS = 4000
+_TRIAGE_LOG_TAIL_CHARS = 6000
+
+
+def _deadline_triage_from_markers(
+    markers: dict[str, Any] | None,
+    *,
+    run_attempt_count: int | None = None,
+) -> list[dict[str, Any]]:
+    """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
+
+    Only markers carrying the ``deadline_triage is True`` signature are
+    surfaced; every other raw-output marker (delivery-done, no-parseable-
+    output, stall) is ignored here. String fields are truncated to bounded
+    display slices (the retained marker stays authoritative in the store).
+    Entries are returned in marker-storage-key order, for a deterministic
+    response.
+
+    ``attempt_key`` is the marker's OWN payload value when it carries one, and
+    only falls back to the storage key otherwise. The two are not
+    interchangeable: a cancellation-triage marker is stored under a reserved
+    ``cancel-triage:<run>:<node>:<suffix>`` row key (FAR-2082) while its payload
+    keeps the attempt that really ran, and ``node_id`` is always read from the
+    payload. Preferring the payload keeps this projection's identifiers
+    mutually consistent and matches
+    :func:`modulo.core.run_log_correlation.marker_tail_entries`; reporting the
+    storage key here would render a synthetic attempt key beside a real node id
+    (``RunDetailView`` shows the value verbatim).
+
+    ``raw_output`` is projected as BOTH a bounded head and a bounded tail:
+    the tail is how the attempt died, the head is the agent command's
+    opening lines (its own budget breadcrumb) — the only evidence of how
+    much of the node budget the sandbox consumed before the command even
+    started. A stdout shorter than the bound yields identical head and
+    tail; an absent/empty one yields ``""`` for both.
+
+    FAR-1886 B1: every entry also carries ``run_attempt_count`` — the RUN's
+    ``runs.node_attempt_count`` (how many node executions had been recorded
+    when the read ran), supplied by the caller from the run row it already
+    loaded. It is DATA, never a cause: an attempt proves one started, not why
+    the run stopped. Both the REST and MCP detail surfaces pass it, so their
+    entry shapes stay identical.
+
+    Round-2 minor 3: ``pr_url`` is projected too. It is NON-GATING evidence:
+    a PR URL observed in the retained tail (heuristic; not anchored to
+    ``gh pr create`` — the marker's ``_extract_pr_url`` takes the first
+    URL-shaped token it finds, which may be a quoted/listed URL). It never
+    arms the idempotency gate — ``delivery_done`` remains the sentinel-only
+    field — and it is never used as a delivery or cost gate.
+    """
+    if not isinstance(markers, dict):
+        return []
+    entries: list[dict[str, Any]] = []
+    for attempt_key in sorted(k for k in markers if isinstance(k, str)):
+        marker = markers[attempt_key]
+        if not isinstance(marker, dict) or marker.get("deadline_triage") is not True:
+            continue
+        raw_output = str(marker.get("raw_output") or "")
+        log_tail = str(marker.get("sandbox_log_tail") or "")
+        payload_attempt_key = marker.get("attempt_key")
+        entries.append(
+            {
+                "node_id": marker.get("node_id"),
+                # The payload's value wins (see the docstring): the row key is
+                # storage identity, and for a cancellation-triage marker it is
+                # deliberately not the attempt key.
+                "attempt_key": payload_attempt_key if isinstance(payload_attempt_key, str) else attempt_key,
+                "no_output_reason": marker.get("no_output_reason"),
+                "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
+                "raw_output_head": raw_output[:_TRIAGE_RAW_OUTPUT_HEAD_CHARS] if raw_output else "",
+                "raw_output_tail": raw_output[-_TRIAGE_RAW_OUTPUT_TAIL_CHARS:] if raw_output else "",
+                "stdout_length": marker.get("stdout_length"),
+                "stderr_length": marker.get("stderr_length"),
+                "delivery_done": marker.get("delivery_done") is True,
+                # Heuristic, non-gating: the first PR URL observed in the
+                # retained tail — NOT proof this attempt ran `gh pr create`
+                # (a quoted/list URL matches too). Never consulted for
+                # delivery, retry, or cost decisions.
+                "pr_url": marker.get("pr_url"),
+                "run_attempt_count": run_attempt_count,
+            }
+        )
+    return entries
+
+
+def _run_attempt_count(run: Any) -> int | None:
+    """The run's ``node_attempt_count`` as an int, or ``None`` when absent."""
+    value = getattr(run, "node_attempt_count", None)
+    return value if isinstance(value, int) else None
+
+
+async def _do_get_deadline_triage(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    *,
+    run_attempt_count: int | None = None,
+) -> list[dict[str, Any]] | None:
+    """Load the run's deadline-kill triage evidence (FAR-704).
+
+    Reads the run's raw-output retention markers through the repo reader and
+    projects the ``deadline_triage``-signed ones. Best-effort like
+    ``_do_get_workspace_inputs``: a DB failure degrades to None (the run
+    response is valid without triage evidence); empty list when the run has
+    no triage markers. ``run_attempt_count`` is the caller's already-loaded
+    run value (FAR-1886 B1) — no second read, and the same value the MCP
+    detail surface passes.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+            return _deadline_triage_from_markers(markers, run_attempt_count=run_attempt_count)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "runs.deadline_triage_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
+def _select_trigger_actor(
+    run: Run,
+    account_labels: dict[uuid.UUID, str],
+    trigger_labels: dict[uuid.UUID, str],
+) -> str | None:
+    """Pick the actor label for a run from preloaded account/trigger labels.
+
+    Manual runs use the triggering account's label (email or display_name);
+    trigger-driven runs (webhook/cron/polling/agent_signal/ongoing/
+    slack_app_mention) use the owning trigger's type. Returns None when neither
+    applies. Shared by the detail path (row-by-row DB lookups) and the list
+    path (bulk-preloaded labels) so the selection logic cannot drift.
+    """
+    if run.trigger_type == "manual" and run.account_id is not None:
+        return account_labels.get(run.account_id)
+    if run.trigger_id is not None:
+        return trigger_labels.get(run.trigger_id)
+    return None
+
+
+async def _resolve_trigger_actor(session: AsyncSession, run: Run) -> str | None:
+    """Resolve a human-readable actor label for a run.
+
+    For manual runs, returns the triggering account's email (falling back to
+    display_name). For trigger-driven runs (webhook/cron/polling/agent_signal/
+    ongoing/slack_app_mention), returns the owning trigger's type as the actor
+    label. Returns None when no account or trigger can be resolved.
+    """
+    account_labels: dict[uuid.UUID, str] = {}
+    if run.trigger_type == "manual" and run.account_id is not None:
+        account_result = await session.execute(select(Account).where(Account.id == run.account_id))
+        account = account_result.scalar_one_or_none()
+        if account is not None:
+            account_labels[run.account_id] = account.email or account.display_name
+    trigger_labels: dict[uuid.UUID, str] = {}
+    if run.trigger_id is not None:
+        trigger_result = await session.execute(select(Trigger).where(Trigger.id == run.trigger_id))
+        trigger = trigger_result.scalar_one_or_none()
+        if trigger is not None:
+            trigger_labels[run.trigger_id] = trigger.trigger_type
+    return _select_trigger_actor(run, account_labels, trigger_labels)
+
+
+def _is_capacity_waiting(status: str, active_count: int, concurrency_limit: int | None) -> bool:
+    """A pending run is queued (``waiting``) at/above the org concurrency limit.
+
+    Shared by the detail path (single-run count) and the list path (bulk
+    capacity) so the admission-gate semantics cannot drift.
+    """
+    return status == "pending" and concurrency_limit is not None and active_count >= concurrency_limit
+
+
+async def _resolve_capacity(session: AsyncSession, org_id: uuid.UUID, run: Run) -> dict[str, Any]:
+    """Compute the org's active-run capacity relative to this run.
+
+    Returns ``{active_runs, concurrency_limit, waiting}`` where ``waiting`` is
+    True when this pending run is queued at/above the org's concurrency limit.
+
+    The count uses the same admission-gate semantics as dispatch
+    (``count_active_runs_for_org(include_pending=False)``): a pending run does
+    not hold capacity, and the run itself is excluded so it never reports
+    itself as consuming a slot.
+    """
+    active_count = await count_active_runs_for_org(
+        session,
+        org_id,
+        include_pending=False,
+        exclude_run_id=run.id,
+    )
+    limit = await get_org_run_concurrency_limit(session, org_id)
+    return {
+        "active_runs": active_count,
+        "concurrency_limit": limit,
+        "waiting": _is_capacity_waiting(run.status, active_count, limit),
+    }
+
+
+async def _resolve_child_runs(session: AsyncSession, run: Run) -> list[dict[str, Any]]:
+    """Resolve the direct child runs of a run (parent_run_id == run.id)."""
+    child_result = await session.execute(
+        select(Run, Pipeline.name)
+        .join(Pipeline, Run.pipeline_id == Pipeline.id)
+        .where(Run.parent_run_id == run.id)
+        .order_by(Run.created_at)
+    )
+    children = []
+    for child_run, pipeline_name in child_result.all():
+        children.append(
+            {
+                "run_id": str(child_run.id),
+                "run_number": child_run.run_number,
+                "status": child_run.status,
+                "pipeline_name": pipeline_name,
+            }
+        )
+    return children
+
+
+async def _do_get_run_observability(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run: Run,
+) -> tuple[str | None, dict[str, Any] | None, list[dict[str, Any]] | None]:
+    """Resolve trigger_actor, capacity, and child_runs for a run detail response."""
+    async with factory() as session, session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+        actor = await _resolve_trigger_actor(session, run)
+        capacity = await _resolve_capacity(session, principal.organisation_id, run)
+        child_runs = await _resolve_child_runs(session, run)
+    return actor, capacity, child_runs
+
+
+@dataclass(frozen=True)
+class _ListRunsQuery:
+    """Filter + pagination params for the runs list.
+
+    Grouped so the CRUD call stays small — the endpoint unpacks its FastAPI
+    query params into one object and hands that to ``_do_list_runs``.
+    """
+
+    pipeline_id: uuid.UUID | None = None
+    run_status: str | None = None
+    trigger_type: str | None = None
+    search: str | None = None
+    page: int = 1
+    page_size: int = 20
+    cursor: str | None = None
+    variant_group_id: uuid.UUID | None = None
+    batch_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class _ListPageContext:
+    """Bulk-preloaded labels + org capacity shared by every item on a list page."""
+
+    child_rollup: dict[uuid.UUID, tuple[Decimal, int]]
+    account_labels: dict[uuid.UUID, str]
+    trigger_labels: dict[uuid.UUID, str]
+    active_count: int
+    concurrency_limit: int | None
+    # Per-run run-level warning count, loaded via ONE awaited
+    # ``get_run_cost_breakdowns`` query (cost_breakdown is deferred) so the
+    # badge renders without N+1 and without reading the ORM attribute.
+    warnings_count: dict[uuid.UUID, int] = field(default_factory=dict)
+    # FAR-1838: per-snapshot version numbers for the page's snapshot ids,
+    # loaded via ONE ``WHERE id IN (...)`` query over the page's DISTINCT
+    # snapshot ids (``_load_snapshot_versions``). Keyed by the same
+    # ``str(snapshot_id)`` spelling the list item serialises, so the builder
+    # never touches the run→snapshot relationship (no per-row query, no N+1).
+    snapshot_versions: dict[str, int] = field(default_factory=dict)
+    # FAR-147: per-run outputs map for agent-verdict extraction. Loaded in
+    # ONE narrow projection query for the whole page (``read_run_outputs_map``,
+    # which fetches only run_id/node_id/outputs_json) — no N+1 on the list
+    # endpoint and no telemetry/marker/artifact blob columns.
+    outputs_map: dict[uuid.UUID, dict[str, Any] | None] = field(default_factory=dict)
+
+
+async def _load_account_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
+    """Bulk-load account labels (email or display_name) for a page of runs."""
+    account_ids = {run.account_id for run in runs if run.account_id is not None}
+    labels: dict[uuid.UUID, str] = {}
+    if not account_ids:
+        return labels
+    account_result = await session.execute(select(Account).where(Account.id.in_(account_ids)))
+    for account in account_result.scalars().all():
+        labels[account.id] = account.email or account.display_name
+    return labels
+
+
+async def _load_trigger_labels(session: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
+    """Bulk-load trigger-type labels for a page of runs."""
+    trigger_ids = {run.trigger_id for run in runs if run.trigger_id is not None}
+    labels: dict[uuid.UUID, str] = {}
+    if not trigger_ids:
+        return labels
+    trigger_result = await session.execute(select(Trigger).where(Trigger.id.in_(trigger_ids)))
+    for trigger in trigger_result.scalars().all():
+        labels[trigger.id] = trigger.trigger_type
+    return labels
+
+
+def _coerce_snapshot_version(raw: Any) -> int | None:
+    """FAR-490-style coercion for a snapshot version number.
+
+    A real ``int`` passes through; anything else — a ``bool`` (which would
+    serialise as the fabricated ``0``/``1``), a MagicMock stand-in, a string —
+    degrades to ``None``. Mirrors the defensive coercion the same routes apply
+    to ``snapshot_id``: a test double must never leak into the payload and a
+    500 must never be raised for a display field.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw
+
+
+async def _load_legacy_outputs(
+    session: AsyncSession,
+    runs: list[Run],
+    organisation_id: uuid.UUID,
+) -> dict[uuid.UUID, dict[str, Any] | None]:
+    """Load the per-run outputs map for a page — ONE narrow query (FAR-147).
+
+    Delegates to ``read_run_outputs_map``, which projects only
+    ``run_id`` / ``node_id`` / ``outputs_json`` for every run in the page in a
+    single statement, restricted to terminal node rows (the metadata sentinel
+    is excluded). No telemetry, marker or artifact blob is loaded.
+    """
+    return await read_run_outputs_map(
+        session,
+        run_ids=[run.id for run in runs],
+        organisation_id=organisation_id,
+    )
+
+
+async def _load_snapshot_versions(session: AsyncSession, runs: list[Run]) -> dict[str, int]:
+    """Bulk-load snapshot version numbers for a page of runs — ONE query (FAR-1838).
+
+    Returns a map keyed by ``str(snapshot_id)`` (the same spelling the list
+    item serialises) so ``_build_list_item`` can surface ``snapshot_version``
+    without touching the run→snapshot relationship — a per-row relationship
+    read would be an N+1 on the list endpoint. The single
+    ``WHERE id IN (...)`` covers the page's DISTINCT snapshot ids only; runs
+    without a snapshot (legacy / test doubles) contribute nothing and later
+    resolve to ``None``.
+    """
+    snapshot_ids: set[uuid.UUID] = set()
+    for run in runs:
+        raw_id = getattr(run, "snapshot_id", None)
+        if isinstance(raw_id, uuid.UUID):
+            snapshot_ids.add(raw_id)
+        elif isinstance(raw_id, str):
+            try:
+                snapshot_ids.add(uuid.UUID(raw_id))
+            except ValueError:
+                # A non-UUID string id (test double / corrupt row) can never
+                # resolve a version — skip it rather than 500 the list page.
+                continue
+    if not snapshot_ids:
+        return {}
+    result = await session.execute(
+        select(PipelineSnapshot.id, PipelineSnapshot.snapshot_version).where(PipelineSnapshot.id.in_(snapshot_ids))
+    )
+    versions: dict[str, int] = {}
+    for snapshot_id, version in result.all():
+        coerced = _coerce_snapshot_version(version)
+        if coerced is not None:
+            versions[str(snapshot_id)] = coerced
+    return versions
+
+
+def _str_or_none(value: Any) -> str | None:
+    """The value when it is a ``str``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """The value when it is an ``int``, else ``None`` (FAR-1862 coercion).
+
+    Guards the dispatch-state read against a test double (MagicMock /
+    SimpleNamespace) carrying a non-int where a count belongs — a raw value
+    would fail ``RunResponse``'s ``int | None`` validation.
+    """
+    return value if isinstance(value, int) else None
+
+
+def _dt_or_none(value: Any) -> datetime | None:
+    """The value when it is a ``datetime``, else ``None`` (FAR-1862 coercion)."""
+    return value if isinstance(value, datetime) else None
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """ISO-8601 string for a datetime column value, else ``None``.
+
+    A real ``datetime`` serialises; any other value (a test double standing in
+    for the column) degrades to ``None`` rather than raising or leaking.
+    """
+    dt = _dt_or_none(value)
+    return dt.isoformat() if dt is not None else None
+
+
+def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
+    """Build one runs-list item dict from a Run row + the shared page context."""
+    pipeline_name = run.pipeline.name if run.pipeline else None
+    child_cost, child_count = ctx.child_rollup.get(run.id, (_COST_ROLLUP_ZERO, 0))
+    child_cost = _quantize_cost_rollup(child_cost)
+    own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
+    error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
+    trigger_actor = _select_trigger_actor(run, ctx.account_labels, ctx.trigger_labels)
+    capacity = {
+        "active_runs": ctx.active_count,
+        "concurrency_limit": ctx.concurrency_limit,
+        "waiting": _is_capacity_waiting(run.status, ctx.active_count, ctx.concurrency_limit),
+    }
+    warnings_count = ctx.warnings_count.get(run.id, 0)
+    # FAR-147: extract legacy agent verdict from outputs_json
+    legacy_agent_verdict = _extract_legacy_agent_verdict(ctx.outputs_map.get(run.id))
+    # FAR-490: snapshot_id must be a UUID/str or None; a MagicMock (e.g. in
+    # test fakes) or any other non-UUID value must surface as None, never a 500.
+    # Mirror the FAR-228/FAR-213 defensive coercion above.
+    _raw_list_snapshot_id = getattr(run, "snapshot_id", None)
+    _list_snapshot_id = str(_raw_list_snapshot_id) if isinstance(_raw_list_snapshot_id, (uuid.UUID, str)) else None
+    # FAR-1838: the version of the snapshot this run executed (``v{n}``),
+    # pre-fetched for the whole page in ONE query (see
+    # ``_load_snapshot_versions``) so the chip never costs a per-row read.
+    # NULL exactly when ``snapshot_id`` is NULL — never a fabricated 0.
+    _snapshot_version: int | None = None
+    if _list_snapshot_id is not None:
+        _snapshot_version = _coerce_snapshot_version(ctx.snapshot_versions.get(_list_snapshot_id))
+    return {
+        "run_id": str(run.id),
+        "pipeline_id": str(run.pipeline_id),
+        "pipeline_name": pipeline_name,
+        "status": run.status,
+        "trigger_type": run.trigger_type,
+        # FAR-1141 / ADR-042: run-level execution origin — 'dispatched' when
+        # the run's graph contains at least one dispatch node, NULL for
+        # executed-by-Modulo / pre-column runs. The value composes the shared
+        # serializer (FAR-1565) so this surface can never hand-roll its own copy.
+        **run_provenance_fields(run),
+        "run_number": run.run_number,
+        # FAR-490: snapshot the run executes (None only for legacy/pre-FK rows)
+        # so run→snapshot verification is one GET, not pagination archaeology.
+        "snapshot_id": _list_snapshot_id,
+        "snapshot_version": _snapshot_version,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "error_code": error_code,
+        "error_detail": error_detail,
+        "total_cost_usd": run.total_cost_usd,
+        "child_runs_cost_usd": child_cost,
+        "child_runs_count": child_count,
+        "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
+        "account_id": str(run.account_id) if run.account_id else None,
+        "input_payload": _mask_output_value(run.input_payload) if run.input_payload else None,
+        "trigger_actor": trigger_actor,
+        "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
+        # FAR-1862: the dispatch-state columns the reconciler's recovery
+        # decisions are computed from. Exposed additively (they are operational
+        # state, not credentials) so a stranded run is diagnosable from the
+        # product instead of requiring DB access — the 2026-10-16 incident had
+        # two runs sitting ``pending`` for 22h with no read surface exposing
+        # WHY. Read defensively (a test double may omit them); a non-datetime
+        # timestamp value degrades to None rather than leaking a MagicMock.
+        "dispatcher": _str_or_none(getattr(run, "dispatcher", None)),
+        "dispatched_at": _iso_or_none(getattr(run, "dispatched_at", None)),
+        "dispatch_phase": _str_or_none(getattr(run, "dispatch_phase", None)),
+        "claim_count": _int_or_none(getattr(run, "claim_count", None)),
+        "enqueue_failed_at": _iso_or_none(getattr(run, "enqueue_failed_at", None)),
+        "capacity": capacity,
+        "warnings_count": warnings_count,
+        # FAR-147: legacy agent verdict (read-only, does not affect work_intact)
+        "legacy_agent_verdict": legacy_agent_verdict,
+    }
+
+
+async def _do_list_runs(
+    factory: async_sessionmaker[AsyncSession],
+    user: TenantPrincipal,
+    query: _ListRunsQuery,
+) -> dict[str, Any]:
+    async with factory() as session, session.begin():
+        await set_rls_org(session, user.organisation_id)
+        await set_rls_user_context(session, user.account_id, user.org_role)
+        result = await db_list_runs(
+            session,
+            organisation_id=user.organisation_id,
+            pipeline_id=query.pipeline_id,
+            status=query.run_status,
+            trigger_type=query.trigger_type,
+            search=query.search,
+            page=query.page,
+            page_size=query.page_size,
+            cursor=query.cursor,
+            variant_group_id=query.variant_group_id,
+            batch_id=query.batch_id,
+            account_id=user.account_id if user.org_role == "viewer" else None,
+        )
+        # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
+        # in Python — never a per-row aggregate (avoids N+1).
+        run_ids = [run.id for run in result.items]
+        child_rollup: dict[uuid.UUID, tuple[Decimal, int]] = {}
+        if run_ids:
+            child_rollup = await get_child_run_rollup(session, run_ids)
+
+        # Run-level warning count: ONE awaited load of the deferred
+        # ``cost_breakdown`` for the whole page, then derive the count in
+        # Python — never a per-row load (avoids N+1) and never a plain
+        # attribute read (a deferred column raises MissingGreenlet under
+        # asyncio even while the session is open).
+        warnings_count: dict[uuid.UUID, int] = {}
+        if run_ids:
+            breakdowns = await get_run_cost_breakdowns(session, run_ids)
+            warnings_count = {
+                uuid.UUID(str(run_id)): compute_run_warnings_count(breakdown)
+                for run_id, breakdown in breakdowns.items()
+            }
+
+        # FAR-1838: snapshot version numbers for the whole page, loaded via ONE
+        # ``WHERE id IN (...)`` over the page's DISTINCT snapshot ids — never a
+        # per-row snapshot read (avoids N+1 on the list endpoint).
+        snapshot_versions = await _load_snapshot_versions(session, result.items)
+
+        # FAR-147: load outputs_json for all runs in the page in bulk to extract
+        # legacy agent verdicts without N+1.
+        outputs_map = await _load_legacy_outputs(session, result.items, user.organisation_id)
+
+        # Active-run observability (FAR-307). Capacity is computed ONCE per
+        # request (one active-count query + one limit read) and reused for
+        # every item; `waiting` is derived per item from its own status. The
+        # count uses admission-gate semantics (pending runs do not hold
+        # capacity), matching dispatch, so queued pending runs are never shown
+        # as waiting on account of other pending runs.
+        account_labels = await _load_account_labels(session, result.items)
+        trigger_labels = await _load_trigger_labels(session, result.items)
+        active_count = await count_active_runs_for_org(session, user.organisation_id, include_pending=False)
+        concurrency_limit = await get_org_run_concurrency_limit(session, user.organisation_id)
+        ctx = _ListPageContext(
+            child_rollup=child_rollup,
+            account_labels=account_labels,
+            trigger_labels=trigger_labels,
+            active_count=active_count,
+            concurrency_limit=concurrency_limit,
+            warnings_count=warnings_count,
+            snapshot_versions=snapshot_versions,
+            outputs_map=outputs_map,
+        )
+        items = [_build_list_item(run, ctx) for run in result.items]
+    return {
+        "items": items,
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "next_cursor": result.next_cursor,
+        "has_more": result.has_more,
+    }
+
+
+@router.get("")
+@handle_db_errors("runs.list_runs_endpoint")
+async def list_runs_endpoint(
+    pipeline_id: uuid.UUID | None = Query(None),
+    run_status: str | None = Query(None, alias="status"),
+    trigger_type: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=256, description="Cursor from previous response"),
+    variant_group_id: uuid.UUID | None = Query(None),
+    batch_id: uuid.UUID | None = Query(None),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    user: TenantPrincipal = require_permission(_CODE_RUN_LIST),
+) -> dict[str, Any]:
+    try:
+        query = _ListRunsQuery(
+            pipeline_id=pipeline_id,
+            run_status=run_status,
+            trigger_type=trigger_type,
+            search=search,
+            page=page,
+            page_size=page_size,
+            cursor=cursor,
+            variant_group_id=variant_group_id,
+            batch_id=batch_id,
+        )
+        return await _run_with_retry(lambda: _do_list_runs(factory, user, query))
+    except ValueError:
+        # Malformed cursor (CursorPaginator.decode_cursor raises ValueError) —
+        # only mappable to 422 when a cursor was actually supplied; a
+        # non-cursor ValueError must not be mis-mapped to a client error.
+        if cursor is None:
+            raise
+        _log.warning("runs.list_runs_endpoint: invalid cursor")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid cursor value",
+        ) from None
+    except IntegrityError:
+        _log.exception("runs.list_runs_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception("route.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.list_runs_endpoint")
+        _log.exception(_CODE_ROUTE_DB_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("runs_list.unexpected_error", extra={"type": type(exc).__name__})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+
+# Union serialization bounds (PR B, plan §6.1): the per-node node_token_usage
+# summary is truncated to the NEWEST N nodes on RunResponse, beyond which a
+# node_count aggregate is emitted; the full union stays on the run row.
+_NODE_TOKEN_USAGE_MAX_NODES = 200
+# Union display clamp — a hostile model_cost_raw_usd cannot reach the UI/money
+# formatter through the union surface; the raw value stays in the stored union
+# for audit. Same clamp value as the breakdown's RAW_REPORTED_DISPLAY_CLAMP.
+_UNION_DISPLAY_CLAMP = Decimal("1000000.0")
+
+
+def _clamped_union_node_cost(node: dict[str, Any]) -> dict[str, Any]:
+    """Copy *node*, magnitude-clamping its ``model_cost_raw_usd`` for display.
+
+    An absent (``None``) or unparseable raw value is preserved verbatim; a
+    parseable value is clamped to ``_UNION_DISPLAY_CLAMP`` unless it is finite
+    and already within the bound. The input ``node`` is never mutated.
+    """
+    entry = dict(node)
+    raw = entry.get("model_cost_raw_usd")
+    if raw is None:
+        return entry
+    try:
+        d = Decimal(str(raw))
+    except (TypeError, ValueError, ArithmeticError):
+        return entry
+    entry["model_cost_raw_usd"] = (
+        float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
+    )
+    return entry
+
+
+def _clamp_node_token_usage_union(ntu: dict[str, Any]) -> dict[str, Any]:
+    """Union display clamp for serialization surfaces (RunResponse + MCP).
+
+    ``model_cost_raw_usd`` in each per-node dict is magnitude-clamped at 1e6
+    for display; every other value is preserved verbatim. The stored union is
+    never mutated.
+    """
+    return {nid: _clamped_union_node_cost(node) if isinstance(node, dict) else node for nid, node in ntu.items()}
+
+
+def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | None:
+    """RunResponse serialization of ``node_token_usage``.
+
+    Applies the union display clamp then the per-node truncation bound: when
+    more than ``_NODE_TOKEN_USAGE_MAX_NODES`` nodes are present, only the
+    newest N (dict insertion order — the union appends as nodes complete) are
+    emitted and a ``node_count`` aggregate records the full size.
+
+    Non-dict / falsy stored values (corrupt JSON, a legacy non-object column
+    value) degrade to ``None`` — the union is a display-only surface and must
+    never raise into the run/variant-compare response.
+    """
+    if not ntu or not isinstance(ntu, dict):
+        return None
+    clamped = _clamp_node_token_usage_union(ntu)
+    total = len(clamped)
+    if total <= _NODE_TOKEN_USAGE_MAX_NODES:
+        return clamped
+    kept = dict(list(clamped.items())[-_NODE_TOKEN_USAGE_MAX_NODES:])
+    kept["node_count"] = total
+    return kept
+
+
+class TriggerRunRequest(BaseModel):
+    pipeline_id: uuid.UUID
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    # FAR-794 slice 2a — caller-supplied work-item refs. Provenance is
+    # ENGINE-ASSIGNED at create time (``caller`` for this channel); any wire
+    # ``source`` value is ignored, and each entry is shape-validated +
+    # canonicalised server-side (malformed entries are dropped, not rejected).
+    work_item_refs: list[dict[str, Any]] | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RunResponse(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    pipeline_id: uuid.UUID
+    run_number: int | None = None
+    pipeline_name: str | None = None
+    langgraph_thread_id: str
+    # FAR-490: the immutable snapshot this run executes. Every run-start path
+    # creates a fresh snapshot from the committed live graph, so the snapshot
+    # (fetchable via GET /pipelines/{id}/snapshots/{snapshot_id}) is the
+    # authoritative record of what the run ACTUALLY executed — expose the link
+    # so staleness investigations never have to diff the live graph instead.
+    snapshot_id: uuid.UUID | None = None
+    # FAR-1838: the version number of the snapshot this run executes (the
+    # ``v{n}`` a run surface renders next to the snapshot id). NULL exactly
+    # when ``snapshot_id`` is NULL (legacy/pre-FK runs) — never fabricated as
+    # ``0``, never the run number. Additive/nullable: existing consumers are
+    # unaffected.
+    snapshot_version: int | None = None
+    error_detail: str | None = None
+    error_code: str | None = None
+    # FAR-1233 cancellation transparency: WHY this run was cancelled (one of
+    # the closed cancel-reason vocabulary, e.g. ``user_requested`` /
+    # ``hitl_review_expired``) and WHO cancelled it (account id, or ``system``).
+    # Both NULL for runs cancelled before the columns shipped — the UI renders
+    # a neutral "reason not recorded" fallback. Additive/nullable: existing
+    # consumers are unaffected.
+    cancel_reason: str | None = None
+    cancelled_by: str | None = None
+    # FAR-706: curated known-fix entries whose raw signature matched this run's
+    # error detail (matched server-side by error_codes.match_known_fixes).
+    # Empty list when nothing matches — display-only, never gates the response.
+    known_fixes: list[dict[str, Any]] | None = None
+    total_cost_usd: Decimal | None = None
+    token_consumption: dict[str, Any] | None = None
+    trace_id: str | None = None
+    # Deep-link to the org's configured OTLP backend (Jaeger-style) for this
+    # run's trace. Only populated on the detail endpoint when the org has an
+    # otlp_endpoint configured — always None on list/trigger responses.
+    trace_url: str | None = None
+    node_token_usage: dict[str, Any] | None = None
+    # Cost breakdown — component snapshots (amounts as strings). NULL for
+    # pre-migration runs; amounts ride the breakdown serializer which owns the
+    # raw_reported display clamp. UNGATED (Free-tier orgs see their own).
+    cost_breakdown: list[dict[str, Any]] | None = None
+    # Run-level cost warnings derived from ``cost_breakdown`` (empty when none).
+    # Shape: ``{"code", "severity", "message"}``. NULL for pre-migration runs;
+    # render-only, never an input to billing.
+    warnings: list[dict[str, Any]] | None = None
+    # Child-run cost rollup. `total_cost_usd` stays own-run cost; these are
+    # derived display fields (0.000000 when no children / all NULL) that never
+    # touch the stored column.
+    child_runs_cost_usd: Decimal = Decimal(_DEFAULT_FLOAT_DISPLAY)
+    child_runs_count: int = 0
+    aggregate_cost_usd: Decimal = Decimal(_DEFAULT_FLOAT_DISPLAY)
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    # FAR-228: the stored run-outcome classification record (FAR-189) and the
+    # derived gate-fired flag. gate_fired is True when the idempotency gate
+    # suppressed a delivery retry (error_code harness.idempotency_gate), or the
+    # classification reason is email_delivered, or any raw-output marker carries
+    # delivery_done — this makes guard-A completions (error_code=None) API
+    # distinguishable from an ordinary complete run.
+    run_classification: dict[str, Any] | None = None
+    gate_fired: bool = False
+    # FAR-213 blocked-partial summary — structured record of run-termination
+    # compensation for a guardrail-blocked run (executed nodes, per-node
+    # publish status, compensation outcomes). None for non-blocked / pre-column
+    # runs.
+    blocked_partial_summary: dict[str, Any] | None = None
+    # FAR-223 item 11 — per-run guardrail interception snapshot (bound /
+    # evaluated / passed / violated / observed / errored / redacted / skipped /
+    # expected_skips / unexpected_skips). NULL when the run had no guardrails
+    # bound, or on pre-migration runs.
+    guardrail_summary: dict[str, int] | None = None
+    # FAR-2054: exhaustive per-seam guardrail coverage, typed and provenance-
+    # aware. ``enforced`` is only ever published with ADR-042 ``attested``
+    # provenance (Modulo acted); ``runtime_loop`` always reads
+    # ``not_applicable`` because Alpha does not consume a runtime tool-event
+    # stream. NULL only for runs created before the column shipped.
+    seam_coverage: list[SeamCoverageStatement] | None = None
+    # FAR-147: the agent's self-reported verdict ("failed") found in the run's
+    # node outputs, or None. Read-only exposure for dashboards and consumers;
+    # it reports what an agent claimed and makes no statement about the run's
+    # outcome. Does NOT affect work_intact or the run's official status.
+    legacy_agent_verdict: str | None = None
+    # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
+    # `capacity` are populated on every list item and on detail for active
+    # runs; `work_item_refs` and `child_runs` are populated only on detail.
+    # The trigger response surfaces `trigger_id`/`heartbeat_at` from the
+    # created run row (getattr fallbacks in `_build_run_response`).
+    trigger_type: str | None = None
+    # FAR-1141 / ADR-042: run-level execution origin — ``'dispatched'`` when
+    # the run's frozen snapshot graph contains at least one ``dispatch`` node
+    # (part of the work executed outside Modulo), ``None`` for runs Modulo
+    # executed itself and for runs recorded before this shipped. This is the
+    # claim-ready surface: without it a dispatched run reads identically to a
+    # Modulo-executed one. Additive/nullable — existing consumers are
+    # unaffected.
+    execution_origin: str | None = None
+    # FAR-1693: the unified provenance class of the run's externally-sourced
+    # data — ``reported`` for a dispatched run (the substrate's datum arrived
+    # from an external surface), ``None`` for an executed / legacy run. Engine-
+    # derived from ``execution_origin`` via ``core.provenance``; additive and
+    # always present alongside ``execution_origin``.
+    provenance: str | None = None
+    trigger_actor: str | None = None
+    trigger_id: uuid.UUID | None = None
+    heartbeat_at: datetime | None = None
+    # FAR-1862: the dispatch-state columns dispatcher_reconcile's recovery
+    # decisions are computed from — ``dispatcher`` (where the job went),
+    # ``dispatched_at`` (the per-attempt clock), ``dispatch_phase`` (how far the
+    # claim got), ``claim_count`` (attempts so far), and ``enqueue_failed_at``
+    # (the durable enqueue-failure marker). Additive/nullable; operational
+    # state, never a credential. These make a stranded run diagnosable from the
+    # product (the 2026-10-16 incident: two runs sat ``pending`` for 22h with
+    # ``error_code=None`` and no read surface exposing the reconciler's inputs).
+    dispatcher: str | None = None
+    dispatched_at: datetime | None = None
+    dispatch_phase: str | None = None
+    claim_count: int | None = None
+    enqueue_failed_at: datetime | None = None
+    work_item_refs: list[dict[str, Any]] | None = None
+    child_runs: list[dict[str, Any]] | None = None
+    capacity: dict[str, Any] | None = None
+    # Masked input payload, matching the list endpoint shape (_build_list_item).
+    # Safe to expose post-redaction: input_payload is persisted post-redaction
+    # by the guardrails module, AND re-masked defensively here via
+    # _mask_output_value so no unmasked input is ever served.
+    input_payload: dict[str, Any] | None = None
+    # FAR-802: resolved workspace input audit records (from run_node_outputs
+    # where node_id == "_mwi_audit").  Each entry carries redacted URLs and
+    # resolved/final SHAs — never credentials.  Absent when no workspace
+    # inputs were configured for this run.
+    workspace_inputs: list[dict[str, Any]] | None = None
+    # FAR-704: node-deadline / cancellation triage evidence, projected from
+    # the FAR-188 raw-output retention markers (run_node_outputs keyed by
+    # attempt_key) that carry the ``deadline_triage`` signature. Each entry
+    # carries the redacted output tail, the sandbox log tail, and the
+    # no_output_reason, so a deadline kill (error_code
+    # node_deadline_exceeded) is triageable from the run page even though no
+    # node envelope reached the Agent Return Contract columns. Empty list
+    # when the run has no such marker; None on a failed read.
+    #
+    # Round-2 minor 3: entries also carry ``pr_url`` — a PR URL observed in the
+    # retained tail (heuristic; not anchored to ``gh pr create``) and
+    # NON-GATING evidence (``delivery_done`` stays sentinel-only, so a url can
+    # never suppress a retry or license a cost).
+    #
+    # FAR-1886 B1: entries also carry ``run_attempt_count`` (the run's
+    # ``runs.node_attempt_count``, read from the run row), and every
+    # run-level terminal path — the age gate and stranded-pending backstop
+    # (``run.no_progress``), the node-deadline reaper and
+    # ``harness.worker_lost`` — now writes a synthetic run-level entry
+    # carrying the reason that path observed, so those runs are no longer
+    # indistinguishable from a silent stall. The reason is the observation,
+    # not a cause inferred from the counter.
+    deadline_triage: list[dict[str, Any]] | None = None
+
+
+async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
+    """Derive whether the FAR-228 idempotency gate fired for a run row.
+
+    True when (a) the run's error_code is ``harness.idempotency_gate`` (guard B
+    suppression), (b) the stored classification reason is ``email_delivered``,
+    or (c) any raw-output marker carries ``delivery_done is True`` (guard A /
+    success-path stamp / cancelled-retention). Never raises on non-dict columns.
+
+    FAR-583: the markers leg reads through the ``run_node_outputs`` repo
+    reader (explicit call — never a ``getattr`` on the legacy column), with
+    the empty/mismatch fallback to the legacy column. Must be called with
+    *session* inside an open transaction.
+    """
+    # The DB stores the RAW spelling for legacy rows (``idempotency_gate``) and
+    # the dotted registry code (``harness.idempotency_gate``) for new writes, so
+    # the read is routed through ``map_legacy_code`` to match both.
+    if map_legacy_code(getattr(run, "error_code", None)) == "harness.idempotency_gate":
+        return True
+    classification = getattr(run, "run_classification", None)
+    if isinstance(classification, dict) and classification.get("reason") == REASON_DELIVERED_EMAIL:
+        return True
+    markers = await read_run_markers(session, run_id=run.id, organisation_id=getattr(run, "organisation_id", None))
+    return bool(_any_marker_delivery_done(markers))
+
+
+def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
+    """Parse the persisted ``guardrail_summary_json`` for run detail (item 11).
+
+    Defensive like ``run_classification``: the JSON column could hold any JSON
+    value (or a MagicMock in tests) — a non-dict/malformed value degrades to
+    None, never a 500.
+    """
+    raw = getattr(run, "guardrail_summary_json", None)
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        return GuardrailSummary.from_mapping(raw).to_dict()
+    except (TypeError, ValueError):
+        _log.warning("runs.guardrail_summary_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+        return None
+
+
+def _seam_coverage_from_run(run: Any) -> list[SeamCoverageStatement] | None:
+    """Parse the persisted FAR-2054 ``seam_coverage_json`` for run detail.
+
+    The JSON column could hold any value (or a MagicMock in a test fake), so the
+    read goes through the typed contract: malformed data degrades to explicit
+    ``degraded``/``not_applicable`` statements, never arbitrary strings and
+    never a 500. ``None`` means the run predates the column (no claim made).
+    """
+    raw = getattr(run, "seam_coverage_json", None)
+    if raw is not None and not isinstance(raw, list):
+        _log.warning("runs.seam_coverage_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+    return parse_seam_coverage(raw)
+
+
+@dataclass(frozen=True)
+class _RunDisplayContext:
+    """Optional display enrichment for a run detail/trigger response.
+
+    Keeps ``_build_run_response`` callable with just the run row for the
+    trigger path while letting the detail path pass the resolved extras (cost
+    rollup, OTLP endpoint, observability) as a single object.
+    """
+
+    child_cost: Decimal | None = None
+    child_count: int = 0
+    otlp_endpoint: str | None = None
+    trigger_actor: str | None = None
+    trigger_id: uuid.UUID | None = None
+    heartbeat_at: datetime | None = None
+    work_item_refs: list[dict[str, Any]] | None = None
+    child_runs: list[dict[str, Any]] | None = None
+    capacity: dict[str, Any] | None = None
+
+
+def _resolve_token_consumption(run: Any) -> dict[str, Any] | None:
+    """Summarise a run's total token consumption (None when untracked)."""
+    if run.total_tokens is None:
+        return None
+    return {"total_tokens": run.total_tokens}
+
+
+def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | None, str | None]:
+    """Return ``(trace_id, trace_url)`` — the OTLP deep-link pair for a run.
+
+    ``trace_url`` is only populated when the org configures an ``otlp_endpoint``;
+    both are None when the run has no langgraph_thread_id.
+    """
+    if not run.langgraph_thread_id:
+        return None, None
+    trace_id = trace_id_for_thread(run.langgraph_thread_id)
+    if otlp_endpoint:
+        return trace_id, f"{otlp_endpoint.rstrip('/')}/jaeger/ui/trace/{trace_id}"
+    return trace_id, None
+
+
+def _attached_snapshot_version(run: Any) -> Any:
+    """The snapshot version of the snapshot object ALREADY loaded on *run* (FAR-1838).
+
+    Reads the ``snapshot`` relationship's loaded value ONLY — it never issues
+    SQL. The session factories run ``autobegin=False``, so a lazy load outside
+    a transaction raises instead of loading; the callers therefore attach the
+    snapshot they just loaded (manual trigger, rerun) or eager-load it in the
+    same transaction (run detail via ``selectinload``), and this reader
+    degrades to ``None`` for a run whose snapshot was never loaded, a
+    non-ORM test double, or a missing snapshot row. The caller coerces the
+    result through :func:`_coerce_snapshot_version`.
+    """
+    state = sa_inspect(run, raiseerr=False)
+    if not isinstance(state, InstanceState):
+        return None
+    if "snapshot" not in state.attrs:
+        return None
+    loaded = state.attrs["snapshot"].loaded_value
+    if loaded is None or loaded is LoaderCallableStatus.NO_VALUE:
+        return None
+    return getattr(loaded, "snapshot_version", None)
+
+
+def _build_run_response(
+    run: Any,
+    ctx: _RunDisplayContext | None = None,
+    *,
+    gate_fired: bool = False,
+    workspace_inputs: list[dict[str, Any]] | None = None,
+    deadline_triage: list[dict[str, Any]] | None = None,
+    outputs_json: dict[str, Any] | None = None,
+) -> RunResponse:
+    """Build a RunResponse from a Run ORM entity, populating derived fields.
+
+    *gate_fired* is derived by the caller via :func:`_run_gate_fired` (which
+    needs an open-transaction session for the FAR-583 markers read).
+    *outputs_json* is the reassembled outputs dict for the run (FAR-147), used
+    to extract the legacy agent verdict.
+    """
+    ctx = ctx or _RunDisplayContext()
+    token_consumption = _resolve_token_consumption(run)
+    trace_id, trace_url = _resolve_trace_display(run, ctx.otlp_endpoint)
+
+    # FAR-147: extract legacy agent verdict from outputs_json
+    legacy_agent_verdict = _extract_legacy_agent_verdict(outputs_json)
+
+    pipeline_name: str | None = None
+    if run.pipeline is not None:
+        pipeline_name = run.pipeline.name
+
+    child_runs_cost_usd = _quantize_cost_rollup(ctx.child_cost if ctx.child_cost is not None else _COST_ROLLUP_ZERO)
+    own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
+
+    error_code, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+
+    # FAR-706: match the curated known-fixes KB over the raw error detail.
+    # match_known_fixes is fail-safe (never raises); serialise defensively so a
+    # malformed entry can never 500 the run detail endpoint.
+    try:
+        known_fixes = [
+            {"fix_id": fix.fix_id, "title": fix.title, "body": fix.body, "link": fix.link}
+            for fix in match_known_fixes(error_detail)
+        ]
+    except Exception:
+        _log.warning("runs.known_fixes_serialise_failed", extra={"run_id": str(getattr(run, "id", ""))}, exc_info=True)
+        known_fixes = []
+
+    # FAR-228: defensive coercion — the run_classification JSON column could
+    # hold any JSON value (or a MagicMock in tests); a non-dict is surfaced as
+    # None, never a 500. gate_fired is derived in _run_gate_fired (also guarded).
+    run_classification = run.run_classification if isinstance(run.run_classification, dict) else None
+
+    # FAR-213: same defensive coercion for the blocked_partial_summary column.
+    blocked_partial_summary = run.blocked_partial_summary if isinstance(run.blocked_partial_summary, dict) else None
+
+    # FAR-490: defensive coercion — snapshot_id must be a UUID/str or None; a
+    # MagicMock (e.g. in test fakes) or any other non-UUID value must never 500
+    # the run detail endpoint.
+    _raw_snapshot_id = getattr(run, "snapshot_id", None)
+    snapshot_id = _raw_snapshot_id if isinstance(_raw_snapshot_id, (uuid.UUID, str)) else None
+
+    # FAR-1838: the version of the snapshot this run executed, read from the
+    # snapshot object ALREADY loaded on the run (the rerun/manual-trigger paths
+    # attach the snapshot they just loaded; the detail path eager-loads it in
+    # the run-load transaction) — never a second fetch, never a lazy load. NULL
+    # exactly when snapshot_id is NULL; a non-int/MagicMock never leaks.
+    snapshot_version = _coerce_snapshot_version(_attached_snapshot_version(run)) if snapshot_id is not None else None
+
+    # Masked input payload, mirroring the list shape (_build_list_item). Same
+    # defensive coercion as run_classification/snapshot_id above: a non-dict
+    # column value (or a MagicMock in test fakes) degrades to None, never a 500.
+    _raw_input_payload = getattr(run, "input_payload", None)
+    input_payload = (
+        _mask_output_value(_raw_input_payload) if isinstance(_raw_input_payload, dict) and _raw_input_payload else None
+    )
+
+    return RunResponse(
+        run_id=run.id,
+        status=run.status,
+        pipeline_id=run.pipeline_id,
+        run_number=run.run_number,
+        pipeline_name=pipeline_name,
+        langgraph_thread_id=run.langgraph_thread_id,
+        snapshot_id=snapshot_id,
+        snapshot_version=snapshot_version,
+        error_detail=error_detail,
+        error_code=error_code,
+        # FAR-1233: both columns are genuinely ``str | None`` on the row, so the
+        # value is read directly (FAR-1566 removed the MagicMock-tolerance
+        # coercion that used to sit here).
+        cancel_reason=run.cancel_reason,
+        cancelled_by=run.cancelled_by,
+        known_fixes=known_fixes,
+        total_cost_usd=run.total_cost_usd,
+        token_consumption=token_consumption,
+        trace_id=trace_id,
+        trace_url=trace_url,
+        node_token_usage=_serialize_node_token_usage(run.node_token_usage),
+        cost_breakdown=run.cost_breakdown,
+        child_runs_cost_usd=child_runs_cost_usd,
+        child_runs_count=ctx.child_count,
+        aggregate_cost_usd=_quantize_cost_rollup(own_cost + child_runs_cost_usd),
+        created_at=run.created_at,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        run_classification=run_classification,
+        gate_fired=gate_fired,
+        blocked_partial_summary=blocked_partial_summary,
+        guardrail_summary=_guardrail_summary_from_run(run),
+        seam_coverage=_seam_coverage_from_run(run),
+        trigger_actor=ctx.trigger_actor,
+        trigger_type=getattr(run, "trigger_type", None),
+        # FAR-1141 / ADR-042: run execution provenance, composed from the ONE
+        # shared serializer (FAR-1565) so this surface can never hand-roll its
+        # own copy or drift from the others.
+        **run_provenance_fields(run),
+        trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
+        heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
+        # FAR-1862: the reconciler's dispatch-state inputs, additive/nullable.
+        # Coerced defensively so a test double cannot fail response validation.
+        dispatcher=_str_or_none(getattr(run, "dispatcher", None)),
+        dispatched_at=_dt_or_none(getattr(run, "dispatched_at", None)),
+        dispatch_phase=_str_or_none(getattr(run, "dispatch_phase", None)),
+        claim_count=_int_or_none(getattr(run, "claim_count", None)),
+        enqueue_failed_at=_dt_or_none(getattr(run, "enqueue_failed_at", None)),
+        work_item_refs=ctx.work_item_refs,
+        child_runs=ctx.child_runs,
+        capacity=ctx.capacity,
+        warnings=compute_run_warnings(run.cost_breakdown),
+        input_payload=input_payload,
+        workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
+        # FAR-147: legacy agent verdict (read-only, does not affect work_intact)
+        legacy_agent_verdict=legacy_agent_verdict,
+    )
+
+
+def _find_entry_candidates(graph_json: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the graph's entry nodes (those with no incoming edge).
+
+    Raises 422 when the graph is empty or has no entry node (a cycle
+    references every node as a target).
+    """
+    nodes = graph_json.get("nodes", [])
+    if not nodes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pipeline graph has no nodes",
+        )
+
+    target_ids: set[str] = set()
+    for edge in graph_json.get("edges", []):
+        target_id = edge.get("target_node_id")
+        if target_id is None:
+            target_id = edge.get("target")
+        if target_id is not None:
+            target_ids.add(str(target_id))
+    entry_candidates = [n for n in nodes if str(n.get("id")) not in target_ids]
+    if not entry_candidates:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Pipeline graph has no entry node (cycle detected)",
+        )
+    return entry_candidates
+
+
+async def _require_valid_entry_agent(session: AsyncSession, entry_node: dict[str, Any]) -> None:
+    """Raise 422 when the entry node's agent id is invalid or the agent is missing."""
+    agent_id_str = entry_node.get("agent_id")
+    if agent_id_str is None:
+        return
+    agent_result = await session.execute(select(Agent).where(Agent.id == uuid.UUID(str(agent_id_str))))
+    agent = agent_result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Entry agent {agent_id_str} not found",
+        )
+
+
+async def _validate_run_input_basics(
+    session: AsyncSession,
+    graph_json: dict[str, Any],
+    _snapshot: PipelineSnapshot,
+    input_payload: dict[str, Any],
+) -> None:
+    """Basic pre-run input health checks (not full schema validation).
+
+    Verifies the entry node exists, its agent is valid, and input is a dict.
+    Full schema-definition validation is delegated to graph_validator at
+    run time after snapshot creation.
+    """
+    entry_candidates = _find_entry_candidates(graph_json)
+    entry_node = entry_candidates[0]
+    if entry_node.get("agent_id") is None:
+        return
+    await _require_valid_entry_agent(session, entry_node)
+
+    if not isinstance(input_payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Input payload must be a JSON object",
+        )
+
+
+async def _enforce_trigger_rate_limit(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    input_payload: dict[str, Any],
+) -> str | None:
+    """Enforce the pipeline's max-triggers rate limit; returns the limit key.
+
+    Returns None when no rate limit is configured. Raises 429 when the window
+    is exhausted — the caller must not create the run.
+    """
+    rl = pipeline.rate_limit_config
+    if not rl or not rl.get("max_triggers"):
+        return None
+    key = TriggerEngine._compute_rate_limit_key(input_payload, rl)
+    recent_count = await TriggerEngine._count_recent_rate_limited(
+        session, pipeline.id, key, int(rl.get("window_seconds", 3600))
+    )
+    if recent_count >= int(rl["max_triggers"]):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: {rl['max_triggers']} triggers per {rl.get('window_seconds', 3600)}s",
+        )
+    return key
+
+
+def pipeline_not_runnable_http(exc: PipelineNotRunnableError) -> HTTPException:
+    """Map the ``create_run`` pipeline-state gate refusal to its HTTP response (FAR-1528).
+
+    Shared by every REST route that can reach ``create_run`` (manual trigger,
+    rerun, test trigger, webhook, replay, slack, variant runs, correction) so
+    the refusal reads identically everywhere instead of a route-local 500.
+    Always 409 Conflict: the pipeline exists but may not run (archived /
+    deleted today, Paused when FAR-1530 lands). A pipeline that does not
+    exist is refused upstream by the route's own 404 entry filter, never here.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+    )
+
+
+async def _create_manual_run(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    req: TriggerRunRequest,
+) -> Run:
+    """Create a manually-triggered run: snapshot, validate, rate-limit, insert.
+
+    Runs inside the caller's transaction (RLS already set). Order matters —
+    snapshot creation and input validation happen before the rate-limit check
+    so a rejected trigger never leaves a dangling snapshot.
+    """
+    pipeline = await get_pipeline(session, req.pipeline_id, organisation_id=principal.organisation_id)
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline {req.pipeline_id} not found")
+    snapshot = await create_snapshot_from_live_graph(
+        session,
+        pipeline_id=pipeline.id,
+        account_id=principal.account_id,
+    )
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {req.pipeline_id} not found",
+        )
+    await _validate_run_input_basics(session, snapshot.graph_json, snapshot, req.input_payload)
+    rate_limit_key = await _enforce_trigger_rate_limit(session, pipeline, req.input_payload)
+    run = await create_run(
+        session,
+        org_id=principal.organisation_id,
+        pipeline_id=pipeline.id,
+        snapshot_id=snapshot.id,
+        trigger_type="manual",
+        input_payload=req.input_payload,
+        rate_limit_key=rate_limit_key,
+        # FAR-794 slice 2a: caller-supplied refs; provenance is engine-assigned
+        # (caller) inside create_run — the wire source is never trusted.
+        work_item_refs=req.work_item_refs,
+        # FAR-620 run attribution: the CALLER's account (the account of the
+        # authenticating credential, NOT the human operator behind it). This
+        # enables the reject→correction guardrail dispatch for manually
+        # triggered runs and closes the MCP/REST stamping asymmetry.
+        account_id=principal.account_id,
+    )
+    # Attach the already-loaded pipeline so _build_run_response can read
+    # run.pipeline.name without a lazy load. Otherwise the relationship is
+    # lazy-loaded after the transaction has committed, which raises
+    # "Autobegin is disabled" on sessions configured with autobegin=False
+    # (e.g. the integration-test session) and turns POST /api/v1/runs into a
+    # 500 even though the run was created successfully.
+    run.pipeline = pipeline
+    # FAR-1838: same attach pattern for the snapshot just created, so
+    # _build_run_response can surface snapshot_version without a second fetch.
+    run.snapshot = snapshot
+    return run
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        429: {"description": "Too Many Requests"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+    dependencies=[Depends(audited("run_triggered", "run", principal_dep=get_current_tenant_user_or_api_key))],
+)
+async def trigger_run(
+    req: TriggerRunRequest,
+    session: AsyncSession = Depends(get_db_session),
+    _engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_trigger_run_team_scope),
+) -> RunResponse:
+    """Manually trigger a pipeline run.
+
+    Returns 202 immediately; execution happens in a background task.
+    The run status can be polled via GET /api/v1/runs/{run_id}.
+
+    Team-private pipelines (visibility='team') are gated: only members of the
+    owning team (or org admins) may trigger them.  Org-visible pipelines remain
+    open to any org member with the ``run.trigger`` role floor.
+    """
+    org_id = principal.organisation_id
+
+    run_response: RunResponse | None = None
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            run = await _create_manual_run(session, principal, req)
+            run_id = run.id
+            # Build the response while the transaction is still open: the
+            # run.pipeline relationship is lazy-loaded, and the session has
+            # autobegin disabled, so a load outside a transaction would raise.
+            # gate_fired reads through the run_node_outputs repo reader in the
+            # SAME transaction (FAR-583).
+            run_response = _build_run_response(run, gate_fired=await _run_gate_fired(session, run))
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except RateLimitConflictError as exc:
+        _log.warning("runs.trigger_run rate_limit_conflict: %s", exc.rate_limit_key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded for this pipeline",
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.trigger_run")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except OrgDeletedError as exc:
+        _log.exception(_CODE_RUNS_TRIGGER_RUN)
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline refused at the create_run
+        # choke point — 409 Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_run pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
+        # the delivery carried none. 422 (not 500): a client-fixable input
+        # validation failure.
+        _log.info("runs.trigger_run work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but none were supplied",
+        ) from None
+
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1625: a per-pipeline snapshot lock's bounded wait was exhausted
+        # under concurrent triggers. That is CONTENTION, not an unexpected fault
+        # — a truthful, retryable 503 (matching the webhook and MCP trigger
+        # paths), so a lost race can be retried rather than surfacing as a
+        # generic 500. Both bounded waits on the snapshot path report here: the
+        # graph-copy advisory lock's acquisition budget and the allocation row
+        # lock's transaction-scoped lock_timeout.
+        _log.warning("runs.trigger_run snapshot_lock_busy: %s", exc)
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_RUNS_TRIGGER_RUN,
+            detail="snapshot lock unavailable; retry the trigger",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Pipeline snapshot lock unavailable - retry the trigger",
+        ) from None
+
+    except StorageExhaustedError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    await dispatch_run(str(run_id), str(org_id), queue="runs")
+
+    return run_response
+
+
+# ---------------------------------------------------------------------------
+# Rerun (FAR-788): re-execute a terminal run against its pinned snapshot
+# ---------------------------------------------------------------------------
+
+
+async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, source_run: Run) -> Run:
+    """Create a rerun of a terminal run: same snapshot, copied input payload.
+
+    Runs inside the caller's transaction (RLS already set). The rerun is
+    pinned to the SOURCE run's ``snapshot_id`` — no fresh snapshot is created —
+    so it executes exactly what the source run executed, not whatever the live
+    graph says today. The input payload is copied server-side from the source
+    row (the request body carries no payload, so callers cannot smuggle a
+    different one in). Lineage: ``trigger_type='rerun'`` and
+    ``parent_run_id=<source run id>``.
+
+    Rate-limit bypass (deliberate): the source run already consumed a trigger
+    slot when it was originally created; a rerun is operator-initiated
+    recovery/re-execution, not a new trigger, so the pipeline's
+    ``max_triggers`` rate limit must not block it.
+    """
+    if source_run.status not in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Run is not in a terminal status: {source_run.status} - only completed or failed runs can be re-run"
+            ),
+        )
+
+    # Defence-in-depth: the column is NOT NULL, but a defensive 409 beats a
+    # 500 for legacy/pre-migration rows that somehow lack the pin.
+    if source_run.snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source run has no snapshot to re-execute",
+        )
+
+    pipeline = await get_pipeline(session, source_run.pipeline_id, organisation_id=principal.organisation_id)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {source_run.pipeline_id} not found",
+        )
+
+    snapshot_result = await session.execute(
+        select(PipelineSnapshot).where(PipelineSnapshot.id == source_run.snapshot_id)
+    )
+    snapshot = snapshot_result.scalar_one_or_none()
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Source run's snapshot is missing",
+        )
+
+    # Server-side payload copy: a rerun always re-sends exactly what the
+    # source run received. deepcopy so the new run's payload never aliases the
+    # ORM instance's loaded dict.
+    copied_payload = deepcopy(source_run.input_payload) if isinstance(source_run.input_payload, dict) else {}
+
+    await _validate_run_input_basics(session, snapshot.graph_json, snapshot, copied_payload)
+
+    run = await create_run(
+        session,
+        org_id=principal.organisation_id,
+        pipeline_id=pipeline.id,
+        snapshot_id=source_run.snapshot_id,
+        trigger_type="rerun",
+        input_payload=copied_payload,
+        # FAR-620 attribution: the rerun belongs to the CALLER's account.
+        account_id=principal.account_id,
+        parent_run_id=source_run.id,
+        # No rate_limit_key — the rerun bypasses the pipeline trigger rate
+        # limit (see docstring). No trigger_id — operator-initiated, not
+        # trigger-initiated, so the org pause gate treats it as exempt.
+    )
+    # Attach the already-loaded pipeline so _build_run_response can read
+    # run.pipeline.name without a lazy load (same autobegin rationale as the
+    # manual trigger path).
+    run.pipeline = pipeline
+    # FAR-1838: the source snapshot is already in hand from the validation
+    # read above — attach it so the response carries snapshot_version without
+    # re-querying the same row (a run whose snapshot is loaded must never be
+    # fetched twice).
+    run.snapshot = snapshot
+    return run
+
+
+@router.post(
+    "/{run_id}/rerun",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not Found"},
+        409: {"description": "Conflict"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+    dependencies=[Depends(audited("run_rerun_triggered", "run", principal_dep=get_current_tenant_user_or_api_key))],
+)
+async def trigger_rerun(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    _engine: AsyncEngine = Depends(_get_engine),
+    principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+) -> RunResponse:
+    """Re-execute a terminal run against its original snapshot.
+
+    Returns 202 immediately; execution happens in a background task. The new
+    run carries ``trigger_type='rerun'``, ``parent_run_id=<source run id>``,
+    the source run's ``snapshot_id`` and a server-side copy of its input
+    payload. Only runs in a terminal status can be re-run (409 otherwise).
+    """
+    org_id = principal.organisation_id
+
+    run_response: RunResponse | None = None
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            source_run = await get_run(session, run_id, organisation_id=org_id)
+            if source_run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            run = await _create_rerun_run(session, principal, source_run)
+            run_id_new = run.id
+            # Build the response while the transaction is still open (same
+            # autobegin rationale as the manual trigger path); gate_fired
+            # reads through the run_node_outputs repo reader in the SAME
+            # transaction (FAR-583).
+            run_response = _build_run_response(run, gate_fired=await _run_gate_fired(session, run))
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.trigger_rerun")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except OrgDeletedError as exc:
+        _log.exception(_CODE_RUNS_TRIGGER_RERUN)
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
+        ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a rerun of a run whose pipeline has since been archived or
+        # soft-deleted is refused at the create_run choke point — 409
+        # Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_rerun pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
+
+    except WorkItemRefsRequiredError as exc:
+        # FAR-794 slice 2a: the rerun copied the source payload server-side and
+        # the merged ref set is empty while the pipeline requires refs. 422:
+        # the operator must supply refs via a fresh trigger (a rerun carries no
+        # request body to fix them with).
+        _log.info("runs.trigger_rerun work_item_refs_required pipeline=%s", exc.pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="This pipeline requires work_item_refs but the source run carried none",
+        ) from None
+
+    except StorageExhaustedError:
+        raise
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    await dispatch_run(str(run_id_new), str(org_id), queue="runs")
+
+    return run_response
+
+
+# ---------------------------------------------------------------------------
+# Run stats / analytics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/stats")
+@handle_db_errors("runs.get_run_stats_endpoint")
+async def get_run_stats_endpoint(
+    period: str = Query(default="30d", pattern=r"^(7d|30d|90d)$"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_LIST),
+) -> dict[str, Any]:
+    """Aggregated run stats for a period (7d|30d|90d)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            account_id = principal.account_id if principal.org_role == "viewer" else None
+            return await get_run_stats(session, period, account_id=account_id)
+    except ProgrammingError:
+        _log.exception("runs.get_run_stats_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_stats_endpoint")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+
+@router.get("/stats/heatmap")
+@handle_db_errors("runs.get_run_heatmap_endpoint")
+async def get_run_heatmap_endpoint(
+    year: int = Query(default=2026, ge=2020, le=2100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_LIST),
+) -> list[dict[str, Any]]:
+    """Run counts per day for the given year (calendar heatmap)."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            account_id = principal.account_id if principal.org_role == "viewer" else None
+            return await get_run_heatmap(session, year, account_id=account_id)
+    except ProgrammingError:
+        _log.exception("runs.get_run_heatmap_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_heatmap_endpoint")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+
+@router.get("/{run_id}")
+async def get_run_status(
+    run_id: uuid.UUID,
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
+) -> RunResponse:
+    try:
+        # qa M15: run + gate_fired derive in ONE transaction (the removed
+        # second-txn helper re-opened a session and re-SELECTed the run).
+        run, gate_fired = await _run_with_retry(lambda: _do_get_run_with_gate(factory, principal, run_id))
+        child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
+        otlp_endpoint = await _do_get_otel_endpoint(factory, principal.organisation_id)
+        trigger_actor, capacity, child_runs = await _run_with_retry(
+            lambda: _do_get_run_observability(factory, principal, run)
+        )
+        workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
+        deadline_triage = await _run_with_retry(
+            lambda: _do_get_deadline_triage(
+                factory,
+                principal,
+                run_id,
+                # FAR-1886 B1: the attempt counter is data on the triage
+                # envelope; take it from the run row already loaded above so
+                # the REST and MCP detail surfaces cannot diverge.
+                run_attempt_count=_run_attempt_count(run),
+            )
+        )
+        # FAR-147: load outputs_json for legacy agent verdict extraction
+        outputs_json = await _run_with_retry(lambda: _do_get_run_outputs(factory, principal, run_id))
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_STATUS)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except RunNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_RUN_NOT_FOUND,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    return _build_run_response(
+        run,
+        _RunDisplayContext(
+            child_cost=child_cost,
+            child_count=child_count,
+            otlp_endpoint=otlp_endpoint,
+            trigger_actor=trigger_actor,
+            heartbeat_at=run.heartbeat_at,
+            work_item_refs=run.work_item_refs,
+            child_runs=child_runs,
+            capacity=capacity,
+        ),
+        gate_fired=gate_fired,
+        workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
+        outputs_json=outputs_json,
+    )
+
+
+async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id: uuid.UUID) -> None:
+    """Request cancellation for a run, finalizing cost for non-paused runs.
+
+    Runs inside the caller's transaction (RLS already set). PAUSED-then-
+    cancelled class (awaiting_human/claimed/hitl_parked) runs NO finalize (§4.2).
+    A STREAMED running run cancelled cross-process is routed through
+    finalize_cancelled_run, re-reading the STORED cumulative sets; a
+    NEVER-PAUSED in-flight run has none on THIS request path, so it records
+    the normal ``cost_components.cancel_salvage_deferred`` diagnostic here —
+    but its docket is NOT forfeited: after the executor settles (it observes
+    the cancellation on its next heartbeat),
+    ``pipeline_execution._salvage_cancelled_run_cost`` reads the executor's
+    persisted attempt marker and attributes marker-provable spend (FAR-1914
+    C2).
+
+    FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
+    FIRST lock in the caller's transaction is ``request_cancellation``'s
+    ``SELECT ... FOR UPDATE`` below (``get_run`` is a plain read). The bound is
+    issued HERE — the caller of the shared ``request_cancellation`` — before
+    that lock, so a contended row surfaces as a bounded 55P03 the route maps to
+    a visible 409 rather than an unbounded wait. It is transaction-scoped, so
+    it also bounds the ``finalize_cancelled_run`` write that follows. (Bounding
+    inside the shared CRUD function instead would let a broad ``except
+    Exception`` caller swallow the 55P03 into a silent lost write — FAR-1601.)
+    """
+    await set_mutation_row_lock_timeout(session)
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+    if run.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run is already in terminal status: {run.status}",
+        )
+
+    # qa F10: ``hitl_parked`` is the parked class too — a parked run's gate
+    # decisions were never finalize-eligible (it is the awaiting_human state
+    # after expiry), so cancelling it must NOT run finalize_cost (the run
+    # holds no accrued-spend accounting the cancel path owns).
+    was_paused = run.status in ("awaiting_human", "claimed", "hitl_parked")
+    # FAR-1233: record WHY (an operator asked) and WHO (the acting account)
+    # in the same write that flips the run cancelled.
+    await request_cancellation(
+        session,
+        run_id,
+        reason=CANCEL_REASON_USER_REQUESTED,
+        actor=str(principal.account_id),
+    )
+    if not was_paused:
+        from farna.core.cost_controller.finalize import finalize_cancelled_run
+
+        await finalize_cancelled_run(session, run_id=run_id, org_id=principal.organisation_id)
+
+
+@router.post(
+    "/{run_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(audited("run_cancelled", "run", principal_dep=get_current_tenant_user))],
+)
+async def cancel_run(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("run.cancel"),
+) -> dict[str, str]:
+    """Request cancellation of a run.
+
+    Returns 202 immediately. The run may transition to cancelled asynchronously.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await _cancel_run(session, principal, run_id)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1610: the transaction-scoped bound
+            # (``mutation_row_lock_timeout_ms``) on the hot ``runs`` row — taken
+            # first by ``request_cancellation``'s ``SELECT ... FOR UPDATE`` and
+            # also bounding ``finalize_cancelled_run``'s write (FAR-1642) —
+            # expired (55P03). The DB is healthy and another change holds the
+            # row, so answer 409, never the retry-inviting 503 the rest of this
+            # arm returns (mirrors api.db_error_handling /
+            # product_analytics_identity).
+            _log.warning("runs.cancel_run.lock_timeout")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Timed out waiting for a lock while cancelling this run; another change is in progress. "
+                    "Re-issue the cancel once the other change completes."
+                ),
+            ) from None
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    return {"status": "accepted"}
+
+
+# ---------------------------------------------------------------------------
+# Run IO inspection
+# ---------------------------------------------------------------------------
+
+
+class RunIOResponse(BaseModel):
+    run_id: uuid.UUID
+    run_number: int | None = None
+    status: str
+    input_payload: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    node_telemetry: dict[str, Any] | None = None
+    fixture_map: dict[str, str] | None = None
+    #: node_id -> human label from the snapshot graph (frontend UUID hygiene).
+    node_labels: dict[str, str] = Field(default_factory=dict)
+    #: FAR-870: true total character length of all stdout across all nodes
+    #: (pre-truncation). Derived from per-node ``stdout_length`` in telemetry
+    #: when present (sandbox nodes store the true length here even when the
+    #: inline ``agent_stdout`` is capped); falls back to ``len(agent_stdout)``
+    #: for nodes without telemetry.
+    stdout_total_length: int = 0
+    #: FAR-870: true total character length of all stderr across all nodes
+    #: (pre-truncation). Derived analogously from ``stderr_length`` / ``agent_stderr``.
+    stderr_total_length: int = 0
+
+    def build_fixture_map(self) -> dict[str, str]:
+        return _build_fixture_map(self.input_payload, self.outputs_json)
+
+
+def _is_per_node_output_shape(resolved_out: Any) -> bool:
+    """True when outputs are structured per-node (each value has ``input``/``output``)."""
+    return isinstance(resolved_out, dict) and any(
+        isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values()
+    )
+
+
+def _build_per_node_fixture(resolved_out: dict[str, Any], inp: dict[str, Any]) -> dict[str, str]:
+    """Build a fixture_map entry per node from per-node ``{input, output}`` records."""
+    fixture: dict[str, str] = {}
+    for node_io in resolved_out.values():
+        if isinstance(node_io, dict):
+            node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
+            node_output = node_io.get("output", "")
+            key = " ".join(str(node_input).split())
+            fixture[key] = str(node_output)
+    return fixture
+
+
+def _build_fixture_map(
+    input_payload: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+) -> dict[str, str]:
+    """Generate a StubModelBackend fixture_map from run IO.
+
+    If outputs_json is structured per-node (each value a dict with
+    ``input`` and ``output`` keys), each node's mapping becomes a
+    fixture_map entry.  Otherwise a single entry maps the full
+    input_payload to the serialised outputs.
+    """
+    fixture: dict[str, str] = {}
+    inp = input_payload or {}
+    out = outputs_json or {}
+
+    # Resolve every per-node value through the pure-return accessor. The
+    # accessor preserves arbitrary producer keys, including ``input`` and
+    # ``output`` when those names are part of the contract.
+    resolved_out: Any = out
+    if isinstance(out, dict):
+        resolved_out = {node_id: node_return(out, None, node_id) for node_id in out}
+
+    if _is_per_node_output_shape(resolved_out):
+        return _build_per_node_fixture(resolved_out, inp)
+    key = " ".join(str(inp).split())
+    fixture[key] = str(resolved_out)
+
+    return fixture
+
+
+async def _load_snapshot_for_run(session: AsyncSession, run: Run | None) -> PipelineSnapshot | None:
+    """Load the pipeline snapshot a run references (None when run/snapshot is absent)."""
+    if run is None or not run.snapshot_id:
+        return None
+    from farna.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
+
+    snap_result = await session.execute(select(SnapModel).where(SnapModel.id == run.snapshot_id))
+    return snap_result.scalar_one_or_none()
+
+
+def _build_node_labels(graph_json: dict[str, Any] | None) -> dict[str, str]:
+    """Map node_id -> human label from a snapshot graph (frontend UUID hygiene)."""
+    labels: dict[str, str] = {}
+    if not isinstance(graph_json, dict):
+        return labels
+    for n in graph_json.get("nodes", []):
+        if isinstance(n, dict) and n.get("id"):
+            labels[str(n["id"])] = str(n.get("label") or n.get("node_type") or n.get("id"))
+    return labels
+
+
+def _normalize_run_outputs(
+    outputs_json: dict[str, Any] | None,
+    _telemetry_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the stored pure node returns without interpreting their contents."""
+    return outputs_json
+
+
+def _normalize_node_telemetry(
+    telemetry_json: dict[str, Any] | None,
+    _outputs_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the stored per-node telemetry mappings without deriving values."""
+    return telemetry_json
+
+
+class FixtureExportResponse(BaseModel):
+    fixture_name: str
+    run_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    status: str
+    snapshot_graph_json: dict[str, Any] = Field(default_factory=dict)
+    input_payload: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    fixture_map: dict[str, str]
+
+
+def _telemetry_log_lengths(tele: dict[str, Any]) -> tuple[int, int]:
+    """``(stdout, stderr)`` character lengths from one node's telemetry dict.
+
+    Prefers the stored ``stdout_length`` / ``stderr_length`` (always the
+    pre-truncation count) and falls back to ``len(str(...))`` of the inline
+    content when the length key is absent but the inline key is present.
+    """
+    stdout_len = tele.get("stdout_length")
+    stderr_len = tele.get("stderr_length")
+    stdout_total = 0
+    stderr_total = 0
+    if stdout_len is not None:
+        stdout_total += int(stdout_len or 0)
+    elif "agent_stdout" in tele:
+        stdout_total += len(str(tele["agent_stdout"] or ""))
+    if stderr_len is not None:
+        stderr_total += int(stderr_len or 0)
+    elif "agent_stderr" in tele:
+        stderr_total += len(str(tele["agent_stderr"] or ""))
+    return stdout_total, stderr_total
+
+
+def _compute_log_totals(
+    normalized_telemetry: dict[str, Any] | None,
+    _normalized_outputs: dict[str, Any] | None,
+) -> tuple[int, int]:
+    """Derive log lengths only from separated per-node telemetry.
+
+    Telemetry stores pre-truncation lengths when available and otherwise derives
+    them from its own inline log fields. Pure node returns are never interpreted
+    as telemetry, so nodes without a telemetry entry contribute zero.
+    """
+    stdout_total = 0
+    stderr_total = 0
+    for node_id in normalized_telemetry or {}:
+        tele = (normalized_telemetry or {}).get(node_id)
+        if isinstance(tele, dict):
+            stdout_len, stderr_len = _telemetry_log_lengths(tele)
+        else:
+            stdout_len, stderr_len = 0, 0
+        stdout_total += stdout_len
+        stderr_total += stderr_len
+    return stdout_total, stderr_total
+
+
+def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlobs) -> RunIOResponse:
+    """Normalise, mask, and package a run's IO into a RunIOResponse.
+
+    One shape for the frontend: ``outputs_json`` contains stored pure returns
+    and ``node_telemetry`` contains stored separated telemetry.
+
+    *blobs* is the run's reassembled dictionary shape (FAR-583 read-switch:
+    the caller reassembles via the ``run_node_outputs`` repo reader inside its
+    transaction).
+    """
+    outputs_json = blobs.outputs
+    telemetry_json = blobs.telemetry
+    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
+    normalized_telemetry = _normalize_node_telemetry(telemetry_json, outputs_json)
+
+    masked_outputs = _mask_output_value(normalized_outputs)
+    masked_telemetry = _mask_output_value(normalized_telemetry)
+    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
+
+    # FAR-870: derive true total character lengths from pre-truncation telemetry.
+    stdout_total, stderr_total = _compute_log_totals(normalized_telemetry, normalized_outputs)
+
+    resp = RunIOResponse(
+        run_id=run.id,
+        run_number=run.run_number,
+        status=run.status,
+        input_payload=masked_input,
+        outputs_json=masked_outputs,
+        node_telemetry=masked_telemetry,
+        node_labels=node_labels,
+        stdout_total_length=stdout_total,
+        stderr_total_length=stderr_total,
+    )
+    resp.fixture_map = resp.build_fixture_map()
+    return resp
+
+
+@router.get("/{run_id}/io")
+@handle_db_errors(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
+async def get_run_io_endpoint(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> RunIOResponse:
+    """Return per-node IO for a completed run, plus generated fixture_map.
+
+    ``outputs_json`` holds each node's pure return and ``node_telemetry`` holds
+    its exhaustive telemetry, exactly as stored. Telemetry-only nodes (e.g.
+    ``skipped`` recovery markers without an ``outputs_json`` entry) appear
+    under ``node_telemetry`` only. All surfaces — input payload, outputs,
+    telemetry — are masked for secrets.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            snapshot = await _load_snapshot_for_run(session, run)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (one batched repo query + the legacy fallback SELECT).
+            blobs = (
+                None
+                if run is None
+                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+            )
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_IO_ENDPOINT)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    if run is None or blobs is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+    node_labels = _build_node_labels(snapshot.graph_json if snapshot else None)
+    return _build_run_io_response(run, node_labels, blobs)
+
+
+class WorkItemEnrichmentItem(BaseModel):
+    """Live GitHub facts for one PR work-item badge (FAR-737)."""
+
+    ref: str
+    repo: str
+    number: int
+    title: str | None = None
+    state: Literal["open", "closed"] | None = None
+    merged: bool | None = None
+    html_url: str | None = None
+
+
+class WorkItemEnrichmentResponse(BaseModel):
+    """Enrichment payload for the Run Detail PR badges.
+
+    Always 200-on-success: missing / failed lookups are simply absent from
+    ``items`` so the view falls back to the plain linked badge.
+    """
+
+    items: list[WorkItemEnrichmentItem] = Field(default_factory=list)
+
+
+@router.get("/{run_id}/work-items/enrichment")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
+async def get_run_work_item_enrichment(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
+    settings: Settings = Depends(get_settings),
+) -> WorkItemEnrichmentResponse:
+    """Live GitHub enrichment for the run's PR work-item badges (FAR-737).
+
+    Display-time, connector-mediated lookup through the run's ORG-scoped
+    GitHub connector, served through a TTL cache. Non-negotiable fallback:
+    every enrichment failure class (no connector configured, credential
+    decrypt error, GitHub unreachable, PR 404) degrades to an empty/partial
+    ``items`` list — this endpoint exists to make the badge RICHER, never to
+    gate the run view, which renders the existing plain linked badge on any
+    error or empty result.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            refs = run.work_item_refs
+            raw_payload = getattr(run, "input_payload", None)
+            payload = raw_payload if isinstance(raw_payload, dict) else None
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    targets = derive_pr_targets(refs, payload)
+    if not targets:
+        return WorkItemEnrichmentResponse()
+    enriched = await enrich_pr_targets(session, principal.organisation_id, targets, settings)
+    return WorkItemEnrichmentResponse(items=[WorkItemEnrichmentItem(**item) for item in enriched])
+
+
+@router.get("/{run_id}/export-fixture")
+@handle_db_errors(_CODE_RUNS_EXPORT_RUN_FIXTURE)
+async def export_run_fixture(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> FixtureExportResponse:
+    """Export run IO data as a StubModelBackend-compatible fixture.
+
+    Returns the input payload, per-node outputs, snapshot graph, and
+    a ``fixture_map`` that can be loaded directly into
+    ``StubModelBackend(fixture_map=...)`` for regression testing.
+
+    All three surfaces are masked for secrets: ``input_payload`` /
+    ``outputs_json`` via :func:`_mask_output_value`, and the snapshot
+    graph via the shared pipeline-graph node masker (FAR-1181).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            snapshot = await _load_snapshot_for_run(session, run)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (the response body is built after the tx closes).
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_EXPORT_RUN_FIXTURE)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    # FAR-1181: snapshots store the graph with REAL stored values (mask echoes
+    # are resolved back to secrets on write), so the fixture export must mask
+    # node credentials exactly as the graph / snapshot-detail / MCP reads do —
+    # otherwise any caller with ``run.output`` can read them here. The shared
+    # helper also passes non-dict payloads through unchanged.
+    graph_json = _masked_snapshot_graph(snapshot.graph_json) if snapshot else {}
+
+    # Normalize to the pure return before masking (FAR-126): the read-side
+    # normaliser returns each node's stored pure return unchanged, so the
+    # exported outputs_json mirrors GET /runs/{id}/io.
+    outputs_json = blobs.outputs
+    telemetry_json = blobs.telemetry
+    normalized_outputs = _normalize_run_outputs(outputs_json, telemetry_json)
+
+    masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
+    masked_outputs = _mask_output_value(normalized_outputs) if normalized_outputs else None
+    fixture_map = _build_fixture_map(masked_input, masked_outputs)
+    short_id = str(run.id)[:8]
+
+    return FixtureExportResponse(
+        fixture_name=f"run_{short_id}_io",
+        run_id=run.id,
+        pipeline_id=run.pipeline_id,
+        status=run.status,
+        snapshot_graph_json=graph_json,
+        input_payload=masked_input,
+        outputs_json=masked_outputs,
+        fixture_map=fixture_map,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workspace lease inspection — REMOVED (FAR-587 / ADR 029)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{run_id}/workspace-lease", include_in_schema=False)
+async def get_run_workspace_lease(
+    run_id: uuid.UUID,
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> None:
+    """Deliberate 410: the WorkspaceLease scaffolding was removed (FAR-587).
+
+    The route is kept out of the OpenAPI schema but answers a typed 410 so
+    existing clients see an intentional contract change, not an accidental
+    404. Workspace tracking lives in ``runs.sandbox_dispatch_state``.
+    """
+    _log.info(
+        "runs.get_run_workspace_lease_gone",
+        extra={"run_id": str(run_id), "organisation_id": str(principal.organisation_id)},
+    )
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."
+        ),
+    )
+
+
+@router.get("/{run_id}/workspace-events")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
+async def get_run_workspace_events(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> list[dict[str, str]]:
+    """Return workspace lifecycle events for a run as a timeline."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            from farna.db.models.audit_event import AuditEvent
+
+            # Defence-in-depth org scoping (FAR-897 / #92): load the run through
+            # the org-scoped CRUD helper first so a foreign-org run id 404s
+            # instead of answering with an (empty) event list, and pin the
+            # audit-event query to the caller's organisation explicitly rather
+            # than relying on RLS alone.
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+            result = await session.execute(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.organisation_id == principal.organisation_id,
+                    AuditEvent.resource_type == "workspace",
+                    AuditEvent.resource_id == run_id,
+                )
+                .order_by(AuditEvent.created_at)
+            )
+            events = result.scalars().all()
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    return [
+        {
+            "event": evt.event_type.replace("workspace_", ""),
+            "detail": sanitize_error_text((evt.payload_json or {}).get("detail", "")),
+            "timestamp": evt.created_at.isoformat(),
+        }
+        for evt in events
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Run-correlated logs (FAR-1690 A4)
+# ---------------------------------------------------------------------------
+
+
+class RunLogEntryModel(BaseModel):
+    """One provenance-typed entry in the run-keyed log correlation view (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    node_id: str | None = None
+    attempt_key: str | None = None
+    source: str
+    provenance: str
+    witnessed_via: str | None = None
+    provider: str | None = None
+    provider_ref: str | None = None
+    recorded_at: str | None = None
+    excerpt: str
+
+
+class RunLogsResponse(BaseModel):
+    """The run-keyed log correlation projection (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    entries: list[RunLogEntryModel]
+
+
+async def _do_get_run_logs(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[RunLogEntry]:
+    """Compose the run's provenance-typed log entries from existing stores.
+
+    Three sources, all keyed by ``run_id`` and none new (A4 adds no store):
+    the run's ``audit_events`` (attested), the retained workspace log tail
+    (observed — captured by ``read_log_tail`` and persisted on markers /
+    telemetry), and a dispatched node's folded-back telemetry (reported, with
+    its ``witnessed_via`` channel stamp). Runs inside the caller's transaction
+    (RLS already set); a foreign-org run id raises 404 before any source read.
+    """
+    from farna.db.models.audit_event import AuditEvent
+
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+    event_rows = (
+        (
+            await session.execute(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.organisation_id == principal.organisation_id,
+                    AuditEvent.resource_id == run_id,
+                    AuditEvent.resource_type.in_(("run", "workspace")),
+                )
+                .order_by(AuditEvent.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+    telemetry = await read_run_telemetry(session, run_id=run_id, organisation_id=principal.organisation_id)
+    events = [
+        {
+            "event_type": row.event_type,
+            "detail": sanitize_error_text((row.payload_json or {}).get("detail")),
+            "recorded_at": row.created_at,
+        }
+        for row in event_rows
+    ]
+    return correlate_run_logs(events=events, markers=markers, telemetry=telemetry)
+
+
+@router.get("/{run_id}/logs")
+@handle_db_errors(_CODE_RUNS_GET_RUN_LOGS)
+async def get_run_logs(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> RunLogsResponse:
+    """Return a run's correlated, provenance-typed log view (FAR-1690 A4).
+
+    A single read endpoint joining the run's structured events, retained
+    workspace log tail (captured via the runtime provider's ``read_log_tail``),
+    and any dispatch-origin substrate entries — each stamped with its governed
+    class (``observed`` / ``reported`` / ``attested``). Unlike the FAR-704
+    ``deadline_triage`` surface, the workspace tail is available for **every**
+    run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
+    tail); no raw payload is added.
+    """
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        entries = await _do_get_run_logs(session, principal, run_id)
+    return RunLogsResponse(
+        run_id=run_id,
+        entries=[
+            RunLogEntryModel(
+                run_id=run_id,
+                node_id=entry.node_id,
+                attempt_key=entry.attempt_key,
+                source=entry.source,
+                provenance=entry.provenance,
+                witnessed_via=entry.witnessed_via,
+                provider=entry.provider,
+                provider_ref=entry.provider_ref,
+                recorded_at=entry.recorded_at.isoformat() if entry.recorded_at is not None else None,
+                excerpt=entry.excerpt,
+            )
+            for entry in entries
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node output inspection
+# ---------------------------------------------------------------------------
+
+
+def _mask_output_value(value: Any, *, _depth: int = 0) -> Any:
+    """Recursively mask sensitive string fields in *value*.
+
+    Two complementary strategies are applied:
+
+    1. **Key-name masking** (existing): string values whose key matches
+       :func:`is_sensitive_key` are replaced wholesale with the standard mask.
+    2. **Value-pattern masking** (FAR-392): every string value is also scanned
+       for gitleaks-style secret VALUES (API keys, tokens, private keys,
+       connection strings, JWTs, ...) regardless of the key it sits under, so
+       secrets in free text or under arbitrary keys are masked too.
+
+    Nones and non-string atomic values pass through unchanged.
+    """
+    if _depth > 20:
+        return value
+    if isinstance(value, str):
+        return mask_secret_values_in_text(value)
+    if isinstance(value, dict):
+        return {
+            k: (
+                mask_sensitive_value(v)
+                if isinstance(v, str) and is_sensitive_key(k)
+                else _mask_output_value(v, _depth=_depth + 1)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_output_value(item, _depth=_depth + 1) for item in value]
+    return value
+
+
+class NodeOutputResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    output: Any = None
+    stdout_artifact: dict[str, Any] | None = None
+    stderr_artifact: dict[str, Any] | None = None
+
+
+@router.get("/{run_id}/nodes/{node_id}/output")
+@handle_db_errors(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
+async def get_run_node_output(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> NodeOutputResponse:
+    """Return a specific node's output from a completed pipeline run.
+
+    Sensitive fields (keys matching *token*, *secret*, *api_key*,
+    *password*, *key*, *credential*) in the output are masked with
+    bullet characters.
+
+    For split rows this returns the node's PURE return. When a node
+    has no return (skipped / recovered / failed-no-return) but exists in
+    ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
+    returned instead of a 404 — never the raw telemetry (no stdout / log
+    tail on this surface).
+
+    ``stdout_artifact`` carries the FAR-811 full-stdout transcript pointer
+    for sandbox nodes whose redacted stdout overflowed the inline retention
+    cap (``None`` otherwise) — a pointer only, never the transcript body.
+
+    ``stderr_artifact`` carries the FAR-879 full-stderr transcript pointer
+    (parity with stdout_artifact).
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            # FAR-583 read-switch: reassemble the blobs INSIDE the transaction
+            # (one batched repo query + the legacy fallback SELECT).
+            blobs = (
+                None
+                if run is None
+                else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+            )
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_NODE_OUTPUT)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    if run is None or blobs is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+    outputs = blobs.outputs or {}
+    telemetry = blobs.telemetry or {}
+    stdout_artifact = node_stdout_artifact(telemetry, outputs, node_id)
+    stderr_artifact = node_stderr_artifact(telemetry, outputs, node_id)
+    node_output = node_return(outputs, telemetry, node_id)
+    if node_output is None:
+        node_meta = node_telemetry(telemetry, outputs, node_id)
+        if isinstance(node_meta, dict):
+            derived = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+            masked = _mask_output_value(derived)
+            return NodeOutputResponse(
+                run_id=run_id,
+                node_id=node_id,
+                output=masked,
+                stdout_artifact=stdout_artifact,
+                stderr_artifact=stderr_artifact,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in run outputs",
+        )
+
+    masked = _mask_output_value(node_output)
+    return NodeOutputResponse(
+        run_id=run_id,
+        node_id=node_id,
+        output=masked,
+        stdout_artifact=stdout_artifact,
+        stderr_artifact=stderr_artifact,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-attempt execution history (FAR-2078, read slice)
+# ---------------------------------------------------------------------------
+
+#: Hard cap on the number of attempt rows returned in one response. The row
+#: count is bounded TODAY by ``1 + max_retries`` (at most 6 retries), but the
+#: API does not rely on that executor-side bound: the response contract caps
+#: the page at 100 items and reports the run's true attempt count in ``total``.
+_MAX_ATTEMPTS_PER_RUN = 100
+
+
+class RunAttemptItem(BaseModel):
+    """One attempt of a run, as exposed on the read surface (FAR-2078)."""
+
+    attempt_index: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    terminal_reason: str | None = None
+    model_used: str | None = None
+    error_code: str | None = None
+
+
+class RunAttemptsResponse(BaseModel):
+    """Attempt history for one run, ordered by ``attempt_index`` ascending.
+
+    ``items`` is capped at :data:`_MAX_ATTEMPTS_PER_RUN`; ``total`` is the
+    run's full attempt count, so a truncated page is visible rather than
+    silently reported as complete.
+    """
+
+    items: list[RunAttemptItem] = Field(default_factory=list)
+    total: int
+
+
+@router.get("/{run_id}/attempts")
+@handle_db_errors(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+async def list_run_attempts(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
+) -> RunAttemptsResponse:
+    """Return the durable per-attempt execution history of a run (FAR-2078).
+
+    Attempts are ordered by ``attempt_index`` ascending (0-based, per run,
+    contiguous — see ``modulo.db.models.run_attempt``). ``items`` is capped at
+    100 rows; ``total`` carries the run's true attempt count.
+
+    Org-scoped like every other run child read: the run is loaded through
+    ``get_run(..., organisation_id=principal.organisation_id)`` behind
+    ``set_rls_org``, so a run belonging to another organisation is
+    indistinguishable from a missing one and answers 404 — never an empty
+    list, which would turn a typo or a cross-tenant probe into a
+    success-shaped response that leaks existence semantics.
+
+    The gate is the SAME viewer-level ``run.status`` permission the run detail
+    endpoint uses (``require_permission_any_credential`` so JWT and org API-key
+    callers both work). Deliberately not a new key: a fresh key that happened
+    to resolve to a different role would silently widen or narrow the gate.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            attempts = await db_list_attempts(session, run_id)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_LIST_RUN_ATTEMPTS)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    # The CRUD read already orders by attempt_index and the pair is unique, so
+    # this sort is a response-boundary guarantee (the contract, not the
+    # helper, is what the client consumes) and the slice is the stated cap.
+    ordered = sorted(attempts, key=lambda attempt: attempt.attempt_index)
+    items = [
+        RunAttemptItem(
+            attempt_index=attempt.attempt_index,
+            started_at=attempt.started_at,
+            ended_at=attempt.ended_at,
+            terminal_reason=attempt.terminal_reason,
+            model_used=attempt.model_used,
+            error_code=attempt.error_code,
+        )
+        for attempt in ordered[:_MAX_ATTEMPTS_PER_RUN]
+    ]
+    return RunAttemptsResponse(items=items, total=len(ordered))
+
+
+# ---------------------------------------------------------------------------
+# Live run events (live stdout/stderr streaming, FAR-98)
+# ---------------------------------------------------------------------------
+
+
+class RunEventItem(BaseModel):
+    seq: int
+    event_type: str
+    payload: dict[str, Any]
+    ts: str
+
+
+class RunEventsResponse(BaseModel):
+    run_id: uuid.UUID
+    events: list[RunEventItem]
+
+
+@router.get("/{run_id}/events")
+@handle_db_errors("runs.get_run_events")
+async def get_run_events(
+    run_id: uuid.UUID,
+    since_seq: int = Query(0, ge=0),
+    node_id: str | None = Query(None),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
+) -> RunEventsResponse:
+    """Return live events for a run since a sequence number.
+
+    Returns ``node.stdout_chunk`` / ``node.stderr_chunk`` (the live-output
+    surface published by sandbox_agent nodes) plus the node lifecycle events
+    ``node_started`` / ``node_completed`` / ``node_failed``. Optionally filter
+    to a single ``node_id``. The run's org-scoped existence is validated first
+    so callers can never observe another org's run events.
+    """
+    try:
+        run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
+    except RunNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND) from None
+    broker = get_registry().get(run.id)
+    events: list[RunEventItem] = []
+    if broker is not None:
+        for evt in broker.replay_since(since_seq):
+            if evt.event_type not in (
+                "node.stdout_chunk",
+                "node.stderr_chunk",
+                "node_started",
+                "node_completed",
+                "node_failed",
+            ):
+                continue
+            if node_id is not None and evt.payload.get("node_id") != node_id:
+                continue
+            events.append(
+                RunEventItem(
+                    seq=evt.seq,
+                    event_type=evt.event_type,
+                    payload=evt.payload,
+                    ts=evt.timestamp.isoformat(),
+                )
+            )
+    return RunEventsResponse(run_id=run.id, events=events)
+
+
+# ---------------------------------------------------------------------------
+# Node observation (task-nv24-node-observed-human)
+# ---------------------------------------------------------------------------
+
+
+class ObserveNodeResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    human_observed_at: str | None = None
+    human_observed_by: str | None = None
+
+
+@router.post(
+    "/{run_id}/nodes/{node_id}/observe",
+    dependencies=[Depends(audited("run_node_observed", "run_node", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors(_CODE_RUNS_OBSERVE_RUN_NODE)
+async def observe_run_node(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> ObserveNodeResponse:
+    """Mark a node as observed by a human.
+
+    Requires operator or admin role.  Idempotent — observing the same
+    node multiple times returns the original observation timestamp.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can observe nodes",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            obs = await observe_node(
+                session,
+                organisation_id=principal.organisation_id,
+                run_id=run_id,
+                node_id=node_id,
+                observed_by=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_OBSERVE_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        # FAR-1825: ``observe_node`` bounds the observation-row lock, so 55P03
+        # is reachable here — a busy row is a 409 conflict, not the 503 below.
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
+        raise_lock_timeout_conflict_if(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    return ObserveNodeResponse(
+        run_id=run_id,
+        node_id=node_id,
+        human_observed_at=obs.human_observed_at.isoformat() if obs.human_observed_at else None,
+        human_observed_by=str(obs.account_id) if obs.account_id else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node recovery (task-prd-recovery-manual-input)
+# ---------------------------------------------------------------------------
+
+
+class NodeRecoverRequest(BaseModel):
+    input_data: dict[str, Any] | None = None
+
+
+class NodeRecoverResponse(BaseModel):
+    run_id: uuid.UUID
+    node_id: str
+    action: str
+    status: str
+
+
+async def _resolve_recovery_stamp(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> str | None:
+    """Resolve the gate id to stamp on a node-recovery resume payload (FAR-541).
+
+    The run's UNDECIDED claim row(s) mark where the run is interrupted —
+    regardless of the target node's name. A row keyed ``hitl_review_*`` is a
+    real HITL gate whose decision must go through approve/reject -> explicit
+    422. Manual-node rows (keyed by the node id — the interrupt payload stamps
+    ``review_id: node_id``) and conformance-block rows (keyed by the guardrail
+    gate id) are stamped into the recovery payload, which the manual-node and
+    conformance consumers accept. A legacy ""-keyed row (pre-stamping
+    interrupt) never wins the stamp.
+
+    FAR-541 iteration 4 (FIX B): the query is deterministic — a row matching
+    the node being recovered wins, otherwise newest-first (``claimed_at DESC
+    NULLS LAST, id DESC``, mirroring ``_latest_committed_decision_row``) —
+    stale undecided rows (normal: recover_node never marks bypassed rows
+    decided) can no longer hijack the stamp pick with a foreign identity, and
+    the pick is stable when rows share a claim timestamp. The matching-node
+    row wins when present (the query orders it first); the explicit Python-side
+    preference keeps the pick correct and auditable even if the SQL ordering
+    drifts.
+    """
+    undecided_review_ids: list[str] = list(
+        (
+            await session.execute(
+                select(HitlClaim.review_id)
+                .where(
+                    HitlClaim.run_id == run_id,
+                    HitlClaim.organisation_id == principal.organisation_id,
+                    HitlClaim.decision.is_(None),
+                )
+                .order_by(
+                    (HitlClaim.review_id == node_id).desc(),
+                    HitlClaim.claimed_at.desc().nullslast(),
+                    HitlClaim.id.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if any(gate.startswith("hitl_review_") for gate in undecided_review_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Node is a pending HITL gate; use the HITL approve/reject endpoints for gate nodes.",
+        )
+    return next(
+        (gate for gate in undecided_review_ids if gate == node_id),
+        next((gate for gate in undecided_review_ids if gate), None),
+    )
+
+
+async def _recover_node_or_http_error(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+    input_data: dict[str, Any] | None,
+) -> Run:
+    """Run ``recover_node``, mapping each domain failure to its HTTP contract."""
+    try:
+        return await recover_node(
+            session,
+            org_id=principal.organisation_id,
+            run_id=run_id,
+            node_id=node_id,
+            input_data=input_data,
+            actor_id=principal.account_id,
+        )
+    except RecoveryNotAllowedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+    except GuardrailOverrideRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+    except NodeNotFoundInGraphError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except NodeAlreadyCompletedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ConcurrentRecoveryError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{run_id}/nodes/{node_id}/recover",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("run_node_recovered", "run_node", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors(_CODE_RUNS_RECOVER_RUN_NODE)
+async def recover_run_node(
+    run_id: uuid.UUID,
+    node_id: str,
+    req: NodeRecoverRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> NodeRecoverResponse:
+    """Recover a failed manual-input node.
+
+    Two modes:
+      * **Re-run** — provide ``input_data`` with the new manual output.
+      * **Skip** — omit ``input_data`` (or set ``null``); the node is marked
+        completed with no output and the run resumes.
+
+    FAR-541: HITL gate targets are refused (422) — gate decisions must go
+    through the approve/reject endpoints. When the run is parked at an
+    undecided claim row, the recovery payload is stamped with that row's gate
+    id so the per-consumer stamp checks accept it (manual nodes: the node id;
+    conformance blocks: the guardrail gate id — the operator break-glass).
+
+    Requires operator or admin role.
+    """
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can recover nodes",
+        )
+
+    # FAR-541: the recover-node resume dispatches {"action": "skip"/"replay"} —
+    # that is NOT a gate decision, and the gate consumer now fails closed on
+    # unstamped/foreign decisions (the resume would bounce the run straight
+    # back to awaiting_human). Reject gate targets up front with an explicit
+    # pointer to the HITL decision endpoints.
+    if node_id.startswith("hitl_review_"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Node is a HITL review; use the HITL approve/reject endpoints for gate nodes.",
+        )
+
+    # FAR-541 (iteration 3, FIX 3): the recovery payload is stamped with the
+    # run's pending claim row's gate id (resolved below) so the per-consumer
+    # stamp checks accept it. Set inside the transaction; left None when the
+    # run has NO undecided claim row (failed-run recovery — dispatch unstamped
+    # exactly as before).
+    stamp_review_id: str | None = None
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            stamp_review_id = await _resolve_recovery_stamp(session, principal, run_id, node_id)
+            run = await _recover_node_or_http_error(session, principal, run_id, node_id, req.input_data)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_RECOVER_RUN_NODE)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    action = "skip" if req.input_data is None else "replay"
+
+    # Resume the graph with the recovery data. dispatch_run enqueues resume_run
+    # to SAQ (the recover-node path); a resume failure surfaces here as 500
+    # rather than fire-and-forget 200.
+    resume_data: dict[str, Any] = {"action": action, "output": req.input_data}
+    if stamp_review_id is not None:
+        # FAR-541 (iteration 3, FIX 3): stamped with the pending claim row's
+        # gate id — the manual-node consumer (stamp == node id), the
+        # conformance consumer (stamp == the block's guardrail gate id), and
+        # the gate consumer (stamp == its own gate id) all verify this stamp;
+        # a run parked at a real HITL gate was already 422'd above.
+        resume_data["review_id"] = stamp_review_id
+
+    try:
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+            job_type="resume_run",
+            resume_data=resume_data,
+        )
+    except Exception as exc:
+        _log.exception("run.recover_node.resume_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume pipeline after node recovery",
+        ) from exc
+
+    # 'resumed' (shadow inline) and 'enqueued'/'deduped' (SAQ accepted) both
+    # leave the run resuming. 'deferred' (capacity-blocked) and
+    # 'enqueue_failed' (final enqueue failure after retries) mean the resume
+    # was NOT actually dispatched — surface them instead of silently dropping
+    # the recovery: the run is left pending and would later be re-dispatched by
+    # dispatcher_reconcile as execute_run with resume_data=None, losing the
+    # user's replay/skip recovery and any supplied input_data (the run would
+    # re-execute from scratch instead of resuming at the recovered node).
+    if outcome in ("deferred", "enqueue_failed"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline resume after node recovery",
+        )
+
+    return NodeRecoverResponse(
+        run_id=run_id,
+        node_id=node_id,
+        action=action,
+        status=run.status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail override (FAR-208 item 6) — the ONLY remediation for a
+# guardrail-blocked terminal run (recover_node refuses eval_blocked runs)
+# ---------------------------------------------------------------------------
+
+
+class GuardrailOverrideRequest(BaseModel):
+    input_data: dict[str, Any]
+
+
+class GuardrailOverrideResponse(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    action: str = "override"
+
+
+@router.post(
+    "/{run_id}/guardrail-override",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("run_guardrail_overridden", "run", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
+@handle_db_errors("runs.guardrail_override")
+async def guardrail_override_run(
+    run_id: uuid.UUID,
+    req: GuardrailOverrideRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> GuardrailOverrideResponse:
+    """Remediate a guardrail-blocked run with operator-supplied input.
+
+    A guardrail block is TERMINAL ``eval_failed`` (error_code ``eval_blocked``)
+    with NO HITL gate, and the generic recover endpoint refuses such runs. The
+    override is the ONLY remediation: it re-runs the guardrail pass on the
+    supplied ``input_data`` (re-block safe default — a still-violating input is
+    refused with 422 and the run stays terminal), persists the post-redaction
+    payload, flips the run with ``is_replay=True``, and re-dispatches it. The
+    flip target and job type branch on node progress (FAR-1711): a node-
+    STARTED run (durable ``first_node_dispatched`` phase — a node-scoped
+    ``block`` eval terminalizes from a completed node) flips to ``running``
+    and is re-dispatched as ``resume_run`` (checkpoint resume — FAR-1649:
+    never re-execute a node-started run); the genuine zero-node block (run-
+    level interception at creation, NULL / pre-node phase) flips to
+    ``pending`` and is re-dispatched from run start (execute_run).
+
+    A node-started run is refused with 409 when its thread carries no
+    resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
+    M1 — the reachable case is a non-interactive pipeline, which never
+    persists one): resuming it would silently re-execute it, so the run is
+    left terminal eval_blocked rather than burned. The checkpoint never
+    appears later, so re-calling this endpoint returns the same 409 — the
+    remediation for such a run is a NEW run, not another override attempt.
+
+    Requires operator or admin role.
+    """
+    rate_key = f"guardrail-override:{principal.organisation_id}:{principal.account_id}"
+    if not await _guardrail_override_rate_limiter.consume(rate_key):
+        _log.warning(
+            "runs.guardrail_override.rate_limited",
+            extra={"org_id": str(principal.organisation_id), "account_id": str(principal.account_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many guardrail overrides. Try again later.",
+        )
+
+    if principal.org_role not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only operators and admins can override guardrail blocks",
+        )
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                run = await guardrail_override(
+                    session,
+                    org_id=principal.organisation_id,
+                    run_id=run_id,
+                    input_data=req.input_data,
+                    actor_id=principal.account_id,
+                )
+            except GuardrailOverrideRejectedError as exc:
+                # Still-violating supplied input — re-block safe default. The
+                # run stays terminal eval_failed; 422 = the supplied input is
+                # unprocessable for this run.
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideNoCheckpointError as exc:
+                # FAR-1711 (M1) fail-closed: the run started a node but has no
+                # resumable checkpoint, so a ``resume_run`` would re-execute it
+                # (FAR-1649). The run stays terminal eval_blocked and the
+                # operator gets a distinct 409 rather than a silently-burned
+                # run. Re-calling this endpoint returns the SAME 409 — a
+                # ``first_node_dispatched`` thread with no root checkpoint
+                # never grows one — so the true remediation is a NEW run
+                # against the pipeline, not another override attempt.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideError as exc:
+                # Not a guardrail-blocked terminal run — nothing to override.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
+            except ConcurrentRecoveryError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IntegrityError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception("runs.guardrail_override")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.guardrail_override_run")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    # FAR-1711: the re-dispatch job type is the ONE shared predicate
+    # ``guardrail_override`` owns (it also chose the flip target), so the
+    # route never re-derives it from a magic status string. A node-STARTED
+    # eval-blocked run was left ``running`` (the recover-node lock status)
+    # and must be re-dispatched as ``resume_run`` — checkpoint resume, never
+    # re-execution (FAR-1649). The genuine zero-node block stays ``pending``
+    # and is re-dispatched from run start (execute_run) with no resume data —
+    # no node ever ran, so there is nothing to resume.
+    job_type = guardrail_override_job_type(run)
+    try:
+        outcome, _job_id = await dispatch_run(
+            str(run_id),
+            str(principal.organisation_id),
+            queue="runs",
+            job_type=job_type,
+        )
+    except Exception as exc:
+        _log.exception("run.guardrail_override_dispatch_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to dispatch pipeline after guardrail override",
+        ) from exc
+
+    if outcome in ("deferred", "enqueue_failed"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to enqueue pipeline after guardrail override",
+        )
+
+    return GuardrailOverrideResponse(run_id=run_id, status=run.status)
+
+
+# ---------------------------------------------------------------------------
+# Prompt reveal (PRD §8.9)
+# ---------------------------------------------------------------------------
+
+
+class PromptRevealResponse(BaseModel):
+    prompt: str
+    messages: list[dict[str, str]]
+    token_count: int
+    prompt_always_visible: bool = False
+
+
+_SENSITIVE_MASK_PATTERNS: list[tuple[str, str]] = [
+    (r'(api_key["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(secret["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(token["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(password["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(credential["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    (r'(passwd["\']?\s*[:=]\s*["\']?)[^"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact Authorization headers (Bearer tokens, Basic auth, etc.)
+    # Captures the full "Authorization: <value>" or "authorization: <value>"
+    (r'(Authorization["\']?\s*[:=]\s*["\']?)\s*(?:Bearer\s+)?[^\s"\'}\s,]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact standalone Bearer tokens (value may contain spaces)
+    (r'(Bearer\s+)[^\n"\'}]+', r"\1" + _MASKED_PLACEHOLDER),
+    # Redact JWT-like tokens (three base64 segments separated by dots)
+    (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", _MASKED_PLACEHOLDER),
+]
+
+
+def _mask_prompt_text(text: str) -> str:
+    """Mask sensitive credential-like values in prompt text.
+
+    Replaces values following sensitive keys (token, secret, api_key,
+    password, key, credential) with bullet characters. Also redacts
+    Authorization/Bearer headers and JWT-like tokens regardless of key name.
+    """
+
+    masked = text
+    for pattern, replacement in _SENSITIVE_MASK_PATTERNS:
+        masked = re.sub(pattern, replacement, masked, flags=re.IGNORECASE)
+    return masked
+
+
+def _mask_message_list(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Apply sensitive masking to all message content."""
+    return [{"role": m["role"], "content": _mask_prompt_text(m["content"])} for m in messages]
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count using a 4-char-per-token heuristic."""
+    return max(1, len(text) // 4)
+
+
+def _decrypt_checkpoint(raw_checkpoint: Any, fernet_key: str | None) -> Any:
+    """Decrypt a checkpoint payload when stored as an encrypted JSON envelope.
+
+    Handles both string-encoded and dict-encoded envelopes. Malformed or
+    undecryptable values degrade to the original payload — never raise.
+    """
+    from cryptography.fernet import Fernet
+
+    if isinstance(raw_checkpoint, str):
+        try:
+            parsed = json.loads(raw_checkpoint)
+            if isinstance(parsed, dict):
+                if parsed.get("__encrypted__") and fernet_key:
+                    f = Fernet(fernet_key.encode())
+                    decrypted = f.decrypt(parsed["data"].encode())
+                    return json.loads(decrypted.decode())
+                return parsed
+        except Exception as exc:
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    elif isinstance(raw_checkpoint, dict) and raw_checkpoint.get("__encrypted__") and fernet_key:
+        try:
+            f = Fernet(fernet_key.encode())
+            decrypted = f.decrypt(raw_checkpoint["data"].encode())
+            return json.loads(decrypted.decode())
+        except Exception as exc:
+            _log.exception("runs._get_checkpoint_state")
+            _log.warning("checkpoint.decrypt_skip", extra={"error": str(exc)[:200]})
+    return raw_checkpoint
+
+
+async def _get_checkpoint_state(
+    session: AsyncSession,
+    thread_id: str,
+    organisation_id: uuid.UUID,
+    fernet_key: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch the latest checkpoint state for a thread, decrypting if needed."""
+    result = await session.execute(
+        text("""
+            SELECT checkpoint, checkpoint_id
+            FROM checkpoints
+            WHERE organisation_id = :org_id
+              AND thread_id = :thread_id
+              AND checkpoint_ns = ''
+            ORDER BY checkpoint_id DESC
+            LIMIT 1
+        """),
+        {"org_id": organisation_id, "thread_id": thread_id},
+    )
+    row = result.fetchone()
+    if row is None:
+        return None
+
+    raw_checkpoint = _decrypt_checkpoint(row[0], fernet_key)
+    if isinstance(raw_checkpoint, dict):
+        return raw_checkpoint.get("channel_values")
+    return None
+
+
+def _messages_from_prior_outputs(
+    outputs_json: dict[str, Any] | None,
+    node_id: str,
+) -> list[dict[str, str]]:
+    """Assistant messages built from previous node outputs (skips the current node)."""
+    messages: list[dict[str, str]] = []
+    if not outputs_json:
+        return messages
+    for prev_node_id in outputs_json:
+        if prev_node_id == node_id:
+            continue
+        output = node_return(outputs_json, None, prev_node_id)
+        if isinstance(output, str):
+            messages.append({"role": "assistant", "content": output})
+        elif isinstance(output, dict):
+            messages.append({"role": "assistant", "content": json.dumps(output, default=str)})
+    return messages
+
+
+def _resolve_node_user_input(
+    checkpoint_state: dict[str, Any] | None,
+    input_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Current user input — prefer checkpoint state, fall back to run input_payload."""
+    user_input: dict[str, Any] | None = None
+    if checkpoint_state:
+        run_ctx = checkpoint_state.get("run_context") or {}
+        user_input = run_ctx.get("input")
+    if user_input is None and input_payload:
+        user_input = input_payload
+    return user_input
+
+
+@dataclass(frozen=True)
+class _MessageContext:
+    """Run/node data needed to reconstruct the LLM messages for a node.
+
+    Groups the four per-run inputs so ``_build_messages`` stays a two-arg
+    helper instead of carrying five positional parameters.
+    """
+
+    input_payload: dict[str, Any] | None = None
+    outputs_json: dict[str, Any] | None = None
+    checkpoint_state: dict[str, Any] | None = None
+    node_id: str = ""
+
+
+def _build_messages(prompt_template: str | None, ctx: _MessageContext) -> list[dict[str, str]]:
+    """Reconstruct the LLM messages for a node from frozen config + run data.
+
+    Builds the system message from the run's FROZEN prompt template (FAR-1398:
+    the snapshot node's ``prompt_template`` with the run's frozen variant
+    per-agent override applied when one applies - what was in effect for THIS
+    run - never the live ``Agent`` row), the user message from the input
+    payload or checkpoint state, and assistant messages from previous node
+    outputs.
+    """
+    messages: list[dict[str, str]] = []
+
+    if prompt_template:
+        messages.append({"role": "system", "content": prompt_template})
+
+    messages.extend(_messages_from_prior_outputs(ctx.outputs_json, ctx.node_id))
+
+    user_input = _resolve_node_user_input(ctx.checkpoint_state, ctx.input_payload)
+    if user_input is not None:
+        if isinstance(user_input, str):
+            messages.append({"role": "user", "content": user_input})
+        else:
+            messages.append({"role": "user", "content": json.dumps(user_input, default=str)})
+
+    return messages
+
+
+def _build_messages_from_template_and_state(
+    prompt_template: str | None,
+    input_payload: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+    checkpoint_state: dict[str, Any] | None,
+    node_id: str,
+) -> list[dict[str, str]]:
+    """Test-facing wrapper around ``_build_messages``."""
+    return _build_messages(
+        prompt_template,
+        _MessageContext(
+            input_payload=input_payload,
+            outputs_json=outputs_json,
+            checkpoint_state=checkpoint_state,
+            node_id=node_id,
+        ),
+    )
+
+
+def _find_node(graph_json: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    """Find a node by id in a graph definition - the single node-list scan.
+
+    FAR-1398: every node lookup on this route (existence, agent id, frozen
+    template) goes through this one helper so the loop body exists exactly
+    once and each lookup shares identical matching semantics
+    (``str(node["id"]) == node_id``).
+    """
+    nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
+    for node in nodes:
+        if str(node.get("id")) == node_id:
+            return node
+    return None
+
+
+def _require_node(graph_json: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The node, or 404 - the SINGLE owner of the node-existence check.
+
+    FAR-1398: both reveal helpers (visibility flag, template resolution) gate
+    through this, so the 404 fires for a node absent from the snapshot graph
+    no matter which helper runs first - it no longer depends on one helper
+    happening to run before the other (the hidden ordering dependency this
+    refactor removes).
+    """
+    node = _find_node(graph_json, node_id)
+    if node is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in pipeline graph",
+        )
+    return node
+
+
+def _agent_id_from_node(node: dict[str, Any]) -> uuid.UUID | None:
+    """Parse a snapshot node's ``agent_id``; ``None`` for a non-agent node."""
+    agent_id = node.get("agent_id")
+    if agent_id is None:
+        return None
+    return uuid.UUID(str(agent_id))
+
+
+def _lookup_agent_for_node(
+    graph_json: dict[str, Any],
+    node_id: str,
+) -> uuid.UUID | None:
+    """Find the agent_id for a node in the graph definition (via ``_find_node``).
+
+    ``None`` means the node EXISTS but is not an agent node. A node absent
+    from the graph raises 404 (``_require_node``) - so the caller never has
+    to distinguish "absent" from "no agent" by inspecting the graph itself.
+    """
+    return _agent_id_from_node(_require_node(graph_json, node_id))
+
+
+def _variant_prompt_override(
+    variant_config_snapshot: Any,
+    agent_id: uuid.UUID,
+) -> str | None:
+    """The run's frozen per-agent prompt override, or ``None`` when none applies.
+
+    FAR-1398: replicates dispatch precedence (``node_runner.
+    _resolve_node_run_overrides``) - an A/B ``prompt_version`` run freezes a
+    per-agent ``prompt_templates`` map into ``run.variant_config_snapshot``
+    at fire time, and dispatch applies it ON TOP OF the snapshot node's
+    template. The reveal must attest the same template, or it claims a
+    configuration that was never in effect.
+
+    Read ONLY from the run's FROZEN ``variant_config_snapshot`` column - the
+    sole source the executor seeds ``_run_overrides`` from (``executor.py``).
+    ``run_context``/checkpoint/``input_payload`` are deliberately NOT
+    consulted: ``_run_overrides`` is a system-reserved namespace that exists
+    precisely so caller-supplied input can never promote it (FAR-342
+    injection surface).
+
+    Returns ``None`` (fall back to the snapshot node template) unless the
+    column is a dict carrying ``_run_overrides.prompt_templates`` as a dict
+    with a NON-EMPTY string for this exact agent - the same non-empty-string
+    condition dispatch requires to override.
+    """
+    if not isinstance(variant_config_snapshot, dict):
+        return None
+    run_overrides = variant_config_snapshot.get("_run_overrides")
+    if not isinstance(run_overrides, dict):
+        return None
+    prompt_templates = run_overrides.get("prompt_templates")
+    if not isinstance(prompt_templates, dict):
+        return None
+    override = prompt_templates.get(str(agent_id))
+    if isinstance(override, str) and override:
+        return override
+    return None
+
+
+def _resolve_reveal_prompt_template(
+    graph_json: dict[str, Any],
+    node_id: str,
+    variant_config_snapshot: Any,
+) -> str | None:
+    """Resolve the frozen prompt that the node's dispatch path actually used.
+
+    Model-backed nodes use the snapshot ``prompt_template`` and the frozen
+    per-agent variant override, matching ``_resolve_node_run_overrides``.
+    ``sandbox_agent`` nodes are a separate dispatch path: they render the
+    snapshot ``agent_prompt`` directly, and do not consume the model-node
+    ``prompt_templates`` variant map. In particular, an ``agent_id`` on a
+    sandbox node does not make that model-node override applicable.
+
+    Returns ``None`` when the snapshot carries no prompt for the node. Raises
+    404 via ``_require_node`` when the node is absent from the graph.
+    """
+    node = _require_node(graph_json, node_id)
+    if node.get("node_type") == "sandbox_agent":
+        agent_prompt = node.get("agent_prompt")
+        return str(agent_prompt) if agent_prompt is not None else None
+
+    agent_id = _agent_id_from_node(node)
+    override = _variant_prompt_override(variant_config_snapshot, agent_id) if agent_id is not None else None
+    if override is not None:
+        return override
+    template = node.get("prompt_template")
+    if template is None:
+        return None
+    return str(template)
+
+
+async def _validate_node_and_resolve_visibility(
+    session: AsyncSession,
+    graph_json: dict[str, Any],
+    node_id: str,
+) -> bool:
+    """Validate the node exists, then resolve the prompt-visibility flag.
+
+    Returns just the ``prompt_always_visible`` policy flag - a CURRENT
+    policy, not historical content (FAR-1398): the live ``Agent`` row is
+    read solely for this flag, and the prompt CONTENT comes from the run's
+    frozen template (see ``_resolve_reveal_prompt_template``).
+
+    Raises 404 when the node is absent from the snapshot graph (via
+    ``_lookup_agent_for_node`` -> ``_require_node``, the single owner of that
+    check - so the 404 does not depend on the agent-id branch or on helper
+    call order).
+
+    FAR-1398 behaviour change: an agent node whose live ``Agent`` row has
+    been DELETED no longer 404s. The snapshot is the sole surviving record
+    of the run's prompt, so the frozen template is served with
+    ``prompt_always_visible=False`` (fail-closed on the policy flag) - the
+    same "live state must not leak into a historical view" rule this ticket
+    exists to fix. A node absent from the snapshot graph still 404s.
+    """
+    agent_id = _lookup_agent_for_node(graph_json, node_id)  # 404s when absent
+    if agent_id is None:
+        # Non-agent node (or node without an agent): no policy flag.
+        return False
+    agent_result = await session.execute(select(Agent).where(Agent.id == agent_id))
+    agent = agent_result.scalar_one_or_none()
+    if agent is None:
+        # Deleted agent: fail CLOSED on the policy flag rather than 404 - the
+        # frozen template is still served (see docstring).
+        return False
+    return bool(agent.prompt_always_visible)
+
+
+def _render_prompt_response(
+    messages: list[dict[str, str]],
+    prompt_always_visible: bool,
+) -> PromptRevealResponse:
+    """Mask messages, render the full prompt text, and build the response."""
+    masked_messages = _mask_message_list(messages)
+    full_prompt = "\n\n".join(f"<{m['role'].upper()}>\n{m['content']}\n</{m['role'].upper()}>" for m in masked_messages)
+    return PromptRevealResponse(
+        prompt=full_prompt,
+        messages=masked_messages,
+        token_count=_estimate_tokens(full_prompt),
+        prompt_always_visible=prompt_always_visible,
+    )
+
+
+# FAR-1472 exemption (read-only POST): reconstructs a node's frozen prompt from
+# the run snapshot and returns it - no state is written, so chaining an audit
+# event per reveal would only add noise. Deliberately left in
+# audit_coverage_baseline.txt.
+@router.post("/{run_id}/nodes/{node_id}/prompt/reveal")
+@handle_db_errors(_CODE_RUNS_REVEAL_NODE_PROMPT)
+async def reveal_node_prompt(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+    settings: Settings = Depends(get_settings),
+) -> PromptRevealResponse:
+    """Reveal the messages reconstructed for a node's LLM call.
+
+    Reconstructs a system message from the run's FROZEN prompt template -
+    the snapshot node's prompt_template with the run's frozen variant
+    per-agent prompt override applied on top when one applies (the same
+    precedence dispatch uses) - assistant messages from prior node outputs,
+    and a user message from the run's input payload (or checkpoint state).
+    This is a reconstruction of the run's frozen configuration plus observed
+    run data - NOT the rendered prompt actually dispatched to the model,
+    which is a single rendered user message built from dispatch-time
+    context. Returns the full prompt text, structured messages (system,
+    user, assistant), and an estimated token count. Sensitive
+    credential-like values are masked.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+
+            # Load snapshot to get graph definition.
+            snapshot = await _load_snapshot_for_run(session, run)
+
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Snapshot {run.snapshot_id} not found for run",
+                )
+
+            # Validate the node exists (404 when absent from the snapshot
+            # graph), and read the live agent row ONLY for the
+            # prompt_always_visible policy flag - a current policy, not
+            # historical content (FAR-1398). A deleted agent fails CLOSED on
+            # the flag and still serves the frozen template.
+            prompt_always_visible = await _validate_node_and_resolve_visibility(session, snapshot.graph_json, node_id)
+
+            # FAR-1398: the prompt template is the configuration in effect
+            # when this run dispatched - the run's FROZEN variant per-agent
+            # override when one applies (dispatch precedence), otherwise the
+            # snapshot node's frozen prompt_template - never the live Agent
+            # row, so editing an agent after a run cannot change what this
+            # endpoint attests.
+            prompt_template = _resolve_reveal_prompt_template(
+                snapshot.graph_json,
+                node_id,
+                run.variant_config_snapshot,
+            )
+
+            # Try to load checkpoint state for richer prompt reconstruction.
+            checkpoint_state = await _get_checkpoint_state(
+                session,
+                run.langgraph_thread_id,
+                principal.organisation_id,
+                fernet_key=settings.fernet_key,
+            )
+
+            # FAR-583 read-switch: reassemble the prior-outputs blobs INSIDE
+            # the transaction (one batched repo query + the legacy fallback).
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+
+        return _render_prompt_response(
+            _build_messages(
+                prompt_template,
+                _MessageContext(
+                    input_payload=run.input_payload,
+                    outputs_json=blobs.outputs,
+                    checkpoint_state=checkpoint_state,
+                    node_id=node_id,
+                ),
+            ),
+            prompt_always_visible,
+        )
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.reveal_node_prompt")
+        _log.exception(_CODE_RUNS_REVEAL_NODE_PROMPT)
+        _log.warning("prompt_reveal.db_error", extra={"error": str(exc)[:200]})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Feature is temporarily unavailable. Please try again.",
+        ) from None
+    except Exception:
+        _log.exception("prompt_reveal.error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while revealing the prompt.",
+        ) from None
+
+
+# ---------------------------------------------------------------------------
+# Node output diff across runs (task-agent-output-diff)
+# ---------------------------------------------------------------------------
+
+
+class NodeOutputDiffLine(BaseModel):
+    type: Literal["unchanged", "removed", "added"]
+    content: str
+    line_a: int | None = None
+    line_b: int | None = None
+
+
+class NodeOutputDiffRequest(BaseModel):
+    run_id_a: uuid.UUID
+    node_id_a: str
+    run_id_b: uuid.UUID
+    node_id_b: str
+
+
+class NodeOutputDiffResponse(BaseModel):
+    run_id_a: uuid.UUID
+    run_id_b: uuid.UUID
+    node_output_a: Any = None
+    node_output_b: Any = None
+    diff_lines: list[NodeOutputDiffLine]
+    has_diff: bool
+
+
+# FAR-1472 exemption (read-only POST): fetches two nodes' outputs, applies
+# masking and returns a line-level diff - it writes nothing. Deliberately left
+# in audit_coverage_baseline.txt.
+@router.post("/diff")
+@handle_db_errors(_CODE_RUNS_DIFF_NODE_OUTPUT)
+async def diff_node_output(
+    req: NodeOutputDiffRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> NodeOutputDiffResponse:
+    """Diff a specific node's output across two runs.
+
+    Accepts two (run_id, node_id) pairs, fetches each node's output,
+    applies sensitive masking, and returns a structured line-level diff
+    via the shared modulo.core.line_diff helper.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            run_a = await get_run(session, req.run_id_a, organisation_id=principal.organisation_id)
+            run_b = await get_run(session, req.run_id_b, organisation_id=principal.organisation_id)
+            # FAR-583 read-switch: reassemble BOTH runs' blobs INSIDE the
+            # transaction (one batched repo query per run + the legacy
+            # fallback SELECT); the response body is built after the tx closes.
+            blobs_a = (
+                None
+                if run_a is None
+                else await read_run_blobs(session, run_id=req.run_id_a, organisation_id=principal.organisation_id)
+            )
+            blobs_b = (
+                None
+                if run_b is None
+                else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
+            )
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_DIFF_NODE_OUTPUT)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+    if run_a is None or blobs_a is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {req.run_id_a} not found",
+        )
+    if run_b is None or blobs_b is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {req.run_id_b} not found",
+        )
+
+    masked_a, text_a = _node_output_for_diff(blobs_a.outputs, req.node_id_a, req.run_id_a)
+    masked_b, text_b = _node_output_for_diff(blobs_b.outputs, req.node_id_b, req.run_id_b)
+
+    diff_lines, has_diff = _build_diff_lines(text_a, text_b)
+
+    return NodeOutputDiffResponse(
+        run_id_a=req.run_id_a,
+        run_id_b=req.run_id_b,
+        node_output_a=masked_a,
+        node_output_b=masked_b,
+        diff_lines=diff_lines,
+        has_diff=has_diff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# FAR-582: artifact side-car endpoints (listing + download)
+# ---------------------------------------------------------------------------
+
+_CODE_RUN_ARTIFACT = "runs.get_run_artifact"
+_CODE_RUN_ARTIFACT_LIST = "runs.list_run_artifacts"
+
+_MSG_ARTIFACT_STREAM_NOT_FOUND = "Artifact stream not found"
+_MSG_ARTIFACT_NOT_CONFIGURED = "Artifact storage is not enabled"
+
+
+class ArtifactPointerResponse(BaseModel):
+    """One artifact pointer returned by the listing endpoint."""
+
+    attempt_key: str
+    stream: str
+    size_bytes: int
+    sha256: str
+    compression: str
+
+
+class ArtifactListResponse(BaseModel):
+    """Response for the per-node artifact listing endpoint."""
+
+    run_id: uuid.UUID
+    node_id: str
+    artifacts: list[ArtifactPointerResponse]
+
+
+@router.get("/{run_id}/nodes/{node_id}/artifacts")
+@handle_db_errors("runs.list_run_artifacts")
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    node_id: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT_LIST),
+) -> ArtifactListResponse:
+    """List all artifact pointers for a node across all attempts.
+
+    Returns an empty list when the node has no artifacts.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            rows = (
+                (
+                    await session.execute(
+                        select(RunNodeOutput).where(
+                            RunNodeOutput.run_id == run_id,
+                            RunNodeOutput.node_id == node_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except ProgrammingError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.list_run_artifacts")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_RUN_NOT_FOUND,
+        )
+
+    # Sort rows by the trailing attempt suffix descending so the listing is
+    # newest-first. A numeric suffix (``run:...:node:node-a:11``) is a claim
+    # count — the ONE ordered attempt family — so it is compared as an integer
+    # and a plain lexicographic sort cannot put ``9`` after ``10``.
+    #
+    # FAR-2084: every other attempt-identity suffix may be ANY non-empty shape
+    # (``:agent``, ``:connector``, ``:fallback``, ``claim-unknown``, 16-hex
+    # fail-open ids), because the writer stamps the suffix once per attempt and
+    # its value is an identity, not necessarily a number. Reading it as a
+    # number here is an ORDERING choice only, never a membership test: the
+    # non-numeric families trail every numeric attempt in deterministic string
+    # order. The suffix itself comes from the shared parser, never an inline
+    # ``rsplit``, so a future fail-open shape cannot silently fall outside.
+    def _attempt_sort_key(row: "RunNodeOutput") -> "tuple[int, str]":
+        suffix = marker_attempt_suffix(row.attempt_key) or row.attempt_key
+        try:
+            return (1, f"{int(suffix):020d}")
+        except ValueError:
+            return (0, suffix)
+
+    sorted_rows = sorted(rows, key=_attempt_sort_key, reverse=True)
+
+    artifacts: list[ArtifactPointerResponse] = []
+    for row in sorted_rows:
+        if not row.artifacts_json:
+            continue
+        artifacts.extend(
+            ArtifactPointerResponse(
+                attempt_key=row.attempt_key,
+                stream=ptr.get("stream", ""),
+                size_bytes=ptr.get("size_bytes", 0),
+                sha256=ptr.get("sha256", ""),
+                compression=ptr.get("compression", "none"),
+            )
+            for ptr in row.artifacts_json
+        )
+
+    return ArtifactListResponse(
+        run_id=run_id,
+        node_id=node_id,
+        artifacts=artifacts,
+    )
+
+
+def _strip_full_attempt_suffix(attempt_key: str) -> str | None:
+    """Return the base attempt key when *attempt_key* addresses a FAR-811
+    full-transcript synthetic key (``<base>:full:<cap>``), else ``None``.
+
+    Sandbox nodes that overflow the inline stdout cap persist the full redacted
+    transcript under a ``:full:<cap>``-suffixed attempt key
+    (``_persist_full_stdout_artifact``). That key exists only in the artifact
+    store, so the run-node-output row lookup by exact attempt key returns no
+    row; the download endpoint must derive the base key and resolve its pointer
+    from the node's telemetry instead.
+
+    The ``<cap>`` here is a byte COUNT, not the attempt identity: this is a
+    DIFFERENT synthetic family from the marker attempt keys the FAR-2084 rule
+    governs (``run:<run>:node:<node>:<any-shape>``). Requiring it to be numeric
+    is correct for this family, so it is deliberately not routed through
+    :func:`modulo.db.crud.run_node_outputs.marker_attempt_suffix`.
+    """
+    parts = attempt_key.rsplit(":", 2)
+    if len(parts) != 3 or parts[1] != "full":
+        return None
+    if not parts[2].isdigit():
+        return None
+    return parts[0]
+
+
+async def _stdout_pointer_from_telemetry(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a node's FAR-811 full-stdout transcript pointer from telemetry.
+
+    Reads the run's reassembled blobs (``node_telemetry_json`` / the legacy
+    inner output envelope) and returns the persisted ``stdout_artifact``
+    pointer, or ``None`` when the node has no stored transcript (inline-sized
+    stdout, non-sandbox node). A blob-read failure is treated as no-pointer so
+    the download endpoint surfaces its normal 404 rather than a 503.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        return None
+    if blobs is None:
+        return None
+    return node_stdout_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
+
+
+async def _stderr_pointer_from_telemetry(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a node's FAR-879 full-stderr transcript pointer from telemetry.
+
+    Reads the run's reassembled blobs and returns the persisted ``stderr_artifact``
+    pointer, or ``None`` when the node has no stored stderr transcript.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
+    except SQLAlchemyError:
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        return None
+    if blobs is None:
+        return None
+    return node_stderr_artifact(blobs.telemetry or {}, blobs.outputs or {}, node_id)
+
+
+async def _load_attempt_row(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+) -> RunNodeOutput | None:
+    """Load the ``RunNodeOutput`` row for one node attempt, scoped to the org.
+
+    Applies the tenant RLS scope before the exact-key lookup. A client-side
+    session-contract violation (``InvalidRequestError`` / ``MissingGreenlet``)
+    is raised as HTTP 500 by ``raise_session_contract_error``; any other DB
+    error returns from that helper and falls through to the 503 raised below.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            return (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == run_id,
+                        RunNodeOutput.node_id == node_id,
+                        RunNodeOutput.attempt_key == attempt_key,
+                    )
+                )
+            ).scalar_one_or_none()
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "runs.get_run_artifact")
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+
+
+def _artifact_pointer_from_row(row: RunNodeOutput | None, stream: str) -> dict[str, Any] | None:
+    """Return the stored side-car pointer for *stream* from a node attempt row."""
+    if row is None or not row.artifacts_json:
+        return None
+    for ptr in row.artifacts_json:
+        if ptr.get("stream") == stream:
+            return ptr
+    return None
+
+
+async def _telemetry_artifact_pointer(
+    stream: str,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+    node_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a synthetic full-transcript pointer for ``stdout``/``stderr``.
+
+    The ``<base>:full:<cap>`` (FAR-811) and ``<base>:full:stderr:<cap>``
+    (FAR-879) synthetic keys have no row, so their pointer lives in the node's
+    telemetry instead.
+    """
+    if stream == "stdout":
+        return await _stdout_pointer_from_telemetry(session, principal, run_id, node_id)
+    if stream == "stderr":
+        return await _stderr_pointer_from_telemetry(session, principal, run_id, node_id)
+    return None
+
+
+@router.get("/{run_id}/nodes/{node_id}/attempts/{attempt_key}/artifacts/{stream}")
+@handle_db_errors("runs.get_run_artifact")
+async def get_run_artifact(
+    run_id: uuid.UUID,
+    node_id: str,
+    attempt_key: str,
+    stream: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_ARTIFACT),
+) -> Response:
+    """Download a decompressed artifact side-car file for a node attempt.
+
+    Returns the raw ``stdout`` or ``stderr`` content as ``text/plain``.
+    Returns 404 when the artifact is not found (node did not produce that
+    stream, or artifact storage is disabled).
+
+    Also serves the FAR-811 full stdout transcript addressed by its synthetic
+    ``<base>:full:<cap>`` attempt key (no row exists for that key — the pointer
+    is resolved from the node's telemetry), and the FAR-879 full stderr
+    transcript addressed by ``<base>:full:stderr:<cap>``, and falls back to the
+    telemetry pointer when a real row has no pointer in its side-car list.
+    """
+    if stream not in ("stdout", "stderr"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    try:
+        from farna.core.artifacts.store import get_store
+
+        store = get_store()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_NOT_CONFIGURED,
+        ) from None
+
+    row = await _load_attempt_row(session, principal, run_id, node_id, attempt_key)
+    base_attempt_key = _strip_full_attempt_suffix(attempt_key)
+
+    # A synthetic ":full:" attempt key legitimately has no row (the transcript
+    # lives only in the artifact store); only a real, non-synthetic miss 404s.
+    if row is None and base_attempt_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    pointer = _artifact_pointer_from_row(row, stream)
+
+    # FAR-811 fallback: a synthetic ":full:" attempt key has no row at all
+    # (the transcript exists only in the artifact store) — the pointer lives
+    # in the node's telemetry instead.  FAR-879: same pattern for stderr's
+    # ":full:stderr:" synthetic key.
+    if pointer is None and base_attempt_key is not None:
+        pointer = await _telemetry_artifact_pointer(stream, session, principal, run_id, node_id)
+
+    if pointer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        )
+
+    try:
+        content = store.read_bytes(pointer)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_MSG_ARTIFACT_STREAM_NOT_FOUND,
+        ) from None
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+def _node_output_for_diff(outputs: dict[str, Any] | None, node_id: str, run_label: str | uuid.UUID) -> tuple[Any, str]:
+    """Return ``(masked_output, json_text)`` for one side of an output diff.
+
+    Raises 404 when the node is absent from the run's outputs. *outputs* is
+    the run's reassembled outputs dict (FAR-583 read-switch).
+    """
+    node_output = node_return(outputs or {}, None, node_id)
+    if node_output is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node {node_id} not found in run {run_label} outputs",
+        )
+    masked = _mask_output_value(node_output)
+    return masked, json.dumps(masked, indent=2)
+
+
+def _build_diff_lines(text_a: str, text_b: str) -> tuple[list[NodeOutputDiffLine], bool]:
+    """Line-level diff of two JSON texts plus whether any line changed."""
+    lines_a = text_a.splitlines(keepends=True)
+    lines_b = text_b.splitlines(keepends=True)
+    diff_lines = [
+        NodeOutputDiffLine(
+            type=kind,
+            content=content,
+            line_a=line_a,
+            line_b=line_b,
+        )
+        for kind, content, line_a, line_b in iter_line_diffs(lines_a, lines_b)
+    ]
+    return diff_lines, any(d.type != "unchanged" for d in diff_lines)
+
+
+# ---------------------------------------------------------------------------
+# FAR-902: Run-detail enforcement surface + flip guard endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{run_id}/schema-enforcement",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Run not found"},
+        500: {"description": "Internal Server Error"},
+    },
+)
+async def get_run_schema_enforcement(
+    run_id: uuid.UUID,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+) -> dict[str, Any]:
+    """D3: Operator-readable run-detail enforcement surface.
+
+    Returns per-node enforcement records so lenient-mode warnings are
+    READABLE.  Response shape: per node/attempt, the outcome, resolved
+    profile, native-vs-verbatim, repair/wasted counts, and the validation
+    errors (respecting the 64KB bound + truncation flag applied at write
+    time).  Includes run-level aggregate counts.
+
+    GET /api/v1/runs/{run_id}/schema-enforcement
+    """
+    try:
+        run = await _do_get_run(session_factory, current_user, run_id)
+    except RunNotFoundError:
+        raise HTTPException(status_code=404, detail=_MSG_RUN_NOT_FOUND) from None
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        # Query enforcement records from run_node_outputs (non-final, non-meta)
+        stmt = (
+            select(
+                RunNodeOutput.node_id,
+                RunNodeOutput.attempt_key,
+                RunNodeOutput.schema_enforcement_json,
+            )
+            .where(
+                RunNodeOutput.run_id == run_id,
+                RunNodeOutput.schema_enforcement_json.isnot(None),
+                RunNodeOutput.node_id != "__run_meta__",
+                RunNodeOutput.attempt_key != "__final__",
+            )
+            .order_by(RunNodeOutput.node_id, RunNodeOutput.attempt_key)
+        )
+        rows = (await session.execute(stmt)).all()
+
+    # Build per-node enforcement records
+    node_records: dict[str, list[dict[str, Any]]] = {}
+    all_records: list[dict[str, Any]] = []
+    for node_id, attempt_key, enforcement_json in rows:
+        if not isinstance(enforcement_json, dict):
+            continue
+        record = dict(enforcement_json)
+        record["node_id"] = node_id
+        record["attempt_key"] = attempt_key
+        node_records.setdefault(node_id, []).append(record)
+        all_records.append(enforcement_json)
+
+    # Aggregate counts
+    from farna.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
+
+    agg = aggregate_run_enforcement(all_records)
+
+    # Derive mode and outcome from enforcement records
+    from farna.core.pipeline_engine.schema_enforcement import (
+        derive_mode_from_records,
+        derive_outcome_from_records,
+    )
+
+    mode = derive_mode_from_records(all_records)
+    outcome = derive_outcome_from_records(all_records)
+
+    # Build per-node list
+    nodes_list = []
+    for node_id, records in node_records.items():
+        node_agg = aggregate_run_enforcement(records)
+        nodes_list.append(
+            {
+                "node_id": node_id,
+                "records": records,
+                "aggregate": {
+                    "native_count": node_agg.native_count,
+                    "verbatim_count": node_agg.verbatim_count,
+                    "repair_count": node_agg.repair_count,
+                    "wasted_count": node_agg.wasted_count,
+                    "total_attempts": node_agg.total_attempts,
+                },
+            }
+        )
+
+    return {
+        "run_id": str(run_id),
+        "schema_validator_mode": run.schema_validator_mode or mode,
+        "schema_validation_outcome": run.schema_validation_outcome or outcome,
+        "nodes": nodes_list,
+        "aggregate": {
+            "native_count": agg.native_count,
+            "verbatim_count": agg.verbatim_count,
+            "repair_count": agg.repair_count,
+            "wasted_count": agg.wasted_count,
+            "total_attempts": agg.total_attempts,
+            "enforcement_record_count": agg.enforcement_record_count,
+        },
+    }
+
+
+@router.get(
+    "/schema-enforcement/flip-guard",
+    status_code=status.HTTP_200_OK,
+    responses={
+        500: {"description": "Internal Server Error"},
+    },
+)
+async def get_schema_enforcement_flip_guard(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+) -> dict[str, Any]:
+    """D2: Read-only flip guard — advises whether lenient-to-strict is safe.
+
+    Examines ALL enforcement records for the caller's organisation and
+    returns the guard's verdict + supporting counts.
+
+    **This endpoint NEVER mutates the mode.**  Changing the mode remains
+    a separate, explicit, already-authorised operator action.
+
+    GET /api/v1/runs/schema-enforcement/flip-guard
+    """
+    from farna.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, current_user.organisation_id)
+        # Query ALL enforcement records for this org
+        stmt = select(RunNodeOutput.schema_enforcement_json).where(
+            RunNodeOutput.organisation_id == current_user.organisation_id,
+            RunNodeOutput.schema_enforcement_json.isnot(None),
+            RunNodeOutput.node_id != "__run_meta__",
+            RunNodeOutput.attempt_key != "__final__",
+        )
+        rows = (await session.execute(stmt)).all()
+
+    all_records = [row[0] for row in rows if isinstance(row[0], dict)]
+
+    verdict = compute_flip_guard_verdict(all_records)
+
+    return {
+        "safe_to_flip": verdict.safe_to_flip,
+        "lenient_warning_count": verdict.lenient_warning_count,
+        "total_records": verdict.total_records,
+        "affected_outcomes": list(verdict.affected_outcomes),
+        "advisory": verdict.advisory,
+    }

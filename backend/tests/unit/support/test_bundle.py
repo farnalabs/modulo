@@ -28,8 +28,8 @@ from typing import Any, ClassVar, Self
 
 import pytest
 
-import modulo.support.bundle as bundle_module
-from modulo.support.bundle import (
+import farna.support.bundle as bundle_module
+from farna.support.bundle import (
     BUNDLE_FORMAT_VERSION,
     GOLDEN_MEMBERS,
     BundleSources,
@@ -40,7 +40,7 @@ from modulo.support.bundle import (
     main,
     read_bundle,
 )
-from modulo.support.redaction import REDACTED
+from farna.support.redaction import REDACTED
 
 POSTGRES_PASSWORD = "PG_PLANT_zz19-weird-real-looking"
 REDIS_PASSWORD = "RD_PLANT_k4-real-cookie-value"
@@ -335,7 +335,7 @@ async def _fake_set_rls_org(session: Any, org_id: Any) -> None:
 
 def test_golden_member_set_is_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_data_dir(tmp_path, "clean log")
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", _fake_set_rls_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", _fake_set_rls_org)
     out = tmp_path / "golden.zip"
     build_bundle(
         out,
@@ -462,7 +462,7 @@ def test_oversized_bundle_truncates_logs_and_records_it(tmp_path: Path) -> None:
 
 
 def test_doctor_report_delegates_to_v1_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher.doctor_report import build_report
+    from farna.launcher.doctor_report import build_report
 
     _seed_data_dir(tmp_path, _planted_log())
     monkeypatch.setattr(bundle_module, "_session_factory", lambda sources: None)

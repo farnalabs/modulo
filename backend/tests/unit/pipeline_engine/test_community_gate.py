@@ -26,8 +26,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -243,7 +243,7 @@ async def test_resolve_scope_gates_granted_install_when_kill_switch_off():
     graph_json = {"nodes": [{"id": "n1", "agent_id": str(agent_id)}]}
 
     with patch(
-        "modulo.core.runtime_config.read_org_flag",
+        "farna.core.runtime_config.read_org_flag",
         new=AsyncMock(return_value=False),
     ) as read_flag:
         scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)
@@ -267,7 +267,7 @@ async def test_resolve_scope_kill_switch_read_fails_open_for_granted_install():
     graph_json = {"nodes": [{"id": "n1", "agent_id": str(agent_id)}]}
 
     with patch(
-        "modulo.core.runtime_config.read_org_flag",
+        "farna.core.runtime_config.read_org_flag",
         new=AsyncMock(side_effect=RuntimeError("db unavailable")),
     ):
         scope = await executor._resolve_run_connector_scope(_FakeSession([agent], [install]), org_id, graph_json)

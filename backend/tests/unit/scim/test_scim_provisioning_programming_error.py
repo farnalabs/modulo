@@ -55,18 +55,18 @@ def client(scim_client: Callable[..., TestClient]) -> TestClient:
 
 
 _SCIM_ROUTES: list[tuple[str, str, str, str | None, object]] = [
-    ("list_users", "GET", "/scim/v2/Users", "modulo.api.routes.scim.scim_list_users", None),
-    ("create_user", "POST", "/scim/v2/Users", "modulo.db.crud.account.get_account_by_email", USER_CREATE_BODY),
-    ("get_user", "GET", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", None),
-    ("replace_user", "PUT", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", USER_CREATE_BODY),
-    ("patch_user", "PATCH", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_get_user", PATCH_USER_BODY),
-    ("delete_user", "DELETE", "/scim/v2/Users/{id}", "modulo.api.routes.scim.scim_delete_user_by_id", None),
-    ("list_groups", "GET", "/scim/v2/Groups", "modulo.api.routes.scim.scim_list_groups", None),
-    ("create_group", "POST", "/scim/v2/Groups", "modulo.db.crud.team.get_team_by_name", GROUP_CREATE_BODY),
-    ("get_group", "GET", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", None),
-    ("replace_group", "PUT", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", GROUP_CREATE_BODY),
-    ("patch_group", "PATCH", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_get_group", PATCH_USER_BODY),
-    ("delete_group", "DELETE", "/scim/v2/Groups/{id}", "modulo.api.routes.scim.scim_delete_group_by_id", None),
+    ("list_users", "GET", "/scim/v2/Users", "farna.api.routes.scim.scim_list_users", None),
+    ("create_user", "POST", "/scim/v2/Users", "farna.db.crud.account.get_account_by_email", USER_CREATE_BODY),
+    ("get_user", "GET", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_get_user", None),
+    ("replace_user", "PUT", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_get_user", USER_CREATE_BODY),
+    ("patch_user", "PATCH", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_get_user", PATCH_USER_BODY),
+    ("delete_user", "DELETE", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_delete_user_by_id", None),
+    ("list_groups", "GET", "/scim/v2/Groups", "farna.api.routes.scim.scim_list_groups", None),
+    ("create_group", "POST", "/scim/v2/Groups", "farna.db.crud.team.get_team_by_name", GROUP_CREATE_BODY),
+    ("get_group", "GET", "/scim/v2/Groups/{id}", "farna.api.routes.scim.scim_get_group", None),
+    ("replace_group", "PUT", "/scim/v2/Groups/{id}", "farna.api.routes.scim.scim_get_group", GROUP_CREATE_BODY),
+    ("patch_group", "PATCH", "/scim/v2/Groups/{id}", "farna.api.routes.scim.scim_get_group", PATCH_USER_BODY),
+    ("delete_group", "DELETE", "/scim/v2/Groups/{id}", "farna.api.routes.scim.scim_delete_group_by_id", None),
 ]
 
 _ENTITY_IDS: dict[str, uuid.UUID | None] = {
@@ -117,10 +117,10 @@ class TestScimDatabaseErrors:
 
         with (
             patch(mock_target, side_effect=side_effect),
-            patch("modulo.api.routes.scim.set_rls_org"),
-            patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
+            patch("farna.api.routes.scim.set_rls_org"),
+            patch("farna.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
             patch(
-                "modulo.api.routes.scim._resolve_scim_admin_caller",
+                "farna.api.routes.scim._resolve_scim_admin_caller",
                 new_callable=AsyncMock,
                 return_value=USER_ID,
             ),
@@ -157,8 +157,8 @@ class TestGetBaseUrl:
 
     def test_list_users_returns_500(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
-            patch("modulo.api.routes.scim.set_rls_org"),
+            patch("farna.api.routes.scim.scim_list_users", return_value=([_MOCK_USER], 1)),
+            patch("farna.api.routes.scim.set_rls_org"),
         ):
             resp = client.get("/scim/v2/Users", headers=AUTH_HEADERS)
         assert resp.status_code == 500
@@ -166,8 +166,8 @@ class TestGetBaseUrl:
 
     def test_get_user_returns_500(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
-            patch("modulo.api.routes.scim.set_rls_org"),
+            patch("farna.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+            patch("farna.api.routes.scim.set_rls_org"),
         ):
             resp = client.get(f"/scim/v2/Users/{USER_ID}", headers=AUTH_HEADERS)
         assert resp.status_code == 500

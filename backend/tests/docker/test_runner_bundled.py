@@ -39,9 +39,9 @@ import aiodocker
 import aiohttp
 import pytest
 
-from modulo.core.bundled_runner.runner_reconciler import reconcile_runner_workspaces
-from modulo.core.runtime_provider import WorkspaceSpec
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.bundled_runner.runner_reconciler import reconcile_runner_workspaces
+from farna.core.runtime_provider import WorkspaceSpec
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
 pytestmark = [pytest.mark.docker]
 
@@ -390,7 +390,7 @@ async def test_reconciler_destroys_orphan_and_spares_active(monkeypatch: pytest.
     orphan_id = await _labelled_container(f"d4m-orphan-{uuid.uuid4().hex[:8]}", orphan_run, age_s=600)
     active_id = await _labelled_container(f"d4m-active-{uuid.uuid4().hex[:8]}", active_run, age_s=600)
     try:
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: _FakeSettings(destroy=True))
+        monkeypatch.setattr("farna.settings.get_settings", lambda: _FakeSettings(destroy=True))
 
         engine = _FakeEngine(active_rows=[[active_run]])
         result = await reconcile_runner_workspaces(engine)
@@ -553,7 +553,7 @@ async def test_reconciler_label_filter_works_through_socket_proxy() -> None:
     run_id = f"proxy-label-{uuid.uuid4().hex[:8]}"
     container_id = await _labelled_container(f"d4m-proxy-{uuid.uuid4().hex[:8]}", run_id, age_s=0)
     try:
-        from modulo.core.bundled_runner import runner_reconciler
+        from farna.core.bundled_runner import runner_reconciler
 
         source = runner_reconciler._DockerWorkspaceSource(endpoint)
         try:

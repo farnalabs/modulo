@@ -1,4 +1,4 @@
-"""Residual unit coverage for modulo.core.cron_helpers (FAR-619).
+"""Residual unit coverage for farna.core.cron_helpers (FAR-619).
 
 Edge branches the existing suites leave uncovered: cron-iteration timezone/DST
 boundaries, the fire-job skip paths (backpressure / paused / shared-budget
@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
-from modulo.core import cron_helpers as ch
-from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+from farna.connectors._rate_bucket import SharedBudgetUnavailableError
+from farna.core import cron_helpers as ch
+from farna.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from tests.unit.api.mock_session import make_redis_client, make_session_factory
 
 ORG = uuid.uuid4()
@@ -143,7 +143,7 @@ def _settings(**overrides: object) -> MagicMock:
 
 
 def _make_trigger(**overrides: object) -> MagicMock:
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.trigger import Trigger
 
     defaults: dict[str, object] = {
         "id": TRIGGER_A,
@@ -307,7 +307,7 @@ async def test_ingest_saq_error_reraises_cancellation():
 
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
-        patch("modulo.core.error_tracking.ErrorIngestionService") as svc_cls,
+        patch("farna.core.error_tracking.ErrorIngestionService") as svc_cls,
     ):
         svc_cls.return_value.ingest = AsyncMock(side_effect=asyncio.CancelledError())
         with pytest.raises(asyncio.CancelledError):
@@ -319,8 +319,8 @@ async def test_ingest_saq_error_swallows_ingest_failure(caplog):
 
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
-        patch("modulo.core.error_tracking.ErrorIngestionService") as svc_cls,
-        caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
+        patch("farna.core.error_tracking.ErrorIngestionService") as svc_cls,
+        caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"),
     ):
         svc_cls.return_value.ingest = AsyncMock(side_effect=RuntimeError("db down"))
         await ch._ingest_saq_error(session, ORG, function="fire_due_triggers", message="boom")
@@ -329,7 +329,7 @@ async def test_ingest_saq_error_swallows_ingest_failure(caplog):
 
 async def test_ingest_saq_error_skips_nil_org(caplog):
     session = _MockSession()
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         await ch._ingest_saq_error(session, ch.SYSTEM_ORG_ID, function="f", message="system error")
     assert any("no tenant context" in m for m in caplog.messages)
     assert not session.added
@@ -368,7 +368,7 @@ async def test_auto_create_snapshot_returns_new_id():
     trigger = _make_trigger()
     snapshot_id = uuid.uuid4()
     with patch(
-        "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+        "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
         new=AsyncMock(return_value=SimpleNamespace(id=snapshot_id)),
     ):
         got = await ch._auto_create_snapshot(session, trigger, ORG, PIPELINE)
@@ -396,7 +396,7 @@ async def test_fire_cron_trigger_backpressure_skips():
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.core.run_admission.evaluate_backpressure",
+            "farna.core.run_admission.evaluate_backpressure",
             new_callable=AsyncMock,
             return_value=(True, "pending queue depth 120"),
         ),
@@ -419,8 +419,8 @@ async def test_fire_cron_trigger_paused_race_backstop_skips():
     session = _MockSession([_lock_result(True), _trigger_result(trigger), _mock_result(scalar_one=0), MagicMock()])
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
-        patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, side_effect=TriggersPausedError()),
+        patch("farna.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+        patch("farna.db.crud.run.create_run", new_callable=AsyncMock, side_effect=TriggersPausedError()),
     ):
         outcome = await ch.fire_cron_trigger(
             trigger_id=TRIGGER_A,
@@ -447,9 +447,9 @@ async def _assert_non_runnable_pipeline_is_a_typed_skip(state: str) -> None:
     session = _MockSession([_lock_result(True), _trigger_result(trigger), _mock_result(scalar_one=0), MagicMock()])
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+        patch("farna.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         patch(
-            "modulo.db.crud.run.create_run",
+            "farna.db.crud.run.create_run",
             new_callable=AsyncMock,
             side_effect=PipelineNotRunnableError(state=state, pipeline_id=PIPELINE),
         ),
@@ -491,7 +491,7 @@ async def test_polling_pre_fire_gate_backpressure_skips():
     trigger = _make_trigger()
     session = _MockSession([_lock_result(True), _trigger_result(trigger), _mock_result(scalar_one=0)])
     with patch(
-        "modulo.core.run_admission.evaluate_backpressure",
+        "farna.core.run_admission.evaluate_backpressure",
         new_callable=AsyncMock,
         return_value=(True, "pending age > limit"),
     ):
@@ -506,8 +506,8 @@ async def test_run_poll_fire_paused_race_backstop_skips():
     connector = MagicMock()
     connector.query = AsyncMock(return_value=SimpleNamespace(records=[{"a": 1}], total=1))
     with (
-        patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=True),
-        patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, side_effect=TriggersPausedError()),
+        patch("farna.core.trigger_engine.polling.evaluate_condition", return_value=True),
+        patch("farna.db.crud.run.create_run", new_callable=AsyncMock, side_effect=TriggersPausedError()),
     ):
         outcome = await ch._run_poll_fire(
             session,
@@ -531,9 +531,9 @@ async def test_run_poll_fire_archived_pipeline_is_a_typed_skip():
     connector = MagicMock()
     connector.query = AsyncMock(return_value=SimpleNamespace(records=[{"a": 1}], total=1))
     with (
-        patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=True),
+        patch("farna.core.trigger_engine.polling.evaluate_condition", return_value=True),
         patch(
-            "modulo.db.crud.run.create_run",
+            "farna.db.crud.run.create_run",
             new_callable=AsyncMock,
             side_effect=PipelineNotRunnableError(state="archived", pipeline_id=PIPELINE),
         ),
@@ -570,9 +570,9 @@ async def test_fire_polling_trigger_shared_budget_outage_resets_epoch():
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+        patch("farna.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         patch.object(ch, "_build_polling_connector", new_callable=AsyncMock, return_value=(connector, _redis())),
-        patch("modulo.core.trigger_engine.polling._close_polling_resources", new_callable=AsyncMock),
+        patch("farna.core.trigger_engine.polling._close_polling_resources", new_callable=AsyncMock),
     ):
         outcome = await ch.fire_polling_trigger(
             trigger_id=TRIGGER_A,
@@ -616,9 +616,9 @@ async def test_fire_report_trigger_uses_formatter_and_deliverer():
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis") as redis_cls,
-        patch("modulo.core.reports.scheduler.get_generator", return_value=AsyncMock(return_value={"raw": 1})),
-        patch("modulo.core.reports.scheduler.get_formatter", return_value=lambda data: formatted),
-        patch("modulo.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=delivered)),
+        patch("farna.core.reports.scheduler.get_generator", return_value=AsyncMock(return_value={"raw": 1})),
+        patch("farna.core.reports.scheduler.get_formatter", return_value=lambda data: formatted),
+        patch("farna.core.reports.scheduler.get_deliverer", return_value=AsyncMock(return_value=delivered)),
     ):
         redis_cls.from_url.return_value = redis_client
         outcome = await ch.fire_report_trigger(report_id=REPORT_ID, org_id=ORG)
@@ -637,7 +637,7 @@ async def test_fire_report_trigger_forwards_epoch_and_bounds_redis_timeouts():
         patch.object(ch, "AsyncRedis") as redis_cls,
         patch.object(ch, "_open_factory", return_value=make_session_factory()),
         patch(
-            "modulo.core.reports.scheduler._fire_scheduled_report",
+            "farna.core.reports.scheduler._fire_scheduled_report",
             new_callable=AsyncMock,
             return_value={"status": "sent"},
         ) as fire,
@@ -659,10 +659,10 @@ async def test_fire_report_trigger_falls_back_to_config_delivery():
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis") as redis_cls,
-        patch("modulo.core.reports.scheduler.get_generator", return_value=AsyncMock(return_value={"raw": 1})),
-        patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
-        patch("modulo.core.reports.scheduler.get_deliverer", return_value=None),
-        patch("modulo.core.reports.scheduler._deliver_via_config", new_callable=AsyncMock, return_value=[{"ok": True}]),
+        patch("farna.core.reports.scheduler.get_generator", return_value=AsyncMock(return_value={"raw": 1})),
+        patch("farna.core.reports.scheduler.get_formatter", return_value=None),
+        patch("farna.core.reports.scheduler.get_deliverer", return_value=None),
+        patch("farna.core.reports.scheduler._deliver_via_config", new_callable=AsyncMock, return_value=[{"ok": True}]),
     ):
         redis_cls.from_url.return_value = redis_client
         outcome = await ch.fire_report_trigger(report_id=REPORT_ID, org_id=ORG)
@@ -679,7 +679,7 @@ async def test_fire_report_trigger_generator_cancellation_reraises():
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis", redis_cls),
         patch(
-            "modulo.core.reports.scheduler.get_generator", return_value=AsyncMock(side_effect=asyncio.CancelledError())
+            "farna.core.reports.scheduler.get_generator", return_value=AsyncMock(side_effect=asyncio.CancelledError())
         ),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -715,7 +715,7 @@ async def test_bump_ongoing_failure_reraises_cancellation():
 async def test_bump_ongoing_failure_swallows_redis_failure(caplog):
     redis_client = _redis()
     redis_client.incr = AsyncMock(side_effect=RuntimeError("redis down"))
-    with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
         await ch._bump_ongoing_failure(_MockSession(), redis_client, TRIGGER_A)
     assert any("ongoing_failure_counter_unavailable" in m for m in caplog.messages)
 
@@ -723,7 +723,7 @@ async def test_bump_ongoing_failure_swallows_redis_failure(caplog):
 async def test_clear_ongoing_failure_swallows_redis_failure(caplog):
     redis_client = _redis()
     redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
-    with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
         await ch._clear_ongoing_failure(redis_client, TRIGGER_A)
     assert any("clear_ongoing_failure failed" in m for m in caplog.messages)
 
@@ -763,7 +763,7 @@ async def test_ongoing_topup_raises_when_snapshot_unresolved():
 async def test_dispatch_ongoing_runs_reraises_cancellation():
     with (
         patch.object(ch, "get_settings", return_value=_settings()),
-        patch("modulo.core.dispatch.dispatch_run", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
+        patch("farna.core.dispatch.dispatch_run", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch._dispatch_ongoing_runs(None, ORG, [uuid.uuid4()])
@@ -772,7 +772,7 @@ async def test_dispatch_ongoing_runs_reraises_cancellation():
 async def test_dispatch_ongoing_runs_collects_per_run_errors():
     with (
         patch.object(ch, "get_settings", return_value=_settings()),
-        patch("modulo.core.dispatch.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
+        patch("farna.core.dispatch.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
     ):
         outcomes = await ch._dispatch_ongoing_runs(None, ORG, [uuid.uuid4(), uuid.uuid4()])
     assert len(outcomes) == 2
@@ -920,7 +920,7 @@ async def test_suite_run_trigger_judge_suite_without_backend_skips_at_fire():
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_suite_run_fire_gates", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
+            "farna.core.eval_engine.execute_suite_run.load_suite_definitions",
             return_value=[judge_def],
         ),
         patch.object(ch, "_build_suite_run_or_skip", new_callable=AsyncMock) as build,
@@ -948,12 +948,12 @@ def test_resolve_suite_run_config_invalid_ids():
 
 
 async def test_build_suite_run_empty_dataset_skips():
-    from modulo.core.eval_engine.execute_suite_run import SuiteRunEmptyDatasetError
+    from farna.core.eval_engine.execute_suite_run import SuiteRunEmptyDatasetError
 
     trigger = _make_trigger(eval_suite_id=uuid.uuid4())
     session = _MockSession()
     with patch(
-        "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+        "farna.core.eval_engine.execute_suite_run.build_suite_run",
         new=AsyncMock(side_effect=SuiteRunEmptyDatasetError("no rows")),
     ):
         run, skip = await ch._build_suite_run_or_skip(session, trigger, ORG, uuid.uuid4(), uuid.uuid4(), {}, PIPELINE)
@@ -963,12 +963,12 @@ async def test_build_suite_run_empty_dataset_skips():
 
 
 async def test_build_suite_run_execution_error_skips():
-    from modulo.core.eval_engine.execute_suite_run import SuiteRunExecutionError
+    from farna.core.eval_engine.execute_suite_run import SuiteRunExecutionError
 
     trigger = _make_trigger(eval_suite_id=uuid.uuid4())
     session = _MockSession()
     with patch(
-        "modulo.core.eval_engine.execute_suite_run.build_suite_run",
+        "farna.core.eval_engine.execute_suite_run.build_suite_run",
         new=AsyncMock(side_effect=SuiteRunExecutionError("bad config")),
     ):
         run, skip = await ch._build_suite_run_or_skip(session, trigger, ORG, uuid.uuid4(), uuid.uuid4(), {}, PIPELINE)
@@ -992,7 +992,7 @@ async def test_claim_catchup_marker_reraises_cancellation():
 async def test_claim_catchup_marker_redis_failure_fails_open(caplog):
     redis_client = _redis()
     redis_client.set = AsyncMock(side_effect=RuntimeError("redis down"))
-    with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
         claimed = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 12345)
     assert claimed is True
 
@@ -1014,7 +1014,7 @@ async def test_mark_catchup_fired_reraises_cancellation():
 async def test_mark_catchup_fired_swallows_redis_failure(caplog):
     redis_client = _redis()
     redis_client.set = AsyncMock(side_effect=RuntimeError("redis down"))
-    with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
         await ch._mark_catchup_fired(redis_client, TRIGGER_A, 12345)
     assert any("catchup_marker_write_failed" in m for m in caplog.messages)
 
@@ -1047,7 +1047,7 @@ async def test_advance_catchup_epoch_failure_returns_not_advanced(caplog):
     now = datetime.now(UTC)
     session = _MockSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         next_nf, advanced = await ch._advance_catchup_epoch(session, _catchup_row(now), now)
     assert advanced is False
     assert next_nf > now
@@ -1081,7 +1081,7 @@ async def test_enqueue_catchup_fire_suite_run_branch():
         await ch._enqueue_catchup_fire(session, _redis(), q, ORG, row, now, None, now, 42, summary)
     assert summary["cron_catchup_enqueued"] == 1
     fn = enqueue.await_args.args[1]
-    assert fn == "modulo.core.saq_worker.fire_suite_run_trigger"
+    assert fn == "farna.core.saq_worker.fire_suite_run_trigger"
 
 
 async def test_enqueue_catchup_fire_enqueue_failure_rolls_back():
@@ -1122,7 +1122,7 @@ async def test_fire_missed_cron_epochs_read_failure_returns(caplog):
     session = _MockSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     summary: dict[str, Any] = {"cron_catchup_enqueued": 0}
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         await ch._fire_missed_cron_epochs(
             session, _redis(), MagicMock(), ORG, datetime.now(UTC), summary=summary, advanced_this_tick=set()
         )
@@ -1230,7 +1230,7 @@ async def test_rollback_catchup_advance_swallows_failure(caplog):
     session = _MockSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     now = datetime.now(UTC)
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         await ch._rollback_catchup_advance(session, TRIGGER_A, now, now + timedelta(hours=1))
     assert any("rollback failed" in m for m in caplog.messages)
 
@@ -1258,7 +1258,7 @@ async def test_write_cron_liveness_reraises_cancellation():
 async def test_write_cron_liveness_swallows_failure(caplog):
     redis_client = _redis()
     redis_client.set = AsyncMock(side_effect=RuntimeError("redis down"))
-    with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"):
         await ch._write_cron_liveness(redis_client)
     assert any("liveness heartbeat write failed" in m for m in caplog.messages)
 
@@ -1274,7 +1274,7 @@ async def test_scans_read_failure_degrades_to_empty(scan: str, caplog):
     q.name = "runs"
     summary: dict[str, Any] = {}
     now = datetime.now(UTC)
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         if scan == "_process_due_cron_scan":
             advanced = await ch._process_due_cron_scan(session, q, _redis(), now, ORG, False, summary)
             assert not advanced
@@ -1564,7 +1564,7 @@ async def test_polling_missing_connector_swallows_failure(caplog):
     session = _MockSession()
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     summary: dict[str, Any] = {"polling_due": 0}
-    with caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
         await ch._polling_missing_connector(session, ORG, row, 60, summary)
     assert any("missing-connector handling failed" in m for m in caplog.messages)
 
@@ -1774,8 +1774,8 @@ async def test_record_fact_for_terminalized_run_success():
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.core.analytics.record_fact_for_terminal_failed_run", fact),
+        patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+        patch("farna.core.analytics.record_fact_for_terminal_failed_run", fact),
     ):
         await ch._record_fact_for_terminalized_run(run.id, ORG)
     fact.assert_awaited_once_with(session, run)
@@ -1786,8 +1786,8 @@ async def test_record_fact_for_terminalized_run_missing_run_warns(caplog):
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=None),
-        caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"),
+        patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=None),
+        caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"),
     ):
         await ch._record_fact_for_terminalized_run(uuid.uuid4(), ORG)
     assert any("terminalized_facts_run_missing" in m for m in caplog.messages)
@@ -1798,7 +1798,7 @@ async def test_record_fact_for_terminalized_run_reraises_cancellation():
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
+        patch("farna.db.crud.run.get_run", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch._record_fact_for_terminalized_run(uuid.uuid4(), ORG)
@@ -1810,16 +1810,16 @@ async def test_record_fact_for_terminalized_run_swallows_failure(caplog):
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.db.crud.run.get_run",
+            "farna.db.crud.run.get_run",
             new_callable=AsyncMock,
             return_value=SimpleNamespace(id=uuid.uuid4(), status="cancelled"),
         ),
         patch(
-            "modulo.core.analytics.record_fact_for_terminal_failed_run",
+            "farna.core.analytics.record_fact_for_terminal_failed_run",
             new_callable=AsyncMock,
             side_effect=RuntimeError("db down"),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"),
     ):
         await ch._record_fact_for_terminalized_run(uuid.uuid4(), ORG)
     assert any("terminalized_facts_failed" in m for m in caplog.messages)
@@ -1842,7 +1842,7 @@ async def test_reconcile_org_read_failure_returns(caplog):
     with (
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "_terminalize_mid_graph_wedges", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
-        caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"),
     ):
         got = await ch._reconcile_org(
             factory=_factory_for(session),
@@ -1938,16 +1938,16 @@ async def test_run_reconcile_sweeps_records_summary(caplog):
             return_value={"scanned": 3, "deactivated": 1, "capped": 0, "alerts": 1, "notify_failed": 0},
         ),
         patch(
-            "modulo.auth.api_key.revoke_run_api_key_sweep",
+            "farna.auth.api_key.revoke_run_api_key_sweep",
             new_callable=AsyncMock,
             return_value={"scanned": 4, "revoked": 2, "errors": 0},
         ),
         patch(
-            "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+            "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
             new_callable=AsyncMock,
             return_value={"orgs_checked": 1, "flagged_orgs": ["org-1"]},
         ),
-        caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"),
     ):
         await ch._run_reconcile_sweeps(redis_client, summary)
     assert summary["classification_classified"] == 2
@@ -1970,14 +1970,14 @@ async def test_run_reconcile_sweeps_swallows_each_failure(caplog):
         patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
         patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
         patch(
-            "modulo.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, side_effect=RuntimeError("db down")
+            "farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, side_effect=RuntimeError("db down")
         ),
         patch(
-            "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+            "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
             new_callable=AsyncMock,
             side_effect=RuntimeError("db down"),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"),
     ):
         await ch._run_reconcile_sweeps(redis_client, summary)
     assert summary["rollback_thresholds_checked"] == 0
@@ -2004,9 +2004,9 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
-        patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
-        patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
-        patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
+        patch("farna.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
+        patch("farna.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
+        patch("farna.core.error_tracking.metrics.record_stall_reason", record),
     ):
         await ch._update_reconcile_telemetry(summary)
     recorded = [call.args[0] for call in record.call_args_list]
@@ -2041,9 +2041,9 @@ async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
-        patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
-        patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
-        patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
+        patch("farna.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
+        patch("farna.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
+        patch("farna.core.error_tracking.metrics.record_stall_reason", record),
     ):
         await ch._update_reconcile_telemetry(summary)
     record.assert_not_called()
@@ -2053,8 +2053,8 @@ async def test_update_reconcile_telemetry_disabled_returns_early():
     record = MagicMock()
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=False),
-        patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock) as sample_runs,
-        patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
+        patch("farna.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock) as sample_runs,
+        patch("farna.core.error_tracking.metrics.record_stall_reason", record),
     ):
         await ch._update_reconcile_telemetry(
             {
@@ -2079,7 +2079,7 @@ async def test_update_reconcile_telemetry_reraises_cancellation():
         patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch(
-            "modulo.core.error_tracking.metrics.sample_run_runtime_metrics",
+            "farna.core.error_tracking.metrics.sample_run_runtime_metrics",
             new_callable=AsyncMock,
             side_effect=asyncio.CancelledError(),
         ),
@@ -2098,11 +2098,11 @@ async def test_update_reconcile_telemetry_swallows_failure(caplog):
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
         patch(
-            "modulo.core.error_tracking.metrics.sample_run_runtime_metrics",
+            "farna.core.error_tracking.metrics.sample_run_runtime_metrics",
             new_callable=AsyncMock,
             side_effect=RuntimeError("db down"),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"),
+        caplog.at_level(logging.WARNING, logger="farna.core.cron_helpers"),
     ):
         await ch._update_reconcile_telemetry(summary)
     assert any("metrics_update_failed" in m for m in caplog.messages)
@@ -2333,7 +2333,7 @@ async def test_capacity_defer_pending_run_no_pipeline_false():
 
 async def test_re_enqueue_run_gates_on_dispatch_run():
     dispatch = AsyncMock(return_value=("enqueued", "job-1"))
-    with patch("modulo.core.dispatch.dispatch_run", dispatch):
+    with patch("farna.core.dispatch.dispatch_run", dispatch):
         outcome, job_id = await ch._re_enqueue_run("runs", str(uuid.uuid4()), str(ORG), "execute_run", key_suffix="abc")
     assert outcome == "enqueued"
     assert job_id == "job-1"
@@ -2452,8 +2452,8 @@ async def test_reconcile_org_reraises_cancellation():
     [
         ("ch.run_classification_reconcile", False),
         ("ch.enforce_no_delivery_streaks", False),
-        ("modulo.auth.api_key.revoke_run_api_key_sweep", True),
-        ("modulo.core.rollback_thresholds.evaluate_rollback_thresholds", True),
+        ("farna.auth.api_key.revoke_run_api_key_sweep", True),
+        ("farna.core.rollback_thresholds.evaluate_rollback_thresholds", True),
     ],
 )
 async def test_run_reconcile_sweeps_reraises_cancellation(sweep_patch: tuple[str, bool]):
@@ -2486,17 +2486,17 @@ def _patch_reconcile_sweeps_before_enforcement(stack: ExitStack) -> None:
     stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, return_value={}))
-    stack.enter_context(patch("modulo.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
+    stack.enter_context(patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
     stack.enter_context(
         patch(
-            "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+            "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
             new_callable=AsyncMock,
             return_value={},
         )
     )
     stack.enter_context(
         patch(
-            "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+            "farna.core.runner_capacity.reconcile_runner_dispatch_markers",
             new_callable=AsyncMock,
             return_value={},
         )
@@ -2511,12 +2511,12 @@ async def test_run_reconcile_sweeps_enforcement_corrected_logs(caplog):
         _patch_reconcile_sweeps_before_enforcement(stack)
         stack.enter_context(
             patch(
-                "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+                "farna.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
                 new_callable=AsyncMock,
                 return_value={"scanned": 7, "corrected": 3},
             )
         )
-        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        stack.enter_context(caplog.at_level(logging.INFO, logger="farna.core.cron_helpers"))
         await ch._run_reconcile_sweeps(redis_client, summary)
     assert summary["enforcement_sweep_scanned"] == 7
     assert summary["enforcement_sweep_corrected"] == 3
@@ -2531,7 +2531,7 @@ async def test_run_reconcile_sweeps_enforcement_reraises_cancellation():
         _patch_reconcile_sweeps_before_enforcement(stack)
         stack.enter_context(
             patch(
-                "modulo.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
+                "farna.core.analytics.enforcement_sweep.sweep_schema_enforcement_facts",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             )
@@ -2570,7 +2570,7 @@ async def test_build_polling_connector_reraises_cancellation():
     ``(None, None)``)."""
     with (
         patch(
-            "modulo.core.trigger_engine.polling._build_polling_connector_from_instance",
+            "farna.core.trigger_engine.polling._build_polling_connector_from_instance",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -2584,7 +2584,7 @@ async def test_build_polling_connector_reraises_shared_budget_unavailable():
     local bucket."""
     with (
         patch(
-            "modulo.core.trigger_engine.polling._build_polling_connector_from_instance",
+            "farna.core.trigger_engine.polling._build_polling_connector_from_instance",
             new=AsyncMock(side_effect=SharedBudgetUnavailableError("redis down")),
         ),
         pytest.raises(SharedBudgetUnavailableError),
@@ -2606,7 +2606,7 @@ async def test_evaluate_poll_condition_reraises_cancellation():
     being swallowed into a condition-error outcome."""
     with (
         patch(
-            "modulo.core.trigger_engine.polling.evaluate_condition",
+            "farna.core.trigger_engine.polling.evaluate_condition",
             MagicMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -2630,10 +2630,10 @@ async def test_fire_polling_trigger_reraises_cancellation_from_poll():
     with (
         patch.object(ch, "_open_factory", return_value=_factory_for(session)),
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+        patch("farna.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         patch.object(ch, "_build_polling_connector", new_callable=AsyncMock, return_value=(MagicMock(), _redis())),
         patch.object(ch, "_run_poll_query", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
-        patch("modulo.core.trigger_engine.polling._close_polling_resources", new_callable=AsyncMock),
+        patch("farna.core.trigger_engine.polling._close_polling_resources", new_callable=AsyncMock),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch.fire_polling_trigger(
@@ -2774,7 +2774,7 @@ async def test_sweep_workspace_input_drift_flags_corrects_skips_and_emits(
         return audit_rows.get(run_id)
 
     monkeypatch.setattr(
-        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        "farna.db.crud.run_node_outputs.read_audit_row_outputs_json",
         _fake_read,
     )
 
@@ -2810,7 +2810,7 @@ async def test_sweep_workspace_input_drift_flags_terminates_no_audit_runs(
         return None
 
     monkeypatch.setattr(
-        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        "farna.db.crud.run_node_outputs.read_audit_row_outputs_json",
         _fake_read,
     )
 
@@ -2837,7 +2837,7 @@ async def test_sweep_workspace_input_drift_flags_swallows_read_error(
         raise RuntimeError("db unavailable")
 
     monkeypatch.setattr(
-        "modulo.db.crud.run_node_outputs.read_audit_row_outputs_json",
+        "farna.db.crud.run_node_outputs.read_audit_row_outputs_json",
         _boom,
     )
 
@@ -2865,14 +2865,14 @@ async def test_run_reconcile_sweeps_records_drift_sweep(
     monkeypatch.setattr(ch, "_open_factory", lambda: make_session_factory())
     monkeypatch.setattr(ch, "run_classification_reconcile", AsyncMock(return_value={}))
     monkeypatch.setattr(ch, "enforce_no_delivery_streaks", AsyncMock(return_value={}))
-    monkeypatch.setattr("modulo.auth.api_key.revoke_run_api_key_sweep", AsyncMock(return_value={}))
+    monkeypatch.setattr("farna.auth.api_key.revoke_run_api_key_sweep", AsyncMock(return_value={}))
     monkeypatch.setattr(
-        "modulo.core.rollback_thresholds.evaluate_rollback_thresholds",
+        "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
         AsyncMock(return_value={"orgs_checked": 0, "flagged_orgs": []}),
     )
-    monkeypatch.setattr("modulo.core.runner_capacity.reconcile_runner_dispatch_markers", AsyncMock(return_value={}))
-    monkeypatch.setattr("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", AsyncMock())
-    monkeypatch.setattr("modulo.core.error_tracking.metrics.sample_error_group_metrics", AsyncMock())
+    monkeypatch.setattr("farna.core.runner_capacity.reconcile_runner_dispatch_markers", AsyncMock(return_value={}))
+    monkeypatch.setattr("farna.core.error_tracking.metrics.sample_run_runtime_metrics", AsyncMock())
+    monkeypatch.setattr("farna.core.error_tracking.metrics.sample_error_group_metrics", AsyncMock())
 
     summary: dict[str, Any] = {}
     redis_client = make_redis_client()

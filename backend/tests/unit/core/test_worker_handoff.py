@@ -32,23 +32,23 @@ import pytest
 from sqlalchemy import literal_column, select
 from sqlalchemy.dialects import postgresql
 
-import modulo.core.pipeline_execution as pipeline_execution
-import modulo.core.saq_worker as sw
-import modulo.core.worker_handoff as wh
-from modulo.core.pipeline_engine.error_codes import (
+import farna.core.pipeline_execution as pipeline_execution
+import farna.core.saq_worker as sw
+import farna.core.worker_handoff as wh
+from farna.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     LEGACY_ALIASES,
     ErrorCodeSpec,
     map_legacy_code,
 )
-from modulo.core.worker_handoff import (
+from farna.core.worker_handoff import (
     WORKER_LOST_ERROR_CODE,
     InFlightRunRegistry,
     get_inflight_registry,
     handback_inflight_runs,
     track_inflight_run,
 )
-from modulo.db.crud import row_lock, run_node_outputs
+from farna.db.crud import row_lock, run_node_outputs
 
 
 def test_registry_register_discard_snapshot() -> None:
@@ -263,7 +263,7 @@ def test_gate_refuses_non_idempotent_node_started_run() -> None:
     which re-dispatches as ``execute_run`` — a re-EXECUTION with no
     idempotency gate of its own (executor._fenced_pending_reset's contract).
     """
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
     assert decision.may_requeue is False
@@ -272,7 +272,7 @@ def test_gate_refuses_non_idempotent_node_started_run() -> None:
 
 def test_gate_requeues_idempotent_node_started_run() -> None:
     """The ticket's sanctioned outcome: an idempotent node-started run re-runs."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(_row(), {"nodes": [{"id": "n1"}]})
     assert decision.may_requeue is True
@@ -280,7 +280,7 @@ def test_gate_requeues_idempotent_node_started_run() -> None:
 
 def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
     """Zero executed nodes => nothing to double-execute (the sibling premise)."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(_row(dispatch_phase="claimed"), {"nodes": [{"id": "n1", "idempotent": False}]})
     assert decision.may_requeue is True
@@ -315,7 +315,7 @@ def test_engine_evidence_excludes_self_reported_output_json() -> None:
 
 def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> None:
     """Observed sandbox evidence must not be discarded by a re-claim."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(
         _row(observed_activity=True),
@@ -328,7 +328,7 @@ def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> 
 
 def test_gate_terminalises_nodeless_run_with_observed_sandbox_activity() -> None:
     """Durable evidence wins before the zero-node requeue arm."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(
         _row(dispatch_phase="claimed", observed_activity=True),
@@ -341,7 +341,7 @@ def test_gate_terminalises_nodeless_run_with_observed_sandbox_activity() -> None
 
 def test_gate_requeues_nodeless_self_report_only_run() -> None:
     """A self-reported-only envelope is not durable engine evidence."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(
         _row(dispatch_phase="claimed", observed_activity=False),
@@ -353,7 +353,7 @@ def test_gate_requeues_nodeless_self_report_only_run() -> None:
 
 def test_gate_honours_never_retry_policy_on_node_started_run() -> None:
     """A policy covering neither failure nor stall forbids the requeue (M1)."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     policy = {"on": ["eval_failed"], "max_retries": 3}
     decision = _handback_decision(_row(retry_policy=policy), {"nodes": [{"id": "n1"}]})
@@ -363,7 +363,7 @@ def test_gate_honours_never_retry_policy_on_node_started_run() -> None:
 
 def test_gate_honours_never_retry_policy_on_pre_node_run() -> None:
     """The pre-node class keeps the sibling ``_should_redispatch_nodeless`` call."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     policy = {"on": ["eval_failed"], "max_retries": 3}
     decision = _handback_decision(_row(dispatch_phase="claimed", retry_policy=policy), {})
@@ -372,7 +372,7 @@ def test_gate_honours_never_retry_policy_on_pre_node_run() -> None:
 
 def test_gate_honours_retry_budget_on_pre_node_run() -> None:
     """An exhausted stall-covered budget terminal-fails, as the sibling does."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     policy = {"on": ["stall"], "max_retries": 2}
     decision = _handback_decision(
@@ -384,7 +384,7 @@ def test_gate_honours_retry_budget_on_pre_node_run() -> None:
 
 def test_gate_treats_checkpointed_row_as_node_started() -> None:
     """A legacy NULL/absent phase with a checkpoint is NOT zero-node (FAR-1088)."""
-    from modulo.core.worker_handoff import _handback_decision
+    from farna.core.worker_handoff import _handback_decision
 
     decision = _handback_decision(
         _row(dispatch_phase=None, checkpoints_absent=False),
@@ -466,7 +466,7 @@ async def test_shutdown_handoff_hook_swallows_errors(
         raise RuntimeError("db down")
 
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
-    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _boom)
+    monkeypatch.setattr("farna.core.worker_handoff.handback_inflight_runs", _boom)
     with caplog.at_level(logging.ERROR):
         await sw._shutdown_handoff_hook({})
     assert any("shutdown_handoff_failed" in r.message for r in caplog.records)
@@ -481,7 +481,7 @@ async def test_shutdown_handoff_hook_logs_handed_back_count(
         return {"handed_back": 3, "terminalised": 2, "skipped": 1}
 
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
-    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _ok)
+    monkeypatch.setattr("farna.core.worker_handoff.handback_inflight_runs", _ok)
     with caplog.at_level(logging.WARNING):
         await sw._shutdown_handoff_hook({})
     assert any("handed_back=3" in r.message for r in caplog.records)
@@ -502,7 +502,7 @@ async def test_shutdown_handoff_hook_propagates_cancelled_error(
         raise asyncio.CancelledError
 
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
-    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _cancel)
+    monkeypatch.setattr("farna.core.worker_handoff.handback_inflight_runs", _cancel)
     with pytest.raises(asyncio.CancelledError):
         await sw._shutdown_handoff_hook({})
 
@@ -522,7 +522,7 @@ async def test_shutdown_handoff_hook_stays_quiet_when_nothing_handed_back(
         return {"handed_back": 0, "terminalised": 0, "skipped": 4}
 
     monkeypatch.setattr(sw, "_get_async_engine", lambda: MagicMock())
-    monkeypatch.setattr("modulo.core.worker_handoff.handback_inflight_runs", _nothing)
+    monkeypatch.setattr("farna.core.worker_handoff.handback_inflight_runs", _nothing)
     with caplog.at_level(logging.WARNING):
         await sw._shutdown_handoff_hook({})
     assert not any("shutdown_handoff handed_back" in r.message for r in caplog.records)
@@ -819,7 +819,7 @@ async def test_load_handback_row_reads_evidence_through_the_blob_chokepoint() ->
 
 def test_node_started_policy_treats_empty_on_list_as_no_veto() -> None:
     """An explicit empty ``on`` is the GUI's inert no-op save — not a veto."""
-    from modulo.core.worker_handoff import _node_started_policy_allows
+    from farna.core.worker_handoff import _node_started_policy_allows
 
     ok, reason = _node_started_policy_allows(_row(retry_policy={"on": []}))
     assert ok is True
@@ -828,7 +828,7 @@ def test_node_started_policy_treats_empty_on_list_as_no_veto() -> None:
 
 def test_node_started_policy_allows_failure_covered_within_budget() -> None:
     """A ``failure``-covering policy with budget left permits the re-run."""
-    from modulo.core.worker_handoff import _node_started_policy_allows
+    from farna.core.worker_handoff import _node_started_policy_allows
 
     ok, reason = _node_started_policy_allows(_row(retry_policy={"on": ["failure"], "max_retries": 3}))
     assert ok is True

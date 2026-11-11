@@ -32,7 +32,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.eval.finding_resolver import (
+from farna.core.eval.finding_resolver import (
     FindingResolutionError,
     resolve_finding,
 )

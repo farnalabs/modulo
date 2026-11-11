@@ -1,7 +1,7 @@
-"""Unit tests for modulo.api.middleware.cors_logging.CorsLoggingMiddleware.
+"""Unit tests for farna.api.middleware.cors_logging.CorsLoggingMiddleware.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the CORS
-middleware subclass. The module has a single consumer (``modulo.api.main``)
+middleware subclass. The module has a single consumer (``farna.api.main``)
 and previously had no dedicated unit test file — the CORS allow/reject
 behaviour and the added logging (preflight DEBUG, rejected-origin WARNING)
 were only exercised indirectly. These tests lock the Starlette CORS contract
@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-_LOGGER = "modulo.api.middleware.cors_logging"
+_LOGGER = "farna.api.middleware.cors_logging"
 
 _ALLOWED = "https://allowed.example"
 _DENIED = "https://evil.example"
@@ -23,7 +23,7 @@ _DENIED = "https://evil.example"
 
 @pytest.fixture
 def app() -> FastAPI:
-    from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
+    from farna.api.middleware.cors_logging import CorsLoggingMiddleware
 
     app = FastAPI()
 
@@ -137,7 +137,7 @@ class TestCorsLoggingMiddleware:
 
 class TestCorsLoggingMiddlewareNonHttp:
     async def test_non_http_scope_is_forwarded_untouched(self) -> None:
-        from modulo.api.middleware.cors_logging import CorsLoggingMiddleware
+        from farna.api.middleware.cors_logging import CorsLoggingMiddleware
 
         scopes_seen: list[str] = []
 

@@ -15,20 +15,20 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import admin_feature_flags
-from modulo.api.routes.admin_feature_flags import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import admin_feature_flags
+from farna.api.routes.admin_feature_flags import (
     _build_registry,
     _emit_org_flag_override_audit,
     _enforce_team_tier_gate,
     _license_is_valid,
     _resolve_tier,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.core.license import (
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import FeatureFlagRegistry
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     LICENCE_GRACE_DAYS,
     LicenseData,
@@ -37,8 +37,8 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -244,7 +244,7 @@ def _patch_resolve_tier() -> Generator[None, None, None]:
     need a specific tier can override this mock.
     """
     with patch(
-        "modulo.api.routes.admin_feature_flags._resolve_tier",
+        "farna.api.routes.admin_feature_flags._resolve_tier",
         new_callable=AsyncMock,
         return_value="community",
     ):
@@ -290,8 +290,8 @@ def _patch_org_settings_writer() -> Generator[None, None, None]:
         return settings
 
     with (
-        patch("modulo.api.routes.admin_feature_flags.update_org_settings_patch", new=_apply),
-        patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_apply),
+        patch("farna.api.routes.admin_feature_flags.update_org_settings_patch", new=_apply),
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new=_apply),
     ):
         yield
 
@@ -310,7 +310,7 @@ class TestListFeatureFlags:
     def test_ordinary_caller_cannot_see_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
         """library.search.in_dev alone does not grant system_maps access."""
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags")
@@ -320,7 +320,7 @@ class TestListFeatureFlags:
 
     def test_internal_caller_can_see_system_maps(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             response = client.get("/api/v1/admin/feature-flags")
@@ -330,7 +330,7 @@ class TestListFeatureFlags:
 
     def test_returns_200(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -338,7 +338,7 @@ class TestListFeatureFlags:
 
     def test_returns_license_block(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -363,7 +363,7 @@ class TestListFeatureFlags:
         )
         store_license("stored-key", stored)
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -372,7 +372,7 @@ class TestListFeatureFlags:
 
     def test_returns_flags_list(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -387,7 +387,7 @@ class TestListFeatureFlags:
 
     def test_returns_would_activate(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -396,7 +396,7 @@ class TestListFeatureFlags:
 
     def test_community_tier_has_team_flags_in_would_activate(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -412,7 +412,7 @@ class TestListFeatureFlags:
 
     def test_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=RuntimeError("boom"),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -433,11 +433,11 @@ class TestListFeatureFlags:
         org.settings_json = {"feature_overrides": {"sso": True}}
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new=AsyncMock(return_value=org),
             ),
         ):
@@ -462,11 +462,11 @@ class TestListFeatureFlags:
         org.settings_json = {"feature_overrides": {"sso": True}}
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new=AsyncMock(return_value=org),
             ),
         ):
@@ -480,7 +480,7 @@ class TestListFeatureFlags:
         """A failed org-override read (e.g. mock/DB session without org data) must
         fall back to the registry defaults instead of failing the request."""
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -494,11 +494,11 @@ class TestListFeatureFlags:
         shared bool-only reader's org-None branch answers, no exception."""
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new=AsyncMock(return_value=None),
             ),
         ):
@@ -523,7 +523,7 @@ class TestGetFeatureFlag:
 
     def test_internal_caller_can_inspect_system_maps(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             response = client.get("/api/v1/admin/feature-flags/system_maps")
@@ -532,7 +532,7 @@ class TestGetFeatureFlag:
 
     def test_returns_200_for_known_flag(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags/sso")
@@ -543,7 +543,7 @@ class TestGetFeatureFlag:
 
     def test_returns_404_for_unknown_flag(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags/nonexistent_flag")
@@ -554,7 +554,7 @@ class TestGetFeatureFlag:
     def test_returns_404_for_retired_internal_flag(self, client: TestClient) -> None:
         """Retired internal flags are hidden even from the system-admin GET."""
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.get("/api/v1/admin/feature-flags/lifecycle_map_journeys")
@@ -567,7 +567,7 @@ class TestGetFeatureFlag:
 
     def test_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=RuntimeError("boom"),
         ):
             resp = client.get("/api/v1/admin/feature-flags/sso")
@@ -585,11 +585,11 @@ class TestGetFeatureFlag:
         org = _org_with_overrides(sso=True)
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
@@ -606,11 +606,11 @@ class TestGetFeatureFlag:
         org = _org_with_overrides(eval_system=False)
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
@@ -627,11 +627,11 @@ class TestGetFeatureFlag:
         org = _org_with_overrides(sso=True)
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
@@ -650,11 +650,11 @@ class TestGetFeatureFlag:
         org.settings_json = None
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
@@ -672,7 +672,7 @@ class TestGetFeatureFlag:
 class TestProgrammingError:
     def test_list_returns_501_on_programming_error(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
             resp = client.get("/api/v1/admin/feature-flags")
@@ -682,7 +682,7 @@ class TestProgrammingError:
 
     def test_get_returns_501_on_programming_error(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
             resp = client.get("/api/v1/admin/feature-flags/sso")
@@ -692,7 +692,7 @@ class TestProgrammingError:
 
     def test_toggle_returns_501_on_programming_error(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
             resp = client.put("/api/v1/admin/feature-flags/sso", json={"enabled": True})
@@ -716,16 +716,16 @@ class TestToggleFeatureFlag:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -740,21 +740,21 @@ class TestToggleFeatureFlag:
         redis_mock.get.return_value = None
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._resolve_tier",
+                "farna.api.routes.admin_feature_flags._resolve_tier",
                 new_callable=AsyncMock,
                 return_value="community",
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -767,7 +767,7 @@ class TestToggleFeatureFlag:
 
     def test_toggle_unknown_flag_returns_404(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
         ):
             resp = client.put(
@@ -781,11 +781,11 @@ class TestToggleFeatureFlag:
     def test_toggle_retired_internal_flag_returns_404_without_writing(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._write_org_override",
+                "farna.api.routes.admin_feature_flags._write_org_override",
                 new_callable=AsyncMock,
             ) as write_override,
         ):
@@ -805,7 +805,7 @@ class TestToggleFeatureFlag:
 
     def test_toggle_error_returns_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=RuntimeError("boom"),
         ):
             resp = client.put(
@@ -837,16 +837,16 @@ class TestTogglePersistence:
         redis_mock.get.return_value = None
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -875,16 +875,16 @@ class TestTogglePersistence:
         redis_mock.get.return_value = None
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -902,11 +902,11 @@ class TestTogglePersistence:
         for a write that did not happen."""
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             ),
@@ -923,16 +923,16 @@ class TestTogglePersistence:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 side_effect=RuntimeError("redis down"),
             ),
         ):
@@ -967,11 +967,11 @@ class TestOrgOverrideCacheInvalidation:
         """Caller with library.search.in_dev passes internal gate and receives 404 for retired flag."""
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._write_org_override",
+                "farna.api.routes.admin_feature_flags._write_org_override",
                 new_callable=AsyncMock,
             ) as write_override,
         ):
@@ -1004,16 +1004,16 @@ class TestOrgOverrideCacheInvalidation:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1029,16 +1029,16 @@ class TestOrgOverrideCacheInvalidation:
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -1056,16 +1056,16 @@ class TestOrgOverrideCacheInvalidation:
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -1084,16 +1084,16 @@ class TestOrgOverrideCacheInvalidation:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 side_effect=RuntimeError("redis down"),
             ),
         ):
@@ -1113,7 +1113,7 @@ class TestOrgOverrideRoundTrip:
     def test_get_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
         org = _org_with_overrides(system_maps=True)
         with patch(
-            "modulo.api.routes.admin_feature_flags.get_organisation",
+            "farna.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
             return_value=org,
         ):
@@ -1124,7 +1124,7 @@ class TestOrgOverrideRoundTrip:
     def test_get_retired_internal_override_is_denied_without_reading(self, internal_client: TestClient) -> None:
         """Caller with system_maps_access cannot read lifecycle_map_journeys override."""
         with patch(
-            "modulo.api.routes.admin_feature_flags.get_organisation",
+            "farna.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
         ) as get_org:
             response = internal_client.get(
@@ -1138,7 +1138,7 @@ class TestOrgOverrideRoundTrip:
         """Caller with library.search.in_dev can read lifecycle_map_journeys override."""
         org = _org_with_overrides(lifecycle_map_journeys=True)
         with patch(
-            "modulo.api.routes.admin_feature_flags.get_organisation",
+            "farna.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
             return_value=org,
         ):
@@ -1155,16 +1155,16 @@ class TestOrgOverrideRoundTrip:
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -1184,16 +1184,16 @@ class TestOrgOverrideRoundTrip:
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -1216,11 +1216,11 @@ class TestRetiredOrgOverrideAccess:
     def test_clear_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
+                "farna.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1233,11 +1233,11 @@ class TestRetiredOrgOverrideAccess:
         """Caller with system_maps_access cannot clear lifecycle_map_journeys override."""
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
             ) as get_org,
             patch(
-                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
+                "farna.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ) as update_settings,
         ):
@@ -1254,11 +1254,11 @@ class TestRetiredOrgOverrideAccess:
         redis_mock = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
+                "farna.api.routes.admin_feature_flags.apply_org_settings_patch_or_404",
                 new_callable=AsyncMock,
             ) as update_settings,
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=redis_mock,
             ),
@@ -1298,21 +1298,21 @@ class TestOrgSettingsPatchScope:
         bind = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "farna.api.routes.admin_feature_flags.update_org_settings_patch",
                 new=capture,
             ),
-            patch("modulo.api.routes.admin_feature_flags.set_rls_org", bind),
+            patch("farna.api.routes.admin_feature_flags.set_rls_org", bind),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1329,11 +1329,11 @@ class TestOrgSettingsPatchScope:
         captured, capture = self._capture_patch()
         with (
             patch(
-                "modulo.api.routes._org_settings.update_org_settings_patch",
+                "farna.api.routes._org_settings.update_org_settings_patch",
                 new=capture,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1409,20 +1409,20 @@ class TestOrgFlagOverrideAudit:
         """Patch the route collaborators shared by every emission test."""
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
                 new=audit,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1477,23 +1477,23 @@ class TestOrgFlagOverrideAudit:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("audit backend down"),
             ),
-            patch("modulo.core.audit_logger.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.audit_logger.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.core.audit_logger.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.audit_logger.set_rls_user_context", new_callable=AsyncMock),
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                "farna.api.routes.admin_feature_flags.Redis.from_url",
                 new_callable=MagicMock,
                 return_value=AsyncMock(),
             ),
@@ -1517,7 +1517,7 @@ class TestOrgFlagOverrideAudit:
             is_system_admin=True,
         )
         with patch(
-            "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+            "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
             new=audit,
         ):
             await _emit_org_flag_override_audit(
@@ -1535,7 +1535,7 @@ class TestOrgFlagOverrideAudit:
         the audit transaction; a fabricated ``"admin"`` would misrepresent the
         principal. Absent claim maps to the established neutral ``""`` sentinel
         (the same fallback used when minting access tokens in
-        ``modulo/auth/jwt.py``).
+        ``farna/auth/jwt.py``).
         """
         audit = AsyncMock()
         principal = AuthenticatedPrincipal(
@@ -1546,7 +1546,7 @@ class TestOrgFlagOverrideAudit:
             is_system_admin=True,
         )
         with patch(
-            "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+            "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
             new=audit,
         ):
             await _emit_org_flag_override_audit(
@@ -1570,7 +1570,7 @@ class TestOrgFlagOverrideAudit:
         )
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
                 side_effect=asyncio.CancelledError,
             ),
             pytest.raises(asyncio.CancelledError),
@@ -1590,7 +1590,7 @@ class TestOrgFlagOverrideAudit:
 
 class TestCatchAllMiddlewareFallback:
     def test_plain_json_on_serialization_failure(self) -> None:
-        from modulo.api.middleware.catch_all import _make_500_response
+        from farna.api.middleware.catch_all import _make_500_response
 
         resp = _make_500_response(None)
         assert resp.status_code == 500
@@ -1672,11 +1672,11 @@ async def _resolve_tier_value(org: MagicMock, *, license_key: str = "") -> str:
     """Run _resolve_tier with no org/system license present by default."""
     session = _session()
     with (
-        patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
-        patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.core.license.get_license", return_value=None),
-        patch("modulo.core.license.parse_and_verify", return_value=_invalid_validation()),
+        patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+        patch("farna.core.license.get_license", return_value=None),
+        patch("farna.core.license.parse_and_verify", return_value=_invalid_validation()),
     ):
         return await _resolve_tier(_settings(license_key), session, _principal())
 
@@ -1697,11 +1697,11 @@ class TestResolveTierLicensing:
         org = _org("team")
         session = _session()
         with (
-            patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
+            patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
         ):
             tier = await _resolve_tier(_settings("env-key"), session, _principal())
         assert tier == "team"
@@ -1710,10 +1710,10 @@ class TestResolveTierLicensing:
         org = _org("team", settings_json={"license_key": "org-key"})
         session = _session()
         with (
-            patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
+            patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("farna.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
         ):
             tier = await _resolve_tier(_settings(), session, _principal())
         assert tier == "team"
@@ -1739,12 +1739,12 @@ async def _build_registry_with(settings: Settings, org: MagicMock | None = None)
     session = _session()
     with (
         patch(
-            "modulo.api.routes.admin_feature_flags.get_organisation",
+            "farna.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
             return_value=org,
         ),
-        patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
     ):
         return await _build_registry(settings, session, _principal())
 
@@ -1843,7 +1843,7 @@ class TestLicenseIsValid:
         org = _org("community", settings_json={"license_key": _valid_license_key()})
         session = _session()
         org_id = uuid.uuid4()
-        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+        with patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
             assert await _license_is_valid(_settings_with_key(""), session, org_id) is True
 
     async def test_invalid_org_key_reports_invalid(self) -> None:
@@ -1851,7 +1851,7 @@ class TestLicenseIsValid:
         org = _org("community", settings_json={"license_key": "not-a-valid-key"})
         session = _session()
         org_id = uuid.uuid4()
-        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+        with patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
             assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
 
     async def test_org_read_failure_reports_invalid(self) -> None:
@@ -1859,7 +1859,7 @@ class TestLicenseIsValid:
         session = _session()
         org_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.admin_feature_flags.get_organisation",
+            "farna.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -1869,7 +1869,7 @@ class TestLicenseIsValid:
         """An org id whose read returns None has no key to verify — reports False."""
         session = _session()
         org_id = uuid.uuid4()
-        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=None):
+        with patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=None):
             assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
 
     async def test_org_settings_not_a_dict_reports_invalid(self) -> None:
@@ -1878,7 +1878,7 @@ class TestLicenseIsValid:
         org.settings_json = ["not", "a", "dict"]
         session = _session()
         org_id = uuid.uuid4()
-        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+        with patch("farna.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
             assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
 
 
@@ -2028,16 +2028,16 @@ class TestOrgOverrideLockTimeout:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "farna.api.routes.admin_feature_flags.update_org_settings_patch",
                 side_effect=_lock_timeout_operational(),
             ),
         ):
@@ -2048,7 +2048,7 @@ class TestOrgOverrideLockTimeout:
     def test_clear_org_flag_override_lock_timeout_is_409(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes._org_settings.update_org_settings_patch",
+                "farna.api.routes._org_settings.update_org_settings_patch",
                 side_effect=_lock_timeout_operational(),
             ),
         ):
@@ -2064,16 +2064,16 @@ class TestOrgOverrideLockTimeout:
         org = _org_with_overrides()
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 return_value=_mock_registry(),
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.get_organisation",
+                "farna.api.routes.admin_feature_flags.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                "farna.api.routes.admin_feature_flags.update_org_settings_patch",
                 side_effect=_lock_timeout_operational(),
             ),
         ):

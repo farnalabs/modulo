@@ -1,4 +1,4 @@
-"""Unit tests for the documentation indexer (modulo.core.documentation_indexer).
+"""Unit tests for the documentation indexer (farna.core.documentation_indexer).
 
 The module builds a searchable index from the product manifest
 ``frontend/src/manifest.yaml`` (the structured product manifest of routes/pages
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
+from farna.core.documentation_indexer import DocEntry, DocumentationIndex
 
 _MINIMAL_MANIFEST = """\
 schema_version: 1

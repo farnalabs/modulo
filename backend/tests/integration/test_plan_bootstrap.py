@@ -26,9 +26,9 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.auth.jwt import create_access_token
-from modulo.core.feature_flags import _KNOWN_FLAGS, INTERNAL_FLAGS, RETIRED_INTERNAL_FLAGS
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.auth.jwt import create_access_token
+from farna.core.feature_flags import _KNOWN_FLAGS, INTERNAL_FLAGS, RETIRED_INTERNAL_FLAGS
+from farna.db.soft_delete import register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
 

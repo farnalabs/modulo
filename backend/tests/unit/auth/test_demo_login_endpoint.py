@@ -33,16 +33,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
-from modulo.api.routes.auth import _resolve_demo_org_membership
-from modulo.api.routes.auth import router as auth_router
-from modulo.auth.passwords import hash_password
-from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.db.models.base import Base
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimitMiddleware
+from farna.api.routes.auth import _resolve_demo_org_membership
+from farna.api.routes.auth import router as auth_router
+from farna.auth.passwords import hash_password
+from farna.core.rate_limiter import AuthRateLimiter
+from farna.db.models.base import Base
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -71,7 +71,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _settings(
@@ -164,7 +164,7 @@ def test_demo_login_kill_switch_answers_plain_404(
 ) -> None:
     """Any missing/falsy piece of the demo env trio must 404 without DB access."""
     _override_settings(app, demo_enabled=demo_enabled, demo_user=demo_user, demo_password=demo_password)
-    with patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)) as account_lookup:
+    with patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)) as account_lookup:
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 404
     account_lookup.assert_not_called()
@@ -173,10 +173,10 @@ def test_demo_login_kill_switch_answers_plain_404(
 def test_demo_login_success_mints_short_lived_demo_token(client: TestClient) -> None:
     account = _demo_account()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
         patch(
-            "modulo.api.routes.auth._resolve_demo_org_membership",
+            "farna.api.routes.auth._resolve_demo_org_membership",
             new=AsyncMock(return_value=(_DEMO_ORG_ID, "viewer")),
         ),
     ):
@@ -199,10 +199,10 @@ def test_demo_login_success_mints_short_lived_demo_token(client: TestClient) -> 
 def test_demo_login_sets_session_cookie_with_demo_ttl(client: TestClient) -> None:
     account = _demo_account()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
         patch(
-            "modulo.api.routes.auth._resolve_demo_org_membership",
+            "farna.api.routes.auth._resolve_demo_org_membership",
             new=AsyncMock(return_value=(_DEMO_ORG_ID, "viewer")),
         ),
     ):
@@ -223,8 +223,8 @@ def test_demo_login_unknown_env_user_answers_plain_404(app: FastAPI, client: Tes
     """
     _override_settings(app, demo_user="ghost@modulo.run")
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", new=MagicMock(return_value=None)),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", new=MagicMock(return_value=None)),
     ):
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 404
@@ -244,9 +244,9 @@ def test_demo_login_env_password_mismatch_answers_plain_404(
     _override_settings(app, demo_password="rotated-env-password")
     stale_account = _demo_account(password_hash=hash_password("old-stored-password"))
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=stale_account)),
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", new=MagicMock(return_value=None)),
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.auth"),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=stale_account)),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", new=MagicMock(return_value=None)),
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.auth"),
     ):
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 404
@@ -275,8 +275,8 @@ def test_demo_login_never_touches_shared_auth_rate_limiter(app: FastAPI, client:
     limiter = AsyncMock(spec=AuthRateLimiter)
     limiter_factory = MagicMock(return_value=limiter)
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=stale_account)),
-        patch("modulo.api.routes.auth.get_auth_rate_limiter", new=limiter_factory),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=stale_account)),
+        patch("farna.api.routes.auth.get_auth_rate_limiter", new=limiter_factory),
     ):
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 404
@@ -316,7 +316,7 @@ def test_auth_middleware_demo_exempt_but_login_not(mock_session: AsyncMock) -> N
 
     with (
         TestClient(auth_app) as mw_client,
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)),
     ):
         demo_resp = mw_client.post("/api/v1/auth/demo")
         assert demo_resp.status_code == 404
@@ -340,10 +340,10 @@ def test_demo_login_account_without_demo_org_membership_answers_plain_404(app: F
     existing_account = _demo_account()
     existing_account.email = "existing-admin@example.com"
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=existing_account)),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=existing_account)),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
         patch(
-            "modulo.api.routes.auth._resolve_demo_org_membership",
+            "farna.api.routes.auth._resolve_demo_org_membership",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -364,9 +364,9 @@ def test_demo_login_system_admin_account_answers_plain_404(app: FastAPI, client:
     elevated_account.is_system_admin = True
     resolver = AsyncMock(return_value=(_DEMO_ORG_ID, "viewer"))
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=elevated_account)),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
-        patch("modulo.api.routes.auth._resolve_demo_org_membership", new=resolver),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=elevated_account)),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth._resolve_demo_org_membership", new=resolver),
     ):
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 404
@@ -378,13 +378,13 @@ def test_demo_login_system_admin_account_answers_plain_404(app: FastAPI, client:
 def test_demo_login_success_logs_audit_event(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     account = _demo_account()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
-        patch("modulo.api.routes.auth.update_last_login", new=AsyncMock()),
+        patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=account)),
+        patch("farna.api.routes.auth.update_last_login", new=AsyncMock()),
         patch(
-            "modulo.api.routes.auth._resolve_demo_org_membership",
+            "farna.api.routes.auth._resolve_demo_org_membership",
             new=AsyncMock(return_value=(_DEMO_ORG_ID, "viewer")),
         ),
-        caplog.at_level(logging.INFO, logger="modulo.api.routes.auth"),
+        caplog.at_level(logging.INFO, logger="farna.api.routes.auth"),
     ):
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 200

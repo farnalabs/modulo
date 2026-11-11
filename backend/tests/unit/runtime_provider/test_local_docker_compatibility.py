@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.shell import ShellConnector
-from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.local_docker import LocalDockerRuntimeProvider
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.shell import ShellConnector
+from farna.core.runtime_provider import ExecResult, WorkspaceSpec
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.local_docker import LocalDockerRuntimeProvider
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -29,7 +29,7 @@ def canonical_provider() -> MagicMock:
 
 
 def test_constructor_preserves_legacy_timeout_semantics() -> None:
-    with patch("modulo.core.runtime_provider.local_docker.DockerRuntimeProvider") as provider_class:
+    with patch("farna.core.runtime_provider.local_docker.DockerRuntimeProvider") as provider_class:
         LocalDockerRuntimeProvider(
             docker_host="tcp://docker:2375",
             default_image="python:test",

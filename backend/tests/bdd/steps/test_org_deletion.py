@@ -38,9 +38,9 @@ def org_pending_deletion(request):
 
 @when("I POST /api/v1/admin/org/deletion-request")
 def post_deletion_request(client, request):
-    from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from farna.api.main import app
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
 
     if getattr(request.node, "_viewer_auth", False):
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
@@ -57,9 +57,9 @@ def post_deletion_request(client, request):
 @when("I GET /api/v1/admin/org/export")
 def get_org_export(client, request):
     with (
-        patch("modulo.api.routes.admin.set_rls_org"),
+        patch("farna.api.routes.admin.set_rls_org"),
         patch(
-            "modulo.db.crud.org_deletion.export_org_data",
+            "farna.db.crud.org_deletion.export_org_data",
             new_callable=AsyncMock,
             return_value={
                 "organisation": [
@@ -85,9 +85,9 @@ def get_org_export(client, request):
 @when("I PATCH /api/v1/admin/org/deletion-cancel")
 def patch_deletion_cancel(client, request):
     with (
-        patch("modulo.api.routes.admin.set_rls_org"),
+        patch("farna.api.routes.admin.set_rls_org"),
         patch(
-            "modulo.db.crud.org_deletion.cancel_org_deletion",
+            "farna.db.crud.org_deletion.cancel_org_deletion",
             new_callable=AsyncMock,
             return_value={"status": "active"},
         ),

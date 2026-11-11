@@ -243,7 +243,7 @@ Every written file carries `_schema_contract_version` (currently `1`) as a
 top-level integer key. It is advisory metadata only: the contract is written
 and consumed within a single node dispatch, so the pipeline does not gate on
 a version mismatch. A host-side reader helper (`read_schema_contract_version`
-in `modulo.core.schema_registry`) exposes the stamped value for operator
+in `farna.core.schema_registry`) exposes the stamped value for operator
 tooling.
 
 ### Sentinel

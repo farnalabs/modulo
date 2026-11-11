@@ -6,7 +6,7 @@ implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 ## Architecture
 
 ```
-ConnectorBase (ABC)          ← modulo/connectors/base.py
+ConnectorBase (ABC)          ← farna/connectors/base.py
   ├── 43 `ConnectorType` enum members (filesystem, github, gitlab,
   │   jira, linear, slack, shell, pagerduty, sentry, datadog, and
   │   more), including the generic REST connector (rest) and the
@@ -15,15 +15,15 @@ ConnectorBase (ABC)          ← modulo/connectors/base.py
   │   have no hub build arm; the hub-native CI-runner ids
   │   `github_actions_ci`, `gitlab_ci` and `woodpecker` are
   │   buildable but are not enum members;
-  │   see modulo/connectors/ for the full list
-  ├── CIRunnerBase           ← modulo/connectors/ci_runner/ (abstract CI runner)
-  ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract ticket-tracker base)
+  │   see farna/connectors/ for the full list
+  ├── CIRunnerBase           ← farna/connectors/ci_runner/ (abstract CI runner)
+  ├── TicketTrackerBase      ← farna/connectors/ticket_tracker/ (abstract ticket-tracker base)
   └── YourConnector          ← your package (via entry point)
 ```
 
 ## ConnectorBase interface
 
-The abstract interface in `modulo/connectors/base.py` separates **reads**
+The abstract interface in `farna/connectors/base.py` separates **reads**
 (`query`) from **writes** (`write`):
 
 ```python
@@ -67,12 +67,12 @@ class ConnectorBase(ABC):
 ### Credential redaction hooks (required if you hold secrets)
 
 Two hooks are not optional for any connector that holds a credential. A
-conformance test walks every class under `modulo.connectors` and fails if a
+conformance test walks every class under `farna.connectors` and fails if a
 concrete connector holds credentials without a redaction recipe
 (`backend/tests/unit/connectors/test_health_detail_credential_redaction.py`):
 
 ```python
-from modulo.connectors.security import CredentialRedactor
+from farna.connectors.security import CredentialRedactor
 
 
 class ConnectorBase(ABC):
@@ -138,7 +138,7 @@ graph validator binds pipeline node requirements from the connector instance's
 stored `connector_type_id` column and its `allowed_operations` list (see
 `core/graph_validator/`); the enum member itself is consulted only for the
 CI-dispatch capability check. Read/write permissions are enforced by the
-`ConnectorPermissionError` checks in `modulo/connectors/base.py`.
+`ConnectorPermissionError` checks in `farna/connectors/base.py`.
 
 Note that swapping one provider for another usually changes the enum member as
 well as the class: `GitHubConnector` and `GitLabConnector` are separate
@@ -175,7 +175,7 @@ directions:
 ### The stored `allowed_operations` allowlist
 
 The capability vocabulary is the `Capability` enum in
-`modulo/connectors/base.py` (22 values: `read`, `write`, `git_push`,
+`farna/connectors/base.py` (22 values: `read`, `write`, `git_push`,
 `create_pr`, `code_review`, `trigger_run`, `get_run_status`, `get_run_logs`,
 `list_runs`, `ticket_read`, `ticket_write`, `ticket_search`, `monitoring`,
 `observability`, `vulnerability_scanning`, `incident_management`,
@@ -198,7 +198,7 @@ re-implementing the rule:
   spelling grants nothing.
 
 The rule fails closed: malformed input restricts instead of granting. Both
-`ConnectorACL` (enforcement in `modulo/connectors/base.py`) and
+`ConnectorACL` (enforcement in `farna/connectors/base.py`) and
 `core/guardrails/conformance.py` (certification) read the stored value through
 these same two helpers, so a surface cannot be certified for a capability the
 ACL denies.
@@ -259,14 +259,14 @@ def build_your_connector(config: dict, creds: dict) -> ConnectorBase:
 ```
 
 ```toml
-[project.entry-points."modulo.connectors"]
+[project.entry-points."farna.connectors"]
 your_connector = "your_package.connector:build_your_connector"
 ```
 
 Or register the builder manually. Registration requires a `PluginManifest`:
 
 ```python
-from modulo.core.plugin_registry import PluginManifest, get_plugin_registry
+from farna.core.plugin_registry import PluginManifest, get_plugin_registry
 
 registry = get_plugin_registry()
 registry.register_connector_type(

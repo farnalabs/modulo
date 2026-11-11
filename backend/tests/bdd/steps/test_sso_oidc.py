@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
-from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_anonymous_plan_context, get_plan_context
+from farna.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from farna.settings import Settings, get_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_oidc.feature")
@@ -56,7 +56,7 @@ def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
 
 
 def _setup_oidc_client(license_key: str = "test-license-key", custom_plan: Any = None) -> None:
-    from modulo.api.main import app as _app
+    from farna.api.main import app as _app
 
     if custom_plan is not None:
         _plan = custom_plan
@@ -81,7 +81,7 @@ def _setup_oidc_client(license_key: str = "test-license-key", custom_plan: Any =
 
 
 def _sign_state(provider_id: str, settings_override: Settings) -> str:
-    from modulo.auth.sso import sign_state
+    from farna.auth.sso import sign_state
 
     raw_state = f"{provider_id}:{uuid.uuid4().hex}"
     return sign_state(raw_state, settings_override.secret_key)
@@ -95,8 +95,8 @@ def _browser_bound_state(provider_id: str, settings_override: Settings) -> tuple
     verifier. A real browser receives that cookie from the login redirect;
     these direct-callback steps install it explicitly.
     """
-    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
-    from modulo.auth.sso import sign_state
+    from farna.api.routes.sso import _OIDC_FLOW_COOKIE
+    from farna.auth.sso import sign_state
 
     raw_state = uuid.uuid4().hex
     state = sign_state(f"{provider_id}:{raw_state}", settings_override.secret_key)
@@ -158,7 +158,7 @@ def licence_without_sso(ctx: dict[str, Any]) -> None:
 @when(parsers.parse('I initiate OIDC login with "{provider}"'))
 def initiate_oidc_login(provider: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_oidc_client(ctx.get("license_key", "test-license-key"), ctx.get("custom_plan"))
-    with patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
+    with patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc:
         mock_disc.return_value = {
             "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_endpoint": "https://oauth2.googleapis.com/token",
@@ -180,11 +180,11 @@ def callback_valid(request: Any, ctx: dict[str, Any], client: Any) -> None:
     id_token = _make_id_token(email, name)
 
     with (
-        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
-        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
-        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("farna.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+        patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_disc.return_value = {
             "token_endpoint": "https://oauth2.googleapis.com/token",
@@ -240,8 +240,8 @@ def callback_tampered_state(request: Any, ctx: dict[str, Any], client: Any) -> N
     tampered = signed + "x"
 
     with (
-        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
+        patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock) as mock_ex,
     ):
         mock_disc.return_value = {"token_endpoint": "https://oauth2.googleapis.com/token"}
         mock_ex.return_value = {"id_token": _make_id_token("user@example.com", "Test")}

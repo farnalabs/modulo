@@ -16,12 +16,12 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from tests.bdd.conftest import harden_session_double
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.housekeeping import Candidate, CategoryResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.housekeeping import Candidate, CategoryResult
+from farna.settings import Settings, get_settings
 
 scenarios("housekeeping.feature")
 
@@ -152,8 +152,8 @@ def _bdd_get_housekeeping(request) -> None:
         request.node._resp = resp
         return
     with (
-        patch("modulo.api.routes.admin_housekeeping.scan_all", return_value=_sample_results()) as mock_scan,
-        patch("modulo.api.routes.admin_housekeeping.set_rls_org") as mock_rls,
+        patch("farna.api.routes.admin_housekeeping.scan_all", return_value=_sample_results()) as mock_scan,
+        patch("farna.api.routes.admin_housekeeping.set_rls_org") as mock_rls,
     ):
         resp = _request("admin", "GET", "/api/v1/admin/housekeeping")
     request.node._resp = resp
@@ -199,13 +199,13 @@ def _bdd_cleanup(request, entity_types: str) -> None:
         return
 
     if types and types[0] == "does_not_exist":
-        with patch("modulo.api.routes.admin_housekeeping.set_rls_org") as mock_rls:
+        with patch("farna.api.routes.admin_housekeeping.set_rls_org") as mock_rls:
             resp = _request("admin", "POST", "/api/v1/admin/housekeeping/cleanup", json={"items": items})
         request.node._resp = resp
         request.node._mock_rls = mock_rls
         return
 
-    with patch("modulo.api.routes.admin_housekeeping.set_rls_org") as mock_rls:
+    with patch("farna.api.routes.admin_housekeeping.set_rls_org") as mock_rls:
         session = _make_mock_session()
         session.begin_nested = MagicMock(return_value=_make_begin_nested())
         execute_result = MagicMock()

@@ -2,14 +2,14 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.feature_flags import (
+from farna.core.feature_flags import (
     CommunityTier,
     DbPlanContext,
     FeatureFlagRegistry,
     LicenseKeyTier,
     resolve_plan_context,
 )
-from modulo.core.license import LicenseData
+from farna.core.license import LicenseData
 
 
 def _make_license_data(**overrides) -> LicenseData:
@@ -79,8 +79,8 @@ class TestDbPlanContext:
     async def test_from_db(self) -> None:
         session = AsyncMock()
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
         ):
             plan_ctx = await DbPlanContext.from_db(session, "community")
         assert plan_ctx is not None
@@ -92,8 +92,8 @@ class TestResolvePlanContext:
         settings = MagicMock()
         settings.modulo_license_key = ""
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
         ):
             plan = await resolve_plan_context(settings, session)
         assert plan.tier() == "community"
@@ -104,9 +104,9 @@ class TestResolvePlanContext:
         settings = MagicMock()
         settings.modulo_license_key = "env-key"
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
-            patch("modulo.core.license.parse_and_verify") as mock_verify,
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.core.license.parse_and_verify") as mock_verify,
         ):
             mock_verify.return_value.valid = True
             mock_verify.return_value.license_data = _make_license_data()
@@ -130,9 +130,9 @@ class TestResolvePlanContext:
         settings.modulo_license_key = ""
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
-            patch("modulo.core.license.parse_and_verify") as mock_verify,
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.core.license.parse_and_verify") as mock_verify,
         ):
             mock_verify.return_value.valid = True
             mock_verify.return_value.license_data = _make_license_data(tier="team")
@@ -157,9 +157,9 @@ class TestResolvePlanContext:
         settings.modulo_license_key = ""
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
-            patch("modulo.core.license.parse_and_verify") as mock_verify,
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.core.license.parse_and_verify") as mock_verify,
         ):
             mock_verify.return_value.valid = True
             mock_verify.return_value.license_data = _make_license_data(tier="team", org_id="org-b")
@@ -183,9 +183,9 @@ class TestResolvePlanContext:
         settings.modulo_license_key = ""
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
-            patch("modulo.core.license.get_license", return_value=None),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.core.license.get_license", return_value=None),
         ):
             plan = await resolve_plan_context(settings, session, org=org)
         assert plan.tier() == "community"
@@ -203,10 +203,10 @@ class TestResolvePlanContext:
         settings.modulo_license_key = "env-key"
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
-            patch("modulo.core.license.get_license", return_value=None),
-            patch("modulo.core.license.parse_and_verify") as mock_verify,
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("farna.core.license.get_license", return_value=None),
+            patch("farna.core.license.parse_and_verify") as mock_verify,
         ):
             mock_verify.return_value.valid = True
             mock_verify.return_value.license_data = _make_license_data(tier="team", features=["sso"])

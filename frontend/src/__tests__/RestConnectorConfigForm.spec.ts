@@ -77,7 +77,7 @@ async function validateAndFlush(wrapper: ReturnType<typeof mountForm>['wrapper']
 // (backend/src/modulo/core/library/integrations/definitions.py). Reads the live
 // Python file so drift in either side fails the parity guard (FAR-466).
 function readRestConfigSchemaFields(): { fields: string[]; advanced: string[] } {
-  const specPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../backend/src/modulo/core/library/integrations/definitions.py')
+  const specPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../backend/src/farna/core/library/integrations/definitions.py')
   const source = readFileSync(specPath, 'utf8')
   const defined = source.indexOf('"config_schema": {')
   const fieldsStart = source.indexOf('"fields": {', defined) + '"fields": {'.length

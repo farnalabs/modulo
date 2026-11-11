@@ -16,14 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import work_item_enrichment
-from modulo.core.connector_hub import ConnectorDecryptError
-from modulo.core.work_item_enrichment import (
+from farna.core import work_item_enrichment
+from farna.core.connector_hub import ConnectorDecryptError
+from farna.core.work_item_enrichment import (
     clear_enrichment_cache,
     derive_pr_targets,
     enrich_pr_targets,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -170,13 +170,13 @@ def _env(
     lister = AsyncMock(return_value=SimpleNamespace(items=instances))
     hub_cls = MagicMock(return_value=hub)
     with (
-        patch("modulo.core.work_item_enrichment.list_connector_instances", new=lister),
-        patch("modulo.core.work_item_enrichment.ConnectorHub", hub_cls),
+        patch("farna.core.work_item_enrichment.list_connector_instances", new=lister),
+        patch("farna.core.work_item_enrichment.ConnectorHub", hub_cls),
         patch(
-            "modulo.core.work_item_enrichment.create_secrets_backend",
+            "farna.core.work_item_enrichment.create_secrets_backend",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("modulo.core.work_item_enrichment.set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.work_item_enrichment.set_rls_org", new_callable=AsyncMock),
     ):
         yield lister, hub_cls
 
@@ -224,7 +224,7 @@ async def test_enrich_hub_construction_failure_degrades_without_raising() -> Non
     with (
         _env(instances=[_github_instance()], hub=_hub(AsyncMock())) as (lister, _hub_cls),
         patch(
-            "modulo.core.work_item_enrichment.ConnectorHub",
+            "farna.core.work_item_enrichment.ConnectorHub",
             MagicMock(side_effect=RuntimeError("hub blew up")),
         ),
     ):
@@ -236,7 +236,7 @@ async def test_enrich_hub_construction_failure_degrades_without_raising() -> Non
 
 async def test_enrich_empty_targets_short_circuits() -> None:
     with patch(
-        "modulo.core.work_item_enrichment.list_connector_instances",
+        "farna.core.work_item_enrichment.list_connector_instances",
         new_callable=AsyncMock,
     ) as lister:
         result = await enrich_pr_targets(_session(), _ORG_ID, [], _settings())
@@ -302,7 +302,7 @@ def test_derive_payload_number_non_numeric_string_is_ignored() -> None:
 async def test_enrich_connector_list_failure_negative_caches() -> None:
     """A DB/list error degrades to a negative cache entry, not a raise."""
     lister = AsyncMock(side_effect=RuntimeError("db down"))
-    with patch("modulo.core.work_item_enrichment.list_connector_instances", new=lister):
+    with patch("farna.core.work_item_enrichment.list_connector_instances", new=lister):
         first = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
         second = await enrich_pr_targets(_session(), _ORG_ID, _TARGETS, _settings())
 

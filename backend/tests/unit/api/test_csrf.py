@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.csrf import CsrfMiddleware
-from modulo.settings import Settings
+from farna.api.middleware.csrf import CsrfMiddleware
+from farna.settings import Settings
 
 CSRF_COOKIE = "XSRF-TOKEN"
 CSRF_HEADER = "X-CSRF-Token"

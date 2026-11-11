@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "az_kv_test_token"
 VAULT_URL = "https://myvault.vault.azure.net"

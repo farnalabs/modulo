@@ -44,19 +44,19 @@ from sqlalchemy.exc import (
     PendingRollbackError,
 )
 
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT, raise_session_contract_error
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT, raise_session_contract_error
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
-_DB_ERROR_REPORTING = "modulo.api.db_error_reporting"
-_DB_ERROR_HANDLING = "modulo.api.db_error_handling"
+_DB_ERROR_REPORTING = "farna.api.db_error_reporting"
+_DB_ERROR_HANDLING = "farna.api.db_error_handling"
 
 
 def _make_settings() -> Settings:
@@ -213,7 +213,7 @@ class TestFeatureFlagsListArmGuard:
         client = _build_client(_ok_session())
         with (
             patch(
-                "modulo.api.routes.admin_feature_flags._build_registry",
+                "farna.api.routes.admin_feature_flags._build_registry",
                 new=AsyncMock(side_effect=_invalid_request_error()),
             ),
             caplog.at_level(logging.ERROR),
@@ -228,7 +228,7 @@ class TestFeatureFlagsListArmGuard:
     def test_operational_error_still_surfaces_as_503(self, cleanup_overrides: None) -> None:
         client = _build_client(_ok_session())
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             new=AsyncMock(side_effect=_operational_error()),
         ):
             resp = client.get(self.URL)

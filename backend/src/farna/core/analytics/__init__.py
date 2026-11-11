@@ -1,0 +1,656 @@
+"""Analytics foundation — run_daily_facts live writer + shared helpers (ADR 020).
+
+``record_run_facts`` is the LIVE writer: called from every terminal finalize
+path (``cost_controller.finalize``) INSIDE the same transaction as the run
+status write, AND — as a compensating row — from every raw terminal writer that
+bypasses ``finalize_cost``: the SAQ task_failure hook (``saq_hooks``), the
+stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
+``worker_lost`` in ``pipeline_execution``), the ``dispatcher_reconcile``
+terminalizers (``executor_superseded`` / ``claim_cap_exhausted`` /
+``dispatch_failed`` / ``hitl_review_expired``) and ``fail_run_terminal``
+(``executor_stalled`` / ``executor_heartbeat_lost`` / ``executor_failed`` /
+``executor_setup_failed``).
+Each compensating write runs in its OWN separate session AFTER the run is
+marked failed, so a facts failure can never roll back the terminal transition.
+``record_fact_for_terminal_failed_run`` is the shared fail-open entry point for
+those paths. ``record_run_facts`` NEVER raises (fail-open), NEVER feeds
+``_fallback_write`` / ``_reduced_escape``, and NEVER influences the cost
+result. A facts-write failure rolls back only the fact (a savepoint), not the
+run's finalization.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import uuid
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from farna.core.analytics.metrics import record_facts_write_failed
+from farna.db.crud.run_node_outputs import RunBlobs, read_run_blobs
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.team import Team
+from farna.db.soft_delete import include_soft_deleted
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = logging.getLogger(__name__)
+
+__all__ = ["TERMINAL_STATUSES", "compute_delta", "record_fact_for_terminal_failed_run", "record_run_facts"]
+
+
+def compute_delta(prev: float | None, curr: float | None) -> float | None:
+    """Period-over-period percent change, rounded to 1dp.
+
+    ``None`` when *prev* is zero/absent/non-finite (the change is infinite or
+    undefined), when both are zero, or when no baseline exists. Negative
+    deltas are returned as-is (a drop is a negative value — never clamped).
+    """
+    if prev is None or prev == 0:
+        return None
+    try:
+        p = float(prev)
+        c = float(curr) if curr is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p) or not math.isfinite(c):
+        return None
+    return round(((c - p) / abs(p)) * 100.0, 1)
+
+
+def _fact_run_date(run: Run) -> date:
+    """The UTC day a run is attributed to — identical to the ledger (ADR 020)."""
+    base = run.started_at or run.created_at
+    if base is None:
+        return datetime.now(UTC).date()
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=UTC)
+    return base.astimezone(UTC).date()
+
+
+def _fact_duration_ms(run: Run) -> int | None:
+    if run.completed_at is not None and run.started_at is not None:
+        return int((run.completed_at - run.started_at).total_seconds() * 1000)
+    return None
+
+
+def _fact_queue_wait_ms(run: Run) -> int | None:
+    """Run.started_at - Run.dispatched_at when both present and ordered, else NULL.
+
+    Semantics: on the FIRST dispatch ``dispatched_at`` is stamped before the run
+    is enqueued and ``started_at`` when a worker claims it, so
+    ``dispatched_at < started_at`` and the stat is a POSITIVE queue wait.
+
+    FAR-2079 — that ordering does NOT hold for a re-dispatched run, and the two
+    timestamps then belong to DIFFERENT attempts:
+
+      * ``started_at`` is stamped at most once, on the first transition to
+        ``running`` (``db/crud/run.py::_apply_run_claim_fields`` and the fenced
+        SQL's ``CASE WHEN started_at IS NULL``), and no reset path clears it
+        (``worker_handoff._HANDBACK_RESET_SQL`` / ``run_admission._RECONCILE_RUNS_SQL``
+        / ``executor._fenced_pending_reset`` only touch dispatched_at /
+        dispatcher / heartbeat_at).
+      * ``dispatched_at`` is REWRITTEN on every dispatch
+        (``core/dispatch.py::_record_dispatched`` — ``SET dispatched_at=now()``),
+        including the dispatcher_reconcile re-enqueue leg (``_re_enqueue_run``)
+        and a HITL resume dispatch.
+
+    So after a re-dispatch or resume ``dispatched_at > started_at``, and the
+    naive subtraction yields a large NEGATIVE "queue wait" (observed on the
+    Branch Fixer pipeline: -42,935 … -4,312,681 ms). There is no valid
+    single-attempt wait to report in that case — the final attempt's own start
+    instant is not stored — so this returns NULL (no sample) rather than a
+    fabricated 0 or a negative number.
+
+    ``dispatched_at`` is read via ``getattr`` so any run-shaped object (legacy
+    fakes without the attribute) degrades to NULL instead of raising.
+    """
+    dispatched_at = getattr(run, "dispatched_at", None)
+    if dispatched_at is not None and run.started_at is not None and dispatched_at <= run.started_at:
+        return int((run.started_at - dispatched_at).total_seconds() * 1000)
+    return None
+
+
+def _fact_total_queue_wait_ms(run: Run) -> int | None:
+    """Run.started_at - Run.created_at in ms — the FULL queue wait (FAR-134).
+
+    Unlike ``queue_wait_ms`` (started minus dispatched — the SAQ worker queue
+    only), this covers the whole wait from run creation to execution start:
+    capacity-deferral backoff PLUS the SAQ queue. NULL when either side is
+    missing. ``created_at`` is read via ``getattr`` to mirror the file's
+    defensive pattern for legacy run-shaped fakes.
+    """
+    created_at = getattr(run, "created_at", None)
+    if created_at is not None and run.started_at is not None:
+        return int((run.started_at - created_at).total_seconds() * 1000)
+    return None
+
+
+def _fact_final_idle_ms(run: Run) -> int | None:
+    """Run.completed_at - Run.heartbeat_at — the stuck-with-no-heartbeat window.
+
+    NULL when either side is absent. A NULL heartbeat_at with a completed run
+    leaves the window unknowable, so the fact is NULL (never a negative value).
+    ``heartbeat_at`` is read via ``getattr`` so any run-shaped object without
+    the attribute degrades to NULL instead of raising.
+    """
+    heartbeat_at = getattr(run, "heartbeat_at", None)
+    if run.completed_at is not None and heartbeat_at is not None:
+        return int((run.completed_at - heartbeat_at).total_seconds() * 1000)
+    return None
+
+
+async def _fact_run_blobs(session: AsyncSession, run: Run) -> RunBlobs | None:
+    """ONE reassembly read per terminalization (qa M14).
+
+    The two byte facts used to call the per-side fallback readers, each of
+    which ran the FULL rows-fetch + RLS probe + legacy SELECT — six statements
+    per terminalization where three suffice. One
+    :func:`read_run_blobs` call serves BOTH sides (the EMPTY /
+    direction-aware fallback to the legacy columns is part of that one read,
+    so pre-sweep stragglers still measure stably); the two byte helpers are
+    then pure computations over the returned blobs. A read failure degrades
+    to ``None`` (BOTH facts go NULL — they share the data source) with a
+    logged warning: this component is best-effort inside the fail-open facts
+    writer and must never be the thing that fails a fact write.
+    """
+    try:
+        return await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "analytics.facts.blob_read_failed",
+            extra={"run_id": str(run.id), "org_id": str(run.organisation_id)},
+            exc_info=True,
+        )
+        return None
+
+
+def _fact_output_bytes(blobs: RunBlobs | None) -> int | None:
+    """Serialised size of the run's outputs (``json.dumps`` length) when present.
+
+    Pure computation over the single :func:`_fact_run_blobs` read (qa M14).
+    FAR-583: the payload is the REASSEMBLED run-level dict from the
+    ``run_node_outputs`` store (legacy-dict shape) — the same
+    ``len(json.dumps(payload, default=str))`` formula, applied to the
+    reassembled value (``default=str`` is byte-identical for the JSON-typed
+    payloads that reach it, and matches ``run_retention._json_bytes``). Since
+    FAR-125 P1 outputs hold PURE returns (telemetry excluded), so this fact
+    measures the pure-return size. ``None`` blobs (read failure) or a NULL
+    side (absent) measure as NULL.
+    """
+    if blobs is None:
+        return None
+    outputs = blobs.outputs
+    if outputs is None:
+        return None
+    try:
+        return len(json.dumps(outputs, default=str))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fact_telemetry_bytes(blobs: RunBlobs | None) -> int | None:
+    """Serialised size of the run's telemetry (``json.dumps`` length) when present.
+
+    Pure computation over the single :func:`_fact_run_blobs` read (qa M14);
+    mirrors :func:`_fact_output_bytes`. NULL when the blobs read failed or
+    the side is absent — never a raise.
+    """
+    if blobs is None:
+        return None
+    telemetry = blobs.telemetry
+    if telemetry is None:
+        return None
+    try:
+        return len(json.dumps(telemetry, default=str))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int | None:
+    """Count of managed workspace inputs resolved for this run (FAR-802).
+
+    Reads the ``run_node_outputs`` audit row keyed by ``(run_id,
+    _mwi_audit)`` and returns the length of the ``workspace_inputs`` list.
+    Returns None when no audit record exists (run had no workspace inputs).
+    Best-effort: a read failure degrades to None — never raises.
+    """
+    from farna.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+    from farna.db.models.run_node_outputs import RunNodeOutput
+
+    try:
+        # One audit row per (run_id, node_id, attempt_key): take the LATEST
+        # attempt so a per-attempt re-run cannot raise MultipleResultsFound
+        # (the table PK is (run_id, node_id, attempt_key)) and silently degrade
+        # the count to NULL.
+        row = (
+            await session.execute(
+                select(RunNodeOutput.outputs_json)
+                .where(
+                    RunNodeOutput.run_id == run.id,
+                    RunNodeOutput.node_id == AUDIT_NODE_ID,
+                )
+                .order_by(RunNodeOutput.attempt_key.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not isinstance(row, dict):
+            return None
+        inputs = row.get("workspace_inputs")
+        return len(inputs) if isinstance(inputs, list) else None
+    except Exception:
+        _log.warning(
+            "analytics.workspace_inputs_count_read_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
+async def _fact_autonomy_level(session: AsyncSession, run: Run) -> str | None:
+    """The autonomy level the run's HITL gates resolved under (FAR-1175).
+
+    Sourced from the run's most recent ``run.autonomy_level_applied`` audit
+    event (autonomy-study.md §3.3) so the analytics surface can bucket by
+    autonomy without re-joining the audit chain. Best-effort: any read failure
+    (or no event) degrades to ``None`` — never raises.
+    """
+    from farna.db.models.audit_event import AuditEvent
+
+    try:
+        payload = (
+            await session.execute(
+                select(AuditEvent.payload_json)
+                .where(
+                    AuditEvent.resource_type == "run",
+                    AuditEvent.resource_id == run.id,
+                    AuditEvent.event_type == "run.autonomy_level_applied",
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not isinstance(payload, dict):
+            return None
+        level = payload.get("autonomy_level")
+        return level if isinstance(level, str) and level else None
+    except Exception:
+        _log.warning(
+            "analytics.autonomy_level_read_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
+async def _fact_enforcement_aggregates(
+    session: AsyncSession,
+    run: Run,
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Aggregate per-attempt enforcement records for a terminal run (FAR-902).
+
+    Reads all non-``__final__`` rows with ``schema_enforcement_json IS NOT
+    NULL`` from ``run_node_outputs`` for this run and aggregates them via the
+    pure :func:`aggregate_run_enforcement` function.  Returns ``(None, [])``
+    when no enforcement records exist (run had no schema enforcement).
+
+    The second element is the raw list of enforcement record dicts, used by
+    the caller to derive mode and outcome via the pure helpers.
+
+    Best-effort: a read failure degrades to ``(None, [])`` -- never raises.
+    This is a telemetry path inside the fail-open ``record_run_facts`` guard.
+    """
+    from farna.core.pipeline_engine.schema_enforcement import aggregate_run_enforcement
+    from farna.db.models.run_node_outputs import RunNodeOutput
+
+    try:
+        rows: Sequence[dict[str, Any] | None] = (
+            (
+                await session.execute(
+                    select(RunNodeOutput.schema_enforcement_json).where(
+                        RunNodeOutput.run_id == run.id,
+                        RunNodeOutput.schema_enforcement_json.isnot(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return None, []
+        raw_records = [r for r in rows if isinstance(r, dict)]
+        return aggregate_run_enforcement(raw_records), raw_records
+    except Exception:
+        _log.warning(
+            "analytics.enforcement_aggregation_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None, []
+
+
+def _derive_graph_dimensions(
+    graph_json: Any,
+) -> tuple[int, int, int | None]:
+    """Node stats from a snapshot's ``graph_json`` — NULL-safe, mirroring
+    ``derive_node_type_map`` (cost_controller.finalize).
+
+    ``graph_json`` is the serialised pipeline graph: a dict with a ``nodes``
+    list of dicts carrying ``node_type`` and ``timeout_seconds``. Malformed
+    input degrades to ``(0, 0, None)`` instead of raising.
+    """
+    node_count = 0
+    sandbox_agent_node_count = 0
+    max_node_timeout_seconds: int | None = None
+    if not isinstance(graph_json, dict):
+        return node_count, sandbox_agent_node_count, max_node_timeout_seconds
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return node_count, sandbox_agent_node_count, max_node_timeout_seconds
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_count += 1
+        if node.get("node_type") == "sandbox_agent":
+            sandbox_agent_node_count += 1
+        raw_timeout = node.get("timeout_seconds")
+        if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
+            timeout = int(raw_timeout)
+            if max_node_timeout_seconds is None or timeout > max_node_timeout_seconds:
+                max_node_timeout_seconds = timeout
+    return node_count, sandbox_agent_node_count, max_node_timeout_seconds
+
+
+async def _snapshot_dimensions(
+    session: AsyncSession,
+    run: Run,
+) -> tuple[str | None, str | None, uuid.UUID | None]:
+    """Team name + pipeline name/folder snapshots (explicit reads — async lazy-load is unavailable).
+
+    FAR-1653: team AND pipeline lookups opt out of the global soft-delete
+    filter via ``include_soft_deleted`` — these are historical snapshots of a
+    completed run, so a team/pipeline soft-deleted after the run finished must
+    still resolve its name (matching the ``backfill_facts`` writer, whose
+    INSERT...FROM SELECT is never scoped by the SELECT-only listener).
+    """
+    team_name: str | None = None
+    if run.owner_team_id is not None:
+        # Entity select (not select(Team.name)): keeps the statement in the
+        # single-type-parameter form include_soft_deleted's bound accepts.
+        team = (
+            await session.execute(include_soft_deleted(select(Team).where(Team.id == run.owner_team_id)))
+        ).scalar_one_or_none()
+        team_name = team.name if team is not None else None
+    pipeline_name: str | None = None
+    folder_id: uuid.UUID | None = None
+    if run.pipeline_id is not None:
+        pipeline = (
+            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+        ).scalar_one_or_none()
+        if pipeline is not None:
+            pipeline_name, folder_id = pipeline.name, pipeline.folder_id
+    return team_name, pipeline_name, folder_id
+
+
+async def _snapshot_graph_dimensions(
+    session: AsyncSession,
+    run: Run,
+) -> tuple[int, int, int | None]:
+    """Snapshot node stats via an explicit SELECT — async lazy-load is unavailable.
+
+    Reads ``graph_json`` from the ``pipeline_snapshots`` table by id (mirroring
+    ``_snapshot_dimensions``), then derives the node stats NULL-safely. A
+    missing/malformed snapshot degrades to ``(0, 0, None)``. ``snapshot_id`` is
+    read via ``getattr`` so any run-shaped object without the attribute
+    degrades to ``(0, 0, None)`` instead of raising.
+    """
+    snapshot_id = getattr(run, "snapshot_id", None)
+    if snapshot_id is None:
+        return _derive_graph_dimensions(None)
+    graph_json = (
+        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    ).scalar_one_or_none()
+    return _derive_graph_dimensions(graph_json)
+
+
+def _fact_is_benign(run: Run) -> bool | None:
+    """The fact's ``benign`` marker from the run's terminal classification (FAR-707).
+
+    ``True`` when ``runs.run_classification`` carries value ``benign`` (a
+    business-expected outcome — an explicit per-pipeline benign signature
+    matched at terminalization), ``False`` when the run IS classified but is
+    not benign, and ``None`` when the run has no usable classification record
+    yet — a raw-SQL terminalizer writes its fact BEFORE the reconcile sweep
+    backfills the classification, and a partial/malformed record must not be
+    read as a confident verdict. Every analytics reader treats NULL as "not
+    benign" (the historical counting), so this degrades fail-open.
+
+    The enum is imported lazily: this module is on the finalize hot path and
+    the classifier pulls in the pipeline-engine package.
+    """
+    record = getattr(run, "run_classification", None)
+    if not isinstance(record, dict):
+        return None
+    value = record.get("value")
+    if not isinstance(value, str):
+        return None
+    from farna.core.pipeline_engine.classify import RunClassificationValue
+
+    return value == RunClassificationValue.benign.value
+
+
+async def record_run_facts(session: AsyncSession, run: Run) -> None:
+    """Upsert the daily fact for a terminal run — NEVER raises (fail-open).
+
+    Wrapped in a savepoint so a facts-write failure rolls back only the fact
+    and the outer transaction (the run finalization) survives. The upsert is
+    ``INSERT ... ON CONFLICT (run_id) DO UPDATE`` — re-finalization corrects
+    the fact in place.
+
+    The run is refreshed at the START, inside this same guard: the fenced
+    ``update_run_status`` (``claim_token`` set) writes via raw SQL and bypasses
+    the ORM identity map, so without a refresh the fact would snapshot the
+    pre-write ``'running'`` row with NULL cost (FAR-200). A refresh failure
+    (PendingRollbackError, connection drop) is logged and DEGRADES to recording
+    from the in-memory object — it can never propagate out of the guard and
+    roll back the run's terminal status write + ledger (ADR-020).
+    """
+    try:
+        try:
+            await session.refresh(run)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "analytics.facts.refresh_failed",
+                extra={"run_id": str(run.id), "org_id": str(run.organisation_id), "status": run.status},
+                exc_info=True,
+            )
+        team_name, pipeline_name, folder_id = await _snapshot_dimensions(session, run)
+        node_count, sandbox_agent_node_count, max_node_timeout_seconds = await _snapshot_graph_dimensions(session, run)
+        blobs = await _fact_run_blobs(session, run)
+        workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
+        enforcement, enforcement_records = await _fact_enforcement_aggregates(session, run)
+        autonomy_level = await _fact_autonomy_level(session, run)
+
+        # FAR-902: derive mode and outcome from the raw enforcement records
+        # and write them onto the Run row so the API route can read them
+        # directly instead of re-deriving every time.
+        if enforcement_records:
+            from farna.core.pipeline_engine.schema_enforcement import (
+                derive_mode_from_records,
+                derive_outcome_from_records,
+            )
+
+            run.schema_validator_mode = derive_mode_from_records(enforcement_records)
+            run.schema_validation_outcome = derive_outcome_from_records(enforcement_records)
+
+        values: dict[str, Any] = {
+            "run_id": run.id,
+            "organisation_id": run.organisation_id,
+            "run_date": _fact_run_date(run),
+            "created_at": run.created_at,
+            "team_id": run.owner_team_id,
+            "team_name": team_name,
+            "pipeline_id": run.pipeline_id,
+            "pipeline_name": pipeline_name,
+            "folder_id": folder_id,
+            "trigger_type": run.trigger_type,
+            # FAR-1141: run-level execution origin copied from the run so the
+            # analytics read path never joins ``runs`` (ADR 020) and the
+            # marker outlives the 90-day run purge. getattr for legacy
+            # run-shaped objects (pre-column runs degrade to NULL, not an
+            # error) — the same defensive read trigger_id / dispatch_phase
+            # use further down.
+            "execution_origin": getattr(run, "execution_origin", None),
+            "status": run.status,
+            "total_cost_usd": run.total_cost_usd,
+            "total_tokens": run.total_tokens,
+            "duration_ms": _fact_duration_ms(run),
+            "error_code": getattr(run, "error_code", None),
+            # FAR-707: business-expected-outcome marker copied from the run's
+            # terminal classification so the analytics read path can drop it
+            # from failure rates without joining ``runs`` (ADR 020).
+            "benign": _fact_is_benign(run),
+            "claim_count": getattr(run, "claim_count", None),
+            "queue_wait_ms": _fact_queue_wait_ms(run),
+            "final_idle_ms": _fact_final_idle_ms(run),
+            "cancellation_requested": getattr(run, "cancellation_requested", None),
+            "dispatcher": getattr(run, "dispatcher", None),
+            "node_count": node_count,
+            "sandbox_agent_node_count": sandbox_agent_node_count,
+            "max_node_timeout_seconds": max_node_timeout_seconds,
+            "parent_run_id": getattr(run, "parent_run_id", None),
+            "snapshot_id": getattr(run, "snapshot_id", None),
+            "batch_id": getattr(run, "batch_id", None),
+            "run_number": getattr(run, "run_number", None),
+            # qa M14: ONE blobs read feeds both byte facts.
+            "output_bytes": _fact_output_bytes(blobs),
+            "telemetry_bytes": _fact_telemetry_bytes(blobs),
+            "rate_limited": getattr(run, "rate_limit_key", None) is not None,
+            # FAR-134 concurrency columns — absolute run-lifecycle instants +
+            # the full queue wait (started - created). getattr defensively for
+            # legacy run-shaped objects that predate the Run fields.
+            "dispatched_at": getattr(run, "dispatched_at", None),
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "total_queue_wait_ms": _fact_total_queue_wait_ms(run),
+            # FAR-1421: claim→dispatch latency provenance — trigger_id +
+            # dispatch-phase columns copied onto the fact so the bucketed
+            # metric (avg_dispatch_latency_ms) never joins runs (ADR 020) and
+            # survives the run purge. getattr for legacy run-shaped objects.
+            "trigger_id": getattr(run, "trigger_id", None),
+            "dispatch_phase": getattr(run, "dispatch_phase", None),
+            "dispatch_phase_entered_at": getattr(run, "dispatch_phase_entered_at", None),
+            "workspace_inputs_count": workspace_inputs_count,
+            # FAR-1463: node-deadline watchdog firings copied from the run so
+            # the analytics read path never joins runs (ADR 020) and the
+            # marker outlives the run purge. getattr for legacy run-shaped
+            # objects (pre-column runs degrade to NULL, not an error).
+            "node_deadline_watchdog_fired_count": getattr(run, "node_deadline_watchdog_fired_count", None),
+            # FAR-902: schema enforcement aggregate counters — aggregated
+            # from per-attempt enforcement records on run_node_outputs.
+            "enforcement_native_count": enforcement.native_count if enforcement else None,
+            "enforcement_verbatim_count": enforcement.verbatim_count if enforcement else None,
+            "enforcement_repair_count": enforcement.repair_count if enforcement else None,
+            "enforcement_wasted_count": enforcement.wasted_count if enforcement else None,
+            # FAR-1175: the effective autonomy the run resolved under (from the
+            # run.autonomy_level_applied audit event; NULL when none).
+            "autonomy_level": autonomy_level,
+        }
+        async with session.begin_nested():
+            stmt = pg_insert(RunDailyFact).values(**values)
+            update_cols = {
+                "status": stmt.excluded.status,
+                "total_cost_usd": stmt.excluded.total_cost_usd,
+                "total_tokens": stmt.excluded.total_tokens,
+                "trigger_type": stmt.excluded.trigger_type,
+                "execution_origin": stmt.excluded.execution_origin,
+                "team_id": stmt.excluded.team_id,
+                "team_name": stmt.excluded.team_name,
+                "pipeline_id": stmt.excluded.pipeline_id,
+                "pipeline_name": stmt.excluded.pipeline_name,
+                "folder_id": stmt.excluded.folder_id,
+                "run_date": stmt.excluded.run_date,
+                "created_at": stmt.excluded.created_at,
+                "duration_ms": stmt.excluded.duration_ms,
+                "error_code": stmt.excluded.error_code,
+                "benign": stmt.excluded.benign,
+                "claim_count": stmt.excluded.claim_count,
+                "queue_wait_ms": stmt.excluded.queue_wait_ms,
+                "final_idle_ms": stmt.excluded.final_idle_ms,
+                "cancellation_requested": stmt.excluded.cancellation_requested,
+                "dispatcher": stmt.excluded.dispatcher,
+                "node_count": stmt.excluded.node_count,
+                "sandbox_agent_node_count": stmt.excluded.sandbox_agent_node_count,
+                "max_node_timeout_seconds": stmt.excluded.max_node_timeout_seconds,
+                "parent_run_id": stmt.excluded.parent_run_id,
+                "snapshot_id": stmt.excluded.snapshot_id,
+                "batch_id": stmt.excluded.batch_id,
+                "run_number": stmt.excluded.run_number,
+                "output_bytes": stmt.excluded.output_bytes,
+                "telemetry_bytes": stmt.excluded.telemetry_bytes,
+                "rate_limited": stmt.excluded.rate_limited,
+                "dispatched_at": stmt.excluded.dispatched_at,
+                "started_at": stmt.excluded.started_at,
+                "completed_at": stmt.excluded.completed_at,
+                "total_queue_wait_ms": stmt.excluded.total_queue_wait_ms,
+                "trigger_id": stmt.excluded.trigger_id,
+                "dispatch_phase": stmt.excluded.dispatch_phase,
+                "dispatch_phase_entered_at": stmt.excluded.dispatch_phase_entered_at,
+                "workspace_inputs_count": stmt.excluded.workspace_inputs_count,
+                "node_deadline_watchdog_fired_count": stmt.excluded.node_deadline_watchdog_fired_count,
+                "enforcement_native_count": stmt.excluded.enforcement_native_count,
+                "enforcement_verbatim_count": stmt.excluded.enforcement_verbatim_count,
+                "enforcement_repair_count": stmt.excluded.enforcement_repair_count,
+                "enforcement_wasted_count": stmt.excluded.enforcement_wasted_count,
+            }
+            await session.execute(stmt.on_conflict_do_update(index_elements=[RunDailyFact.run_id], set_=update_cols))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        record_facts_write_failed()
+        _log.warning(
+            "analytics.facts.write_failed",
+            extra={"run_id": str(run.id), "org_id": str(run.organisation_id), "status": run.status},
+            exc_info=True,
+        )
+
+
+async def record_fact_for_terminal_failed_run(session: AsyncSession, run: Run | None) -> None:
+    """Best-effort daily-fact write for a run terminalised outside finalize (P6').
+
+    Shared fail-open entry point for the raw terminal writers (the SAQ
+    task_failure hook, the stale-run sweep, ``dispatcher_reconcile`` and
+    ``fail_run_terminal``) that write ``status='failed'`` directly and never
+    run ``cost_controller.finalize`` — without this compensating row the run
+    would be invisible to the analytics failure/stall dimensions.
+
+    The caller supplies a session whose RLS org context is set and a Run
+    re-selected AFTER the terminal status write (a pre-write entity would
+    record ``status='running'`` with a NULL ``completed_at``). None-guarded and
+    fail-open: a missing run is logged and skipped; any write failure is logged
+    and swallowed — it must never fail the already-committed terminal write.
+    """
+    if run is None:
+        _log.warning("analytics.terminal_failed_facts_run_missing")
+        return
+    try:
+        await record_run_facts(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("analytics.terminal_failed_facts_failed run=%s", run.id)

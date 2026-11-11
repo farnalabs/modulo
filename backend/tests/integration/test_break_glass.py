@@ -24,9 +24,9 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.api.routes.admin import _extract_bg_pgcode
-from modulo.db.crud.org_membership import resolve_role_from_membership
-from modulo.db.rls import set_rls_org
+from farna.api.routes.admin import _extract_bg_pgcode
+from farna.db.crud.org_membership import resolve_role_from_membership
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 # ── helpers ──────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@ async def test_deactivated_account_resolves_none_role(
 
 
 async def test_scim_deactivate_and_recreate_reversible(db_engine: AsyncEngine, bg_org: uuid.UUID) -> None:
-    from modulo.db.crud.scim import scim_create_user, scim_deactivate_user
+    from farna.db.crud.scim import scim_create_user, scim_deactivate_user
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     caller = await _create_account(db_engine)

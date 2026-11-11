@@ -12,7 +12,7 @@ import json
 import uuid
 from typing import Any
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     _CONTENT_BEGIN,
     _CONTENT_END,
     _MAX_JUDGE_CONTENT_LENGTH,
@@ -21,7 +21,7 @@ from modulo.core.eval_engine import (
     EvalEngine,
     EvalType,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
 
 
 def _eval_def(config: dict[str, Any]) -> EvalDefinition:

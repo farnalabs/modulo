@@ -43,7 +43,7 @@ def _alembic_config(db_url: str) -> Config:
     config.set_main_option("sqlalchemy.url", db_url)
     config.set_main_option(
         "script_location",
-        str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"),
+        str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"),
     )
     # Skip fileConfig so we don't stomp module loggers (mirrors conftest).
     config.config_file_name = None

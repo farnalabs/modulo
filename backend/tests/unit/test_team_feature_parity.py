@@ -3,7 +3,7 @@
 Every ``team``-tier feature declared in the catalog must actually be enforced
 somewhere in the codebase: either a ``require_feature("<name>")`` /
 ``feature_enabled("<name>")`` / ``get_flag("<name>")`` check in
-``backend/src/modulo`` (route gate or service level), a
+``backend/src/farna`` (route gate or service level), a
 ``feature-name="<name>"`` / ``featureEnabled("<name>")`` reference in the
 frontend, or a service-level check.
 
@@ -18,13 +18,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from modulo.core.feature_flags import _KNOWN_FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS
 from tests.unit._source_scan import iter_source_text
 
 # Repo root: this file lives at backend/tests/unit/test_team_feature_parity.py
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_BACKEND_SRC = _REPO_ROOT / "backend" / "src" / "modulo"
+_BACKEND_SRC = _REPO_ROOT / "backend" / "src" / "farna"
 _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 
 # Team-tier flags declared in the catalog but intentionally not yet enforced
@@ -93,7 +93,7 @@ def test_every_non_known_team_flag_is_enforced() -> None:
     unenforced = _unenforced_team_flags()
     assert unenforced == set(), (
         f"Team-tier flags are declared in the catalog but not enforced anywhere: {sorted(unenforced)}. "
-        "Add a require_feature/feature_enabled/get_flag check in backend/src/modulo, a FeatureGate/featureEnabled "
+        "Add a require_feature/feature_enabled/get_flag check in backend/src/farna, a FeatureGate/featureEnabled "
         "reference in frontend/src/, or a service-level check. If the flag is intentionally not yet "
         "shipped, add it to KNOWN_UNENFORCED_TEAM_FLAGS instead."
     )

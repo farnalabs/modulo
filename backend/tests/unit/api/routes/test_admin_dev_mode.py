@@ -10,9 +10,9 @@ assert the DB override actually wins.
 import uuid
 from unittest.mock import MagicMock
 
-from modulo.api.routes.admin_dev_mode import SetDevModeRequest, get_dev_mode, set_dev_mode
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings
+from farna.api.routes.admin_dev_mode import SetDevModeRequest, get_dev_mode, set_dev_mode
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

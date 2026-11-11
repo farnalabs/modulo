@@ -1,7 +1,7 @@
-"""Focused unit tests for isolated ``modulo.auth.sso`` helper functions.
+"""Focused unit tests for isolated ``farna.auth.sso`` helper functions.
 
 These target low-level helpers (RLS scoping, provider lookups, group-mapping
-application, JSON-object validation) to keep ``modulo.auth`` package coverage
+application, JSON-object validation) to keep ``farna.auth`` package coverage
 above the 90% gate without touching the network-bound OIDC/SAML flows.
 """
 
@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from defusedxml import ElementTree
 
-from modulo.auth import sso as sso_mod
-from modulo.auth.sso import (
+from farna.auth import sso as sso_mod
+from farna.auth.sso import (
     _lookup_provider_by_client_id,
     _lookup_provider_by_entity_id,
     _require_json_object,
@@ -40,7 +40,7 @@ def _mock_session(scalar_value=None):
 
 async def test_set_default_rls_org_no_org():
     session = _mock_session(scalar_value=None)
-    with patch("modulo.auth.sso.set_rls_org") as set_rls:
+    with patch("farna.auth.sso.set_rls_org") as set_rls:
         await _set_default_rls_org(session)
     session.execute.assert_awaited_once()
     set_rls.assert_not_awaited()
@@ -49,7 +49,7 @@ async def test_set_default_rls_org_no_org():
 async def test_set_default_rls_org_with_org():
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(scalar_value=org)
-    with patch("modulo.auth.sso.set_rls_org") as set_rls:
+    with patch("farna.auth.sso.set_rls_org") as set_rls:
         await _set_default_rls_org(session)
     set_rls.assert_awaited_once_with(session, org.id)
 
@@ -110,9 +110,9 @@ async def test_apply_group_mappings_skips_non_dict():
     account = _account()
     org_id = uuid.uuid4()
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account") as get_mem,
-        patch("modulo.auth.sso.add_team_member") as add_member,
-        patch("modulo.auth.sso.update_member_role") as upd,
+        patch("farna.auth.sso.get_membership_by_team_and_account") as get_mem,
+        patch("farna.auth.sso.add_team_member") as add_member,
+        patch("farna.auth.sso.update_member_role") as upd,
     ):
         await apply_group_mappings(session, account, org_id, ["team-a"], [{"not": "a dict"}])
     get_mem.assert_not_awaited()
@@ -125,8 +125,8 @@ async def test_apply_group_mappings_idp_group_not_present():
     account = _account()
     org_id = uuid.uuid4()
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account") as get_mem,
-        patch("modulo.auth.sso.add_team_member") as add_member,
+        patch("farna.auth.sso.get_membership_by_team_and_account") as get_mem,
+        patch("farna.auth.sso.add_team_member") as add_member,
     ):
         await apply_group_mappings(
             session,
@@ -144,8 +144,8 @@ async def test_apply_group_mappings_invalid_team_id():
     account = _account()
     org_id = uuid.uuid4()
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account") as get_mem,
-        patch("modulo.auth.sso.add_team_member") as add_member,
+        patch("farna.auth.sso.get_membership_by_team_and_account") as get_mem,
+        patch("farna.auth.sso.add_team_member") as add_member,
     ):
         await apply_group_mappings(
             session,
@@ -164,8 +164,8 @@ async def test_apply_group_mappings_adds_new_member():
     org_id = uuid.uuid4()
     team_id = uuid.uuid4()
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account", new=AsyncMock(return_value=None)) as get_mem,
-        patch("modulo.auth.sso.add_team_member", new=AsyncMock()) as add_member,
+        patch("farna.auth.sso.get_membership_by_team_and_account", new=AsyncMock(return_value=None)) as get_mem,
+        patch("farna.auth.sso.add_team_member", new=AsyncMock()) as add_member,
     ):
         await apply_group_mappings(
             session,
@@ -188,9 +188,9 @@ async def test_apply_group_mappings_updates_existing_role():
     team_id = uuid.uuid4()
     existing = SimpleNamespace(id=uuid.uuid4(), role="viewer")
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account", new=AsyncMock(return_value=existing)) as get_mem,
-        patch("modulo.auth.sso.update_member_role", new=AsyncMock()) as upd,
-        patch("modulo.auth.sso.add_team_member", new=AsyncMock()) as add_member,
+        patch("farna.auth.sso.get_membership_by_team_and_account", new=AsyncMock(return_value=existing)) as get_mem,
+        patch("farna.auth.sso.update_member_role", new=AsyncMock()) as upd,
+        patch("farna.auth.sso.add_team_member", new=AsyncMock()) as add_member,
     ):
         await apply_group_mappings(
             session,
@@ -257,8 +257,8 @@ def test_validate_saml_destination_invalid_base64():
 
 def test_validate_saml_destination_parse_error():
     with (
-        patch("modulo.auth.sso._decode_saml_response", return_value=b"<bad"),
-        patch("modulo.auth.sso.ElementTree.fromstring", side_effect=ElementTree.ParseError("boom")),
+        patch("farna.auth.sso._decode_saml_response", return_value=b"<bad"),
+        patch("farna.auth.sso.ElementTree.fromstring", side_effect=ElementTree.ParseError("boom")),
     ):
         assert sso_mod._validate_saml_response_destination("abc", "https://acs") is None
 
@@ -267,8 +267,8 @@ def test_validate_saml_destination_missing_attr():
     root = MagicMock()
     root.get.return_value = None
     with (
-        patch("modulo.auth.sso._decode_saml_response", return_value=b"<xml/>"),
-        patch("modulo.auth.sso.ElementTree.fromstring", return_value=root),
+        patch("farna.auth.sso._decode_saml_response", return_value=b"<xml/>"),
+        patch("farna.auth.sso.ElementTree.fromstring", return_value=root),
     ):
         assert sso_mod._validate_saml_response_destination("abc", "https://acs") is None
 
@@ -277,8 +277,8 @@ def test_validate_saml_destination_mismatch():
     root = MagicMock()
     root.get.return_value = "https://evil"
     with (
-        patch("modulo.auth.sso._decode_saml_response", return_value=b"<xml/>"),
-        patch("modulo.auth.sso.ElementTree.fromstring", return_value=root),
+        patch("farna.auth.sso._decode_saml_response", return_value=b"<xml/>"),
+        patch("farna.auth.sso.ElementTree.fromstring", return_value=root),
         pytest.raises(ValueError, match="Destination does not match"),
     ):
         sso_mod._validate_saml_response_destination("abc", "https://acs")

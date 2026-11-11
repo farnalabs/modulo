@@ -16,28 +16,28 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.external_agent import (
+from farna.db.crud.external_agent import (
     create_external_agent,
     get_external_agent,
     list_external_agents,
     soft_delete_external_agent,
     update_external_agent,
 )
-from modulo.db.crud.mcp_server import (
+from farna.db.crud.mcp_server import (
     create_mcp_server,
     get_mcp_server,
     list_mcp_servers,
     soft_delete_mcp_server,
     update_mcp_server,
 )
-from modulo.db.models import Base
-from modulo.db.models.external_agent import ExternalAgent
-from modulo.db.models.mcp_server import APPROVAL_STATUS_APPROVED, McpServer
-from modulo.db.models.organisation import Organisation
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.db.models import Base
+from farna.db.models.external_agent import ExternalAgent
+from farna.db.models.mcp_server import APPROVAL_STATUS_APPROVED, McpServer
+from farna.db.models.organisation import Organisation
+from farna.db.soft_delete import register_soft_delete_filter
 
 # Soft-delete semantics depend on the global ORM filter, which is registered as
-# an import side effect of ``modulo.db.session``. A test module asserting a
+# an import side effect of ``farna.db.session``. A test module asserting a
 # soft-deleted row is hidden MUST ensure the filter is registered in its own
 # process (see the 2026-10-14 lesson in Repos/modulo/AGENTS.md).
 register_soft_delete_filter()

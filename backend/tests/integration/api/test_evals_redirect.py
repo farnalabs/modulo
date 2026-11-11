@@ -36,8 +36,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.passwords import hash_password
-from modulo.settings import Settings, get_settings
+from farna.auth.passwords import hash_password
+from farna.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -185,8 +185,8 @@ async def _seed_feedback_record(
 
 @pytest_asyncio.fixture
 async def client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
 
     settings = Settings(
         database_url=db_url,
@@ -265,7 +265,7 @@ async def env(db_engine: AsyncEngine, client: AsyncClient) -> AsyncGenerator[Chu
 
 
 async def _load_eval_rows(env: Chunk3bEnv, name: str) -> list:
-    from modulo.db.models.eval import Eval
+    from farna.db.models.eval import Eval
 
     factory = async_sessionmaker(env.engine, expire_on_commit=False)
     async with factory() as session:
@@ -299,7 +299,7 @@ async def _assert_cutover_shape(
     with ``eval_definitions``: migration ``0324_purge_eval_definitions``
     (FAR-1962) drops it, so that assertion has no table to read.
     """
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     rows = await _load_eval_rows(env, name)
     assert len(rows) == 1, f"expected exactly 1 Eval row for {name}, got {len(rows)}"
@@ -316,7 +316,7 @@ async def _assert_cutover_shape(
         matching = [e for e, _gate in loaded if e.name == name]
         assert len(matching) == 1, "the executor read must surface the persisted eval"
 
-        from modulo.db.models.policy_gate import PolicyGate
+        from farna.db.models.policy_gate import PolicyGate
 
         gates = (
             (
@@ -447,8 +447,8 @@ async def test_w4_rest_update_bumps_version_and_updates_gate(env: Chunk3bEnv, cl
     assert put2.status_code == 200, put2.text
     assert put2.json()["version"] == 3
 
-    from modulo.db.models.eval import Eval
-    from modulo.db.models.policy_gate import PolicyGate
+    from farna.db.models.eval import Eval
+    from farna.db.models.policy_gate import PolicyGate
 
     factory = async_sessionmaker(env.engine, expire_on_commit=False)
     async with factory() as session:
@@ -519,7 +519,7 @@ async def test_w6_guardrail_update_still_has_no_gate(env: Chunk3bEnv, client: As
 async def test_w1_create_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncClient) -> None:
     """Criterion 5 - create an eval via W1, then drive EvalEngine.evaluate
     to prove the persisted config produces an EvalResult with the expected outcome."""
-    from modulo.core.eval_engine import EvalEngine, EvalType
+    from farna.core.eval_engine import EvalEngine, EvalType
 
     name = f"c5-evaluate-{env.org_id.hex[:6]}"
     payload = {
@@ -537,7 +537,7 @@ async def test_w1_create_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncC
     assert len(rows) == 1
     row = rows[0]
 
-    from modulo.core.guardrails import to_engine_definition
+    from farna.core.guardrails import to_engine_definition
 
     engine_def = to_engine_definition(row)
     assert engine_def.eval_type == EvalType("regex")
@@ -556,7 +556,7 @@ async def test_w1_create_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncC
 async def test_w2_from_run_eval_actually_evaluates(env: Chunk3bEnv, client: AsyncClient) -> None:
     """Criterion 6 - create an eval via W2 (from-run), then drive EvalEngine.evaluate
     to prove the persisted config produces an EvalResult."""
-    from modulo.core.eval_engine import EvalEngine
+    from farna.core.eval_engine import EvalEngine
 
     snapshot_id = await _seed_snapshot(env.engine, env.org_id, env.pipeline_id)
     run_id = await _seed_run(env.engine, env.org_id, env.pipeline_id, snapshot_id)
@@ -576,7 +576,7 @@ async def test_w2_from_run_eval_actually_evaluates(env: Chunk3bEnv, client: Asyn
     assert len(rows) == 1
     row = rows[0]
 
-    from modulo.core.guardrails import to_engine_definition
+    from farna.core.guardrails import to_engine_definition
 
     engine_def = to_engine_definition(row)
 

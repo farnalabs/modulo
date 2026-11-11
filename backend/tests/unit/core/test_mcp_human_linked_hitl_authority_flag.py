@@ -9,7 +9,7 @@ auth boundary.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.feature_flags import (
+from farna.core.feature_flags import (
     FeatureFlagRegistry,
     resolve_mcp_human_linked_hitl_authority,
 )
@@ -39,7 +39,7 @@ class TestResolver:
     async def test_org_override_disables_it(self) -> None:
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(return_value=False)
-        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+        with patch("farna.core.feature_flags.get_registry", return_value=registry):
             enabled = await resolve_mcp_human_linked_hitl_authority(
                 org_id=None, flag_name="mcp_human_linked_hitl_authority"
             )
@@ -48,7 +48,7 @@ class TestResolver:
     async def test_read_failure_fails_closed_to_off(self) -> None:
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
-        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+        with patch("farna.core.feature_flags.get_registry", return_value=registry):
             enabled = await resolve_mcp_human_linked_hitl_authority(
                 org_id=None, flag_name="mcp_human_linked_hitl_authority"
             )

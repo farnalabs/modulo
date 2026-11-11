@@ -13,12 +13,12 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
-from modulo.db.crud.system_audit_event import (
+from farna.db.crud.system_audit_event import (
     LIST_DEFAULT_PAGE_SIZE,
     LIST_MAX_PAGE_SIZE,
     list_system_audit_events,
 )
-from modulo.db.models.system_audit_event import SystemAuditEvent
+from farna.db.models.system_audit_event import SystemAuditEvent
 from tests.unit.crud.helpers import (
     compile_sql,
     find_count_statement,

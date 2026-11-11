@@ -18,8 +18,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.passwords import hash_password
-from modulo.settings import Settings, get_settings
+from farna.auth.passwords import hash_password
+from farna.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -105,8 +105,8 @@ async def _deactivate(engine: AsyncEngine, account_id: uuid.UUID) -> None:
 
 @pytest_asyncio.fixture
 async def client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
 
     settings = Settings(
         database_url=db_url,

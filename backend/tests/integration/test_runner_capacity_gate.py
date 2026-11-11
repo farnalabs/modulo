@@ -20,9 +20,9 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-import modulo.core.runner_capacity as _rc
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.runner_capacity import (
+import farna.core.runner_capacity as _rc
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.runner_capacity import (
     RUNNER_PROVIDER_DOCKER,
     RunnerCapacityDeniedError,
     acquire_runner_dispatch_slot,
@@ -32,7 +32,7 @@ from modulo.core.runner_capacity import (
     resolve_runner_capacity_decision,
     runner_capacity_lock_keys,
 )
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 
 pytestmark = [
     pytest.mark.integration,
@@ -188,7 +188,7 @@ async def _seed_run(
 def _insert_run(values: dict[str, Any]) -> Any:
     from sqlalchemy import insert
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     return insert(Run).values(**values)
 
@@ -635,7 +635,7 @@ _SWEEP_LOCK_SEQ = itertools.count()
 
 
 async def _sweep(db_engine: AsyncEngine) -> dict[str, Any]:
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
     # Hermetic dedup advisory-lock key. The deploy pre-deploy gate runs the full
@@ -788,7 +788,7 @@ async def test_sweep_clears_terminal_non_fence_and_transitions_stale_running(
         marker=stale_tombstone,
     )
 
-    with caplog.at_level(logging.INFO, logger="modulo.core.runner_capacity"):
+    with caplog.at_level(logging.INFO, logger="farna.core.runner_capacity"):
         await _sweep(db_engine)
 
     row = await _run_row(db_engine, org_id, terminal_run)
@@ -840,7 +840,7 @@ async def test_sweep_emits_violation_on_breach(
     await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k1", "e2b"))
     await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k2", "e2b"))
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.runner_capacity"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.runner_capacity"):
         await _sweep(db_engine)
     assert any("runner.capacity.violation" in m for m in caplog.messages)
 
@@ -1096,7 +1096,7 @@ async def test_sweep_no_violation_below_cap(
     await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k1", "e2b"))
     await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k2", "e2b"))
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.runner_capacity"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.runner_capacity"):
         result = await _sweep(db_engine)
     assert result["violations"] == 0, "an org below cap must not be counted as a breach"
     assert not any("runner.capacity.violation" in m for m in caplog.messages)

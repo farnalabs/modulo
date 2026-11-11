@@ -362,15 +362,15 @@ class TestModelParity:
     """The migration's rename targets are exactly what the models declare."""
 
     def test_model_table_names(self) -> None:
-        from modulo.db.models.assistant_context_source import AssistantContextSource
-        from modulo.db.models.assistant_skill import AssistantSkill
+        from farna.db.models.assistant_context_source import AssistantContextSource
+        from farna.db.models.assistant_skill import AssistantSkill
 
         assert AssistantSkill.__table__.name == "assistant_skills"
         assert AssistantContextSource.__table__.name == "assistant_context_sources"
 
     def test_migration_targets_cover_model_constraints(self) -> None:
-        from modulo.db.models.assistant_context_source import AssistantContextSource
-        from modulo.db.models.assistant_skill import AssistantSkill
+        from farna.db.models.assistant_context_source import AssistantContextSource
+        from farna.db.models.assistant_skill import AssistantSkill
 
         module = _load_migration()
         migration_targets = {new for _table, _old, new in module._CONSTRAINTS}
@@ -384,15 +384,15 @@ class TestModelParity:
 
     def test_models_declare_no_skills_mode_check(self) -> None:
         """Guards the ticket correction: the skills table never had one."""
-        from modulo.db.models.assistant_skill import AssistantSkill
+        from farna.db.models.assistant_skill import AssistantSkill
 
         check_names = {c.name for c in AssistantSkill.__table__.constraints if isinstance(c, CheckConstraint)}
         assert check_names == {"ck_assistant_skills_owner"}
 
     def test_chat_tables_are_not_renamed(self) -> None:
         """chat_sessions/chat_messages table names are unchanged by 0257."""
-        from modulo.db.models.assistant_message import ChatMessage
-        from modulo.db.models.assistant_session import ChatSession
+        from farna.db.models.assistant_message import ChatMessage
+        from farna.db.models.assistant_session import ChatSession
 
         assert ChatSession.__table__.name == "chat_sessions"
         assert ChatMessage.__table__.name == "chat_messages"

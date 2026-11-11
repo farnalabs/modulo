@@ -38,9 +38,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api import mcp_server as ms
-from modulo.db.crud.pipeline import _graph_content_unchanged
-from modulo.db.rls import set_rls_org
+from farna.api import mcp_server as ms
+from farna.db.crud.pipeline import _graph_content_unchanged
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -235,7 +235,7 @@ async def test_bind_records_edit_snapshot_then_suppresses_identical_rebind(
             patch.object(ms, "_session", _real_session_factory(db_engine)),
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_check_agent_tool_scope"),
-            patch("modulo.db.crud.pipeline._graph_content_unchanged", new=_spy),
+            patch("farna.db.crud.pipeline._graph_content_unchanged", new=_spy),
         ):
             first = await ms.bind_connector_to_node(**kwargs)
             second = await ms.bind_connector_to_node(**kwargs)
@@ -318,7 +318,7 @@ async def test_bind_snapshot_failure_is_surfaced_not_swallowed(
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_check_agent_tool_scope"),
             # ``None`` is exactly what the fail-closed branch refuses to commit.
-            patch("modulo.db.crud.pipeline_snapshot.create_snapshot_edit", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline_snapshot.create_snapshot_edit", new=AsyncMock(return_value=None)),
         ):
             result = await ms.bind_connector_to_node(**kwargs)
     finally:
@@ -365,7 +365,7 @@ async def test_bind_snapshot_actor_ladder_records_honestly_unattributed_write(
             patch.object(ms, "_session", _real_session_factory(db_engine)),
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_check_agent_tool_scope"),
-            caplog.at_level("WARNING", logger="modulo.api.mcp_server"),
+            caplog.at_level("WARNING", logger="farna.api.mcp_server"),
         ):
             result = await ms.bind_connector_to_node(**kwargs)
     finally:

@@ -1,4 +1,4 @@
-"""Coverage boost for ``modulo.core.pipeline_execution`` (FAR-835).
+"""Coverage boost for ``farna.core.pipeline_execution`` (FAR-835).
 
 Targets uncovered paths identified by the baseline coverage report.
 """
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import DBAPIError, OperationalError
 
-import modulo.core.pipeline_execution as pe
+import farna.core.pipeline_execution as pe
 
 # -----------------------------------------------------------------------
 # _resolve_claim_stale_seconds — settings path (line 177)
@@ -65,7 +65,7 @@ class TestMaybeAlertRetryStorm:
                 return _Conn()
 
         emit_mock = AsyncMock()
-        with patch("modulo.core.error_tracking.emit_saq_retry_storm_alert", emit_mock):
+        with patch("farna.core.error_tracking.emit_saq_retry_storm_alert", emit_mock):
             await pe._maybe_alert_retry_storm(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
         emit_mock.assert_awaited_once()
         assert emit_mock.await_args.args[3] == 5
@@ -95,7 +95,7 @@ class TestMaybeAlertRetryStorm:
                 return _Conn()
 
         emit_mock = AsyncMock()
-        with patch("modulo.core.error_tracking.emit_saq_retry_storm_alert", emit_mock):
+        with patch("farna.core.error_tracking.emit_saq_retry_storm_alert", emit_mock):
             await pe._maybe_alert_retry_storm(_Engine(), "run-1", "org-1")  # type: ignore[arg-type]
         emit_mock.assert_not_awaited()
 
@@ -197,8 +197,8 @@ class TestLoadAndSetup:
         )
 
         with (
-            patch("modulo.core.pipeline_engine.executor.PipelineExecutor", autospec=True),
-            patch("modulo.core.notifier.Notifier", autospec=True),
+            patch("farna.core.pipeline_engine.executor.PipelineExecutor", autospec=True),
+            patch("farna.core.notifier.Notifier", autospec=True),
         ):
             run, executor = await pe.load_and_setup(MagicMock(), uuid.uuid4(), uuid.uuid4())  # type: ignore[arg-type]
         assert run is fake_run
@@ -269,8 +269,8 @@ class TestLoadAndSetup:
             raise RuntimeError("fernet bad")
 
         with (
-            patch("modulo.core.notifier.Notifier", side_effect=_fail_notifier),
-            patch("modulo.core.pipeline_engine.executor.PipelineExecutor", autospec=True),
+            patch("farna.core.notifier.Notifier", side_effect=_fail_notifier),
+            patch("farna.core.pipeline_engine.executor.PipelineExecutor", autospec=True),
         ):
             run, executor = await pe.load_and_setup(MagicMock(), uuid.uuid4(), uuid.uuid4())  # type: ignore[arg-type]
         assert run is fake_run
@@ -734,7 +734,7 @@ class TestReDispatchCapacityBlocked:
     async def test_returns_outcome_string(self) -> None:
         """_re_dispatch_capacity_blocked returns the outcome string from dispatch_run."""
         with patch(
-            "modulo.core.dispatch.dispatch_run",
+            "farna.core.dispatch.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-123"),
         ):
@@ -744,7 +744,7 @@ class TestReDispatchCapacityBlocked:
     async def test_exception_returns_failed(self) -> None:
         """When dispatch_run raises, returns 'failed'."""
         with patch(
-            "modulo.core.dispatch.dispatch_run",
+            "farna.core.dispatch.dispatch_run",
             new_callable=AsyncMock,
             side_effect=RuntimeError("dispatch boom"),
         ):
@@ -755,7 +755,7 @@ class TestReDispatchCapacityBlocked:
         """CancelledError from dispatch_run must propagate."""
         with (
             patch(
-                "modulo.core.dispatch.dispatch_run",
+                "farna.core.dispatch.dispatch_run",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),

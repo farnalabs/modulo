@@ -29,8 +29,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
-from modulo.db.crud.pipeline_owner import validate_accountability_owner
+from farna.auth.jwt import create_access_token
+from farna.db.crud.pipeline_owner import validate_accountability_owner
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -106,8 +106,8 @@ async def owners_data(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uu
     outsider = await _seed_account(db_engine, org_id=None, tag="outsider")
     out_of_team = await _seed_account(db_engine, org_id=test_org, tag="noteam")
 
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

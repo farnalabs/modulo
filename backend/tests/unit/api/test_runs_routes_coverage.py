@@ -23,20 +23,20 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import runs as runs_module
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.pipeline_engine.recovery import (
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import runs as runs_module
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
 )
-from modulo.core.rate_limiter import TokenBucketRegistry
-from modulo.db.crud.run_node_outputs import RunBlobs
-from modulo.settings import Settings, get_settings
+from farna.core.rate_limiter import TokenBucketRegistry
+from farna.db.crud.run_node_outputs import RunBlobs
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -221,8 +221,8 @@ def _install_overrides(session: AsyncMock, *, org_role: str = "admin") -> None:
 @pytest.fixture(autouse=True)
 def _patch_route_rls():
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
     ):
         yield
 
@@ -260,7 +260,7 @@ def _fresh_client(begin_exc: Exception | None = None) -> Generator[TestClient, N
 def test_run_stats_returns_crud_payload(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     stats = {"total_runs": 3, "by_status": {"complete": 3}}
-    with patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value=stats) as get_stats:
+    with patch("farna.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value=stats) as get_stats:
         resp = http.get("/api/v1/runs/stats", params={"period": "30d"})
 
     assert resp.status_code == 200, resp.text
@@ -271,7 +271,7 @@ def test_run_stats_returns_crud_payload(client: tuple[TestClient, AsyncMock]) ->
 def test_viewer_run_stats_passes_account_scope(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     _install_overrides(_session, org_role="viewer")
-    with patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value={}) as get_stats:
+    with patch("farna.api.routes.runs.get_run_stats", new_callable=AsyncMock, return_value={}) as get_stats:
         resp = http.get("/api/v1/runs/stats")
 
     assert resp.status_code == 200, resp.text
@@ -290,7 +290,7 @@ def test_run_stats_rejects_bad_period(client: tuple[TestClient, AsyncMock]) -> N
 def test_run_stats_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs.get_run_stats", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.get_run_stats", new_callable=AsyncMock, side_effect=exc),
     ):
         resp = http.get("/api/v1/runs/stats")
 
@@ -300,7 +300,7 @@ def test_run_stats_error_mapping(exc: Exception, expected: int) -> None:
 def test_run_heatmap_returns_crud_payload(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     heatmap = [{"date": "2026-09-01", "count": 2}]
-    with patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=heatmap) as get_heatmap:
+    with patch("farna.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=heatmap) as get_heatmap:
         resp = http.get("/api/v1/runs/stats/heatmap", params={"year": 2026})
 
     assert resp.status_code == 200, resp.text
@@ -311,7 +311,7 @@ def test_run_heatmap_returns_crud_payload(client: tuple[TestClient, AsyncMock]) 
 def test_viewer_run_heatmap_passes_account_scope(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     _install_overrides(session, org_role="viewer")
-    with patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=[]) as get_heatmap:
+    with patch("farna.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, return_value=[]) as get_heatmap:
         resp = http.get("/api/v1/runs/stats/heatmap")
 
     assert resp.status_code == 200, resp.text
@@ -322,7 +322,7 @@ def test_viewer_run_heatmap_passes_account_scope(client: tuple[TestClient, Async
 def test_run_heatmap_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.get_run_heatmap", new_callable=AsyncMock, side_effect=exc),
     ):
         resp = http.get("/api/v1/runs/stats/heatmap")
 
@@ -336,7 +336,7 @@ def test_run_heatmap_error_mapping(exc: Exception, expected: int) -> None:
 
 def test_run_io_unknown_run_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=None):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=None):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/io")
 
     assert resp.status_code == 404
@@ -345,7 +345,7 @@ def test_run_io_unknown_run_returns_404(client: tuple[TestClient, AsyncMock]) ->
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_INTEGRITY, 409), (_SQL, 503), (_RUNTIME, 500)])
 def test_run_io_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/io")
 
     assert resp.status_code == expected, resp.text
@@ -357,8 +357,8 @@ def test_run_io_happy_path_normalizes_and_masks(client: tuple[TestClient, AsyncM
     snapshot = MagicMock()
     snapshot.graph_json = {"nodes": [{"id": "n1", "label": "Node One"}]}
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.api.routes.runs._load_snapshot_for_run", new_callable=AsyncMock, return_value=snapshot),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs._load_snapshot_for_run", new_callable=AsyncMock, return_value=snapshot),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/io")
 
@@ -381,8 +381,8 @@ def test_export_fixture_returns_fixture_payload(client: tuple[TestClient, AsyncM
     snapshot = MagicMock()
     snapshot.graph_json = {"nodes": [{"id": "n1", "label": "Node One"}]}
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.api.routes.runs._load_snapshot_for_run", new_callable=AsyncMock, return_value=snapshot),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run),
+        patch("farna.api.routes.runs._load_snapshot_for_run", new_callable=AsyncMock, return_value=snapshot),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
@@ -396,7 +396,7 @@ def test_export_fixture_returns_fixture_payload(client: tuple[TestClient, AsyncM
 
 def test_export_fixture_unknown_run_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=None):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=None):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
     assert resp.status_code == 404
@@ -404,7 +404,7 @@ def test_export_fixture_unknown_run_returns_404(client: tuple[TestClient, AsyncM
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_INTEGRITY, 409), (_SQL, 503), (_RUNTIME, 500)])
 def test_export_fixture_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
     assert resp.status_code == expected, resp.text
@@ -482,7 +482,7 @@ def test_workspace_events_returns_timeline(client: tuple[TestClient, AsyncMock])
 
     # FAR-897: the endpoint loads the run through the org-scoped CRUD helper
     # first; patch it so the queued execute results serve the audit query.
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
     assert resp.status_code == 200, resp.text
@@ -497,7 +497,7 @@ def test_workspace_events_empty_returns_empty_list(client: tuple[TestClient, Asy
     http, session = client
     _queue_execute(session, [_result(rows=[])])
 
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=MagicMock()):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/workspace-events")
 
     assert resp.status_code == 200
@@ -519,7 +519,7 @@ def test_workspace_events_error_mapping(exc: Exception, expected: int) -> None:
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_INTEGRITY, 409), (_SQL, 503), (_RUNTIME, 500)])
 def test_node_output_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/n1/output")
 
     assert resp.status_code == expected, resp.text
@@ -532,7 +532,7 @@ def test_node_output_error_mapping(exc: Exception, expected: int) -> None:
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (_INTEGRITY, 409), (_SQL, 503), (_RUNTIME, 500)])
 def test_observe_run_lookup_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/observe")
 
     assert resp.status_code == expected, resp.text
@@ -542,8 +542,8 @@ def test_observe_run_lookup_error_mapping(exc: Exception, expected: int) -> None
 def test_observe_write_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
-        patch("modulo.api.routes.runs.observe_node", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.observe_node", new_callable=AsyncMock, side_effect=exc),
     ):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/observe")
 
@@ -567,10 +567,10 @@ def test_recover_node_denied_for_operator(runner_client: TestClient) -> None:
 
 def _recover_patches(exc: Exception) -> list:
     return [
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, side_effect=exc),
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         ),
@@ -620,9 +620,9 @@ def test_recover_node_typed_domain_error_mapping(exc: Exception, expected: int) 
 def test_recover_node_dispatch_failure_maps_to_500() -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
-        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=_make_run()),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
     ):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/recover", json={"input_data": None})
 
@@ -644,12 +644,12 @@ def _override_patches(exc: Exception | None = None) -> list:
         ),
     ]
     if exc is not None:
-        patches.append(patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, side_effect=exc))
+        patches.append(patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, side_effect=exc))
     else:
-        patches.append(patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run))
+        patches.append(patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run))
     patches.append(
         patch(
-            "modulo.api.routes.runs.dispatch_run",
+            "farna.api.routes.runs.dispatch_run",
             new_callable=AsyncMock,
             return_value=("enqueued", "job-id"),
         )
@@ -684,8 +684,8 @@ def test_guardrail_override_dispatch_failure_maps_to_500() -> None:
             "_guardrail_override_rate_limiter",
             TokenBucketRegistry(rate=10 / 60.0, burst=10),
         ),
-        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=_make_run()),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
+        patch("farna.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
     ):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/guardrail-override", json={"input_data": {"x": 1}})
 
@@ -701,7 +701,7 @@ def test_guardrail_override_dispatch_failure_maps_to_500() -> None:
 def test_list_runs_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs._do_list_runs", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs._do_list_runs", new_callable=AsyncMock, side_effect=exc),
     ):
         resp = http.get("/api/v1/runs")
 
@@ -718,7 +718,7 @@ def test_get_run_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
         patch(
-            "modulo.api.routes.runs._do_get_run_with_gate",
+            "farna.api.routes.runs._do_get_run_with_gate",
             new_callable=AsyncMock,
             side_effect=exc,
         ),
@@ -735,7 +735,7 @@ def test_get_run_error_mapping(exc: Exception, expected: int) -> None:
 
 @pytest.mark.parametrize(("exc", "expected"), [(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)])
 def test_cancel_run_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs._cancel_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs._cancel_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
     assert resp.status_code == expected, resp.text
@@ -749,7 +749,7 @@ def test_cancel_run_lock_timeout_maps_to_409_not_503() -> None:
     otherwise fall through to."""
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs._cancel_run", new_callable=AsyncMock, side_effect=_LOCK_TIMEOUT),
+        patch("farna.api.routes.runs._cancel_run", new_callable=AsyncMock, side_effect=_LOCK_TIMEOUT),
     ):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
@@ -765,8 +765,8 @@ def test_cancel_run_lock_timeout_maps_to_409_not_503() -> None:
 def test_trigger_run_error_mapping(exc: Exception, expected: int) -> None:
     with (
         _fresh_client() as http,
-        patch("modulo.api.routes.runs._create_manual_run", new_callable=AsyncMock, side_effect=exc),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job")),
+        patch("farna.api.routes.runs._create_manual_run", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job")),
     ):
         resp = http.post("/api/v1/runs", json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {}})
 
@@ -780,7 +780,7 @@ def test_trigger_run_error_mapping(exc: Exception, expected: int) -> None:
 
 @pytest.mark.parametrize(("exc", "expected"), [(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)])
 def test_diff_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.post(
             "/api/v1/runs/diff",
             json={
@@ -800,7 +800,7 @@ def test_diff_run_b_missing_returns_404(client: tuple[TestClient, AsyncMock]) ->
     def _get_run_side_effect(_session: object, run_id: object, **_kw: object) -> object:
         return _make_run() if run_id == _RUN_ID else None
 
-    with patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=_get_run_side_effect):
+    with patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=_get_run_side_effect):
         resp = http.post(
             "/api/v1/runs/diff",
             json={
@@ -822,7 +822,7 @@ def test_diff_run_b_missing_returns_404(client: tuple[TestClient, AsyncMock]) ->
 
 @pytest.mark.parametrize(("exc", "expected"), [(_INTEGRITY, 409), (_PROG, 501), (_SQL, 503), (_RUNTIME, 500)])
 def test_reveal_error_mapping(exc: Exception, expected: int) -> None:
-    with _fresh_client() as http, patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
+    with _fresh_client() as http, patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=exc):
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/nodes/n1/prompt/reveal")
 
     assert resp.status_code == expected, resp.text
@@ -831,9 +831,9 @@ def test_reveal_error_mapping(exc: Exception, expected: int) -> None:
 def test_reveal_snapshot_load_error_maps_to_503(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with (
-        patch("modulo.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
+        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=_make_run()),
         patch(
-            "modulo.api.routes.runs._load_snapshot_for_run",
+            "farna.api.routes.runs._load_snapshot_for_run",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("boom"),
         ),
@@ -1037,11 +1037,11 @@ async def test_enforce_trigger_rate_limit_paths() -> None:
     pipeline.rate_limit_config = {"max_triggers": 1, "window_seconds": 60}
     with (
         patch(
-            "modulo.core.trigger_engine.TriggerEngine._compute_rate_limit_key",
+            "farna.core.trigger_engine.TriggerEngine._compute_rate_limit_key",
             MagicMock(return_value="rl-key"),
         ),
         patch(
-            "modulo.core.trigger_engine.TriggerEngine._count_recent_rate_limited",
+            "farna.core.trigger_engine.TriggerEngine._count_recent_rate_limited",
             new_callable=AsyncMock,
             return_value=0,
         ),
@@ -1050,11 +1050,11 @@ async def test_enforce_trigger_rate_limit_paths() -> None:
 
     with (
         patch(
-            "modulo.core.trigger_engine.TriggerEngine._compute_rate_limit_key",
+            "farna.core.trigger_engine.TriggerEngine._compute_rate_limit_key",
             MagicMock(return_value="rl-key"),
         ),
         patch(
-            "modulo.core.trigger_engine.TriggerEngine._count_recent_rate_limited",
+            "farna.core.trigger_engine.TriggerEngine._count_recent_rate_limited",
             new_callable=AsyncMock,
             return_value=1,
         ),
@@ -1072,9 +1072,9 @@ async def test_create_manual_run_missing_snapshot_maps_to_404() -> None:
     principal = TenantPrincipal(username="t", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     req = runs_module.TriggerRunRequest(pipeline_id=_PIPELINE_ID, input_payload={})
     with (
-        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=MagicMock()),
+        patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=MagicMock()),
         patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            "farna.api.routes.runs.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -1189,7 +1189,7 @@ def test_get_run_artifact_returns_decompressed_content(client) -> None:
     _queue_execute(_session, [row])
     store = MagicMock()
     store.read_bytes = MagicMock(return_value=b"hello world")
-    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+    with patch("farna.core.artifacts.store.get_store", return_value=store):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
     assert resp.status_code == 200, resp.text
     assert resp.content == b"hello world"
@@ -1199,7 +1199,7 @@ def test_get_run_artifact_returns_decompressed_content(client) -> None:
 def test_get_run_artifact_404_when_row_missing(client) -> None:
     http, _session = client
     _queue_execute(_session, [_result(scalar_one_or_none=None)])
-    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+    with patch("farna.core.artifacts.store.get_store", return_value=MagicMock()):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
     assert resp.status_code == 404
 
@@ -1211,7 +1211,7 @@ def test_get_run_artifact_404_when_stream_missing(client) -> None:
     _queue_execute(_session, [row])
     store = MagicMock()
     store.read_bytes = MagicMock(return_value=b"should-not-be-read")
-    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+    with patch("farna.core.artifacts.store.get_store", return_value=store):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
     assert resp.status_code == 404
 
@@ -1223,14 +1223,14 @@ def test_get_run_artifact_404_when_file_missing(client) -> None:
     _queue_execute(_session, [row])
     store = MagicMock()
     store.read_bytes = MagicMock(side_effect=FileNotFoundError("Artifact not found: x"))
-    with patch("modulo.core.artifacts.store.get_store", return_value=store):
+    with patch("farna.core.artifacts.store.get_store", return_value=store):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/stdout")
     assert resp.status_code == 404
 
 
 def test_get_run_artifact_404_when_invalid_stream(client) -> None:
     http, _session = client
-    with patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()):
+    with patch("farna.core.artifacts.store.get_store", return_value=MagicMock()):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}/artifacts/bogus")
     assert resp.status_code == 404
 
@@ -1253,7 +1253,7 @@ def test_get_run_artifact_resolves_synthetic_full_attempt_key(client) -> None:
         markers={},
     )
     with (
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(runs_module, "read_run_blobs", new=AsyncMock(return_value=blobs)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stdout")
@@ -1277,7 +1277,7 @@ def test_get_run_artifact_resolves_synthetic_full_attempt_key_stderr(client) -> 
         markers={},
     )
     with (
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(runs_module, "read_run_blobs", new=AsyncMock(return_value=blobs)),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/{_RUN_ID}/attempts/{_RUN_ID}:full:12345/artifacts/stderr")
@@ -1353,7 +1353,7 @@ def test_get_run_artifact_db_error_maps_to_503() -> None:
     """A transient SQLAlchemyError reading the attempt row maps to 503."""
     with (
         _fresh_client(begin_exc=_SQL) as http,
-        patch("modulo.core.artifacts.store.get_store", return_value=MagicMock()),
+        patch("farna.core.artifacts.store.get_store", return_value=MagicMock()),
     ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/nodes/n1/attempts/attempt-1/artifacts/stdout")
 

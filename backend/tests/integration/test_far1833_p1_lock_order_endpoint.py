@@ -37,17 +37,17 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api.routes import costs as costs_routes
-from modulo.api.routes.costs import UpdateCostControlsRequest
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cost_controller.org_auto_pause import (
+from farna.api.routes import costs as costs_routes
+from farna.api.routes.costs import UpdateCostControlsRequest
+from farna.auth.jwt import TenantPrincipal
+from farna.core.cost_controller.org_auto_pause import (
     AUTO_PAUSE_REASON_SPEND_CEILING,
     maybe_auto_pause_org_triggers,
 )
-from modulo.core.runner_capacity import lock_org_cost_state
-from modulo.db.models.organisation import Organisation
-from modulo.db.rls import set_rls_org
-from modulo.db.sqlstates import sqlstate_of
+from farna.core.runner_capacity import lock_org_cost_state
+from farna.db.models.organisation import Organisation
+from farna.db.rls import set_rls_org
+from farna.db.sqlstates import sqlstate_of
 
 pytestmark = pytest.mark.integration
 

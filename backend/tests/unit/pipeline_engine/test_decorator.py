@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.pipeline_engine import (
+from farna.core.pipeline_engine import (
     ContextSetterViolationError,
     RunCancelledError,
     cancellable_node,
     set_cancellation_check,
 )
-from modulo.core.pipeline_engine.decorator import (
+from farna.core.pipeline_engine.decorator import (
     get_connector_hub,
     set_audit_hook,
     set_connector_hub,

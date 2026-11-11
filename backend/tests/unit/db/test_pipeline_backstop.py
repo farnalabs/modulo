@@ -22,11 +22,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.api.routes.pipelines import _is_privileged
-from modulo.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
-from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from farna.api.routes.pipelines import _is_privileged
+from farna.db.crud.pipeline import GraphWriteActor, replace_pipeline_graph
+from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
-_SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "modulo"
+_SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "farna"
 
 
 # ---------------------------------------------------------------------------

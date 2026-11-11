@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.db_error_handling — the ``handle_db_errors`` decorator.
+"""Unit tests for farna.api.db_error_handling — the ``handle_db_errors`` decorator.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the decorator that
 490+ call sites across the route layer rely on to translate DB/validation
@@ -32,8 +32,8 @@ from sqlalchemy.exc import (
     SQLAlchemyError,
 )
 
-from modulo.api.db_error_handling import handle_db_errors, prime_stream, reemit_primed_stream
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, TriggersPausedError
+from farna.api.db_error_handling import handle_db_errors, prime_stream, reemit_primed_stream
+from farna.core.exceptions import OrgDeletedError, PipelineNotRunnableError, TriggersPausedError
 
 
 def _integrity_error() -> IntegrityError:
@@ -189,7 +189,7 @@ class TestLogging:
         async def fail() -> None:
             raise _integrity_error()
 
-        with caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"), pytest.raises(HTTPException):
+        with caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"), pytest.raises(HTTPException):
             await _run(fail())
 
         messages = [r.getMessage() for r in caplog.records]
@@ -200,7 +200,7 @@ class TestLogging:
         async def fail() -> None:
             raise _programming_error()
 
-        with caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"), pytest.raises(HTTPException):
+        with caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"), pytest.raises(HTTPException):
             await _run(fail())
 
         messages = [r.getMessage() for r in caplog.records]
@@ -211,7 +211,7 @@ class TestLogging:
         async def fail() -> None:
             raise RuntimeError("boom")
 
-        with caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"), pytest.raises(HTTPException):
+        with caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"), pytest.raises(HTTPException):
             await _run(fail())
 
         messages = [r.getMessage() for r in caplog.records]
@@ -238,7 +238,7 @@ class TestStructured503Backstop:
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert excinfo.value.detail == "Database temporarily unavailable."
 
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert len(records) == 1
         record = records[0]
         assert record.levelno == logging.ERROR
@@ -267,7 +267,7 @@ class TestStructured503Backstop:
             await _run(_endpoint(_programming_error())())
 
         assert programming_exc.value.status_code == status.HTTP_501_NOT_IMPLEMENTED
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert not records
 
 
@@ -340,7 +340,7 @@ class TestHandleDbErrors:
 
     async def test_logs_error_with_log_prefix(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _endpoint(IntegrityError("stmt", {}, Exception("duplicate")))()
@@ -418,7 +418,7 @@ class TestInvalidRequestErrorMapping:
             await _endpoint(InvalidRequestError("Autobegin is disabled on this Session"))()
 
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert not records, f"InvalidRequestError must not write a service_unavailable record: {records}"
 
     async def test_invalid_request_error_logs_as_a_session_contract_error(
@@ -426,7 +426,7 @@ class TestInvalidRequestErrorMapping:
     ) -> None:
         """It IS still logged (loudly) — just under the programming-error key."""
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _endpoint(InvalidRequestError("Autobegin is disabled on this Session"))()
@@ -475,7 +475,7 @@ class TestPendingRollbackErrorMapping:
             await _endpoint(PendingRollbackError(self._MSG))()
 
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        records = [r for r in caplog.records if r.name == "modulo.api.db_error_reporting"]
+        records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert len(records) == 1
         record = records[0]
         assert record.levelno == logging.ERROR
@@ -487,7 +487,7 @@ class TestPendingRollbackErrorMapping:
 
     async def test_pending_rollback_logs_under_its_own_key(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _endpoint(PendingRollbackError(self._MSG))()
@@ -525,7 +525,7 @@ class TestPipelineNotRunnableMapping:
 
     async def test_detail_is_byte_identical_to_the_sibling_route_helper(self) -> None:
         """The shared arm must read exactly like ``pipeline_not_runnable_http``."""
-        from modulo.api.routes.runs import pipeline_not_runnable_http
+        from farna.api.routes.runs import pipeline_not_runnable_http
 
         refusal = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="deleted")
 
@@ -542,7 +542,7 @@ class TestPipelineNotRunnableMapping:
     async def test_route_that_translates_itself_is_not_double_handled(self) -> None:
         """A route-local ``except`` arm already raises HTTPException; the
         shared arm must leave it untouched (one conversion, never two)."""
-        from modulo.api.routes.runs import pipeline_not_runnable_http
+        from farna.api.routes.runs import pipeline_not_runnable_http
 
         refusal = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
 
@@ -566,7 +566,7 @@ class TestPipelineNotRunnableMapping:
             raise PipelineNotRunnableError(pipeline_id=pipeline_id, state="archived")
 
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.WARNING, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _run(fail())
@@ -636,7 +636,7 @@ class TestTriggersPausedMapping:
             raise TriggersPausedError(org_id=self._ORG, trigger_type="cron")
 
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.WARNING, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _run(fail())
@@ -700,8 +700,8 @@ class TestOrgDeletedMapping:
         rewords its detail, this fails and the shared arm must be updated with
         it — the two must never drift apart.
         """
-        import modulo.api.routes.runs as runs_route
-        import modulo.api.routes.triggers as triggers_route
+        import farna.api.routes.runs as runs_route
+        import farna.api.routes.triggers as triggers_route
 
         deleted_template = 'detail=f"Cannot create run: organisation {exc.org_id} is deleted"'
         missing_template = 'detail=f"Cannot create run: organisation {exc.org_id} not found"'
@@ -740,7 +740,7 @@ class TestOrgDeletedMapping:
             raise OrgDeletedError(org_id=self._ORG, deleted=True)
 
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.WARNING, logger="farna.api.db_error_handling"),
             pytest.raises(HTTPException),
         ):
             await _run(fail())
@@ -880,8 +880,8 @@ class TestManualNodeOutputSchemaErrorMapping:
     """The manual-node output-schema refusal keeps its own 422 detail."""
 
     def test_maps_to_422_with_the_exception_detail(self) -> None:
-        from modulo.api.db_error_handling import _translate_wrapped_exception
-        from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
+        from farna.api.db_error_handling import _translate_wrapped_exception
+        from farna.db.crud.pipeline import ManualNodeOutputSchemaError
 
         exc = ManualNodeOutputSchemaError("node-123")
         with pytest.raises(HTTPException) as excinfo:

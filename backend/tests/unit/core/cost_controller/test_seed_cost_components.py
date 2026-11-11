@@ -2,8 +2,8 @@
 
 The org-enumeration query in ``seed_cost_components`` used to run WITHOUT an
 active transaction. The production session factories
-(``modulo.api.dependencies.get_or_create_session_factory`` and
-``modulo.db.session.AsyncSessionLocal``) are created with ``autobegin=False``,
+(``farna.api.dependencies.get_or_create_session_factory`` and
+``farna.db.session.AsyncSessionLocal``) are created with ``autobegin=False``,
 so that query raised ``InvalidRequestError: Autobegin is disabled on this
 Session`` at startup, the exception was swallowed by the lifespan
 try/except, and NO org ever got default cost components — every run then
@@ -24,10 +24,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.seed_data.cost_components import seed_cost_components, seed_cost_components_for_org
-from modulo.db.models.base import Base
-from modulo.db.models.cost_component import CostComponent
-from modulo.db.models.organisation import Organisation
+from farna.core.seed_data.cost_components import seed_cost_components, seed_cost_components_for_org
+from farna.db.models.base import Base
+from farna.db.models.cost_component import CostComponent
+from farna.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ORG_FRESH = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -47,7 +47,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 @pytest.fixture
 def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
-    # modulo.api.dependencies.get_or_create_session_factory).
+    # farna.api.dependencies.get_or_create_session_factory).
     return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 
@@ -95,7 +95,7 @@ async def test_seed_cost_components_logs_seed_progress(
     removed once the seed was confirmed working on prod; the ``_log.info``
     lines are the observability record of the seed.
     """
-    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
+    caplog.set_level(logging.INFO, logger="farna.core.seed_data.cost_components")
     async with factory() as session, session.begin():
         session.add(Organisation(id=_ORG, name="Seed Org", slug="seed-org"))
 
@@ -112,7 +112,7 @@ async def test_seed_cost_components_no_orgs_is_a_noop(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Zero-org enumeration must not crash and must seed nothing."""
-    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
+    caplog.set_level(logging.INFO, logger="farna.core.seed_data.cost_components")
     seeded = await seed_cost_components(factory)
 
     assert seeded == 0
@@ -133,7 +133,7 @@ async def test_seed_emits_log_records_at_info_level(
     level production runs at. Setting the caplog level to INFO for the seed
     logger exercises the real path and catches that failure class.
     """
-    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
+    caplog.set_level(logging.INFO, logger="farna.core.seed_data.cost_components")
     async with factory() as session, session.begin():
         session.add(Organisation(id=_ORG, name="Seed Org", slug="seed-org"))
 
@@ -141,7 +141,7 @@ async def test_seed_emits_log_records_at_info_level(
 
     assert seeded == 1
     messages = [
-        record.getMessage() for record in caplog.records if record.name == "modulo.core.seed_data.cost_components"
+        record.getMessage() for record in caplog.records if record.name == "farna.core.seed_data.cost_components"
     ]
     assert "cost_components.seeded" in messages
     assert "cost_components.seed_complete" in messages

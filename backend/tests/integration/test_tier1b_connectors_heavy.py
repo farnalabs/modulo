@@ -23,8 +23,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.gitlab import GitLabConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.gitlab import GitLabConnector
 from tests.helpers.testcontainers_harness import (
     SSRF_LOOPBACK_OPTIN,
     ContainerHandle,

@@ -1,6 +1,6 @@
 """Coverage tests for the FAR-775 variant batch API routes.
 
-Drives every handler and helper in modulo.api.routes.variant_batches with
+Drives every handler and helper in farna.api.routes.variant_batches with
 mocked DB sessions / RLS so the new production code clears the SonarCloud
 new-code coverage gate. No real database is touched.
 """
@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes import variant_batches as vb
-from modulo.api.routes.variant_batches import (
+from farna.api.routes import variant_batches as vb
+from farna.api.routes.variant_batches import (
     _build_state_summaries,
     _legacy_batch_id_filter,
     _load_batch_detail,
@@ -27,7 +27,7 @@ from modulo.api.routes.variant_batches import (
     list_batches,
     re_fire_batch,
 )
-from modulo.db.crud.run_node_outputs import RunBlobs
+from farna.db.crud.run_node_outputs import RunBlobs
 from tests.unit.api.mock_session import configure_rls_preamble, make_empty_execute_result
 
 # ---------------------------------------------------------------------------
@@ -93,8 +93,8 @@ def _make_state(batch_id: uuid.UUID | None = None, **kwargs: object) -> MagicMoc
 
 def _patch_rls() -> Any:
     return (
-        patch("modulo.api.routes.variant_batches.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.variant_batches.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.variant_batches.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.variant_batches.set_rls_user_context", new_callable=AsyncMock),
     )
 
 
@@ -194,7 +194,7 @@ class TestLoadRunBlobs:
         run = _make_run()
         blobs = RunBlobs(outputs={"agent1": {"text": "hi"}}, telemetry={}, markers=None)
         with patch(
-            "modulo.api.routes.variant_batches.read_run_node_outputs_raw",
+            "farna.api.routes.variant_batches.read_run_node_outputs_raw",
             new_callable=AsyncMock,
             return_value=blobs,
         ):
@@ -206,7 +206,7 @@ class TestLoadRunBlobs:
         run = _make_run()
         blobs = RunBlobs(outputs=None, telemetry=None, markers=None)
         with patch(
-            "modulo.api.routes.variant_batches.read_run_node_outputs_raw",
+            "farna.api.routes.variant_batches.read_run_node_outputs_raw",
             new_callable=AsyncMock,
             return_value=blobs,
         ):
@@ -217,7 +217,7 @@ class TestLoadRunBlobs:
         run = _make_run()
         blobs = RunBlobs(outputs={}, telemetry={}, markers=None)
         with patch(
-            "modulo.api.routes.variant_batches.read_run_node_outputs_raw",
+            "farna.api.routes.variant_batches.read_run_node_outputs_raw",
             new_callable=AsyncMock,
             return_value=blobs,
         ):
@@ -265,8 +265,8 @@ class TestLoadBatchDetail:
 
         session = make_session_mock()
         with (
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[]),
         ):
             with pytest.raises(HTTPException) as exc:
                 await _load_batch_detail(session, batch_id=uuid.uuid4(), org_id=uuid.uuid4())
@@ -276,13 +276,11 @@ class TestLoadBatchDetail:
         run = _make_run(variant_config_snapshot={"variant_name": "ctrl"}, completed_at=datetime.now(UTC))
         session = make_session_mock()
         with (
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[run]),
-            patch("modulo.api.routes.variant_batches._batch_load_eval_stats", new_callable=AsyncMock, return_value={}),
-            patch(
-                "modulo.api.routes.variant_batches._batch_load_eval_results", new_callable=AsyncMock, return_value={}
-            ),
-            patch("modulo.api.routes.variant_batches._load_run_blobs", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[run]),
+            patch("farna.api.routes.variant_batches._batch_load_eval_stats", new_callable=AsyncMock, return_value={}),
+            patch("farna.api.routes.variant_batches._batch_load_eval_results", new_callable=AsyncMock, return_value={}),
+            patch("farna.api.routes.variant_batches._load_run_blobs", new_callable=AsyncMock, return_value=None),
         ):
             detail = await _load_batch_detail(session, batch_id=uuid.uuid4(), org_id=uuid.uuid4())
         assert detail["status"] == "complete"
@@ -293,17 +291,15 @@ class TestLoadBatchDetail:
         state = _make_state(name="named")
         session = make_session_mock()
         with (
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[run]),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_batch_runs", new_callable=AsyncMock, return_value=[run]),
             patch(
-                "modulo.api.routes.variant_batches._batch_load_eval_stats",
+                "farna.api.routes.variant_batches._batch_load_eval_stats",
                 new_callable=AsyncMock,
                 return_value={run.id: (0, 0)},
             ),
-            patch(
-                "modulo.api.routes.variant_batches._batch_load_eval_results", new_callable=AsyncMock, return_value={}
-            ),
-            patch("modulo.api.routes.variant_batches._load_run_blobs", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches._batch_load_eval_results", new_callable=AsyncMock, return_value={}),
+            patch("farna.api.routes.variant_batches._load_run_blobs", new_callable=AsyncMock, return_value=None),
         ):
             detail = await _load_batch_detail(session, batch_id=state.batch_id, org_id=uuid.uuid4())
         assert detail["name"] == "named"
@@ -346,17 +342,17 @@ class TestListBatchesLegacyScan:
             _patch_rls()[0],
             _patch_rls()[1],
             patch(
-                "modulo.api.routes.variant_batches.list_batch_states",
+                "farna.api.routes.variant_batches.list_batch_states",
                 new_callable=AsyncMock,
                 return_value=(states, 1),
             ),
             patch(
-                "modulo.api.routes.variant_batches.get_all_state_batch_ids",
+                "farna.api.routes.variant_batches.get_all_state_batch_ids",
                 new_callable=AsyncMock,
                 return_value={state_bid},
             ),
             patch(
-                "modulo.api.routes.variant_batches.list_batch_runs_for_batch_ids",
+                "farna.api.routes.variant_batches.list_batch_runs_for_batch_ids",
                 new_callable=AsyncMock,
                 return_value={legacy_bid: [legacy_run]},
             ),
@@ -380,7 +376,7 @@ class TestGetBatchHandler:
             _patch_rls()[0],
             _patch_rls()[1],
             patch(
-                "modulo.api.routes.variant_batches._load_batch_detail",
+                "farna.api.routes.variant_batches._load_batch_detail",
                 new_callable=AsyncMock,
                 return_value=detail,
             ),
@@ -397,7 +393,7 @@ class TestDeleteBatchHandler:
             _patch_rls()[0],
             _patch_rls()[1],
             patch(
-                "modulo.api.routes.variant_batches.soft_delete_batch_state",
+                "farna.api.routes.variant_batches.soft_delete_batch_state",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -420,15 +416,15 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
             patch(
-                "modulo.api.routes.variant_batches.run_variant_batch",
+                "farna.api.routes.variant_batches.run_variant_batch",
                 new_callable=AsyncMock,
                 return_value=[{"frozen_snapshot": {"batch_id": str(new_id)}}],
             ),
             patch(
-                "modulo.api.routes.variant_batches._load_batch_detail",
+                "farna.api.routes.variant_batches._load_batch_detail",
                 new_callable=AsyncMock,
                 return_value={"batch_id": str(new_id)},
             ),
@@ -446,7 +442,7 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
         ):
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), session, principal)
@@ -462,8 +458,8 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=None),
         ):
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), session, principal)
@@ -482,8 +478,8 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
         ):
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), session, principal)
@@ -503,9 +499,9 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
-            patch("modulo.api.routes.variant_batches.run_variant_batch", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.run_variant_batch", new_callable=AsyncMock, return_value=None),
         ):
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), session, principal)
@@ -525,10 +521,10 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
             patch(
-                "modulo.api.routes.variant_batches.run_variant_batch",
+                "farna.api.routes.variant_batches.run_variant_batch",
                 new_callable=AsyncMock,
                 return_value=[{"frozen_snapshot": {}}],
             ),
@@ -547,7 +543,7 @@ class TestReFireBatchHandler:
         """
         from fastapi import HTTPException
 
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         org_id = uuid.uuid4()
         pipeline_id = uuid.uuid4()
@@ -562,10 +558,10 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
             patch(
-                "modulo.api.routes.variant_batches.run_variant_batch",
+                "farna.api.routes.variant_batches.run_variant_batch",
                 new_callable=AsyncMock,
                 side_effect=refusal,
             ),
@@ -595,10 +591,10 @@ class TestReFireBatchHandler:
         with (
             _patch_rls()[0],
             _patch_rls()[1],
-            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
-            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch("farna.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("farna.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
             patch(
-                "modulo.api.routes.variant_batches.run_variant_batch",
+                "farna.api.routes.variant_batches.run_variant_batch",
                 new_callable=AsyncMock,
                 side_effect=refusal,
             ),
@@ -612,7 +608,7 @@ class TestReFireBatchHandler:
         (``routes/runs.py`` trigger + rerun, ``routes/triggers.py`` test
         trigger); the chain-less re-fire route must read the same."""
         org_id = uuid.uuid4()
-        from modulo.core.exceptions import OrgDeletedError
+        from farna.core.exceptions import OrgDeletedError
 
         http_exc = await self._refusal_from_re_fire(OrgDeletedError(org_id=org_id, deleted=True))
         assert http_exc.status_code == 409
@@ -621,7 +617,7 @@ class TestReFireBatchHandler:
     async def test_org_missing_refusal_returns_404(self) -> None:
         """The other branch of the same sibling mapping: no org row -> 404."""
         org_id = uuid.uuid4()
-        from modulo.core.exceptions import OrgDeletedError
+        from farna.core.exceptions import OrgDeletedError
 
         http_exc = await self._refusal_from_re_fire(OrgDeletedError(org_id=org_id, deleted=False))
         assert http_exc.status_code == 404
@@ -632,7 +628,7 @@ class TestReFireBatchHandler:
         500 — ``re_fire_batch`` has no local ``except TriggersPausedError``
         chain either, so the shared translation is the only mapping."""
         org_id = uuid.uuid4()
-        from modulo.core.exceptions import TriggersPausedError
+        from farna.core.exceptions import TriggersPausedError
 
         http_exc = await self._refusal_from_re_fire(TriggersPausedError(org_id=org_id, trigger_type="manual"))
         assert http_exc.status_code == 409

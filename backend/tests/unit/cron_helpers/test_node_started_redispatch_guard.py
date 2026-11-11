@@ -43,8 +43,8 @@ from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
@@ -250,7 +250,7 @@ async def _run_reconcile(
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
         stack.enter_context(
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
         )
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session
@@ -321,7 +321,7 @@ class TestNodeStartedRowIsNeverRedispatched:
         strictly earlier than D8's 25h staleness sweep anyway."""
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -343,7 +343,7 @@ class TestNodelessChokepointTruthfulForNodeStartedRow:
         dispatched" log/event — it gets its own counter and message."""
         import logging
 
-        from modulo.core.cron_helpers import _fail_nodeless_run
+        from farna.core.cron_helpers import _fail_nodeless_run
 
         run = SimpleNamespace(
             status="running",
@@ -407,7 +407,7 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         idempotency-gated and is the shape behind the 2026-10-10 storm."""
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -526,7 +526,7 @@ class TestFencedResetIsIdempotencyGated:
         these assertions, and the functional watchdog test below breaks when
         its own gate stops working.
         """
-        from modulo.core.pipeline_engine import executor, retry_policy, watchdog_retry
+        from farna.core.pipeline_engine import executor, retry_policy, watchdog_retry
 
         exec_src = Path(executor.__file__).read_text(encoding="utf-8")
         rp_src = Path(retry_policy.__file__).read_text(encoding="utf-8")
@@ -595,7 +595,7 @@ class TestF6aGatedRecoveryResumesNodeStartedNeverReexecutes:
         run) fails here first."""
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -624,7 +624,7 @@ class TestExecutorWriteSiteSharesPhaseConstant:
         the dependency-free ``dispatch_phases`` leaf — the same object the
         predicates bind — and no bare ``"first_node_dispatched"`` literal
         remains in the executor module."""
-        from modulo.core.pipeline_engine import executor
+        from farna.core.pipeline_engine import executor
 
         assert executor.PHASE_FIRST_NODE_DISPATCHED is PHASE_FIRST_NODE_DISPATCHED
         source = Path(executor.__file__).read_text(encoding="utf-8")
@@ -643,7 +643,7 @@ class TestSlotSweepExcludesNodeStartedFromRetryOnly:
     async def test_slot_sweep_sql_excludes_node_started_from_retry_arm_only(self) -> None:
         """The emitted UPDATE carries the claim_count OR-arm: over-budget
         rows bypass the phase exclusion entirely."""
-        import modulo.core.run_admission as ra
+        import farna.core.run_admission as ra
 
         statements: list[str] = []
 
@@ -720,7 +720,7 @@ class TestNodeStartedTerminalizedTickAlert:
             stack.enter_context(patch.object(ch, "_open_system_factory"))
             stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
             stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
-            stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+            stack.enter_context(patch("farna.core.cron_helpers.AsyncRedis"))
             with caplog.at_level(logging.ERROR, logger=ch.__name__):
                 await ch._dispatcher_reconcile_body(
                     _settings=_settings(),

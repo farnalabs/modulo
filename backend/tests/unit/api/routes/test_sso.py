@@ -17,16 +17,16 @@ import pytest
 from fastapi import Request, Response
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.exception_handlers import sso_error_redirect
-from modulo.api.routes.sso import (
+from farna.api.exception_handlers import sso_error_redirect
+from farna.api.routes.sso import (
     _OIDC_FLOW_COOKIE,
     _resolve_org_slug_for_error,
     _resolve_saml_for_route,
     oidc_callback,
     oidc_login,
 )
-from modulo.auth.sso import SsoCallbackError, SsoProvisioningDeniedError, sign_state, verify_state
-from modulo.settings import Settings
+from farna.auth.sso import SsoCallbackError, SsoProvisioningDeniedError, sign_state, verify_state
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 
@@ -160,7 +160,7 @@ async def test_oidc_callback_runs_db_work_inside_begin() -> None:
         await app_session.execute(MagicMock())
         return {"access_token": "at", "refresh_token": "rt"}
 
-    with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
+    with patch("farna.api.routes.sso.oidc_process_callback", new=fake_process_callback):
         resp = await oidc_callback(
             provider="google",
             request=request,
@@ -202,11 +202,11 @@ async def test_saml_app_fallback_opens_scoped_transaction_when_caller_has_none()
 
     with (
         patch(
-            "modulo.api.routes.sso._read_system_saml_provider_by_slug",
+            "farna.api.routes.sso._read_system_saml_provider_by_slug",
             new=AsyncMock(return_value=None),
         ),
-        patch("modulo.api.routes.sso._set_default_rls_org", new=fake_set_default_rls_org),
-        patch("modulo.api.routes.sso.get_provider_by_provider_id", new=fake_get_provider),
+        patch("farna.api.routes.sso._set_default_rls_org", new=fake_set_default_rls_org),
+        patch("farna.api.routes.sso.get_provider_by_provider_id", new=fake_get_provider),
     ):
         resolved = await _resolve_saml_for_route("okta-saml", None, fake)
 
@@ -252,7 +252,7 @@ async def test_oidc_callback_join_denied_carries_org_for_org_login() -> None:
         raise SsoProvisioningDeniedError("denied", org_id=org_id)
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=denying_callback),
+        patch("farna.api.routes.sso.oidc_process_callback", new=denying_callback),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -278,7 +278,7 @@ async def test_oidc_callback_join_denied_without_org_uses_base_login() -> None:
         raise SsoProvisioningDeniedError("denied")
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=denying_callback),
+        patch("farna.api.routes.sso.oidc_process_callback", new=denying_callback),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -303,7 +303,7 @@ async def test_oidc_callback_value_error_raises_auth_failed() -> None:
         raise ValueError("Invalid state parameter — possible CSRF")
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=failing_callback),
+        patch("farna.api.routes.sso.oidc_process_callback", new=failing_callback),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -329,7 +329,7 @@ async def test_oidc_callback_programming_error_raises_provider_unavailable() -> 
         raise ProgrammingError("SELECT 1", {}, Exception("missing table"))
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=failing_callback),
+        patch("farna.api.routes.sso.oidc_process_callback", new=failing_callback),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -421,7 +421,7 @@ async def test_oidc_login_sets_host_prefixed_flow_cookie() -> None:
     async def fake_authorize_url(*_args: object, **_kwargs: object) -> tuple[str, str, str, str]:
         return "https://idp.example.com/authorize?state=x", raw_state, nonce, code_verifier
 
-    with patch("modulo.api.routes.sso.oidc_get_authorize_url", new=fake_authorize_url):
+    with patch("farna.api.routes.sso.oidc_get_authorize_url", new=fake_authorize_url):
         resp = await oidc_login(
             provider="google",
             _request=_make_request(),
@@ -454,7 +454,7 @@ async def test_oidc_callback_rejects_state_without_flow_cookie() -> None:
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -478,7 +478,7 @@ async def test_oidc_callback_rejects_flow_cookie_bound_to_another_state() -> Non
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -507,7 +507,7 @@ async def test_oidc_callback_rejects_unverifiable_flow_cookie() -> None:
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -531,7 +531,7 @@ async def test_oidc_callback_rejects_tampered_state_even_with_a_cookie() -> None
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -561,7 +561,7 @@ async def test_oidc_callback_rejects_flow_cookie_without_nonce_and_verifier_fiel
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -600,7 +600,7 @@ async def test_oidc_callback_rejects_flow_cookie_with_empty_binding_secret(
     process = AsyncMock()
 
     with (
-        patch("modulo.api.routes.sso.oidc_process_callback", new=process),
+        patch("farna.api.routes.sso.oidc_process_callback", new=process),
         pytest.raises(SsoCallbackError) as exc_info,
     ):
         await oidc_callback(
@@ -625,7 +625,7 @@ async def test_oidc_callback_clears_flow_cookie_on_success() -> None:
     async def fake_process_callback(*_args: object, **_kwargs: object) -> dict[str, str]:
         return {"access_token": "at", "refresh_token": "rt"}
 
-    with patch("modulo.api.routes.sso.oidc_process_callback", new=fake_process_callback):
+    with patch("farna.api.routes.sso.oidc_process_callback", new=fake_process_callback):
         resp = await oidc_callback(
             provider="google",
             request=request,
@@ -653,7 +653,7 @@ async def test_oidc_callback_threads_nonce_and_verifier_from_the_cookie() -> Non
         captured["verifier"] = str(kwargs["code_verifier"])
         return {"access_token": "at", "refresh_token": "rt"}
 
-    with patch("modulo.api.routes.sso.oidc_process_callback", new=capturing_callback):
+    with patch("farna.api.routes.sso.oidc_process_callback", new=capturing_callback):
         await oidc_callback(
             provider="google",
             request=request,

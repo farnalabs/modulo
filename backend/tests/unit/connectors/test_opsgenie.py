@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total_count
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.opsgenie import OpsgenieConnector, _next_offset_cursor
+from farna.connectors._safe_page import safe_paging_total as _paging_total_count
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.opsgenie import OpsgenieConnector, _next_offset_cursor
 
 API_KEY = "og_test_key"
 _BASE = "https://api.opsgenie.com/v2"

@@ -19,12 +19,12 @@
 #       contents), project name, resolved service list, volume NAMES only,
 #       bounded and repeat-collapsed container logs, host facts + clock.
 #   * app-level facts (collected only when the app container is reachable):
-#       the in-container `python -m modulo.support.bundle` bundle, merged into
+#       the in-container `python -m farna.support.bundle` bundle, merged into
 #       the same zip. The HTTP API is never called - it may be the thing that
 #       is broken.
 #
 # CONTRACT WITH THE BUNDLE-FORMAT MODULE (FAR-2305)
-# `python -m modulo.support.bundle --out <path> --json` inside the app
+# `python -m farna.support.bundle --out <path> --json` inside the app
 # container is the single source of truth for the format: the
 # `bundle_format_version`, the `MANIFEST.txt`/`report.json` shape, the redaction
 # layers and the ref line. This script does NOT reimplement redaction. It
@@ -44,7 +44,7 @@
 #     no Farnalabs endpoint, no upload.
 #   * docker-level log members are NEVER shipped verbatim. `docker compose logs`
 #     output is piped through the module's own redaction (the same
-#     `python -m modulo.support.bundle --redact-stdin` gate app-level members
+#     `python -m farna.support.bundle --redact-stdin` gate app-level members
 #     use), run in a one-off container of the app image so it does not need the
 #     stack to be up. If that filter cannot run, the log member is WITHHELD and
 #     the reason is recorded - withholding is correct, leaking is not. A bash
@@ -85,7 +85,7 @@ readonly MAX_LOG_BYTES=$((256 * 1024))
 readonly SOURCE_DOCKER="docker"
 readonly SOURCE_APP="app"
 readonly REDACTION_DOCKER_OUTPUT="verbatim (docker CLI output)"
-readonly REDACTION_APP_MODULE="module (modulo.support.bundle)"
+readonly REDACTION_APP_MODULE="module (farna.support.bundle)"
 
 OUT=""
 COMPOSE_FILE=""
@@ -382,12 +382,12 @@ collect_logs() {
   # leaked secret is not. A bash regex scrub is deliberately not a fallback.
   local filter_rc=0
   compose run --rm -T --no-deps --entrypoint python "$APP_SERVICE" \
-    -m modulo.support.bundle --redact-stdin \
+    -m farna.support.bundle --redact-stdin \
     <"$collapsed" >"$filtered" 2>"$WORK/redact-${safe}.err" || filter_rc=$?
   if (( filter_rc != 0 )); then
     local reason
     reason="$(sed -n '1,3p' "$WORK/redact-${safe}.err" | tr '\n' ' ')"
-    note "$rel" "log tail withheld: redaction via 'python -m modulo.support.bundle --redact-stdin' in a one-off '$APP_SERVICE' container was unavailable (exit $filter_rc): ${reason:-no output}"
+    note "$rel" "log tail withheld: redaction via 'python -m farna.support.bundle --redact-stdin' in a one-off '$APP_SERVICE' container was unavailable (exit $filter_rc): ${reason:-no output}"
     LOGS_WITHHELD=$((LOGS_WITHHELD + 1))
     rm -f "$filtered"
     return 0
@@ -395,7 +395,7 @@ collect_logs() {
 
   mkdir -p "$(dirname "$dest")"
   mv "$filtered" "$dest"
-  register_member "$rel" "last $TAIL_LINES lines for service '$service', repeated lines collapsed, redacted" "docker" "module (modulo.support.bundle --redact-stdin)"
+  register_member "$rel" "last $TAIL_LINES lines for service '$service', repeated lines collapsed, redacted" "docker" "module (farna.support.bundle --redact-stdin)"
 }
 
 # ---------------------------------------------------------------------------
@@ -719,11 +719,11 @@ collect_app() {
   local remote_path="/tmp/modulo-support.zip"
   local json_out=""
   local rc=0
-  json_out="$(compose exec -T "$APP_SERVICE" python -m modulo.support.bundle --out "$remote_path" --json 2>"$WORK/app-exec.err")" || rc=$?
+  json_out="$(compose exec -T "$APP_SERVICE" python -m farna.support.bundle --out "$remote_path" --json 2>"$WORK/app-exec.err")" || rc=$?
   if (( rc != 0 )); then
     local reason
     reason="$(sed -n '1,3p' "$WORK/app-exec.err" | tr '\n' ' ')"
-    record_missing "app" "python -m modulo.support.bundle failed in the '$APP_SERVICE' container (exit $rc): ${reason:-no output}"
+    record_missing "app" "python -m farna.support.bundle failed in the '$APP_SERVICE' container (exit $rc): ${reason:-no output}"
     return 0
   fi
 
@@ -764,7 +764,7 @@ collect_app() {
 
   if ! command -v unzip >/dev/null 2>&1; then
     cp "$app_zip" "$MEMBERS/app/modulo-support.zip"
-    register_member "app/modulo-support.zip" "app bundle produced by modulo.support.bundle, nested because unzip is not installed" "$SOURCE_APP" "$REDACTION_APP_MODULE"
+    register_member "app/modulo-support.zip" "app bundle produced by farna.support.bundle, nested because unzip is not installed" "$SOURCE_APP" "$REDACTION_APP_MODULE"
     note "app/modulo-support.zip" "unzip is not installed; the app bundle is nested instead of merged flat"
     APP_COLLECTED=1
     return 0
@@ -804,7 +804,7 @@ collect_app() {
       *)
         mkdir -p "$(dirname "$MEMBERS/$rel")"
         mv "$extract/$rel" "$MEMBERS/$rel"
-        register_member "$rel" "app-level member produced by modulo.support.bundle" "$SOURCE_APP" "$REDACTION_APP_MODULE"
+        register_member "$rel" "app-level member produced by farna.support.bundle" "$SOURCE_APP" "$REDACTION_APP_MODULE"
         ;;
     esac
   done < <(cd "$extract" && find . -type f -print | sed 's|^\./||')
@@ -869,7 +869,7 @@ MANIFEST="$MEMBERS/MANIFEST.txt"
     done <"$NOTES_FILE"
   fi
   printf '\nredaction: app-level members and every docker-level log tail are redacted by\n'
-  printf 'modulo.support.bundle. A log tail whose redaction filter could not run is\n'
+  printf 'farna.support.bundle. A log tail whose redaction filter could not run is\n'
   printf 'withheld and listed above, never shipped raw. Open this bundle and check its\n'
   printf 'contents before sending it to anyone.\n'
 } >"$MANIFEST"
@@ -979,6 +979,6 @@ TMP_ZIP=""
 printf '%s\n' "$REF_LINE"
 printf 'bundle: %s (%s)\n' "$OUT" "$(human_size "$zip_size")"
 if (( LOGS_WITHHELD > 0 )); then
-  printf 'Log tails were withheld because redaction via modulo.support.bundle was unavailable (%d service(s)).\n' "$LOGS_WITHHELD"
+  printf 'Log tails were withheld because redaction via farna.support.bundle was unavailable (%d service(s)).\n' "$LOGS_WITHHELD"
 fi
 printf 'Open the bundle and check its contents before sending it to anyone.\n'

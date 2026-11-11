@@ -19,10 +19,10 @@ from sqlalchemy import Table
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import list_pipelines
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
+from farna.db.crud.pipeline import list_pipelines
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 

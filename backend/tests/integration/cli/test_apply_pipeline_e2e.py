@@ -44,13 +44,13 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api import mcp_server as ms
-from modulo.auth.jwt import create_access_token
-from modulo.cli.apply.loader import parse_apply_documents
-from modulo.cli.apply.pipeline_apply import resolve_graph
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.db.crud.schema import create_schema, create_schema_version
-from modulo.db.rls import set_rls_org
+from farna.api import mcp_server as ms
+from farna.auth.jwt import create_access_token
+from farna.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.pipeline_apply import resolve_graph
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.db.crud.schema import create_schema, create_schema_version
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

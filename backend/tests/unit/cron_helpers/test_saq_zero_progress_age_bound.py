@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import modulo.core.cron_helpers as ch
+import farna.core.cron_helpers as ch
 
 
 class TestSaqZeroProgressMaxAgeReader:

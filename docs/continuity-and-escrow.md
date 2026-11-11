@@ -23,7 +23,7 @@ Verified properties:
 | Property | Evidence |
 |---|---|
 | The source builds with no Farnalabs-held secret. | The production all-in-one image builds from a clean checkout with no credential or build secret from Farnalabs. [Build the image from source](#build-the-image-from-source) below gives the command, which was run against this checkout for this page. |
-| The Community tier needs no license key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/modulo/core/license_bootstrap.py`: "Booting with no license at all stays valid"). |
+| The Community tier needs no license key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/farna/core/license_bootstrap.py`: "Booting with no license at all stays valid"). |
 | You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Farna Control and of any modified version or derivative work you create, including personal, internal and commercial use, provided that you may not use Farna Control or any such modified version or derivative work to offer a paid hosted or managed service to third parties where that service provides substantially the same functionality as Farna Control. See `LICENSE`. |
 | Each released version converts to Apache-2.0. | `LICENSE`: the Change Date for the distributed version is 2029-07-12, and "For each version of the Licensed Work, the Change Date is three years after that version is first publicly released." |
 
@@ -104,7 +104,7 @@ Team licenses are Ed25519-signed keys in the format
 `<base64(payload)>.<base64(signature)>`. Verification uses exactly one public
 key, the trust anchor:
 
-- the built-in development public key in `backend/src/modulo/core/license.py`
+- the built-in development public key in `backend/src/farna/core/license.py`
   when `MODULO_LICENSE_PUBLIC_KEY` is unset; or
 - the configured `MODULO_LICENSE_PUBLIC_KEY` (64 hex characters).
 
@@ -133,7 +133,7 @@ and sign your own Team licenses. Run these commands in a checkout of the source.
    ```bash
    cd backend
    uv run python -c "
-   from modulo.core.registry.crypto import generate_keypair
+   from farna.core.registry.crypto import generate_keypair
    import json
    print(json.dumps(generate_keypair(), indent=2))
    "
@@ -157,7 +157,7 @@ and sign your own Team licenses. Run these commands in a checkout of the source.
    ```bash
    cd backend
    uv run python -c "
-   from modulo.core.license_signing import generate_team_license
+   from farna.core.license_signing import generate_team_license
    print(generate_team_license(
        'Your Organisation',
        term_months=12,

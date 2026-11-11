@@ -7,7 +7,7 @@ import uuid
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.eval_engine import EvalBlockedError
+from farna.core.eval_engine import EvalBlockedError
 
 # ---------------------------------------------------------------------------
 # Active features
@@ -138,7 +138,7 @@ def node_outputs(output_json: str, ctx):
 
 @when("the eval engine evaluates the output")
 def eval_engine_evaluates(ctx):
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     eval_def = ctx["eval_def"]
     engine = EvalEngine()

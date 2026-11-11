@@ -102,6 +102,6 @@ def install_audit_session_double(monkeypatch: pytest.MonkeyPatch) -> None:
     dependency override on ``audit_session`` itself.
     """
     monkeypatch.setattr(
-        "modulo.core.audit_coverage._shared_session_factory",
+        "farna.core.audit_coverage._shared_session_factory",
         lambda: _AuditTestSession,
     )

@@ -461,7 +461,7 @@ jobs:
       # --- path-derived label sync (FAR-1527) ---
       #
       # Reconciles a small MANAGED label set derived from the changed paths:
-      #   db: migrations               <- backend/src/modulo/db/migrations/**
+      #   db: migrations               <- backend/src/farna/db/migrations/**
       #   risk: high                   <- globs in .github/high-risk-paths.yaml
       #   area: backend                <- backend/**
       #   area: frontend               <- frontend/**
@@ -589,7 +589,7 @@ jobs:
             # through with `;;&` so every overlapping category is recorded
             # instead of only the first match.
             case "$file" in
-              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;&
+              backend/src/farna/db/migrations/*) HAS_MIGRATIONS=true ;;&
               backend/*) HAS_BACKEND=true ;;&
               frontend/*) HAS_FRONTEND=true ;;&
                .github/*|deploy/*) HAS_CI=true ;;&

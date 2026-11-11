@@ -10,11 +10,11 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from tests.unit.notifier.conftest import begin_context
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -74,7 +74,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER,
         org_role="operator",
     )
-    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+    with patch("farna.api.routes.admin_notifications.validate_outbound_url"):
         test_client = TestClient(app)
         test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
         test_client.headers["X-CSRF-Token"] = "test-csrf-token"

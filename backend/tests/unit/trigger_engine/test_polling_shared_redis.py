@@ -27,10 +27,10 @@ import httpx
 import pytest
 from redis.exceptions import RedisError
 
-from modulo.connectors._rate_bucket import RedisTokenBucket, SharedBudgetUnavailableError
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.rest import RestConnector, RESTRateLimitTimeoutError, SecurityGuard
-from modulo.core.trigger_engine.polling import (
+from farna.connectors._rate_bucket import RedisTokenBucket, SharedBudgetUnavailableError
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.rest import RestConnector, RESTRateLimitTimeoutError, SecurityGuard
+from farna.core.trigger_engine.polling import (
     _build_polling_connector,
     _build_polling_connector_from_instance,
     _close_polling_resources,
@@ -213,18 +213,18 @@ async def test_trigger_rest_connector_fails_closed_on_redis_outage() -> None:
 
 def test_resolver_returns_none_when_redis_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Redis genuinely not configured -> None (no shared budget exists to multiply)."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock(redis_url="", modulo_db="postgresql"))
+    monkeypatch.setattr("farna.settings.get_settings", lambda: MagicMock(redis_url="", modulo_db="postgresql"))
     assert connector_hub.resolve_shared_rate_limit_redis("org-1") is None
 
 
 def test_resolver_returns_none_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """SQLite DB -> no shared Redis budget to wire."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(redis_url="redis://localhost:6379/0", modulo_db="sqlite"),
     )
     assert connector_hub.resolve_shared_rate_limit_redis("org-1") is None
@@ -232,10 +232,10 @@ def test_resolver_returns_none_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_resolver_returns_none_without_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-tenant probe path: never wire a shared budget (cross-tenant leak guard)."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(redis_url="redis://localhost:6379/0", modulo_db="postgresql"),
     )
     assert connector_hub.resolve_shared_rate_limit_redis(None) is None
@@ -243,10 +243,10 @@ def test_resolver_returns_none_without_tenant(monkeypatch: pytest.MonkeyPatch) -
 
 def test_resolver_builds_shared_client_when_configured_with_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
     """A configured Redis on a tenant path returns a Redis client (authoritative)."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(redis_url="redis://localhost:6379/0", modulo_db="postgresql"),
     )
     client = connector_hub.resolve_shared_rate_limit_redis("org-1")
@@ -255,22 +255,22 @@ def test_resolver_builds_shared_client_when_configured_with_tenant(monkeypatch: 
 
 def test_resolver_fails_closed_on_settings_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Settings unreadable on a tenant path FAILS CLOSED (SharedBudgetUnavailableError)."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
     def boom() -> Any:
         raise RuntimeError("settings unavailable")
 
-    monkeypatch.setattr("modulo.settings.get_settings", boom)
+    monkeypatch.setattr("farna.settings.get_settings", boom)
     with pytest.raises(SharedBudgetUnavailableError, match="settings could not be read"):
         connector_hub.resolve_shared_rate_limit_redis("org-1")
 
 
 def test_resolver_fails_closed_on_client_construction_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A configured-but-unconstructable Redis client FAILS CLOSED (no local bucket)."""
-    from modulo.core import connector_hub
+    from farna.core import connector_hub
 
     monkeypatch.setattr(
-        "modulo.settings.get_settings",
+        "farna.settings.get_settings",
         lambda: MagicMock(redis_url="redis://localhost:6379/0", modulo_db="postgresql"),
     )
 
@@ -295,7 +295,7 @@ class _FakeSecretsBackend:
 
 def test_cron_build_polling_connector_wires_shared_redis_and_tenant() -> None:
     """The cron fire-path wrapper threads redis_client + tenant_id = str(org_id)."""
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     shared_redis = object()
     captured: dict[str, Any] = {}
@@ -312,9 +312,9 @@ def test_cron_build_polling_connector_wires_shared_redis_and_tenant() -> None:
     session = MagicMock()
     with (
         patch.object(cron_helpers, "get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
     ):
         result = asyncio.run(
             cron_helpers._build_polling_connector(
@@ -336,7 +336,7 @@ def test_cron_build_polling_connector_wires_shared_redis_and_tenant() -> None:
 
 def test_cron_build_polling_connector_propagates_shared_budget_error() -> None:
     """A configured-but-unresolvable shared budget PROPAGATES (fail-closed), not swallowed."""
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     def fake_resolver(_org: str) -> Any:
         raise SharedBudgetUnavailableError("shared rate-limit Redis client is configured but could not be constructed")
@@ -344,8 +344,8 @@ def test_cron_build_polling_connector_propagates_shared_budget_error() -> None:
     session = MagicMock()
     with (
         patch.object(cron_helpers, "get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
         pytest.raises(SharedBudgetUnavailableError),
     ):
         asyncio.run(
@@ -379,10 +379,10 @@ def test_from_instance_closes_resolved_redis_when_connector_build_fails() -> Non
         raise KeyError("missing credential 'token'")
 
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", side_effect=fake_resolver),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
         pytest.raises(KeyError, match="missing credential"),
     ):
         asyncio.run(
@@ -405,10 +405,10 @@ def test_from_instance_closes_nothing_when_no_redis_resolved_and_build_fails() -
         raise ValueError("bad config")
 
     with (
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
-        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("farna.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+        patch("farna.core.trigger_engine.polling._build_polling_connector", side_effect=fake_build_connector),
         pytest.raises(ValueError, match="bad config"),
     ):
         asyncio.run(

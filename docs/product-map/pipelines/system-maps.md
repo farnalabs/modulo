@@ -3,27 +3,27 @@ id: feat-system-maps
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/system_maps.py
-  - backend/src/modulo/api/schemas/system_maps.py
-  - backend/src/modulo/api/dependencies.py
-  - backend/src/modulo/api/routes/admin_feature_flags.py
-  - backend/src/modulo/api/team_scope.py
-  - backend/src/modulo/core/system_maps_discovery.py
-  - backend/src/modulo/core/system_map_persistence.py
-  - backend/src/modulo/core/system_map_validation.py
-  - backend/src/modulo/core/feature_flags.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/db/models/system_map.py
-  - backend/src/modulo/db/repositories/system_map.py
-  - backend/src/modulo/db/migrations/versions/0341_system_maps.py
-  - backend/src/modulo/db/migrations/versions/0342_system_maps_integrity.py
-  - backend/src/modulo/db/migrations/versions/0343_system_maps_revision_fk.py
-  - backend/src/modulo/db/migrations/versions/0344_system_maps_tenant_integrity.py
-  - backend/src/modulo/db/migrations/versions/0345_system_maps_name_integrity.py
-  - backend/src/modulo/db/migrations/versions/0347_system_maps_version_aware.py
-  - backend/src/modulo/cli/apply/system_map_apply.py
-  - backend/src/modulo/cli/apply/plan.py
-  - backend/src/modulo/cli/apply/models.py
+  - backend/src/farna/api/routes/system_maps.py
+  - backend/src/farna/api/schemas/system_maps.py
+  - backend/src/farna/api/dependencies.py
+  - backend/src/farna/api/routes/admin_feature_flags.py
+  - backend/src/farna/api/team_scope.py
+  - backend/src/farna/core/system_maps_discovery.py
+  - backend/src/farna/core/system_map_persistence.py
+  - backend/src/farna/core/system_map_validation.py
+  - backend/src/farna/core/feature_flags.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/db/models/system_map.py
+  - backend/src/farna/db/repositories/system_map.py
+  - backend/src/farna/db/migrations/versions/0341_system_maps.py
+  - backend/src/farna/db/migrations/versions/0342_system_maps_integrity.py
+  - backend/src/farna/db/migrations/versions/0343_system_maps_revision_fk.py
+  - backend/src/farna/db/migrations/versions/0344_system_maps_tenant_integrity.py
+  - backend/src/farna/db/migrations/versions/0345_system_maps_name_integrity.py
+  - backend/src/farna/db/migrations/versions/0347_system_maps_version_aware.py
+  - backend/src/farna/cli/apply/system_map_apply.py
+  - backend/src/farna/cli/apply/plan.py
+  - backend/src/farna/cli/apply/models.py
   - frontend/src/views/SystemMapsView.vue
   - frontend/src/views/SystemMapDetailView.vue
   - frontend/src/views/DashboardView.vue

@@ -12,11 +12,11 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from modulo.api.routes.admin_sso import (
+from farna.api.routes.admin_sso import (
     _provider_response,
     list_presets_endpoint,
 )
-from modulo.auth.jwt import TenantPrincipal
+from farna.auth.jwt import TenantPrincipal
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

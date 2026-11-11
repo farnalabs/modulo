@@ -12,9 +12,9 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.api.models.error import ErrorIngestRequest
-from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.api.models.error import ErrorIngestRequest
+from farna.core.error_tracking import ErrorIngestionService, SessionKeyStore
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -130,9 +130,9 @@ class TestIngest:
         event_mock.id = uuid.uuid4()
 
         with (
-            patch("modulo.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)) as create_mock,
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group") as upsert_mock,
+            patch("farna.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)) as create_mock,
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group") as upsert_mock,
         ):
             upsert_group = MagicMock()
             upsert_group.id = uuid.uuid4()
@@ -172,9 +172,9 @@ class TestIngest:
         existing_group.id = uuid.uuid4()
 
         with (
-            patch("modulo.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)),
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=existing_group)),
-            patch("modulo.core.error_tracking.upsert_error_group") as upsert_mock,
+            patch("farna.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=existing_group)),
+            patch("farna.core.error_tracking.upsert_error_group") as upsert_mock,
         ):
             upsert_group = MagicMock()
             upsert_group.id = uuid.uuid4()
@@ -200,12 +200,12 @@ class TestIngest:
             return MagicMock(id=uuid.uuid4())
 
         with (
-            patch("modulo.core.error_tracking.create_error_event", side_effect=fake_create_event),
+            patch("farna.core.error_tracking.create_error_event", side_effect=fake_create_event),
             patch(
-                "modulo.core.error_tracking.get_error_group_by_fingerprint",
+                "farna.core.error_tracking.get_error_group_by_fingerprint",
                 AsyncMock(return_value=None),
             ),
-            patch("modulo.core.error_tracking.upsert_error_group") as upsert_mock,
+            patch("farna.core.error_tracking.upsert_error_group") as upsert_mock,
         ):
             upsert_mock.return_value = MagicMock(id=uuid.uuid4())
             await svc.ingest(
@@ -237,9 +237,9 @@ class TestIngest:
         session = _make_session()
 
         with (
-            patch("modulo.core.error_tracking.create_error_event", AsyncMock()) as create_mock,
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock()),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock()),
+            patch("farna.core.error_tracking.create_error_event", AsyncMock()) as create_mock,
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock()),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock()),
         ):
             with pytest.raises(ValueError, match=rf"'{missing}'"):
                 await svc.ingest(session, _ORG_ID, event_data)
@@ -256,9 +256,9 @@ class TestIngestBatch:
         grp.id = uuid.uuid4()
 
         with (
-            patch("modulo.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)),
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
+            patch("farna.core.error_tracking.create_error_event", AsyncMock(return_value=event_mock)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
         ):
             events = [
                 {"level": "error", "message": "err1", "source": "backend"},
@@ -283,11 +283,11 @@ class TestIngestBatch:
 
         with (
             patch(
-                "modulo.core.error_tracking.create_error_event",
+                "farna.core.error_tracking.create_error_event",
                 AsyncMock(side_effect=[event_mock, ValueError("boom"), event_mock]),
             ),
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=grp)),
         ):
             events = [
                 {"level": "error", "message": "ok1", "source": "backend"},

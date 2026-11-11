@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.api.mcp_server import list_trigger_events
+from farna.api.mcp_server import list_trigger_events
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -55,7 +55,7 @@ def _make_mock_session() -> AsyncMock:
 
 class TestGetTriggerEventsAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -63,29 +63,29 @@ class TestGetTriggerEventsAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_trigger_events()
         assert result["error"] == "auth_expired"
         assert "revoked" in result.get("detail", "").lower() or "expired" in result.get("detail", "").lower()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.check_tool_scope")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.check_tool_scope")
     async def test_insufficient_scope(
         self,
         mock_check_scope: MagicMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_check_scope.side_effect = MCPAuthorizationError("insufficient_scope")
         mock_cm = AsyncMock()
@@ -104,7 +104,7 @@ class TestGetTriggerEventsAuth:
 
 class TestGetTriggerEventsSuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -112,15 +112,15 @@ class TestGetTriggerEventsSuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_returns_all_events_when_no_filters(
         self,
         mock_session: AsyncMock,
@@ -166,8 +166,8 @@ class TestGetTriggerEventsSuccess:
         assert result["data"][1]["id"] == str(event2.id)
         assert result["data"][1]["run_id"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_filters_by_trigger_id(
         self,
         mock_session: AsyncMock,
@@ -194,8 +194,8 @@ class TestGetTriggerEventsSuccess:
         # The WHERE clause must actually filter on the requested trigger.
         assert any(f"trigger_id = '{target_trigger_id}'" in sql for sql in _executed_sql(mock_sesh))
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_filters_by_pipeline_id(
         self,
         mock_session: AsyncMock,
@@ -223,14 +223,14 @@ class TestGetTriggerEventsSuccess:
         assert any(f"triggers.pipeline_id = '{pipeline_id}'" in sql for sql in executed)
         assert any("pipelines.deleted_at IS NULL" in sql for sql in executed)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_viewer_without_pipeline_filters_by_account_membership(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_role, _ctx_user_id
 
         _ctx_role.set("viewer")
         account_id = uuid.uuid4()
@@ -259,14 +259,14 @@ class TestGetTriggerEventsSuccess:
             _ctx_user_id.set(None)
             _ctx_role.set("runner")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_viewer_with_pipeline_filters_by_account_membership(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_role, _ctx_user_id
 
         _ctx_role.set("viewer")
         account_id = uuid.uuid4()
@@ -298,15 +298,15 @@ class TestGetTriggerEventsSuccess:
             _ctx_user_id.set(None)
             _ctx_role.set("runner")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_viewer_with_unset_account_fails_closed(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         """A viewer read without an account id must never degrade to org-wide."""
-        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_role, _ctx_user_id
 
         _ctx_role.set("viewer")
         _ctx_user_id.set(None)
@@ -332,7 +332,7 @@ class TestGetTriggerEventsSuccess:
         so this guard is the builder's own fail-closed backstop: it must raise
         rather than omit the membership boundary and degrade to an org-wide read.
         """
-        from modulo.api.mcp_server import McpAuthContextError, _build_trigger_event_query
+        from farna.api.mcp_server import McpAuthContextError, _build_trigger_event_query
 
         session = AsyncMock()
 
@@ -349,8 +349,8 @@ class TestGetTriggerEventsSuccess:
 
         session.execute.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_respects_limit(
         self,
         mock_session: AsyncMock,
@@ -375,8 +375,8 @@ class TestGetTriggerEventsSuccess:
         # The rows query must fetch limit+1 to detect the next page.
         assert any("LIMIT 6" in sql for sql in _executed_sql(mock_sesh))
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_returns_empty_when_no_events(
         self,
         mock_session: AsyncMock,
@@ -398,8 +398,8 @@ class TestGetTriggerEventsSuccess:
         assert result["total"] == 0
         assert not result["data"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_trigger_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -418,8 +418,8 @@ class TestGetTriggerEventsSuccess:
         # Validation fails before any query is executed.
         mock_sesh.execute.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_pipeline_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -437,8 +437,8 @@ class TestGetTriggerEventsSuccess:
         assert result["field"] == "pipeline_id"
         mock_sesh.execute.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_limit_clamped_to_100(
         self,
         mock_session: AsyncMock,

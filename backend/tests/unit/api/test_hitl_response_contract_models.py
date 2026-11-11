@@ -7,8 +7,8 @@ with ``response_contract`` field validation.
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import HitlResponseContract, HitlResponseOption, HitlReviewConfig
-from modulo.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH
+from farna.api.routes.pipelines import HitlResponseContract, HitlResponseOption, HitlReviewConfig
+from farna.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH
 
 _VALID_DESCRIPTION = "A" * HITL_DESCRIPTION_MIN_LENGTH
 

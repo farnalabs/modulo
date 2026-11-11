@@ -15,12 +15,12 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _split_merge_outputs,
     finalize_cancelled_run,
     finalize_cost,
 )
-from modulo.db.crud.run_node_outputs import RunBlobs
+from farna.db.crud.run_node_outputs import RunBlobs
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -75,9 +75,9 @@ async def test_finalize_writes_lockstep_columns_from_legacy_segment() -> None:
     run = _make_run()
     session = _mock_session(run)
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -146,13 +146,13 @@ async def test_finalize_already_pure_rows_idempotent_noop() -> None:
     run = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
     session = _mock_session(run)
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch("farna.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -198,14 +198,14 @@ async def test_cancel_path_does_not_resplit_pure_rows() -> None:
     )
     session = _mock_session(run)
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch("farna.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._log") as mock_log,
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._log") as mock_log,
     ):
         await finalize_cancelled_run(session, run_id=run.id, org_id=_ORG_ID)
     kwargs = mock_urs.await_args.kwargs
@@ -230,12 +230,12 @@ async def test_fallback_writes_shape_identical_two_column_rows() -> None:
     session = _mock_session(run)
     with (
         patch(
-            "modulo.core.cost_controller.finalize.load_live_components",
+            "farna.core.cost_controller.finalize.load_live_components",
             side_effect=RuntimeError("boom"),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
-        patch("modulo.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize._e2b_rate", return_value=Decimal("0.1332")),
     ):
         await finalize_cost(
             session,
@@ -270,9 +270,9 @@ async def test_recovery_fields_survive_later_finalize_merge() -> None:
     run = _make_run()
     session = _mock_session(run)
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
         await finalize_cost(
             session,
@@ -294,13 +294,13 @@ async def test_recovery_fields_survive_later_finalize_merge() -> None:
     run2 = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
     session2 = _mock_session(run2)
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", return_value=[]),
+        patch("farna.core.cost_controller.finalize.load_live_components", return_value=[]),
         patch(
-            "modulo.core.cost_controller.finalize.read_run_blobs",
+            "farna.core.cost_controller.finalize.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs=stored_outputs, telemetry=stored_telemetry, markers=None)),
         ),
-        patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs2,
-        patch("modulo.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
+        patch("farna.core.cost_controller.finalize.update_run_status") as mock_urs2,
+        patch("farna.core.cost_controller.finalize.record_run_facts", new=AsyncMock()),
     ):
         await finalize_cost(
             session2,

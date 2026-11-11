@@ -21,19 +21,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.executor import (
     _graph_has_script_mode,
     _retry_after_policy,
     _script_lease_probe_ok,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     OutputSchemaValidationError,
     ScriptInvalidOutputError,
     ScriptSideEffectUnknownError,
     SupersededNodeError,
     make_sandbox_agent_fn,
 )
-from modulo.core.pipeline_engine.retry_policy import _failure_event_matches
+from farna.core.pipeline_engine.retry_policy import _failure_event_matches
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 
@@ -319,8 +319,8 @@ async def test_script_mode_mid_execution_termination_raises_side_effect_unknown(
     fn = make_sandbox_agent_fn(node_def)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.01),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.01),
         pytest.raises(ScriptSideEffectUnknownError),
     ):
         await fn(_run_state())

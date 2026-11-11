@@ -17,12 +17,12 @@ must be a member of the authoritative DB CHECK vocabulary
 
 import pytest
 
-from modulo.core.eval_engine.evidence_layer import (
+from farna.core.eval_engine.evidence_layer import (
     KEY_NAMESPACE_OWNERSHIP,
     EvidenceWriteAuthorisationError,
     assert_write_authorisation,
 )
-from modulo.db.models.evidence import PRODUCER_TYPES
+from farna.db.models.evidence import PRODUCER_TYPES
 
 # ---------------------------------------------------------------------------
 # W1 — authorised write accepted

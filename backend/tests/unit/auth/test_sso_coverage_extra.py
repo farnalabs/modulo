@@ -1,4 +1,4 @@
-"""Extra coverage for ``modulo.auth.sso`` to keep ``modulo.auth`` above its 90% gate.
+"""Extra coverage for ``farna.auth.sso`` to keep ``farna.auth`` above its 90% gate.
 
 These target pure-logic branches and network/error paths that the happy-path
 SSO tests never exercise (SSRF rejections, malformed discovery/token JSON,
@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.sso import (
+from farna.auth.sso import (
     _audit_invite_consumed_fail_open,
     _decode_saml_response,
     _exchange_code,
@@ -36,7 +36,7 @@ from modulo.auth.sso import (
     saml_process_response,
     sign_state,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 
 def _override(**kwargs: object) -> Settings:
@@ -80,8 +80,8 @@ async def test_apply_group_mappings_non_dict_mapping() -> None:
     session = _mock_session()
     account = SimpleNamespace(id=uuid.uuid4())
     with (
-        patch("modulo.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock, return_value=None),
-        patch("modulo.auth.sso.add_team_member", new_callable=AsyncMock) as add_mock,
+        patch("farna.auth.sso.get_membership_by_team_and_account", new_callable=AsyncMock, return_value=None),
+        patch("farna.auth.sso.add_team_member", new_callable=AsyncMock) as add_mock,
     ):
         await apply_group_mappings(session, account, uuid.uuid4(), ["g"], ["not-a-dict"])
     add_mock.assert_not_called()
@@ -129,7 +129,7 @@ async def test_fetch_discovery_json_decode_error() -> None:
     response.json.side_effect = json.JSONDecodeError("bad", "doc", 0)
     client = AsyncMock()
     client.get.return_value = response
-    with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+    with patch("farna.auth.sso.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value = client
         with pytest.raises(ValueError, match="Invalid JSON in discovery document"):
             await _fetch_discovery("https://issuer.example/discovery")
@@ -143,7 +143,7 @@ async def test_fetch_discovery_pinned_json_decode_error() -> None:
     pacer = AsyncMock()
     pacer.return_value.__aenter__.return_value = client
     with (
-        patch("modulo.auth.sso.pinned_async_client", pacer),
+        patch("farna.auth.sso.pinned_async_client", pacer),
         pytest.raises(ValueError, match="Invalid JSON in discovery document"),
     ):
         await _fetch_discovery_pinned("https://issuer.example/discovery")
@@ -154,7 +154,7 @@ async def test_exchange_code_json_decode_error() -> None:
     response.json.side_effect = json.JSONDecodeError("bad", "doc", 0)
     client = AsyncMock()
     client.post.return_value = response
-    with patch("modulo.auth.sso.httpx.AsyncClient") as client_type:
+    with patch("farna.auth.sso.httpx.AsyncClient") as client_type:
         client_type.return_value.__aenter__.return_value = client
         with pytest.raises(ValueError, match="Invalid JSON in OIDC token response"):
             await _exchange_code("https://tok", "cid", "csec", "code", "http://cb", "verifier")
@@ -190,9 +190,9 @@ async def test_resolve_oidc_provider_ssrf_rejects_discovery_url() -> None:
         scopes=None,
     )
     with (
-        patch("modulo.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
+        patch("farna.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
         patch(
-            "modulo.auth.sso.validate_outbound_url_async",
+            "farna.auth.sso.validate_outbound_url_async",
             new_callable=AsyncMock,
             side_effect=ValueError("blocked"),
         ),
@@ -218,7 +218,7 @@ async def test_authorize_missing_discovery_url() -> None:
         scopes=None,
     )
     with (
-        patch("modulo.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
+        patch("farna.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
         pytest.raises(ValueError, match="missing client_id or discovery_url"),
     ):
         await oidc_get_authorize_url("pid", settings, "http://cb", session, session)
@@ -228,7 +228,7 @@ async def test_authorize_discovery_fetch_error() -> None:
     settings = _override()
     session = _mock_session()
     with (
-        patch("modulo.auth.sso._fetch_discovery", new_callable=AsyncMock, side_effect=httpx.ConnectError("x")),
+        patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock, side_effect=httpx.ConnectError("x")),
         pytest.raises(ValueError, match="Failed to fetch discovery document"),
     ):
         await oidc_get_authorize_url("google", settings, "http://cb", session, session)
@@ -245,7 +245,7 @@ async def test_callback_missing_client_secret() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", None, "https://d", None, None),
         ),
@@ -269,13 +269,11 @@ async def test_callback_missing_token_endpoint() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
-        patch(
-            "modulo.auth.sso._fetch_discovery", new_callable=AsyncMock, return_value={"jwks_uri": "j", "issuer": "i"}
-        ),
+        patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock, return_value={"jwks_uri": "j", "issuer": "i"}),
         pytest.raises(ValueError, match="No token_endpoint"),
     ):
         await oidc_process_callback(
@@ -296,16 +294,16 @@ async def test_callback_missing_id_token() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={}),
         pytest.raises(ValueError, match="missing a valid id_token"),
     ):
         await oidc_process_callback(
@@ -326,16 +324,16 @@ async def test_callback_missing_jwks_or_issuer() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         pytest.raises(ValueError, match="missing jwks_uri or issuer"),
     ):
         await oidc_process_callback(
@@ -356,17 +354,17 @@ async def test_callback_missing_email() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
-        patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock, return_value={}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso.verify_id_token", new_callable=AsyncMock, return_value={}),
         pytest.raises(ValueError, match="did not return an email"),
     ):
         await oidc_process_callback(
@@ -387,18 +385,18 @@ async def test_callback_no_app_session() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
-            "modulo.auth.sso.verify_id_token",
+            "farna.auth.sso.verify_id_token",
             new_callable=AsyncMock,
             return_value={"email": "u@e.z", "sub": "s"},
         ),
@@ -422,28 +420,28 @@ async def test_callback_groups_not_a_list() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
-            "modulo.auth.sso.verify_id_token",
+            "farna.auth.sso.verify_id_token",
             new_callable=AsyncMock,
             return_value={"email": "u@e.z", "sub": "s", "groups": "notalist"},
         ),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
         patch(
-            "modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}
+            "farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}
         ) as issue_mock,
     ):
         await oidc_process_callback(
@@ -468,33 +466,33 @@ async def test_callback_applies_group_mappings() -> None:
     )
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
-            "modulo.auth.sso.verify_id_token",
+            "farna.auth.sso.verify_id_token",
             new_callable=AsyncMock,
             return_value={"email": "u@e.z", "sub": "s", "groups": ["g1"]},
         ),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
         patch(
-            "modulo.auth.sso._lookup_provider_by_client_id",
+            "farna.auth.sso._lookup_provider_by_client_id",
             new_callable=AsyncMock,
             return_value=db_provider,
         ),
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
     ):
         await oidc_process_callback(
             "code",
@@ -525,9 +523,9 @@ async def test_resolve_saml_config_metadata_url_ssrf_rejected() -> None:
         enabled=True,
     )
     with (
-        patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
+        patch("farna.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
         patch(
-            "modulo.auth.sso.validate_outbound_url_async",
+            "farna.auth.sso.validate_outbound_url_async",
             new_callable=AsyncMock,
             side_effect=ValueError("blocked"),
         ),
@@ -551,9 +549,9 @@ async def test_resolve_saml_config_metadata_url_fetch_error() -> None:
     pacer = AsyncMock()
     pacer.return_value.__aenter__.return_value = client
     with (
-        patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
-        patch("modulo.auth.sso.validate_outbound_url_async", new_callable=AsyncMock),
-        patch("modulo.auth.sso.pinned_async_client", pacer),
+        patch("farna.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
+        patch("farna.auth.sso.validate_outbound_url_async", new_callable=AsyncMock),
+        patch("farna.auth.sso.pinned_async_client", pacer),
         pytest.raises(ValueError, match="Failed to fetch SAML IdP metadata"),
     ):
         await _resolve_saml_config(None, session, settings)
@@ -574,9 +572,9 @@ async def test_resolve_saml_config_metadata_url_fetch_success() -> None:
     pacer = AsyncMock()
     pacer.return_value.__aenter__.return_value = client
     with (
-        patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
-        patch("modulo.auth.sso.validate_outbound_url_async", new_callable=AsyncMock),
-        patch("modulo.auth.sso.pinned_async_client", pacer),
+        patch("farna.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
+        patch("farna.auth.sso.validate_outbound_url_async", new_callable=AsyncMock),
+        patch("farna.auth.sso.pinned_async_client", pacer),
     ):
         idp_metadata, entity_id, _key, _cert, db = await _resolve_saml_config(None, session, settings)
 
@@ -596,7 +594,7 @@ async def test_resolve_saml_config_missing_metadata() -> None:
         enabled=True,
     )
     with (
-        patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
+        patch("farna.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
         pytest.raises(ValueError, match="missing IdP metadata"),
     ):
         await _resolve_saml_config(None, session, settings)
@@ -612,11 +610,11 @@ async def test_saml_get_auth_url_handler_error() -> None:
     session = _mock_session()
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=("metadata", "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth") as mh,
+        patch("farna.auth.sso.ModuloSamlAuth") as mh,
     ):
         mh.return_value.get_auth_url.side_effect = Exception("boom")
         with pytest.raises(ValueError, match="Failed to generate SAML AuthnRequest"):
@@ -642,7 +640,7 @@ async def test_saml_process_response_metadata_parse_error() -> None:
     session = _mock_session()
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=("not-valid-xml", "entity", None, None, None),
         ),
@@ -658,11 +656,11 @@ async def test_saml_process_response_no_email() -> None:
     handler.process_response.return_value = {"name_id": "", "attributes": {}}
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         pytest.raises(ValueError, match="did not return an email"),
     ):
         await saml_process_response("<resp>", settings, None, session)
@@ -677,11 +675,11 @@ async def test_saml_process_response_no_app_session() -> None:
     }
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         pytest.raises(RuntimeError, match="No app session"),
     ):
         await saml_process_response("<resp>", settings, None, None)
@@ -697,13 +695,13 @@ async def test_saml_process_response_jit_runtime_error() -> None:
     }
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             side_effect=RuntimeError("No organisation exists"),
         ),
@@ -723,23 +721,23 @@ async def test_saml_process_response_applies_group_mappings() -> None:
     db_saml = SimpleNamespace(group_mappings=[{"idp_group": "g1", "team_id": str(uuid.uuid4()), "team_role": "editor"}])
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
         patch(
-            "modulo.auth.sso._lookup_provider_by_entity_id",
+            "farna.auth.sso._lookup_provider_by_entity_id",
             new_callable=AsyncMock,
             return_value=db_saml,
         ),
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
     ):
         await saml_process_response("<resp>", settings, None, session)
         mock_apply.assert_awaited_once()
@@ -809,7 +807,7 @@ async def test_sso_audit_lock_timeout_is_contained_by_the_outer_savepoint() -> N
     session.begin_nested = MagicMock(return_value=nested)
     audit = AsyncMock(side_effect=_lock_timeout_error())
 
-    with patch("modulo.core.audit_logger.append_audit_event", audit):
+    with patch("farna.core.audit_logger.append_audit_event", audit):
         # Fail-open: the helper must NOT re-raise.
         await _audit_invite_consumed_fail_open(session, uuid.uuid4(), uuid.uuid4())
 
@@ -830,7 +828,7 @@ async def test_sso_audit_success_runs_inside_the_savepoint() -> None:
     session.begin_nested = MagicMock(return_value=nested)
     audit = AsyncMock(return_value=None)
 
-    with patch("modulo.core.audit_logger.append_audit_event", audit):
+    with patch("farna.core.audit_logger.append_audit_event", audit):
         await _audit_invite_consumed_fail_open(session, uuid.uuid4(), uuid.uuid4())
 
     session.begin_nested.assert_called_once()
@@ -863,9 +861,9 @@ async def test_resolve_oidc_provider_app_fallback_opens_transaction() -> None:
         scopes=None,
     )
     with (
-        patch("modulo.auth.sso._read_system_oidc_provider", new_callable=AsyncMock, return_value=None),
-        patch("modulo.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org,
-        patch("modulo.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
+        patch("farna.auth.sso._read_system_oidc_provider", new_callable=AsyncMock, return_value=None),
+        patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org,
+        patch("farna.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
     ):
         client_id, _secret, _discovery, _scopes, provider = await _resolve_oidc_provider(
             "google", None, session, settings
@@ -884,29 +882,29 @@ async def test_callback_skips_group_mappings_without_provider() -> None:
     signed = sign_state("google:state", settings.secret_key)
     with (
         patch(
-            "modulo.auth.sso._resolve_oidc_provider",
+            "farna.auth.sso._resolve_oidc_provider",
             new_callable=AsyncMock,
             return_value=("cid", "csec", "https://d", None, None),
         ),
         patch(
-            "modulo.auth.sso._fetch_discovery",
+            "farna.auth.sso._fetch_discovery",
             new_callable=AsyncMock,
             return_value={"token_endpoint": "https://d/token", "jwks_uri": "https://d/jwks", "issuer": "i"},
         ),
-        patch("modulo.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
+        patch("farna.auth.sso._exchange_code", new_callable=AsyncMock, return_value={"id_token": "x"}),
         patch(
-            "modulo.auth.sso.verify_id_token",
+            "farna.auth.sso.verify_id_token",
             new_callable=AsyncMock,
             return_value={"email": "u@e.z", "sub": "s", "groups": ["g1"]},
         ),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
-        patch("modulo.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock, return_value=None),
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+        patch("farna.auth.sso._lookup_provider_by_client_id", new_callable=AsyncMock, return_value=None),
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
     ):
         await oidc_process_callback(
             "code",
@@ -933,19 +931,19 @@ async def test_saml_process_response_skips_group_mappings_without_provider() -> 
     }
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
-        patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock, return_value=None),
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
+        patch("farna.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock, return_value=None),
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}),
     ):
         await saml_process_response("<resp>", settings, None, session)
 
@@ -960,18 +958,18 @@ async def test_saml_process_response_maps_token_issue_failure() -> None:
     handler.process_response.return_value = {"name_id": "n", "attributes": {"email": "u@e.z"}}
     with (
         patch(
-            "modulo.auth.sso._resolve_saml_config",
+            "farna.auth.sso._resolve_saml_config",
             new_callable=AsyncMock,
             return_value=(_VALID_METADATA, "entity", None, None, None),
         ),
-        patch("modulo.auth.sso.ModuloSamlAuth", return_value=handler),
+        patch("farna.auth.sso.ModuloSamlAuth", return_value=handler),
         patch(
-            "modulo.auth.sso.jit_provision_user",
+            "farna.auth.sso.jit_provision_user",
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
         patch(
-            "modulo.auth.sso.issue_sso_tokens",
+            "farna.auth.sso.issue_sso_tokens",
             new_callable=AsyncMock,
             side_effect=RuntimeError("token boom"),
         ),

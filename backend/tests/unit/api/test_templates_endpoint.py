@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -137,7 +137,7 @@ def test_list_templates_returns_200(client: TestClient) -> None:
     page_result.page = 1
     page_result.page_size = 20
 
-    with patch("modulo.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
+    with patch("farna.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
         mock_list.return_value = page_result
         resp = client.get("/api/v1/templates")
 
@@ -159,7 +159,7 @@ def test_list_templates_with_category_filter(client: TestClient) -> None:
     page_result.page = 1
     page_result.page_size = 20
 
-    with patch("modulo.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
+    with patch("farna.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
         mock_list.return_value = page_result
         resp = client.get("/api/v1/templates?category=release")
 
@@ -177,7 +177,7 @@ def test_list_templates_search(client: TestClient) -> None:
     page_result.page = 1
     page_result.page_size = 20
 
-    with patch("modulo.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
+    with patch("farna.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
         mock_list.return_value = page_result
         resp = client.get("/api/v1/templates?search=PR")
 
@@ -193,7 +193,7 @@ def test_list_templates_empty(client: TestClient) -> None:
     page_result.page = 1
     page_result.page_size = 20
 
-    with patch("modulo.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
+    with patch("farna.api.routes.templates.list_templates", new_callable=AsyncMock) as mock_list:
         mock_list.return_value = page_result
         resp = client.get("/api/v1/templates")
 
@@ -252,8 +252,8 @@ def test_create_from_template_returns_201(client: TestClient) -> None:
     mock_pipeline.snapshot_count = 0
 
     with (
-        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
-        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+        patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("farna.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
     ):
         mock_get.return_value = template_prim
         mock_create.return_value = mock_pipeline
@@ -273,7 +273,7 @@ def test_create_from_template_returns_201(client: TestClient) -> None:
 def test_create_from_template_not_found(client: TestClient) -> None:
     template_id = uuid.uuid4()
 
-    with patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get:
+    with patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = None
         resp = client.post(f"/api/v1/pipelines/from-template/{template_id}")
 
@@ -341,8 +341,8 @@ def test_create_from_template_with_hitl_review(client: TestClient) -> None:
     mock_pipeline.snapshot_count = 0
 
     with (
-        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
-        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+        patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("farna.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
     ):
         mock_get.return_value = template_prim
         mock_create.return_value = mock_pipeline
@@ -391,8 +391,8 @@ def test_create_from_template_with_schemaless_manual_node_returns_422(client: Te
     mock_pipeline.name = "Test (from template)"
 
     with (
-        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
-        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+        patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("farna.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
     ):
         mock_get.return_value = template_prim
         mock_create.return_value = mock_pipeline
@@ -448,9 +448,9 @@ def test_create_from_template_with_declared_policy_gate_strips_and_warns(
     mock_pipeline.name = "Test (from template)"
 
     with (
-        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
-        patch("modulo.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.templates"),
+        patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("farna.api.routes.templates.create_pipeline", new_callable=AsyncMock) as mock_create,
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.templates"),
     ):
         mock_get.return_value = template_prim
         mock_create.return_value = mock_pipeline
@@ -474,9 +474,9 @@ def test_create_from_template_unexpected_error_returns_500(client: TestClient) -
     template_prim = _make_template_primitive(id=template_id)
 
     with (
-        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch("farna.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
         patch(
-            "modulo.api.routes.templates.create_pipeline",
+            "farna.api.routes.templates.create_pipeline",
             new_callable=AsyncMock,
             side_effect=RuntimeError("unexpected writer failure"),
         ),
@@ -498,7 +498,7 @@ def test_create_from_template_below_operator_denied(client: TestClient) -> None:
 def test_from_template_endpoint_carries_pipeline_create_tag() -> None:
     import inspect
 
-    from modulo.api.routes.templates import create_pipeline_from_template_endpoint
+    from farna.api.routes.templates import create_pipeline_from_template_endpoint
 
     params = inspect.signature(create_pipeline_from_template_endpoint).parameters
     dep = params["principal"].default
@@ -512,7 +512,7 @@ def test_from_template_endpoint_carries_pipeline_create_tag() -> None:
 
 
 def test_template_response_from_primitive() -> None:
-    from modulo.api.routes.templates import TemplateResponse
+    from farna.api.routes.templates import TemplateResponse
 
     prim = _make_template_primitive()
     response = TemplateResponse.from_primitive(prim)
@@ -525,7 +525,7 @@ def test_template_response_from_primitive() -> None:
 
 
 def test_agent_count_from_content() -> None:
-    from modulo.db.crud.template import _agent_count_from_content
+    from farna.db.crud.template import _agent_count_from_content
 
     content = {"agents": [{"name": "A"}, {"name": "B"}]}
     assert _agent_count_from_content(content) == 2
@@ -534,7 +534,7 @@ def test_agent_count_from_content() -> None:
 
 
 def test_preview_data_from_content() -> None:
-    from modulo.db.crud.template import _preview_data_from_content
+    from farna.db.crud.template import _preview_data_from_content
 
     content = {
         "graph_nodes": [

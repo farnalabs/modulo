@@ -1,4 +1,4 @@
-"""QA lens pass on ``modulo.api.dependencies`` — the API-key credential gate,
+"""QA lens pass on ``farna.api.dependencies`` — the API-key credential gate,
 the feature-availability gate, and the dependency-tagging contract.
 
 ``require_permission_any_credential`` is the CI/CD credential path (PRD §5.2):
@@ -21,13 +21,13 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     require_feature,
     require_permission_any_credential,
 )
-from modulo.api.models.problem import ProblemException, ProblemType
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionConfigurationError, _authz_enforce_ctx
+from farna.api.models.problem import ProblemException, ProblemType
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import PermissionConfigurationError, _authz_enforce_ctx
 
 _ORG = uuid.uuid4()
 _ACCOUNT = uuid.uuid4()
@@ -89,7 +89,7 @@ def _signed_team_licence(*, org_id: str = "tenant-org", expires_days: int = 30) 
     import json
     from datetime import UTC, datetime, timedelta
 
-    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+    from farna.core.registry.crypto import generate_keypair, sign_primitive
 
     kp = generate_keypair()
     payload = {
@@ -274,14 +274,14 @@ class TestFeatureRequiredDetail:
     """
 
     def test_team_tier_below_plan_names_the_licence(self) -> None:
-        from modulo.api.dependencies import _feature_required_detail
+        from farna.api.dependencies import _feature_required_detail
 
         detail = _feature_required_detail("sso", "community")
         assert "requires a Team licence" in detail
         assert "system or organisation scope" in detail
 
     def test_community_tier_disabled_does_not_claim_a_licence(self) -> None:
-        from modulo.api.dependencies import _feature_required_detail
+        from farna.api.dependencies import _feature_required_detail
 
         detail = _feature_required_detail("system_maps", "community")
         assert "system_maps is not enabled for this organisation" in detail
@@ -290,7 +290,7 @@ class TestFeatureRequiredDetail:
         assert "requires a licence" not in detail
 
     def test_unknown_feature_fails_closed_neutrally(self) -> None:
-        from modulo.api.dependencies import _feature_required_detail
+        from farna.api.dependencies import _feature_required_detail
 
         detail = _feature_required_detail("not_a_real_flag", "community")
         assert detail == "not_a_real_flag is not available"
@@ -298,7 +298,7 @@ class TestFeatureRequiredDetail:
 
     def test_team_feature_on_a_team_plan_does_not_claim_a_missing_licence(self) -> None:
         """Below-or-equal tier disables via an override, not an entitlement gap."""
-        from modulo.api.dependencies import _feature_required_detail
+        from farna.api.dependencies import _feature_required_detail
 
         detail = _feature_required_detail("sso", "team")
         assert "Team licence" not in detail
@@ -322,23 +322,23 @@ class TestRequireFeatureAnonymous:
         return dep.dependency(ctx=ctx)  # type: ignore[attr-defined]
 
     def test_enabled_feature_passes(self) -> None:
-        from modulo.api.dependencies import require_feature_anonymous
+        from farna.api.dependencies import require_feature_anonymous
 
         dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
         assert self._check(dep, feature_enabled=True, has_license_key=False) is None
 
     def test_unlicensed_authentication_entry_point_degrades(self, caplog: pytest.LogCaptureFixture) -> None:
         """No valid licence at any scope -> the gate lets authentication through."""
-        from modulo.api.dependencies import require_feature_anonymous
+        from farna.api.dependencies import require_feature_anonymous
 
         dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
-        with caplog.at_level("WARNING", logger="modulo.api.dependencies"):
+        with caplog.at_level("WARNING", logger="farna.api.dependencies"):
             assert self._check(dep, feature_enabled=False, has_license_key=False) is None
         assert any("anonymous_degraded_authentication" in rec.message for rec in caplog.records)
 
     def test_unlicensed_without_opt_in_still_402(self) -> None:
         """The default gate is NOT weakened — no opt-in means no degrade."""
-        from modulo.api.dependencies import require_feature_anonymous
+        from farna.api.dependencies import require_feature_anonymous
 
         dep = require_feature_anonymous("sso")
         with pytest.raises(ProblemException) as excinfo:
@@ -347,7 +347,7 @@ class TestRequireFeatureAnonymous:
 
     def test_resolved_licence_without_feature_still_402_names_scope(self) -> None:
         """A determinate downgrade refuses even on an authentication entry point."""
-        from modulo.api.dependencies import require_feature_anonymous
+        from farna.api.dependencies import require_feature_anonymous
 
         dep = require_feature_anonymous("sso", allow_degraded_authentication=True)
         with pytest.raises(ProblemException) as excinfo:
@@ -384,8 +384,8 @@ class TestAnonymousPlanTenantScope:
         return session
 
     async def test_binds_the_single_login_active_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
-        from modulo.core import feature_flags as ff
+        from farna.api import dependencies as deps
+        from farna.core import feature_flags as ff
 
         org = MagicMock()
         captured: dict[str, object] = {}
@@ -399,8 +399,8 @@ class TestAnonymousPlanTenantScope:
         assert captured["org"] is org
 
     async def test_zero_or_multi_org_falls_back_to_system_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
-        from modulo.core import feature_flags as ff
+        from farna.api import dependencies as deps
+        from farna.core import feature_flags as ff
 
         captured: dict[str, object] = {}
 
@@ -416,7 +416,7 @@ class TestAnonymousPlanTenantScope:
         """A single-org instance with zero rows must NOT drop to system scope."""
         from fastapi import HTTPException
 
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         settings = MagicMock()
         settings.modulo_multi_org_enabled = False
@@ -426,9 +426,9 @@ class TestAnonymousPlanTenantScope:
 
     async def test_org_scoped_team_key_enables_sso_for_the_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The paying customer's org-level key is what the anonymous gate now sees."""
-        from modulo.api import dependencies as deps
-        from modulo.core import feature_flags as ff
-        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+        from farna.api import dependencies as deps
+        from farna.core import feature_flags as ff
+        from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 
         key, public_key = _signed_team_licence()
         set_public_key(public_key)
@@ -458,8 +458,8 @@ class TestAnonymousPlanTenantScope:
     def test_org_scoped_key_for_another_org_is_not_applied(self) -> None:
         """FAR-2060: a key whose ``org_id`` claim names a different org must not
         license this tenant — the claim is load-bearing at resolution time."""
-        from modulo.core import feature_flags as ff
-        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+        from farna.core import feature_flags as ff
+        from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 
         key, public_key = _signed_team_licence(org_id="some-other-tenant")
         set_public_key(public_key)
@@ -480,9 +480,9 @@ class TestAnonymousPlanTenantScope:
         With no single login-active org the ladder runs at system scope; the
         env-var key rung is verified and resolves the plan.
         """
-        from modulo.api import dependencies as deps
-        from modulo.core import feature_flags as ff
-        from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+        from farna.api import dependencies as deps
+        from farna.core import feature_flags as ff
+        from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
 
         key, public_key = _signed_team_licence()
         set_public_key(public_key)
@@ -518,7 +518,7 @@ class TestSystemEngineIsFallback:
     scenario explicitly."""
 
     def test_true_when_system_url_unset_and_no_prior_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         class _UnprovisionedSettings:
             modulo_system_database_url = ""
@@ -535,7 +535,7 @@ class TestSystemEngineIsFallback:
             deps._SYSTEM_ENGINE_IS_FALLBACK = saved_flag
 
     def test_false_when_system_url_set_and_no_prior_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
             modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
@@ -560,7 +560,7 @@ class TestSystemEngineIsFallback:
 
         import sqlalchemy.ext.asyncio as sa_asyncio
 
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         class _SqliteSettings:
             modulo_system_database_url = "sqlite+aiosqlite:///system-test.db"
@@ -598,7 +598,7 @@ class TestSystemEnginePoolRecycle:
 
         import sqlalchemy.ext.asyncio as sa_asyncio
 
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
             modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
@@ -625,27 +625,27 @@ class TestSystemMapsReadDependencies:
     """The published-read gate and the internal-access probe (FAR-2363)."""
 
     def test_published_read_allows_a_viewer(self) -> None:
-        from modulo.api.dependencies import _require_published_system_maps_read
+        from farna.api.dependencies import _require_published_system_maps_read
 
         principal = _tenant("viewer")
         assert _require_published_system_maps_read(principal) is principal
 
     def test_published_read_below_viewer_is_denied_403(self) -> None:
-        from modulo.api.dependencies import _require_published_system_maps_read
+        from farna.api.dependencies import _require_published_system_maps_read
 
         with pytest.raises(HTTPException) as excinfo:
             _require_published_system_maps_read(_tenant(""))
         assert excinfo.value.status_code == 403
 
     def test_internal_access_true_when_the_internal_gate_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         principal = _tenant("operator")
         monkeypatch.setattr(deps, "_require_internal_system_maps_access", lambda *_a, **_k: principal)
         assert deps._system_maps_internal_access(principal) is True
 
     def test_internal_access_false_when_the_internal_gate_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api import dependencies as deps
+        from farna.api import dependencies as deps
 
         def _deny(*_a: object, **_k: object) -> None:
             raise HTTPException(status_code=403, detail="denied")

@@ -1,6 +1,6 @@
-"""Unit tests for ``modulo.db.crud.team_scope`` (FAR-1515).
+"""Unit tests for ``farna.db.crud.team_scope`` (FAR-1515).
 
-The connector re-scope gate (``modulo.api.routes.connectors``) locates the
+The connector re-scope gate (``farna.api.routes.connectors``) locates the
 pipelines that bind a connector through ``pipelines_binding_connector``. That
 helper is a cheap text-contains prefilter read through ``team_blind_org_scope``;
 off Postgres there is no team RLS policy, so the scope helper issues no SQL and
@@ -13,14 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.sql.elements import False_
 
-from modulo.db.crud.team_scope import (
+from farna.db.crud.team_scope import (
     BlindPipelineScope,
     account_team_scope_clause,
     pipeline_team_scope_team_blind,
     pipelines_binding_connector,
     viewer_run_scope_visible,
 )
-from modulo.db.models.pipeline import Pipeline
+from farna.db.models.pipeline import Pipeline
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
@@ -121,7 +121,7 @@ async def test_pipeline_team_scope_team_blind_non_postgres_absent_row_returns_no
     session = AsyncMock()
     session.execute = AsyncMock(return_value=_first_result(None))
 
-    with patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="sqlite")):
+    with patch("farna.db.rls._ensure_active_transaction", AsyncMock(return_value="sqlite")):
         scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
 
     assert scope is None
@@ -137,8 +137,8 @@ async def test_pipeline_team_scope_team_blind_postgres_reads_then_clears_guc() -
     session.execute = AsyncMock(return_value=_first_result((owner, "team")))
 
     with (
-        patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
-        patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_set,
+        patch("farna.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
+        patch("farna.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_set,
     ):
         scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
 
@@ -152,8 +152,8 @@ async def test_pipeline_team_scope_team_blind_postgres_absent_row_returns_none()
     session.execute = AsyncMock(return_value=_first_result(None))
 
     with (
-        patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
-        patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock),
+        patch("farna.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
+        patch("farna.db.rls.set_rls_execution_context", new_callable=AsyncMock),
     ):
         scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
 

@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.notifier.event_mapper import NotificationEventMapper
-from modulo.db.models.notification import Notification
+from farna.core.notifier.event_mapper import NotificationEventMapper
+from farna.db.models.notification import Notification
 
 _ORG = uuid.uuid4()
 _TARGET_USER = uuid.uuid4()
@@ -50,7 +50,7 @@ async def _call(
     """Invoke create_from_event with a patched create_notification, returning (result, mock)."""
     session = AsyncMock()
     with patch(
-        "modulo.core.notifier.event_mapper.create_notification",
+        "farna.core.notifier.event_mapper.create_notification",
         new_callable=AsyncMock,
         return_value=_notification_stub(),
     ) as mock_create:
@@ -390,7 +390,7 @@ async def test_ttl_hours_none_passes_no_expiry(
     No shipped event uses None since FAR-2138 retired ``system_announcement``;
     the mapper capability is pinned here so the branch cannot rot untested.
     """
-    from modulo.core.notifier.event_mapper import _EVENT_CONFIG
+    from farna.core.notifier.event_mapper import _EVENT_CONFIG
 
     monkeypatch.setitem(
         _EVENT_CONFIG,

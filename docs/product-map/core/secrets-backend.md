@@ -3,11 +3,11 @@ id: feat-core-secrets-backend
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/secrets_backend/__init__.py
-  - backend/src/modulo/core/secrets_backend/fernet.py
-  - backend/src/modulo/core/secrets_backend/vault.py
-  - backend/src/modulo/core/secrets_backend/aws.py
-  - backend/src/modulo/core/fernet_rotation.py
+  - backend/src/farna/core/secrets_backend/__init__.py
+  - backend/src/farna/core/secrets_backend/fernet.py
+  - backend/src/farna/core/secrets_backend/vault.py
+  - backend/src/farna/core/secrets_backend/aws.py
+  - backend/src/farna/core/fernet_rotation.py
 unit-tests:
   - backend/tests/unit/secrets_backend/test_factory.py
   - backend/tests/unit/secrets_backend/test_fernet_backend.py
@@ -105,7 +105,7 @@ rather than in the manifest registry.
   BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/
   secrets_backend.feature`` into the executing BDD suite from
   ``steps/test_secrets_backend.py``, driving the REAL
-  ``modulo.core.secrets_backend`` seams network-free and DB-free - the
+  ``farna.core.secrets_backend`` seams network-free and DB-free - the
   ``FernetSecretsBackend`` persists/reads real rows in an in-memory aiosqlite
   engine (round-trip, in-place upsert, delete, whitespace-normalized keys),
   organization scoping via the real ``WHERE organisation_id = :oid`` SQL the

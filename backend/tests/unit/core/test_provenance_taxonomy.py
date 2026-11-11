@@ -36,11 +36,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.mcp_server import _mcp_run_item, _run_status_base
-from modulo.api.routes.dashboard import _load_recent_runs
-from modulo.core.node_output_split import DISPATCH_PROVENANCE_FIELDS
-from modulo.core.pipeline_engine.node_runner import _stamp_dispatch_provenance
-from modulo.core.provenance import (
+from farna.api.mcp_server import _mcp_run_item, _run_status_base
+from farna.api.routes.dashboard import _load_recent_runs
+from farna.core.node_output_split import DISPATCH_PROVENANCE_FIELDS
+from farna.core.pipeline_engine.node_runner import _stamp_dispatch_provenance
+from farna.core.provenance import (
     DISPATCH_DATUM_PROVENANCE,
     PROVENANCE_ATTESTED,
     PROVENANCE_DERIVED,
@@ -51,8 +51,8 @@ from modulo.core.provenance import (
     WITNESSED_VIA_KEY,
     execution_origin_provenance_class,
 )
-from modulo.core.run_provenance import run_provenance_fields
-from modulo.db.models.run import EXECUTION_ORIGIN_DISPATCHED, Run
+from farna.core.run_provenance import run_provenance_fields
+from farna.db.models.run import EXECUTION_ORIGIN_DISPATCHED, Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)

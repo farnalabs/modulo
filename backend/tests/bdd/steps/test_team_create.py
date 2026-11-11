@@ -66,8 +66,8 @@ def create_team(name: str, description: str, request, ctx, client=None) -> None:
     created = _make_mock_team(name=name, description=description)
 
     with (
-        patch("modulo.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
-        patch("modulo.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
+        patch("farna.api.routes.teams.get_team_by_name", new_callable=AsyncMock, return_value=existing),
+        patch("farna.api.routes.teams.create_team", new_callable=AsyncMock, return_value=created),
     ):
         resp = _active_client(request, client).post(
             "/api/v1/teams",

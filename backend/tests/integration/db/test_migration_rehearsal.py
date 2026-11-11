@@ -54,7 +54,7 @@ def _alembic_config(db_url: str) -> Config:
     config.set_main_option("sqlalchemy.url", db_url)
     config.set_main_option(
         "script_location",
-        str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"),
+        str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"),
     )
     config.config_file_name = None
     return config
@@ -78,7 +78,7 @@ def _asyncio_run(coro):
 def _sync_url(asyncpg_url: str) -> str:
     # Reuse env.py's canonical async->sync driver mapping so the sync engine
     # selects the postgresql+psycopg dialect (psycopg2 is not in the tree).
-    from modulo.db.migrations import env as migration_env
+    from farna.db.migrations import env as migration_env
 
     return migration_env._to_sync_url(asyncpg_url)
 
@@ -237,7 +237,7 @@ def rehearsal_migration_db(monkeypatch):
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
         m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
-        from modulo.db.bootstrap_role import bootstrap_roles
+        from farna.db.bootstrap_role import bootstrap_roles
 
         _asyncio_run(bootstrap_roles(raw, app_url))
         command.upgrade(config, _INTERMEDIATE)
@@ -297,7 +297,7 @@ def test_rehearsal_failure_rolls_back_and_reraises(
     NOTE: the original test monkeypatched ``do_run_migrations`` to inject a
     failure, but alembic loads ``env.py`` as a *fresh* module during
     ``command.upgrade`` (``util.load_python_file`` builds a brand-new module
-    object, never ``modulo.db.migrations.env``), so a monkeypatch on the
+    object, never ``farna.db.migrations.env``), so a monkeypatch on the
     imported module could never reach the code alembic actually ran. The failure
     is therefore triggered through the real DB, which exercises the same
     rollback + re-raise + report contract against the genuine run.

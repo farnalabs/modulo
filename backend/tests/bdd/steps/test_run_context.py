@@ -149,8 +149,8 @@ def auth_in_org(org: str) -> None:
 
 @when(parsers.parse('the context_setter node "{node_name}" writes "{key}"="{value}" to run_context'))
 def context_setter_writes(node_name: str, key: str, value: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.pipeline_engine import cancellable_node
-    from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+    from farna.core.pipeline_engine import cancellable_node
+    from farna.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
 
     coerced: Any = value
     if value.lower() == "true":
@@ -179,7 +179,7 @@ def context_setter_writes(node_name: str, key: str, value: str, ctx: dict[str, A
 
 @when(parsers.parse('the agent node "{node_name}" attempts to write "{key}"="{value}" to run_context'))
 def agent_attempts_write(node_name: str, key: str, value: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.pipeline_engine import ContextSetterViolationError, cancellable_node
+    from farna.core.pipeline_engine import ContextSetterViolationError, cancellable_node
 
     coerced: Any = value
     if value.lower() == "true":
@@ -208,7 +208,7 @@ def agent_attempts_write(node_name: str, key: str, value: str, ctx: dict[str, An
 
 @when("the run starts")
 def run_starts(ctx: dict[str, Any]) -> None:
-    from modulo.core.pipeline_engine.executor import _seed_state
+    from farna.core.pipeline_engine.executor import _seed_state
     from tests.bdd.conftest import make_mock_snapshot
 
     snapshot = make_mock_snapshot(run_context_defaults=dict(ctx["defaults"]))
@@ -223,7 +223,7 @@ def run_starts(ctx: dict[str, Any]) -> None:
 
 @when(parsers.parse('the agent node "{node_name}" attempts to write to run_context'))
 def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.pipeline_engine import ContextSetterViolationError, cancellable_node
+    from farna.core.pipeline_engine import ContextSetterViolationError, cancellable_node
 
     @cancellable_node(role="agent")
     async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -231,7 +231,7 @@ def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> Non
 
     import asyncio
 
-    with patch("modulo.core.pipeline_engine.decorator._log.warning") as mock_warning:
+    with patch("farna.core.pipeline_engine.decorator._log.warning") as mock_warning:
         try:
             asyncio.run(bad_node(_LIVE_STATE))
             ctx["violation_error"] = None
@@ -260,7 +260,7 @@ def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> Non
 @when("an audit hook is registered")
 def audit_hook_registered(ctx: dict[str, Any]) -> None:
     """Register a decorator audit hook that records dispatched violation payloads."""
-    from modulo.core.pipeline_engine.decorator import set_audit_hook
+    from farna.core.pipeline_engine.decorator import set_audit_hook
 
     received: dict[str, Any] = {}
 
@@ -428,7 +428,7 @@ def warning_includes_fields(ctx: dict[str, Any]) -> None:
 @then(parsers.parse('the audit hook receives node "{node_name}" with attempted fields {fields}'))
 def audit_hook_received_node(node_name: str, fields: str, ctx: dict[str, Any]) -> None:
     """Assert the decorator dispatched the audit hook payload for a violation."""
-    from modulo.core.pipeline_engine.decorator import set_audit_hook
+    from farna.core.pipeline_engine.decorator import set_audit_hook
 
     try:
         received = ctx.get("audit_hook_received", {})
@@ -460,7 +460,7 @@ def _pin_pipeline_ceiling(ctx: dict[str, Any]) -> None:
     does too: an already-pinned key does NOT win, and an absent/NULL ceiling
     pops it, matching the executor's pop-then-pin precedence.
     """
-    from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+    from farna.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 
     rc = ctx.setdefault("run_context", {})
     ceiling = getattr(ctx.get("pipeline"), "max_autonomy_level", None)
@@ -484,7 +484,7 @@ def pipeline_has_autonomy_ceiling(pipeline_name: str, level: str, ctx: dict[str,
     """Configure the pipeline's max_autonomy_level ceiling and pin it into
     run_context, seeding BOTH the pipeline attribute and the reserved
     ``_pipeline_max_autonomy`` key the gate steps resolve against."""
-    from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+    from farna.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
 
     if ctx.get("pipeline") is None:
         from tests.bdd.conftest import make_mock_pipeline
@@ -506,7 +506,7 @@ def pipeline_has_no_autonomy_defaults(pipeline_name: str, ctx: dict[str, Any]) -
 
 @when("a HITL review checks the autonomy level")
 def hitl_review_checks_autonomy(ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import effective_autonomy_level
+    from farna.core.run_context.autonomy import effective_autonomy_level
 
     _pin_pipeline_ceiling(ctx)
     rc: dict[str, Any] = ctx.get("run_context") or {}
@@ -521,7 +521,7 @@ def context_setter_changes_autonomy(new_level: str, ctx: dict[str, Any]) -> None
 
 @then("the gate is skipped")
 def gate_is_skipped(ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import (
+    from farna.core.run_context.autonomy import (
         should_skip_hitl_review,
     )
 
@@ -537,7 +537,7 @@ def no_human_interrupt(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse('the gate uses the pipeline default "{level}"'))
 def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import AutonomyLevel
+    from farna.core.run_context.autonomy import AutonomyLevel
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
@@ -546,7 +546,7 @@ def gate_uses_pipeline_default(level: str, ctx: dict[str, Any]) -> None:
 
 @then("the gate interrupts for human review")
 def gate_interrupts(ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import (
+    from farna.core.run_context.autonomy import (
         should_skip_hitl_review,
     )
 
@@ -557,7 +557,7 @@ def gate_interrupts(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse("the next HITL review checks the new autonomy level"))
 def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import effective_autonomy_level
+    from farna.core.run_context.autonomy import effective_autonomy_level
 
     _pin_pipeline_ceiling(ctx)
     rc: dict[str, Any] = ctx.get("run_context") or {}
@@ -567,7 +567,7 @@ def next_gate_checks_new_level(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse('the gate uses "{level}"'))
 def gate_uses_level(level: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.run_context.autonomy import AutonomyLevel
+    from farna.core.run_context.autonomy import AutonomyLevel
 
     autonomy = ctx.get("resolved_autonomy")
     assert autonomy is not None, "No resolved_autonomy in context"
@@ -578,8 +578,8 @@ def gate_uses_level(level: str, ctx: dict[str, Any]) -> None:
 def context_setter_writes_nothing(node_name: str, ctx: dict[str, Any]) -> None:
     import asyncio
 
-    from modulo.core.pipeline_engine import cancellable_node
-    from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+    from farna.core.pipeline_engine import cancellable_node
+    from farna.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
 
     async def _noop_setter(state: dict[str, Any]) -> dict[str, Any]:
         return {}

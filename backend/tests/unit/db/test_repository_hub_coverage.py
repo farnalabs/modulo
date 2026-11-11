@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import select
 
-from modulo.db.repositories import RepositoryHub
-from modulo.db.repositories.generic import GenericRepository
-from modulo.db.repositories.postgres import PostgresRepository
+from farna.db.repositories import RepositoryHub
+from farna.db.repositories.generic import GenericRepository
+from farna.db.repositories.postgres import PostgresRepository
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -42,7 +42,7 @@ async def test_repository_hub_forwards_context_filter_pagination_and_execute() -
 
 def test_repository_hub_uses_settings_when_db_type_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = MagicMock(modulo_db="POSTGRES")
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: settings)
+    monkeypatch.setattr("farna.settings.get_settings", lambda: settings)
     hub = RepositoryHub(session_factory=MagicMock())
     assert isinstance(hub.repo, PostgresRepository)
 

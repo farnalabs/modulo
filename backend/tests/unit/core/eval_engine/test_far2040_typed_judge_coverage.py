@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-import modulo.core.eval_engine.typed_judge.legacy as legacy
-from modulo.core.eval_engine.typed_judge import (
+import farna.core.eval_engine.typed_judge.legacy as legacy
+from farna.core.eval_engine.typed_judge import (
     JudgeConfidenceKind,
     JudgeErrorCode,
     JudgeExecutionError,
@@ -21,12 +21,12 @@ from modulo.core.eval_engine.typed_judge import (
     from_judge_callable_dict,
     verdict_from_typed_response,
 )
-from modulo.core.eval_engine.typed_judge.envelope import (
+from farna.core.eval_engine.typed_judge.envelope import (
     _coerce_questions,
     _coerce_score,
     _finite_float,
 )
-from modulo.core.eval_engine.typed_judge.legacy import (
+from farna.core.eval_engine.typed_judge.legacy import (
     CODE_INVALID,
     CODE_LEGACY_READ_ONLY,
     TYPED_ANSWER_CONTRACT,
@@ -35,7 +35,7 @@ from modulo.core.eval_engine.typed_judge.legacy import (
     reject_legacy_judge_write,
     validate_typed_judge_config,
 )
-from modulo.core.eval_engine.typed_judge.naming import confidence_label
+from farna.core.eval_engine.typed_judge.naming import confidence_label
 
 
 def _base_config() -> dict[str, Any]:

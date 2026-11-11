@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.pipeline_engine import graph_cache as graph_cache_module
-from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine import graph_cache as graph_cache_module
+from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
+from farna.core.pipeline_engine.executor import (
     _GATED_EVAL_MODES_KEY,
     PipelineExecutor,
     compute_retry_aware_topology_hash,
@@ -243,18 +243,18 @@ async def test_resume_compile_wiring_matches_execute_path():
     ex_builds, ex_compiles, ex_build_mock, ex_goc_mock = _recording_compile_mocks()
     with (
         patch(
-            "modulo.core.pipeline_engine.executor.async_sessionmaker",
+            "farna.core.pipeline_engine.executor.async_sessionmaker",
             return_value=_make_session_factory(_make_execute_session(snapshot, pipeline)),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=ex_goc_mock),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=ex_build_mock),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=ex_goc_mock),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=ex_build_mock),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
@@ -273,21 +273,21 @@ async def test_resume_compile_wiring_matches_execute_path():
     settings_mock.fernet_key = "test-fernet-key-not-for-production="
     with (
         patch(
-            "modulo.core.pipeline_engine.executor.async_sessionmaker",
+            "farna.core.pipeline_engine.executor.async_sessionmaker",
             return_value=_make_session_factory(_make_resume_session(snapshot, pipeline)),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=rs_goc_mock),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=rs_build_mock),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
-        patch("modulo.settings.get_settings", return_value=settings_mock),
-        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=rs_goc_mock),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=rs_build_mock),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("farna.settings.get_settings", return_value=settings_mock),
+        patch("farna.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
     ):
         executor = PipelineExecutor(MagicMock())
         executor._checkpointer_conn_string = "sqlite:///test.db"
@@ -332,17 +332,17 @@ async def test_execute_then_resume_hits_same_cache_entry_with_retry_policy():
         # --- execute leg (REAL get_or_compile; only the factory is patched) ---
         with (
             patch(
-                "modulo.core.pipeline_engine.executor.async_sessionmaker",
+                "farna.core.pipeline_engine.executor.async_sessionmaker",
                 return_value=_make_session_factory(_make_execute_session(snapshot, pipeline)),
             ),
-            patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-            patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-            patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-            patch("modulo.core.pipeline_engine.executor.build_graph_from_json", build_mock),
-            patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-            patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+            patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+            patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+            patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.set_rls_org"),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch("farna.core.pipeline_engine.executor.build_graph_from_json", build_mock),
+            patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+            patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
             patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         ):
             executor = PipelineExecutor(MagicMock())
@@ -358,20 +358,20 @@ async def test_execute_then_resume_hits_same_cache_entry_with_retry_policy():
         settings_mock.fernet_key = "test-fernet-key-not-for-production="
         with (
             patch(
-                "modulo.core.pipeline_engine.executor.async_sessionmaker",
+                "farna.core.pipeline_engine.executor.async_sessionmaker",
                 return_value=_make_session_factory(_make_resume_session(snapshot, pipeline)),
             ),
-            patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-            patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-            patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-            patch("modulo.core.pipeline_engine.executor.build_graph_from_json", build_mock),
-            patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-            patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-            patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
-            patch("modulo.settings.get_settings", return_value=settings_mock),
-            patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+            patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+            patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+            patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+            patch("farna.core.pipeline_engine.executor.set_rls_org"),
+            patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch("farna.core.pipeline_engine.executor.build_graph_from_json", build_mock),
+            patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+            patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+            patch("farna.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+            patch("farna.settings.get_settings", return_value=settings_mock),
+            patch("farna.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
         ):
             executor = PipelineExecutor(MagicMock())
             executor._checkpointer_conn_string = "sqlite:///test.db"
@@ -621,23 +621,23 @@ async def test_resume_reapplies_the_fire_time_mode_and_logs_it(
     settings_mock = MagicMock()
     settings_mock.fernet_key = "test-fernet-key-not-for-production="
     with (
-        caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"),
+        caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.executor"),
         patch(
-            "modulo.core.pipeline_engine.executor.async_sessionmaker",
+            "farna.core.pipeline_engine.executor.async_sessionmaker",
             return_value=_make_session_factory(session),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_fake_get_or_compile),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=_fake_build),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
-        patch("modulo.settings.get_settings", return_value=settings_mock),
-        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=_fake_get_or_compile),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=_fake_build),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("farna.settings.get_settings", return_value=settings_mock),
+        patch("farna.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
     ):
         executor = PipelineExecutor(MagicMock())
         executor._checkpointer_conn_string = "sqlite:///test.db"

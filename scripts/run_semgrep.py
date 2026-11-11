@@ -47,12 +47,12 @@ DIFFERENT shape, and the two paths treat it differently:
 
 ``PartialParsing`` is deliberately NOT treated as incomplete (FAR-1933). On
 the CI invocation (``uv run --project backend --no-sync semgrep``) the one
-reproducible per-file instance is ``backend/src/modulo/api/mcp_server.py``
+reproducible per-file instance is ``backend/src/farna/api/mcp_server.py``
 (the PEP 695 generic at line 2111, a genuine 1-line skip), so failing on it
 would make the gate permanently red for an unrelated reason. Semgrep's
 aggregate partial-analysis summary is not stable across invocations / entry
 points: an earlier scan through a different semgrep entry point named
-``backend/src/modulo/core/pipeline_engine/node_runner.py`` and several
+``backend/src/farna/core/pipeline_engine/node_runner.py`` and several
 ``frontend/src/__tests__/**.spec.ts`` files, which are not reproduced by
 per-file scans of those files with this invocation. The per-file scan is
 therefore the authoritative signal. The HITL graph-write guard's region at

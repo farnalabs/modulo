@@ -37,18 +37,18 @@ from sqlalchemy import Table, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.exceptions import PipelineNotRunnableError
-from modulo.db.crud.run import _enforce_pipeline_state_gate, _pipeline_not_runnable_state, create_run
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.variant_group import VariantGroup
+from farna.core.exceptions import PipelineNotRunnableError
+from farna.db.crud.run import _enforce_pipeline_state_gate, _pipeline_not_runnable_state, create_run
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -275,7 +275,7 @@ class TestPipelineStateGateOrgScope:
         await _seed_org(session)
         await _seed_pipeline(session, archived_at=datetime.now(UTC))
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.run"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.run"):
             await _enforce_pipeline_state_gate(session, _PIPELINE, uuid.uuid4())
 
         assert any("pipeline_row_absent" in record.getMessage() for record in caplog.records)

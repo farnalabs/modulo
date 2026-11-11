@@ -1,8 +1,8 @@
-"""Unit tests for modulo.core.pricing."""
+"""Unit tests for farna.core.pricing."""
 
 import pytest
 
-from modulo.core.pricing import PRICING_TABLE, PricingConfig, get_pricing
+from farna.core.pricing import PRICING_TABLE, PricingConfig, get_pricing
 
 
 class TestPricingConfig:

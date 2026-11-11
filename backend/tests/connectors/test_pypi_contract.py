@@ -7,7 +7,7 @@ to re-record against the live registry.
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorQuery, ConnectorType
+from farna.connectors.base import ConnectorQuery, ConnectorType
 
 
 @pytest.mark.vcr
@@ -27,7 +27,7 @@ def test_pypi_connector_type(pypi_connector):
 
 async def test_pypi_health_check(pypi_connector, monkeypatch):
     """Health check reports registry reachability — stubbed offline via MockTransport."""
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"info": {"name": "requests"}})
@@ -49,7 +49,7 @@ async def test_pypi_health_check(pypi_connector, monkeypatch):
 
 async def test_pypi_write_raises(pypi_connector):
     """PyPI connector is read-only — write() must raise."""
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with pytest.raises(ValueError, match="read-only"):
         await pypi_connector.write(ConnectorPayload(resource="package", data={"name": "test"}))

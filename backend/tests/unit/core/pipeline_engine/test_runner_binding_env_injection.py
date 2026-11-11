@@ -7,7 +7,7 @@ Covers the new lines in ``core/pipeline_engine/node_runner.py``:
 
 import uuid
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _build_sandbox_envs,
     _conformance_ctx_cv,
     _runner_binding_env_profile_id,

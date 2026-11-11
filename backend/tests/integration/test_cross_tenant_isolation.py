@@ -18,10 +18,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
-from modulo.core.feature_flags import LicenseData, LicenseKeyTier
-from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.rls import set_rls_org
+from farna.auth.jwt import create_access_token
+from farna.core.feature_flags import LicenseData, LicenseKeyTier
+from farna.db.models.trigger_event import TriggerEvent
+from farna.db.rls import set_rls_org
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -448,9 +448,9 @@ async def integration_client(
     db_url: str,
     app_engine: AsyncEngine,
 ) -> AsyncClient:
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -1374,7 +1374,7 @@ class TestTriggerEventRetentionRls:
         expired events through a BYPASSRLS-equivalent factory. The plain
         ``modulo_app`` factory (NOBYPASSRLS, no ``app.organisation_id``) would
         silently match zero rows and delete nothing."""
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         old_a = await _seed_trigger_event(
             db_engine, org_a, trigger_a, received_at=datetime.now(UTC) - timedelta(days=100)

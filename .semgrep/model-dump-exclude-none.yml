@@ -12,4 +12,4 @@ rules:
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/modulo/api/routes/**"]
+      include: ["**/backend/src/farna/api/routes/**"]

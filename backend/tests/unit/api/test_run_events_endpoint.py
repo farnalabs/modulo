@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.runs import RunNotFoundError
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.runs import RunNotFoundError
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.pipeline_engine.event_broker import RunEventBroker
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -95,8 +95,8 @@ def test_get_run_events_returns_chunk_events_since_seq(client: TestClient) -> No
     broker.publish("node.stderr_chunk", {"node_id": "n1", "chunk": "warn"})  # seq=4
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=_make_run()),
-        patch("modulo.api.routes.runs.get_registry") as mock_registry,
+        patch("farna.api.routes.runs._do_get_run", return_value=_make_run()),
+        patch("farna.api.routes.runs.get_registry") as mock_registry,
     ):
         mock_registry.return_value.get.return_value = broker
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/events?since_seq=1")
@@ -118,8 +118,8 @@ def test_get_run_events_filters_by_node_id(client: TestClient) -> None:
     broker.publish("node.stdout_chunk", {"node_id": "n2", "chunk": "b"})
 
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=_make_run()),
-        patch("modulo.api.routes.runs.get_registry") as mock_registry,
+        patch("farna.api.routes.runs._do_get_run", return_value=_make_run()),
+        patch("farna.api.routes.runs.get_registry") as mock_registry,
     ):
         mock_registry.return_value.get.return_value = broker
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/events?node_id=n2")
@@ -134,8 +134,8 @@ def test_get_run_events_filters_by_node_id(client: TestClient) -> None:
 def test_get_run_events_empty_when_no_broker(client: TestClient) -> None:
     """A run with no in-process broker (old/completed) returns an empty list."""
     with (
-        patch("modulo.api.routes.runs._do_get_run", return_value=_make_run()),
-        patch("modulo.api.routes.runs.get_registry") as mock_registry,
+        patch("farna.api.routes.runs._do_get_run", return_value=_make_run()),
+        patch("farna.api.routes.runs.get_registry") as mock_registry,
     ):
         mock_registry.return_value.get.return_value = None
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/events")
@@ -146,8 +146,8 @@ def test_get_run_events_empty_when_no_broker(client: TestClient) -> None:
 
 def test_get_run_events_404_when_run_not_found(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs._do_get_run", side_effect=RunNotFoundError(_RUN_ID)),
-        patch("modulo.api.routes.runs.get_registry"),
+        patch("farna.api.routes.runs._do_get_run", side_effect=RunNotFoundError(_RUN_ID)),
+        patch("farna.api.routes.runs.get_registry"),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/events")
 

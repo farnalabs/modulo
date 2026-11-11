@@ -16,12 +16,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.runtime_config.store import RuntimeConfigStore
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.runtime_config.store import RuntimeConfigStore
+from farna.settings import Settings, get_settings
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
 _USER_ID = "00000000-0000-0000-0000-000000000002"
@@ -44,7 +44,7 @@ async def _override_session() -> AsyncGenerator[MagicMock, None]:
 def runtime_config_store() -> Generator[RuntimeConfigStore, None, None]:
     """Give each test a fresh runtime-config store, mirroring production wiring."""
     store = RuntimeConfigStore()
-    with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
+    with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
         yield store
 
 
@@ -52,8 +52,8 @@ def runtime_config_store() -> Generator[RuntimeConfigStore, None, None]:
 def _no_otel_reconfigure() -> Generator[None, None, None]:
     """Keep PUT from mutating global OTel state while still persisting the override."""
     with (
-        patch("modulo.otel_bridge.export.setup_otel"),
-        patch("modulo.settings.get_settings", return_value=_make_settings()),
+        patch("farna.otel_bridge.export.setup_otel"),
+        patch("farna.settings.get_settings", return_value=_make_settings()),
     ):
         yield
 

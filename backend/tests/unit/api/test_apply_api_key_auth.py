@@ -22,13 +22,13 @@ from cryptography.fernet import Fernet
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.team_scope import TeamScopedResource
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.team_scope import TeamScopedResource
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.graph_validator._types import ValidationResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -146,17 +146,17 @@ class TestApplyApiKeyAuth:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.api.routes.schemas.create_schema", return_value=schema),
+                patch("farna.api.routes.schemas.create_schema", return_value=schema),
             ):
                 client = TestClient(app)
                 resp = client.post("/api/v1/schemas", json=_SCHEMA_CREATE_BODY, headers=_AUTH_HEADERS)
@@ -199,21 +199,21 @@ class TestApplyApiKeyAuth:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.api.routes.model_backends.get_model_backend", return_value=backend),
-                patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
-                patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+                patch("farna.api.routes.model_backends.get_model_backend", return_value=backend),
+                patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),
+                patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
                 patch(
-                    "modulo.api.routes.model_backends._run_health_check_on_save",
+                    "farna.api.routes.model_backends._run_health_check_on_save",
                     new=AsyncMock(return_value=("ok", None)),
                 ),
             ):
@@ -243,14 +243,14 @@ class TestApplyApiKeyAuth:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("runner", "human")),
                 ),
             ):
@@ -303,17 +303,17 @@ class TestApplyApiKeyAuth:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.api.routes.pipelines.create_pipeline", return_value=pipeline),
+                patch("farna.api.routes.pipelines.create_pipeline", return_value=pipeline),
             ):
                 client = TestClient(app)
                 resp = client.post(
@@ -389,14 +389,14 @@ class TestApplyApiKeyAuth:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
             ):
@@ -466,17 +466,17 @@ class TestApiKeyListsAgents:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
+                patch("farna.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.api.routes.agents.list_agents", return_value=listing),
+                patch("farna.api.routes.agents.list_agents", return_value=listing),
             ):
                 client = TestClient(app)
                 resp = client.get("/api/v1/agents", headers=_AUTH_HEADERS)
@@ -504,7 +504,7 @@ def _make_gate_session(*, membership_found: object = None) -> AsyncMock:
 
 def _team_gate_app(provider):
     """A minimal app with one GET route behind the ANY-CREDENTIAL team gate."""
-    from modulo.api.dependencies import require_team_membership_or_admin_any_credential
+    from farna.api.dependencies import require_team_membership_or_admin_any_credential
 
     test_app = FastAPI()
 
@@ -536,18 +536,18 @@ class TestTeamGateKeyBoundary:
         test_app.dependency_overrides[get_db_session] = override_session
         try:
             with (
-                patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+                patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
                 patch(
-                    "modulo.api.dependencies.get_or_create_session_factory",
+                    "farna.api.dependencies.get_or_create_session_factory",
                     return_value=_FakeFactory(auth_session),
                 ),
-                patch("modulo.auth.api_key.validate_api_key", return_value=key),
+                patch("farna.auth.api_key.validate_api_key", return_value=key),
                 patch(
-                    "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+                    "farna.db.crud.org_membership.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.api.dependencies.set_rls_org", new=AsyncMock()),
-                patch("modulo.api.dependencies.set_rls_user_context", new=AsyncMock()),
+                patch("farna.api.dependencies.set_rls_org", new=AsyncMock()),
+                patch("farna.api.dependencies.set_rls_user_context", new=AsyncMock()),
             ):
                 client = TestClient(test_app)
                 return client.get("/team-resource", headers=_AUTH_HEADERS)
@@ -645,21 +645,21 @@ class TestGraphSaveGateParity:
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
         try:
             with (
-                patch("modulo.api.routes.pipelines.set_rls_org"),
-                patch("modulo.api.routes.pipelines.set_rls_user_context"),
-                patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
+                patch("farna.api.routes.pipelines.set_rls_org"),
+                patch("farna.api.routes.pipelines.set_rls_user_context"),
+                patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
                 patch(
-                    "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                    "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
                     new=AsyncMock(return_value=pipeline),
                 ),
-                patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-                patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
+                patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+                patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
                 patch(
-                    "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+                    "farna.api.routes.pipelines.GraphValidator.validate_definition",
                     return_value=validation,
                 ),
                 patch(
-                    "modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows",
+                    "farna.db.crud.guardrail_config.load_pipeline_guardrail_rows",
                     new=AsyncMock(return_value=[]),
                 ),
             ):

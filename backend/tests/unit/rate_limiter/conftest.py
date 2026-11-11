@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 import pytest
 from tests.unit.rate_limiter.helpers import make_redis_client
 
-from modulo.api.middleware import rate_limiter as rl_mod
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core import rate_limiter as rl_core
+from farna.api.middleware import rate_limiter as rl_mod
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.core import rate_limiter as rl_core
 
 
 class _FrozenClock:
@@ -35,7 +35,7 @@ def auth_redis() -> MagicMock:
 
 @pytest.fixture
 def frozen_time(monkeypatch: pytest.MonkeyPatch) -> float:
-    """Freeze ``time.time`` inside ``modulo.core.rate_limiter``.
+    """Freeze ``time.time`` inside ``farna.core.rate_limiter``.
 
     Sliding-window assertions compare an exact cutoff/score; with the real
     clock they can only assert a multi-second tolerance, which hides window

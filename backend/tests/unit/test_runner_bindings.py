@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import _build_sandbox_envs
-from modulo.core.runner_bindings import (
+from farna.core.pipeline_engine.node_runner import _build_sandbox_envs
+from farna.core.runner_bindings import (
     RESERVED_ENV_VAR_PREFIXES,
     RESERVED_ENV_VARS,
     is_reserved_env_var,
 )
-from modulo.db.runner_binding_constraints import (
+from farna.db.runner_binding_constraints import (
     BindingValidationError,
     known_source_fields_for,
     validate_binding_pair,
@@ -110,7 +110,7 @@ class TestErrorCodeMapping:
     """Resolution failures are first-class error codes (the D6 rollback trigger)."""
 
     def test_registry_entries(self) -> None:
-        from modulo.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
+        from farna.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
 
         binding_spec = ERROR_CODE_REGISTRY["sandbox.binding_resolution"]
         assert binding_spec.error_class == "config"
@@ -121,7 +121,7 @@ class TestErrorCodeMapping:
 
     def test_legacy_aliases_map_class_names(self) -> None:
         """Both the node-runner wrapper and the raw core class name resolve."""
-        from modulo.core.pipeline_engine.error_codes import LEGACY_ALIASES, map_legacy_code
+        from farna.core.pipeline_engine.error_codes import LEGACY_ALIASES, map_legacy_code
 
         assert LEGACY_ALIASES["SandboxBindingResolutionError"] == "sandbox.binding_resolution"
         assert LEGACY_ALIASES["SandboxTierRefusedError"] == "sandbox.tier_refused"
@@ -135,7 +135,7 @@ class TestErrorCodeMapping:
         subclass contract is what routes these through the executor's
         retryable-node-failure handling before the error-code table.
         """
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             SandboxBindingResolutionError,
             SandboxNodeFailedError,
             SandboxTierRefusedError,
@@ -187,7 +187,7 @@ def test_sandbox_exceptions_are_single_definitions():
     modules (the FAR-996/997 lesson).  node_runner must re-export the
     canonical classes from sandbox_errors.
     """
-    from modulo.core.pipeline_engine import node_runner, sandbox_errors
+    from farna.core.pipeline_engine import node_runner, sandbox_errors
 
     assert node_runner.SandboxNodeFailedError is sandbox_errors.SandboxNodeFailedError
     assert node_runner.SandboxTierRefusedError is sandbox_errors.SandboxTierRefusedError
@@ -199,11 +199,11 @@ def test_sandbox_exceptions_cross_module_catchable():
     This is the regression this fix exists for — before unification, the
     two classes were distinct types and except matching silently failed.
     """
-    from modulo.core.pipeline_engine import sandbox_errors
+    from farna.core.pipeline_engine import sandbox_errors
 
     # Raise via the node_runner re-export — this is how runner_dispatch and
     # the executor surface the error.
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.node_runner import (
         SandboxTierRefusedError as NodeRunnerTier,
     )
 

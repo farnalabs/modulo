@@ -6,7 +6,7 @@
 * @duncantait
 
 # Backend changes also require review
-backend/src/modulo/** @duncantait
+backend/src/farna/** @duncantait
 
 # Frontend changes also require review
 frontend/src/** @duncantait

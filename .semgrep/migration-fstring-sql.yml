@@ -5,7 +5,7 @@
 #   a NEW migration must be built through an identifier guard BEFORE
 #   interpolation — a ``_validate_identifier``/``_validate_role_name``-style
 #   helper validating against ``^[a-z_][a-z0-9_]*$`` (see
-#   ``backend/src/modulo/db/bootstrap_role.py`` for the reference pattern).
+#   ``backend/src/farna/db/bootstrap_role.py`` for the reference pattern).
 #   Interpolating raw values directly into ``op.execute(f"DROP INDEX IF
 #   EXISTS {name}")`` is how an untrusted index/constraint name becomes
 #   arbitrary DDL.

@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core import capacity_alerts as ca
-from modulo.core.notifier.event_mapper import _BODY_TEMPLATES, _TITLE_TEMPLATES
+from farna.core import capacity_alerts as ca
+from farna.core.notifier.event_mapper import _BODY_TEMPLATES, _TITLE_TEMPLATES
 
 _NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
@@ -1115,7 +1115,7 @@ async def test_backpressure_hits_reports_pipelines_beyond_the_cap_as_unevaluated
         checked.append(pipeline_id)
         return False, ""
 
-    monkeypatch.setattr("modulo.core.run_admission.evaluate_backpressure", _evaluate)
+    monkeypatch.setattr("farna.core.run_admission.evaluate_backpressure", _evaluate)
 
     hits, unevaluated = await ca._backpressure_hits(AsyncMock(), report)
 
@@ -1483,7 +1483,7 @@ async def test_backpressure_hits_skips_invalid_ids_and_records_a_hit(
             return True, "queue_depth=2 limit=1"
         return False, ""
 
-    monkeypatch.setattr("modulo.core.run_admission.evaluate_backpressure", _evaluate)
+    monkeypatch.setattr("farna.core.run_admission.evaluate_backpressure", _evaluate)
 
     hits, unevaluated = await ca._backpressure_hits(AsyncMock(), report)
 

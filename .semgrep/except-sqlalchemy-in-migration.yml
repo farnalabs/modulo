@@ -5,4 +5,4 @@ rules:
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/modulo/db/migrations/**", "**/alembic/**", "**/db/migrations/**"]
+      include: ["**/backend/src/farna/db/migrations/**", "**/alembic/**", "**/db/migrations/**"]

@@ -10,18 +10,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.errors import RouterNoMatchError
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine.errors import RouterNoMatchError
+from farna.core.pipeline_engine.graph_cache import (
     RouterConfigError,
     _register_router_rule_targets,
     _validate_router_config,
     build_graph_from_json,
 )
-from modulo.core.pipeline_engine.jmespath_eval import (
+from farna.core.pipeline_engine.jmespath_eval import (
     compile_jmespath,
     evaluate_jmespath_condition,
 )
-from modulo.core.pipeline_engine.node_runner import make_router_node_fn
+from farna.core.pipeline_engine.node_runner import make_router_node_fn
 
 # ---------------------------------------------------------------------------
 # Shared JMESPath evaluator
@@ -177,9 +177,9 @@ def test_validate_router_config_requires_default():
 
 def _compiled_structure(graph_json):
     with (
-        patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         compiled = build_graph_from_json(graph_json)
     g = compiled.get_graph()
@@ -232,7 +232,7 @@ def test_hitl_node_compiles_like_edge_gate():
 
 
 def test_loop_edge_authorable_in_valid_set():
-    from modulo.core.workflow_import_export import VALID_EDGE_TYPES
+    from farna.core.workflow_import_export import VALID_EDGE_TYPES
 
     assert "loop" in VALID_EDGE_TYPES
 
@@ -305,9 +305,9 @@ def test_router_rule_targets_excluded_from_entry_point():
         "edges": [{"source": "S", "target": "R"}],
     }
     with (
-        patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         compiled = build_graph_from_json(graph_json)
     graph = compiled.get_graph()
@@ -351,7 +351,7 @@ from typing import Any  # noqa: E402
 
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor  # noqa: E402
+from farna.core.pipeline_engine.executor import PipelineExecutor  # noqa: E402
 
 
 def _make_run(*, claim_token: str | None = "tok-claim-abc") -> MagicMock:
@@ -471,17 +471,17 @@ async def test_execute_router_no_match_terminalizes_as_router_no_match():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         # Must NOT raise — the exception is terminalized, not propagated.
@@ -510,17 +510,17 @@ async def test_execute_router_no_match_not_classed_as_failed():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -540,9 +540,9 @@ async def test_execute_router_no_match_not_classed_as_failed():
 from sqlalchemy import CheckConstraint, select  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
-from modulo.db.crud.run import RUN_STATUS_WHITELIST, update_run_status  # noqa: E402
-from modulo.db.models.base import Base  # noqa: E402
-from modulo.db.models.run import TERMINAL_STATUSES, Run  # noqa: E402
+from farna.db.crud.run import RUN_STATUS_WHITELIST, update_run_status  # noqa: E402
+from farna.db.models.base import Base  # noqa: E402
+from farna.db.models.run import TERMINAL_STATUSES, Run  # noqa: E402
 
 
 def test_run_model_check_constraint_allows_router_no_match():

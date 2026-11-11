@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     _CONTENT_BEGIN,
     _CONTENT_END,
     _GUARD_INSTRUCTION,
@@ -20,7 +20,7 @@ from modulo.core.eval_engine import (
     EvalEngine,
     EvalType,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode
+from farna.core.eval_engine.typed_judge import JudgeErrorCode
 
 
 def _make_eval_def(config: dict | None = None) -> EvalDefinition:

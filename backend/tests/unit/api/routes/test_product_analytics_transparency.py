@@ -34,18 +34,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes import product_analytics_transparency as pat_module
-from modulo.api.routes.product_analytics_transparency import (
+from farna.api.dependencies import get_db_session
+from farna.api.routes import product_analytics_transparency as pat_module
+from farna.api.routes.product_analytics_transparency import (
     TransparencyResponse,
     _coerce_last_dump,
     _resolve_org,
 )
-from modulo.api.routes.product_analytics_transparency import router as transparency_router
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.product_analytics.constants import (
+from farna.api.routes.product_analytics_transparency import router as transparency_router
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.core.product_analytics.constants import (
     DUMP_COUNT_KEY,
     DUMP_WATERMARK_KEY,
     INSTANCE_SWITCH_KEY,
@@ -107,7 +107,7 @@ def _licence(*, claim: bool = True) -> SimpleNamespace:
 @pytest.fixture(autouse=True)
 def _default_no_licence(monkeypatch: pytest.MonkeyPatch) -> None:
     """No installed licence by default; licence tests override this seam."""
-    monkeypatch.setattr("modulo.core.product_analytics.consent.get_license", lambda: None)
+    monkeypatch.setattr("farna.core.product_analytics.consent.get_license", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -270,7 +270,7 @@ def _patch_sources(
         "get_config",
         new=AsyncMock(side_effect=_transparency_get_config(transparency_values or {})),
     ), patch(
-        "modulo.core.product_analytics.consent.get_config",
+        "farna.core.product_analytics.consent.get_config",
         new=AsyncMock(side_effect=_consent_get_config(consent_values or {})),
     )
 
@@ -365,7 +365,7 @@ class TestRealInstanceSwitch:
 
     def test_licence_claim_sets_the_default_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "modulo.core.product_analytics.consent.get_license",
+            "farna.core.product_analytics.consent.get_license",
             lambda: _licence(claim=True),
         )
         client = _client()
@@ -379,7 +379,7 @@ class TestRealInstanceSwitch:
 
     def test_operator_off_vetoes_the_licence_claim(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "modulo.core.product_analytics.consent.get_license",
+            "farna.core.product_analytics.consent.get_license",
             lambda: _licence(claim=True),
         )
         client = _client()
@@ -410,7 +410,7 @@ class TestInstanceSwitchWrite:
         with (
             sources[0],
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new=AsyncMock(side_effect=_consent_get_config(stored)),
             ),
             patch.object(pat_module, "update_config", new=AsyncMock(side_effect=_fake_update)),
@@ -431,7 +431,7 @@ class TestInstanceSwitchWrite:
 
     def test_clearing_restores_the_licence_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "modulo.core.product_analytics.consent.get_license",
+            "farna.core.product_analytics.consent.get_license",
             lambda: _licence(claim=True),
         )
         client = _client(session=_write_session())
@@ -444,7 +444,7 @@ class TestInstanceSwitchWrite:
         with (
             sources[0],
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new=AsyncMock(side_effect=_consent_get_config(stored)),
             ),
             patch.object(pat_module, "delete_config", new=AsyncMock(side_effect=_fake_delete)),
@@ -476,7 +476,7 @@ class TestInstanceSwitchWrite:
         with (
             sources[0],
             patch(
-                "modulo.core.product_analytics.consent.get_config",
+                "farna.core.product_analytics.consent.get_config",
                 new=AsyncMock(side_effect=_consent_get_config(stored)),
             ),
             patch.object(pat_module, "delete_config", new=AsyncMock(side_effect=_fake_delete)),

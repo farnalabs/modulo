@@ -6,7 +6,7 @@ behaviour, and the import-time registry validation.
 
 import pytest
 
-from modulo.auth.permissions import (
+from farna.auth.permissions import (
     PERMISSIONS,
     PermissionConfigurationError,
     PermissionDenied,
@@ -14,7 +14,7 @@ from modulo.auth.permissions import (
     is_delegable,
     resolve_required,
 )
-from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
+from farna.auth.team_rbac import ORG_ROLE_HIERARCHY
 
 
 class TestAssertOrgRole:
@@ -140,7 +140,7 @@ class TestResolveRequired:
         ``system_maps.read`` and ``system_maps_access`` must never collide: the
         latter is the operator authoring gate, the former a viewer read floor.
         """
-        from modulo.auth.permissions import SYSTEM_MAPS_READ_PERMISSION
+        from farna.auth.permissions import SYSTEM_MAPS_READ_PERMISSION
 
         assert SYSTEM_MAPS_READ_PERMISSION == "system_maps.read"
         assert PERMISSIONS[SYSTEM_MAPS_READ_PERMISSION] == "viewer"

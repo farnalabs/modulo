@@ -32,20 +32,20 @@ from starlette.middleware import Middleware
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-import modulo.api.mcp_server as ms
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.mcp_server import (
+import farna.api.mcp_server as ms
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.mcp_server import (
     McpAuthMiddleware,
     _call_next_if_feature_enabled,
     _dispatch_unauth_paths,
     _mcp_feature_unavailable_response,
     _mcp_server_flag_enabled,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -167,8 +167,8 @@ class TestOAuthClientRoutesFlagOff:
 
     def test_register_denied(self, flag_off_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             resp = flag_off_client.post(self.ENDPOINT, json=_REGISTER_BODY)
         # The gate runs before the handler: nothing is created.
@@ -176,19 +176,19 @@ class TestOAuthClientRoutesFlagOff:
         self._assert_feature_required(resp)
 
     def test_list_denied(self, flag_off_client: TestClient) -> None:
-        with patch("modulo.api.routes.mcp_oauth.list_oauth_clients") as mock_list:
+        with patch("farna.api.routes.mcp_oauth.list_oauth_clients") as mock_list:
             resp = flag_off_client.get(self.ENDPOINT)
         mock_list.assert_not_called()
         self._assert_feature_required(resp)
 
     def test_delete_denied(self, flag_off_client: TestClient) -> None:
-        with patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete:
+        with patch("farna.api.routes.mcp_oauth.delete_oauth_client") as mock_delete:
             resp = flag_off_client.delete(f"{self.ENDPOINT}/myclient123")
         mock_delete.assert_not_called()
         self._assert_feature_required(resp)
 
     def test_consent_approve_denied(self, flag_off_client: TestClient) -> None:
-        with patch("modulo.auth.oauth.consume_consent_state") as mock_consume:
+        with patch("farna.auth.oauth.consume_consent_state") as mock_consume:
             resp = flag_off_client.post(
                 "/api/v1/mcp/oauth/consent/approve",
                 json={"state": "abc"},
@@ -204,8 +204,8 @@ class TestOAuthClientRoutesFlagOn:
 
     def test_register_returns_201(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_client = MagicMock()
             mock_client.id = uuid.uuid4()
@@ -219,8 +219,8 @@ class TestOAuthClientRoutesFlagOn:
 
     def test_list_returns_200(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.list_oauth_clients") as mock_list,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_list.return_value = []
             resp = admin_client.get(self.ENDPOINT)
@@ -230,8 +230,8 @@ class TestOAuthClientRoutesFlagOn:
 
     def test_delete_returns_200(self, admin_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
         ):
             mock_delete.return_value = True
             resp = admin_client.delete(f"{self.ENDPOINT}/myclient123")
@@ -247,9 +247,9 @@ class TestOAuthClientRoutesFlagOn:
         state_row.scopes = ["trigger:run"]
         state_row.code_challenge = "challenge"
         with (
-            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
-            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
-            patch("modulo.auth.oauth.create_authorization_code", new=AsyncMock(return_value="code123")),
+            patch("farna.api.routes.mcp_oauth.set_rls_org"),
+            patch("farna.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch("farna.auth.oauth.create_authorization_code", new=AsyncMock(return_value="code123")),
         ):
             resp = admin_client.post(
                 "/api/v1/mcp/oauth/consent/approve",
@@ -364,7 +364,7 @@ async def test_gate_is_fail_closed_on_flag_read_error() -> None:
 
     with (
         patch.object(ms, "_session", _fake_session),
-        patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(side_effect=RuntimeError("boom"))),
     ):
         denied = await ms._mcp_server_feature_gate(_ORG_ID)
 
@@ -385,7 +385,7 @@ async def test_flag_read_cancellation_propagates() -> None:
 
     with (
         patch(
-            "modulo.db.crud.organisation.get_organisation",
+            "farna.db.crud.organisation.get_organisation",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -401,7 +401,7 @@ async def test_flag_enabled_reads_the_resolved_org_plan() -> None:
     plan_ctx.feature_enabled.return_value = True
 
     with (
-        patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)) as mock_get_org,
+        patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)) as mock_get_org,
         patch.object(ms, "resolve_plan_context", new=AsyncMock(return_value=plan_ctx)) as mock_resolve,
         patch.object(ms, "get_settings", return_value=MagicMock()),
     ):
@@ -418,7 +418,7 @@ async def test_flag_disabled_returns_the_structured_response() -> None:
     plan_ctx.feature_enabled.return_value = False
 
     with (
-        patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.db.crud.organisation.get_organisation", new=AsyncMock(return_value=MagicMock())),
         patch.object(ms, "resolve_plan_context", new=AsyncMock(return_value=plan_ctx)),
         patch.object(ms, "get_settings", return_value=MagicMock()),
     ):
@@ -510,8 +510,8 @@ def _pre_auth_client() -> Generator[TestClient, None, None]:
     the very behaviour under test.
     """
     with (
-        patch("modulo.core.rate_limiter.RateLimiterRegistry.check", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server.public_url_is_configured", return_value=True),
+        patch("farna.core.rate_limiter.RateLimiterRegistry.check", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server.public_url_is_configured", return_value=True),
     ):
         yield TestClient(app)
 
@@ -543,10 +543,10 @@ def test_pre_auth_grant_endpoints_are_denied_not_401(path: str) -> None:
     """Flag off, NO credentials: 402 feature_required — never 401, never 500."""
     form = _TOKEN_FORM if path.endswith("token") else _REFRESH_FORM
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_mock_factory()),
-        patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
-        patch("modulo.auth.oauth.validate_client_secret", new=AsyncMock(return_value=_mock_client())),
-        patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
+        patch("farna.api.mcp_server._get_session_factory", return_value=_mock_factory()),
+        patch("farna.api.mcp_server.set_rls_org", new=AsyncMock()),
+        patch("farna.auth.oauth.validate_client_secret", new=AsyncMock(return_value=_mock_client())),
+        patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
         _pre_auth_client() as c,
     ):
         resp = c.post(path, data=form)
@@ -564,13 +564,13 @@ def test_pre_auth_grant_endpoints_reach_the_exchange_when_flag_on(path: str) -> 
     """Flag on, NO credentials: the exchange is attempted (never a 401)."""
     form = _TOKEN_FORM if path.endswith("token") else _REFRESH_FORM
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_mock_factory()),
-        patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
-        patch("modulo.auth.oauth.validate_client_secret", new=AsyncMock(return_value=_mock_client())),
-        patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server._exchange_authorization_code", new=AsyncMock(return_value=None)) as mock_exchange,
+        patch("farna.api.mcp_server._get_session_factory", return_value=_mock_factory()),
+        patch("farna.api.mcp_server.set_rls_org", new=AsyncMock()),
+        patch("farna.auth.oauth.validate_client_secret", new=AsyncMock(return_value=_mock_client())),
+        patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._exchange_authorization_code", new=AsyncMock(return_value=None)) as mock_exchange,
         patch(
-            "modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=None)
+            "farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=None)
         ) as mock_exchange_refresh,
         _pre_auth_client() as c,
     ):
@@ -589,12 +589,12 @@ def test_pre_auth_grant_endpoints_reach_the_exchange_when_flag_on(path: str) -> 
 def test_pre_auth_authorize_is_denied_not_401_when_flag_off() -> None:
     """GET /mcp/oauth/authorize, no credentials, flag off → 402, never 401."""
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_mock_factory()),
-        patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
-        patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.api.mcp_server._get_session_factory", return_value=_mock_factory()),
+        patch("farna.api.mcp_server.set_rls_org", new=AsyncMock()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
+        patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
+        patch("farna.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
         _pre_auth_client() as c,
     ):
         resp = c.get("/mcp/oauth/authorize", params=_AUTHORIZE_QUERY)
@@ -607,13 +607,13 @@ def test_pre_auth_authorize_is_denied_not_401_when_flag_off() -> None:
 def test_pre_auth_authorize_redirects_to_consent_when_flag_on() -> None:
     """Flag on, no credentials: the anonymous 302 to the SPA consent route."""
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_mock_factory()),
-        patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
-        patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()),
+        patch("farna.api.mcp_server._get_session_factory", return_value=_mock_factory()),
+        patch("farna.api.mcp_server.set_rls_org", new=AsyncMock()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
+        patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
+        patch("farna.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.auth.oauth.create_consent_state", new=AsyncMock()),
         _pre_auth_client() as c,
     ):
         resp = c.get(
@@ -630,13 +630,13 @@ def test_pre_auth_authorize_redirects_to_consent_when_flag_on() -> None:
 def test_pre_auth_authorize_writes_no_consent_state_when_flag_off() -> None:
     """The flag is checked BEFORE the consent row is written."""
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_mock_factory()),
-        patch("modulo.api.mcp_server.set_rls_org", new=AsyncMock()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
-        patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
-        patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
+        patch("farna.api.mcp_server._get_session_factory", return_value=_mock_factory()),
+        patch("farna.api.mcp_server.set_rls_org", new=AsyncMock()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=_mock_client())),
+        patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
+        patch("farna.auth.oauth.normalize_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.auth.oauth.validate_client_scopes", new=MagicMock(return_value=["trigger:run"])),
+        patch("farna.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
         _pre_auth_client() as c,
     ):
         resp = c.get("/mcp/oauth/authorize", params=_AUTHORIZE_QUERY)

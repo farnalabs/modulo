@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from modulo.launcher import manifest as manifest_module
-from modulo.launcher.manifest import (
+from farna.launcher import manifest as manifest_module
+from farna.launcher.manifest import (
     _KEY_ID_CURRENT,
     _KEY_ID_NEXT,
 )
@@ -87,7 +87,7 @@ def clean_launcher_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def sig_factory(test_signing_keys: dict[str, str]) -> Any:
     """Build a .sig dict signed by the given test key over *payload*."""
 
-    from modulo.launcher.manifest import sign_release_bytes
+    from farna.launcher.manifest import sign_release_bytes
 
     def _factory(payload: bytes, key_id: str | None = None) -> dict[str, str]:
         resolved_id = key_id if key_id is not None else _KEY_ID_CURRENT

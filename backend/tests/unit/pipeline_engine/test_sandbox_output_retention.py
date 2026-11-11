@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     _BoundedFinalDrain,
     _marker_delivery_done_for_node,
@@ -444,8 +444,8 @@ async def test_stalled_command_retains_captured_stdout():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -517,7 +517,7 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
     open with a log BEFORE the node decorator grace budget is consumed — the
     node still raises the retryable SandboxNodeFailedError and never becomes a
     terminal node_timeout."""
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner")
     _fn, row, sandbox = _retention_env(output_json='{"summary": "broken", ')
 
     class _HangSession(_RetentionSession):
@@ -537,7 +537,7 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT", 0.1),
+        patch("farna.core.pipeline_engine.node_runner._RAW_OUTPUT_MARKER_PERSIST_TIMEOUT", 0.1),
         pytest.raises(SandboxNodeFailedError, match=r"no parseable output\.json"),
     ):
         await hang_fn(_run_state())
@@ -643,7 +643,7 @@ async def test_cross_tenant_run_id_writes_nothing(caplog):
     and never raise. The REAL ``set_rls_org`` guard is exercised (not mocked
     away); the fake session resolves the SELECT to no row exactly as RLS would
     hide a foreign-org run."""
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner")
     row = _FakeRunRow()
 
     def _foreign_factory() -> _RetentionSession:
@@ -667,7 +667,7 @@ async def test_cross_tenant_run_id_writes_nothing(caplog):
 async def test_silent_early_returns_are_logged(caplog):
     """FIX 8 (observability): silent early returns — no run_id and an unparseable
     org id — log WARNINGs instead of silently skipping."""
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner")
     row = _FakeRunRow()
 
     def _factory() -> _RetentionSession:
@@ -760,7 +760,7 @@ async def test_redaction_failure_never_blocks_retention():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._TOKENIZED_GIT_URL_PATTERN",
+            "farna.core.pipeline_engine.node_runner._TOKENIZED_GIT_URL_PATTERN",
             new=_boom_pattern,
         ),
         pytest.raises(SandboxNodeFailedError),
@@ -997,7 +997,7 @@ async def test_cancelled_node_capture_of_delivery_sentinel_flushed_during_the_gr
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0.05),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
@@ -1023,7 +1023,7 @@ async def test_bounded_final_drain_logs_an_awaited_failure() -> None:
         raise RuntimeError("drain failed")
 
     sequencer = _BoundedFinalDrain(_drain, timeout=1.0)
-    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+    with patch("farna.core.pipeline_engine.node_runner._log") as mock_log:
         await sequencer.run_once()
 
     mock_log.error.assert_called_once()
@@ -1049,7 +1049,7 @@ async def test_bounded_final_drain_logs_a_failure_on_the_timeout_boundary() -> N
         raise RuntimeError("boundary drain failure")
 
     sequencer = _BoundedFinalDrain(_drain, timeout=0.0)
-    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+    with patch("farna.core.pipeline_engine.node_runner._log") as mock_log:
         await sequencer.run_once()
 
     mock_log.error.assert_called_once()
@@ -1078,7 +1078,7 @@ async def test_bounded_final_drain_logs_a_late_failure() -> None:
         raise RuntimeError("late drain failure")
 
     sequencer = _BoundedFinalDrain(_drain, timeout=0.01)
-    with patch("modulo.core.pipeline_engine.node_runner._log") as mock_log:
+    with patch("farna.core.pipeline_engine.node_runner._log") as mock_log:
         await sequencer.run_once()
         await started.wait()
         mock_log.warning.assert_called_once()
@@ -1123,7 +1123,7 @@ async def test_cancelled_node_with_no_grace_skips_the_second_look():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0),
+        patch("farna.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 0),
         pytest.raises(asyncio.CancelledError),
     ):
         await fn(_run_state())
@@ -1173,7 +1173,7 @@ async def test_cancelled_during_the_post_cancel_grace_still_retains_the_marker()
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 30),
+        patch("farna.core.pipeline_engine.node_runner._CANCEL_DELIVERY_GRACE_SECONDS", 30),
     ):
         task = asyncio.create_task(fn(_run_state()))
         # Well past the (mocked, instant) first drain: the node is parked in
@@ -1298,7 +1298,7 @@ async def test_guard_a_skips_when_prior_attempt_marked_delivery_done():
     state["_run_id"] = _run_uuid
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         result = await fn(state)
 
@@ -1334,7 +1334,7 @@ async def test_guard_a_skips_after_success_persisted_marker():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         first = await fn(state)
 
@@ -1346,7 +1346,7 @@ async def test_guard_a_skips_after_success_persisted_marker():
     # Guard A must read the SUCCESS-persisted marker and skip — no sandbox.
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         second = await fn(state)
 
@@ -1382,7 +1382,7 @@ async def test_guard_a_skips_when_gate_disabled_by_kill_switch():
     state["_claim_lease"] = "tok-claim"
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         result = await fn(state)
 
@@ -1466,7 +1466,7 @@ async def test_cancelled_node_persist_failure_fail_open_reraises():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._persist_raw_output_marker",
+            "farna.core.pipeline_engine.node_runner._persist_raw_output_marker",
             persist_mock,
         ),
         pytest.raises(asyncio.CancelledError),
@@ -1540,7 +1540,7 @@ async def test_guard_a_inert_when_multi_node():
     state["_run_id"] = _RUN_ID
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         result = await fn(state)
 
@@ -1557,7 +1557,7 @@ async def test_stall_over_cap_stdout_emits_artifact_pointer_on_marker(tmp_path):
     """FAR-811: when a stall fires and redacted stdout exceeds the retention cap,
     the stall marker carries a ``stdout_artifact`` pointer (the full redacted
     transcript was written to the artifact store)."""
-    from modulo.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.store import LocalArtifactStore
 
     cap = 2048
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
@@ -1590,9 +1590,9 @@ async def test_stall_over_cap_stdout_emits_artifact_pointer_on_marker(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -1641,8 +1641,8 @@ async def test_stall_under_cap_stdout_emits_no_artifact_pointer():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -1663,7 +1663,7 @@ async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_pat
     equals the cap (full mode), so stdout_truncated is False and the writer
     is cleaned up without producing a pointer. The stall path produces the
     pointer (tested separately)."""
-    from modulo.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.store import LocalArtifactStore
 
     cap = 2048
     over_cap_content = "y" * 4096
@@ -1700,7 +1700,7 @@ async def test_streaming_writer_captures_over_cap_stdout_on_success_path(tmp_pat
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
     ):
         result = await fn(_run_state())
 
@@ -1729,7 +1729,7 @@ async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_pa
     artifact would hold only ``cap`` bytes and claim ``truncated: False``; the
     fix keeps the full ``len(over_cap_content)`` bytes and reports ``truncated:
     False`` honestly (the writer is uncapped)."""
-    from modulo.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.store import LocalArtifactStore
 
     cap = 2048  # small retention cap
     over_cap_content = "y" * 4096  # raw > cap -> stdout_truncated True
@@ -1769,10 +1769,10 @@ async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_pa
         # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and the
         # over-cap branch fires.
         patch(
-            "modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG",
+            "farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG",
             new=cap,
         ),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
     ):
         result = await fn(_run_state())
 
@@ -1794,7 +1794,7 @@ async def test_streaming_writer_success_path_over_cap_emits_full_artifact(tmp_pa
 async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
     """FAR-844: when stdout is UNDER the cap, the streaming writer produces no
     pointer — inline retention is sufficient."""
-    from modulo.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.store import LocalArtifactStore
 
     cap = 8192
     under_cap_content = "x" * 2048
@@ -1830,7 +1830,7 @@ async def test_streaming_writer_under_cap_stdout_has_no_pointer(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
     ):
         result = await fn(_run_state())
 
@@ -1855,8 +1855,8 @@ async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_
     actually ran. On main the streaming writer is never constructed, so
     ``finalize`` is never called and this test fails — making the feature's
     behavioural delta real, not coincidental."""
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     over_cap_content = "y" * 4096
@@ -1909,8 +1909,8 @@ async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_
         # _MAX_DRAIN_WINDOW (512KB), so the full 4096-byte log is drained and
         # stdout_truncated fires — which is the branch that prefers the streaming
         # writer's finalize() over the fallback.
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(StreamingArtifactWriter, "finalize", new=_spy_finalize),
     ):
         result = await fn(_run_state())
@@ -1945,7 +1945,7 @@ async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
     triggers via total timeout (``_wait_command_with_idle_watchdog`` raises
     ``TimeoutError``) instead of stall (``handle.wait`` raises
     ``asyncio.TimeoutError``)."""
-    from modulo.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.store import LocalArtifactStore
 
     cap = 2048
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
@@ -1981,9 +1981,9 @@ async def test_total_timeout_over_cap_stdout_emits_artifact_pointer(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch(
-            "modulo.core.pipeline_engine.node_runner._wait_command_with_exec_process",
+            "farna.core.pipeline_engine.node_runner._wait_command_with_exec_process",
             new=AsyncMock(side_effect=_total_timeout_exc),
         ),
         pytest.raises(SandboxNodeFailedError),
@@ -2007,8 +2007,8 @@ async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path)
     the streaming writer (created during drain) is finalised and its pointer is
     attached as _exc_stdout_artifact rather than falling through to the
     one-shot fallback."""
-    import modulo.core.pipeline_engine.node_runner as _nr
-    from modulo.core.artifacts.store import LocalArtifactStore
+    import farna.core.pipeline_engine.node_runner as _nr
+    from farna.core.artifacts.store import LocalArtifactStore
 
     store = LocalArtifactStore(tmp_path)
     cap = 2048  # small retention cap so over-cap stdout triggers the exc path
@@ -2026,8 +2026,8 @@ async def test_far844_exc_path_streaming_writer_finalize_emits_pointer(tmp_path)
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
     ):
         result = await fn(_run_state())
@@ -2051,8 +2051,8 @@ async def test_far844_streaming_writer_init_failure_logs_and_falls_back(tmp_path
     failure is logged (``sandbox_agent.streaming_writer_init_failed``) and the
     run falls back to the one-shot ``_persist_full_stdout_artifact`` rather than
     crashing."""
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     log_content = "z" * 700_000
@@ -2062,8 +2062,8 @@ async def test_far844_streaming_writer_init_failure_logs_and_falls_back(tmp_path
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
         patch.object(StreamingArtifactWriter, "__init__", side_effect=RuntimeError("boom-init")),
     ):
         result = await fn(_run_state())
@@ -2077,8 +2077,8 @@ async def test_far844_drain_write_failure_logs(tmp_path):
     """FAR-844: a write failure mid-drain is logged
     (``sandbox_agent.streaming_writer_write_failed``) and the run continues
     (the fallback persists the full transcript)."""
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     log_content = "z" * 700_000
@@ -2088,8 +2088,8 @@ async def test_far844_drain_write_failure_logs(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
         patch.object(StreamingArtifactWriter, "write", side_effect=RuntimeError("boom-write")),
     ):
         result = await fn(_run_state())
@@ -2102,8 +2102,8 @@ async def test_far844_success_finalize_failure_logs_and_falls_back(tmp_path):
     """FAR-844: a finalize failure on the success path is logged
     (``sandbox_agent.streaming_writer_finalize_failed``) and the run falls back
     to the one-shot persist."""
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     log_content = "z" * 700_000
@@ -2113,8 +2113,8 @@ async def test_far844_success_finalize_failure_logs_and_falls_back(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
         patch.object(StreamingArtifactWriter, "finalize", side_effect=RuntimeError("boom-finalize")),
     ):
         result = await fn(_run_state())
@@ -2128,9 +2128,9 @@ async def test_far844_exc_finalize_and_teardown_cleanup_failure_logs(tmp_path):
     failure (``sandbox_agent.streaming_writer_finalize_failed``) and the later
     teardown cleanup failure (``sandbox_agent.streaming_writer_cleanup_failed``)
     are both logged and do not crash the run."""
-    import modulo.core.pipeline_engine.node_runner as _nr
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    import farna.core.pipeline_engine.node_runner as _nr
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     log_content = "z" * 700_000
@@ -2143,8 +2143,8 @@ async def test_far844_exc_finalize_and_teardown_cleanup_failure_logs(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=LocalArtifactStore(tmp_path)),
         patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
         patch.object(StreamingArtifactWriter, "finalize", side_effect=RuntimeError("boom-finalize")),
         patch.object(StreamingArtifactWriter, "cleanup", side_effect=RuntimeError("boom-cleanup")),
@@ -2160,8 +2160,8 @@ async def test_far844_stall_cleanup_failure_logs(tmp_path):
     """FAR-844: on the stall path, a streaming-writer cleanup failure before the
     stall artifact is written is logged (``sandbox_agent.streaming_writer_cleanup_failed``)
     and the stall marker still carries a stdout_artifact pointer."""
-    from modulo.core.artifacts.store import LocalArtifactStore
-    from modulo.core.artifacts.streaming import StreamingArtifactWriter
+    from farna.core.artifacts.store import LocalArtifactStore
+    from farna.core.artifacts.streaming import StreamingArtifactWriter
 
     cap = 2048
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=cap)
@@ -2189,9 +2189,9 @@ async def test_far844_stall_cleanup_failure_logs(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(StreamingArtifactWriter, "cleanup", side_effect=RuntimeError("boom-cleanup")),
         pytest.raises(SandboxNodeFailedError),
     ):
@@ -2206,8 +2206,8 @@ async def test_far879_exc_path_over_cap_stderr_emits_pointer(tmp_path):
     """FAR-879 / FAR-1315 coverage: on the generic exception path with over-cap
     stderr, the stderr artifact pointer is persisted — the stderr parity of the
     stdout exception-path arm."""
-    import modulo.core.pipeline_engine.node_runner as _nr
-    from modulo.core.artifacts.store import LocalArtifactStore
+    import farna.core.pipeline_engine.node_runner as _nr
+    from farna.core.artifacts.store import LocalArtifactStore
 
     store = LocalArtifactStore(tmp_path)
     cap = 2048
@@ -2223,8 +2223,8 @@ async def test_far879_exc_path_over_cap_stderr_emits_pointer(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.pipeline_engine.node_runner._MAX_ARTIFACT_LOG", new=cap),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch.object(_nr, "_is_sandbox_session_lost_echo", _boom),
     ):
         result = await fn(_run_state())

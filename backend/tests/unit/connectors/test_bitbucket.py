@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.bitbucket import BitbucketConnector
+from farna.connectors._safe_page import safe_paging_total as _paging_total
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.bitbucket import BitbucketConnector
 
 TOKEN = "bitbucket_test_token"
 _API = "https://api.bitbucket.org/2.0"

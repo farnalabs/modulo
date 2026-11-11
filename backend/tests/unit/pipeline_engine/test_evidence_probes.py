@@ -1,7 +1,7 @@
 """Unit tests for the FAR-152 evidence & no-op detection machinery.
 
 Covers the §15.3/§15.14 surface implemented in
-``modulo.core.pipeline_engine.evidence``: tri-state ``EvidenceResult`` and the
+``farna.core.pipeline_engine.evidence``: tri-state ``EvidenceResult`` and the
 no-op gate input, the concrete ``SandboxEvidenceProvider`` probed against tiny
 real git repos and real directories, the bounded ``run_evidence_probe`` runner,
 the §15.14 metric fires-when contracts, and the bounded reconciliation sweep.
@@ -20,8 +20,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine import evidence
-from modulo.core.pipeline_engine.evidence import (
+from farna.core.pipeline_engine import evidence
+from farna.core.pipeline_engine.evidence import (
     EVIDENCE_PROBE_TIMEOUT_SECONDS,
     CommandResult,
     EvidenceResult,
@@ -38,10 +38,10 @@ from modulo.core.pipeline_engine.evidence import (
     run_evidence_probe,
     write_evidence_row,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_evidence import RunEvidence
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_evidence import RunEvidence
+from farna.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
 
 # The run_evidence table is org-scoped (0133); unit tests run on SQLite where
@@ -967,7 +967,7 @@ class TestReconcileNoopEvidence:
             raise RuntimeError("probe layer failure")
 
         monkeypatch_probe = pytest.MonkeyPatch()
-        monkeypatch_probe.setattr("modulo.core.pipeline_engine.evidence.run_evidence_probe", _exploding_probe)
+        monkeypatch_probe.setattr("farna.core.pipeline_engine.evidence.run_evidence_probe", _exploding_probe)
         try:
             summary = await reconcile_noop_evidence(sqlite_factory, provider=_RaisingProvider(), max_runs=10)
         finally:
@@ -1023,7 +1023,7 @@ class TestEvidenceEnabled:
         class _Settings:
             modulo_heuristic_enabled = True
 
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: _Settings())
         assert evidence_enabled() is True
 
     def test_settings_fallback_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1032,7 +1032,7 @@ class TestEvidenceEnabled:
         class _Settings:
             modulo_heuristic_enabled = False
 
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: _Settings())
+        monkeypatch.setattr("farna.settings.get_settings", lambda: _Settings())
         assert evidence_enabled() is False
 
     def test_settings_lookup_failure_defaults_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1041,7 +1041,7 @@ class TestEvidenceEnabled:
         def _boom() -> None:
             raise ImportError("no settings module")
 
-        monkeypatch.setattr("modulo.settings.get_settings", _boom)
+        monkeypatch.setattr("farna.settings.get_settings", _boom)
         assert evidence_enabled() is True
 
     async def test_run_probe_disabled_is_unverifiable_without_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,8 +10,8 @@ query_analytics tool tests — both funnel through the same shared service.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import query_analytics_concurrency
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from farna.api.mcp_server import query_analytics_concurrency
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -28,7 +28,7 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
 
 class _AuthContext:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -37,7 +37,7 @@ class _AuthContext:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
@@ -72,13 +72,13 @@ def _patch_plan(enabled: bool):
     """Patch the org lookup + plan resolution to return an enabled/disabled plan."""
     plan = _EnabledPlan() if enabled else _DisabledPlan()
     return (
-        patch("modulo.api.mcp_server._session", return_value=_make_session_context(make_session_scope())),
+        patch("farna.api.mcp_server._session", return_value=_make_session_context(make_session_scope())),
         patch(
-            "modulo.db.crud.organisation.get_organisation",
+            "farna.db.crud.organisation.get_organisation",
             new=AsyncMock(return_value=MagicMock(settings_json={}, plan_id=None)),
         ),
-        patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
-        patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+        patch("farna.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
+        patch("farna.api.mcp_server.get_settings", return_value=MagicMock()),
     )
 
 
@@ -90,29 +90,29 @@ def _plan_enabled_patches() -> list[patch]:
         org_patch,
         plan_patch,
         settings_patch,
-        patch("modulo.api.mcp_server._get_session_factory", return_value=AsyncMock()),
+        patch("farna.api.mcp_server._get_session_factory", return_value=AsyncMock()),
     ]
 
 
 class TestQueryAnalyticsConcurrency(_AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await query_analytics_concurrency()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_insufficient_scope_denies_without_analytics_query(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await query_analytics_concurrency()
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_feature_gate_off_returns_feature_required(
         self,
         mock_validate_auth: AsyncMock,
@@ -123,7 +123,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert result["error"] == "feature_required"
         assert "analytics_page" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_enum_returns_invalid_params(
         self,
         mock_validate_auth: AsyncMock,
@@ -133,7 +133,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency(group_by="fortnight")
         assert result["error"] == "invalid_params"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_pipeline_id_returns_invalid_params(
         self,
         mock_validate_auth: AsyncMock,
@@ -144,7 +144,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert result["error"] == "invalid_params"
         assert "pipeline_id" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_invalid_folder_id_returns_invalid_params(
         self,
         mock_validate_auth: AsyncMock,
@@ -158,7 +158,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert result["error"] == "invalid_params"
         assert "folder_id" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_success_passes_typed_params_to_service(
         self,
         mock_validate_auth: AsyncMock,
@@ -175,7 +175,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         pid_a = uuid.uuid4()
         pid_b = uuid.uuid4()
         patches = _plan_enabled_patches()
-        patches.append(patch("modulo.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
+        patches.append(patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
@@ -198,7 +198,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert params.status.value == "failed"
         assert params.dimension is None, "concurrency has no dimension split"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_limit_is_clamped_to_query_cap(
         self,
         mock_validate_auth: AsyncMock,
@@ -207,7 +207,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
 
         canned = {"group_by": "day", "buckets": []}
         patches = _plan_enabled_patches()
-        patches.append(patch("modulo.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
+        patches.append(patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
@@ -216,7 +216,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         mock_run = patches[-1].new
         assert mock_run.await_args.kwargs["params"].limit == 1000, "limit must be clamped to the REST cap of 1000"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_date_params_parse_to_aware_datetimes(
         self,
         mock_validate_auth: AsyncMock,
@@ -225,7 +225,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
 
         canned = {"group_by": "day", "date_from": None, "date_to": None, "pool_reference": None, "buckets": []}
         patches = _plan_enabled_patches()
-        patches.append(patch("modulo.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
+        patches.append(patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(return_value=canned)))
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
@@ -239,19 +239,19 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert params.date_to.tzinfo is not None, "an ISO datetime keeps its offset"
         assert params.date_to.hour == 14, "an ISO datetime must be parsed, not treated as a bare date"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rate_limited_maps_to_error_dict(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         import contextlib
 
-        from modulo.core.analytics.service import AnalyticsRateLimitedError
+        from farna.core.analytics.service import AnalyticsRateLimitedError
 
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(side_effect=AnalyticsRateLimitedError("Rate limit exceeded")),
             )
         )
@@ -261,19 +261,19 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency()
         assert result["error"] == "rate_limited"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_validation_error_maps_to_invalid_params(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         import contextlib
 
-        from modulo.core.analytics.service import AnalyticsValidationError
+        from farna.core.analytics.service import AnalyticsValidationError
 
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(side_effect=AnalyticsValidationError("date range must be 365 days or less")),
             )
         )
@@ -284,19 +284,19 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         assert result["error"] == "invalid_params"
         assert "365 days" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_query_timeout_maps_to_query_timeout(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         import contextlib
 
-        from modulo.core.analytics.service import AnalyticsQueryTimeoutError
+        from farna.core.analytics.service import AnalyticsQueryTimeoutError
 
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(side_effect=AnalyticsQueryTimeoutError("query exceeded timeout")),
             )
         )
@@ -306,19 +306,19 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency()
         assert result["error"] == "query_timeout"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_migration_required_maps_to_migration_required(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         import contextlib
 
-        from modulo.core.analytics.service import AnalyticsMigrationRequiredError
+        from farna.core.analytics.service import AnalyticsMigrationRequiredError
 
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(
                     side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")
                 ),
@@ -330,19 +330,19 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency()
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_database_error_maps_to_database_error(
         self,
         mock_validate_auth: AsyncMock,
     ) -> None:
         import contextlib
 
-        from modulo.core.analytics.service import AnalyticsDatabaseError
+        from farna.core.analytics.service import AnalyticsDatabaseError
 
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(side_effect=AnalyticsDatabaseError("Database temporarily unavailable.")),
             )
         )
@@ -352,7 +352,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency()
         assert result["error"] == "database_error"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_programming_error_maps_to_migration_required(
         self,
         mock_validate_auth: AsyncMock,
@@ -364,7 +364,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         patches = _plan_enabled_patches()
         patches.append(
             patch(
-                "modulo.api.mcp_server.run_concurrency_query",
+                "farna.api.mcp_server.run_concurrency_query",
                 new=AsyncMock(side_effect=ProgrammingError("SELECT ...", {}, RuntimeError("no such table"))),
             )
         )
@@ -374,7 +374,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             result = await query_analytics_concurrency()
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_unexpected_error_maps_to_internal_error(
         self,
         mock_validate_auth: AsyncMock,
@@ -383,7 +383,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
 
         patches = _plan_enabled_patches()
         patches.append(
-            patch("modulo.api.mcp_server.run_concurrency_query", new=AsyncMock(side_effect=RuntimeError("boom")))
+            patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(side_effect=RuntimeError("boom")))
         )
         with contextlib.ExitStack() as stack:
             for p in patches:

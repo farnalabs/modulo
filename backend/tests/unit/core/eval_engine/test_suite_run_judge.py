@@ -23,27 +23,27 @@ from langchain_core.messages import AIMessage, BaseMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.execute_suite_run import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.execute_suite_run import (
     build_suite_run,
 )
-from modulo.core.eval_engine.suite_run_judge import (
+from farna.core.eval_engine.suite_run_judge import (
     build_org_model_backend_hub,
     build_suite_run_model_judge_callable,
 )
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.db.models import Base
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_dataset import EvalCase, EvalDataset
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.eval_suite import EvalSuite
-from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
-from modulo.db.models.model_backend import ModelBackend
-from modulo.db.models.run import Run
-from modulo.db.models.trigger_event import TriggerEvent
-from modulo.model_backends.base import ModelBackendBase
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.db.models import Base
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.eval import Eval
+from farna.db.models.eval_dataset import EvalCase, EvalDataset
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.eval_suite import EvalSuite
+from farna.db.models.eval_suite_run import SuiteRun, SuiteRunState
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.run import Run
+from farna.db.models.trigger_event import TriggerEvent
+from farna.model_backends.base import ModelBackendBase
 
 
 def _tables() -> list[Any]:
@@ -253,8 +253,8 @@ async def test_build_hub_builds_and_initialises_active_rows(session, monkeypatch
         seen.append(list(instances))
 
     monkeypatch.setattr(ModelBackendHub, "initialise", _fake_initialise)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda **_: object())
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: type("_S", (), {"fernet_key": "k"})())
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda **_: object())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: type("_S", (), {"fernet_key": "k"})())
 
     hub = await build_org_model_backend_hub(session, org)
 
@@ -303,9 +303,9 @@ async def test_build_hub_tears_down_when_initialise_fails(session, monkeypatch) 
 
     monkeypatch.setattr(ModelBackendHub, "__aenter__", _tracking_aenter)
     monkeypatch.setattr(ModelBackendHub, "initialise", _raising_initialise)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._teardown_hub", _fake_teardown)
-    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda **_: object())
-    monkeypatch.setattr("modulo.settings.get_settings", lambda: type("_S", (), {"fernet_key": "k"})())
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._teardown_hub", _fake_teardown)
+    monkeypatch.setattr("farna.core.secrets_backend.create_secrets_backend", lambda **_: object())
+    monkeypatch.setattr("farna.settings.get_settings", lambda: type("_S", (), {"fernet_key": "k"})())
 
     with pytest.raises(RuntimeError, match="initialise boom"):
         await build_org_model_backend_hub(session, org)
@@ -429,8 +429,8 @@ def test_judge_callable_caches_each_built_backend_across_calls() -> None:
 # _maybe_wire_suite_judge                                                     #
 # --------------------------------------------------------------------------- #
 async def test_maybe_wire_no_judge_defs_builds_no_hub(session, monkeypatch) -> None:
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     suite, dataset, backend = await _seed_suite(session, org)
@@ -457,8 +457,8 @@ async def test_maybe_wire_no_judge_defs_builds_no_hub(session, monkeypatch) -> N
 
 
 async def test_maybe_wire_judge_def_sets_callable_and_returns_hub(session, monkeypatch) -> None:
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     suite, dataset, backend = await _seed_suite(session, org)
@@ -484,8 +484,8 @@ async def test_maybe_wire_judge_def_sets_callable_and_returns_hub(session, monke
 
 
 async def test_maybe_wire_no_active_backend_leaves_kwargs_untouched(session, monkeypatch) -> None:
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     suite, dataset, backend = await _seed_suite(session, org, subject_status="inactive")
@@ -511,8 +511,8 @@ async def test_maybe_wire_no_active_backend_leaves_kwargs_untouched(session, mon
 # SAQ job end-to-end                                                          #
 # --------------------------------------------------------------------------- #
 async def test_saq_job_runs_judge_end_to_end_and_tears_down_hub(monkeypatch) -> None:
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -567,8 +567,8 @@ async def test_saq_job_missing_backend_id_persists_error_and_fails_run(monkeypat
     definition errored) so the run terminalises ``failed``, with one error row
     carrying the coded reason.
     """
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -623,8 +623,8 @@ async def test_saq_job_logs_and_continues_when_hub_teardown_fails(monkeypatch) -
     Pin that guard so a raising ``__aexit__`` cannot turn a completed run into
     an orchestration failure.
     """
-    import modulo.core.saq_worker as sw
-    from modulo.core.eval_engine import suite_run_judge
+    import farna.core.saq_worker as sw
+    from farna.core.eval_engine import suite_run_judge
 
     org = uuid.uuid4()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -662,7 +662,7 @@ async def test_saq_job_logs_and_continues_when_hub_teardown_fails(monkeypatch) -
 
 
 async def test_saq_job_judge_suite_without_active_backend_records_errors(monkeypatch) -> None:
-    import modulo.core.saq_worker as sw
+    import farna.core.saq_worker as sw
 
     org = uuid.uuid4()
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -686,7 +686,7 @@ async def test_saq_job_judge_suite_without_active_backend_records_errors(monkeyp
         async def ingest(self, *a: Any, **k: Any) -> None:
             return None
 
-    monkeypatch.setattr("modulo.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
+    monkeypatch.setattr("farna.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
     monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
 
     stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
@@ -712,7 +712,7 @@ def test_a_raw_backend_not_found_from_a_judge_is_a_configuration_error(
     ``build_model_judge_callable`` normally converts this already; the suite's
     own arm is the backstop for any other judge adapter.
     """
-    from modulo.core.model_backend_hub import BackendNotFoundError
+    from farna.core.model_backend_hub import BackendNotFoundError
 
     backend_id = uuid.uuid4()
 
@@ -721,7 +721,7 @@ def test_a_raw_backend_not_found_from_a_judge_is_a_configuration_error(
             raise BackendNotFoundError(backend_id)
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.llm_judge.build_model_judge_callable",
+        "farna.core.pipeline_engine.llm_judge.build_model_judge_callable",
         lambda hub, key: _LeakingJudge(),
     )
     judge = build_suite_run_model_judge_callable(ModelBackendHub())

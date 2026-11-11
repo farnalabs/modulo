@@ -6,7 +6,7 @@ Locks the FAR-143 contract:
     placement and the FAR-125 node-keyed split placement, plus arbitrary
     nesting, and flattens every matching location.
   * ``validate_and_normalise_reported_refs`` canonicalises ``kind`` + ``ref``
-    via ``modulo.db.lifecycle_refs``, forces provenance to ``"reported"``,
+    via ``farna.db.lifecycle_refs``, forces provenance to ``"reported"``,
     drops unknown statuses, dedups by ``(kind, ref, source)``, and caps at
     ``max_refs``.
   * both functions are PURE: no DB, deterministic, and the input is never
@@ -21,11 +21,11 @@ from typing import Any
 
 import pytest
 
-from modulo.core.lifecycle_map.self_report import (
+from farna.core.lifecycle_map.self_report import (
     parse_self_report_refs,
     validate_and_normalise_reported_refs,
 )
-from modulo.settings import get_settings, work_item_refs_cap
+from farna.settings import get_settings, work_item_refs_cap
 
 _ENTRY: dict[str, Any] = {"kind": "github_pr", "ref": "#123"}
 
@@ -36,7 +36,7 @@ def _isolate_refs_cap_cache() -> Generator[None, None, None]:
 
     ``work_item_refs_cap`` and the ``get_settings`` it reads are ``lru_cache``d
     for the life of the worker process, so a test in another module that stubs
-    ``modulo.settings.get_settings`` (for example with a bare ``MagicMock``,
+    ``farna.settings.get_settings`` (for example with a bare ``MagicMock``,
     whose ``int()`` is ``1``) and then exercises a refs path leaves a cap of 1
     cached and visible here once xdist co-locates the modules in a shard. The
     unpinned tests below then silently drop every ref past the first. Clear

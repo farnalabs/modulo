@@ -11,17 +11,17 @@ import respx
 from pydantic import ValidationError
 from tests.unit.cli.test_apply_executor import _mock_current
 
-from modulo.api.schemas.system_maps import SystemMapUpdate
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import parse_apply_documents
-from modulo.cli.apply.models import (
+from farna.api.schemas.system_maps import SystemMapUpdate
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.models import (
     SystemMapEntity,
     SystemMapLoopConfigEntity,
     SystemMapNodeEntity,
     SystemMapRelationshipEntity,
     SystemMapRevisionEntity,
 )
-from modulo.cli.apply.system_map_apply import (
+from farna.cli.apply.system_map_apply import (
     _apply_one_system_map,
     _create_payload,
     _plan_system_map_view,
@@ -488,7 +488,7 @@ class TestSystemMapUpdateMethod:
 
 
 def test_build_desired_views() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     entity = _system_map_entity(name="Test Map")
     entity_set = EntitySet(system_maps=[entity])
@@ -506,7 +506,7 @@ def test_build_desired_views() -> None:
 
 
 def test_build_desired_views_ambiguous_name_blocked() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     entity = _system_map_entity(name="Ambiguous Map")
     entity_set = EntitySet(system_maps=[entity])
@@ -526,7 +526,7 @@ def test_build_desired_views_ambiguous_name_blocked() -> None:
 
 
 def test_apply_system_maps_create() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     executor = _MockExecutor()
     entity = _system_map_entity(name="New Map")
@@ -543,7 +543,7 @@ def test_apply_system_maps_create() -> None:
 
 
 def test_apply_system_maps_update() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     executor = _MockExecutor()
     entity = _system_map_entity(name="Existing Map", description="Updated")
@@ -563,7 +563,7 @@ def test_apply_system_maps_update() -> None:
 
 
 def test_apply_system_maps_create_with_revision() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     executor = _MockExecutor()
     node = _loop_node_entity()
@@ -583,7 +583,7 @@ def test_apply_system_maps_create_with_revision() -> None:
 
 
 def test_apply_system_maps_failure_isolated() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     class _FailingExecutor(_MockExecutor):
         def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -616,8 +616,8 @@ def test_system_map_plan_apply_plan_is_idempotent(caplog) -> None:
     """A second plan against the API's list shape must report unchanged."""
     import logging
 
-    from modulo.cli.apply.models import EntitySet
-    from modulo.cli.apply.plan import build_plan
+    from farna.cli.apply.models import EntitySet
+    from farna.cli.apply.plan import build_plan
 
     node = _loop_node_entity()
     loop = _loop_config_entity()
@@ -645,7 +645,7 @@ def test_system_map_plan_apply_plan_is_idempotent(caplog) -> None:
 
     # GET /api/v1/system-maps returns map metadata only (no revision content).
     current = {"system_map": {"Converge Map": _map_row(name="Converge Map")}}
-    with caplog.at_level(logging.WARNING, logger="modulo.cli.apply.plan"):
+    with caplog.at_level(logging.WARNING, logger="farna.cli.apply.plan"):
         second = build_plan(desired, current)
 
     assert [entry["name"] for entry in second["unchanged"]] == ["Converge Map"]
@@ -657,8 +657,8 @@ def test_system_map_declared_revision_change_does_not_flap(caplog) -> None:
     """Revision content is create-only: a changed revision still converges, loudly."""
     import logging
 
-    from modulo.cli.apply.models import EntitySet
-    from modulo.cli.apply.plan import build_plan
+    from farna.cli.apply.models import EntitySet
+    from farna.cli.apply.plan import build_plan
 
     node = _loop_node_entity()
     loop = _loop_config_entity()
@@ -671,7 +671,7 @@ def test_system_map_declared_revision_change_does_not_flap(caplog) -> None:
     desired, _blocked = build_desired_views(entity_set, {"system_map": {}}, desired, blocked, set())
 
     current = {"system_map": {"Converge Map": _map_row(name="Converge Map")}}
-    with caplog.at_level(logging.WARNING, logger="modulo.cli.apply.plan"):
+    with caplog.at_level(logging.WARNING, logger="farna.cli.apply.plan"):
         report = build_plan(desired, current)
 
     assert [entry["name"] for entry in report["unchanged"]] == ["Converge Map"]
@@ -681,8 +681,8 @@ def test_system_map_declared_revision_change_does_not_flap(caplog) -> None:
 
 def test_system_map_metadata_change_is_still_detected() -> None:
     """Excluding the create-only revision must not mask a real metadata change."""
-    from modulo.cli.apply.models import EntitySet
-    from modulo.cli.apply.plan import build_plan
+    from farna.cli.apply.models import EntitySet
+    from farna.cli.apply.plan import build_plan
 
     node = _loop_node_entity()
     loop = _loop_config_entity()
@@ -734,7 +734,7 @@ def test_system_map_entity_team_visibility_requires_owner() -> None:
 
 
 def test_build_desired_views_skips_already_blocked_key() -> None:
-    from modulo.cli.apply.models import EntitySet
+    from farna.cli.apply.models import EntitySet
 
     entity = _system_map_entity(name="Test Map")
     entity_set = EntitySet(system_maps=[entity])
@@ -750,8 +750,8 @@ def test_build_desired_views_skips_already_blocked_key() -> None:
 
 def test_system_map_existing_map_without_revision_is_unchanged() -> None:
     """An existing map with no declared revision plans from metadata only."""
-    from modulo.cli.apply.models import EntitySet
-    from modulo.cli.apply.plan import build_plan
+    from farna.cli.apply.models import EntitySet
+    from farna.cli.apply.plan import build_plan
 
     entity = _system_map_entity(name="Converge Map")
     entity_set = EntitySet(system_maps=[entity])

@@ -114,7 +114,7 @@ _ORPHAN_EVAL_ID = uuid.UUID("c3210000-0000-0000-0000-000000000013")
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     # Skip fileConfig: its disable_existing_loggers=True would silence the
     # migration's own logger for the rest of the session (caplog assertions).
     config.config_file_name = None

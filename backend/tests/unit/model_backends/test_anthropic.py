@@ -7,8 +7,8 @@ import pytest
 from anthropic import APIConnectionError, APIStatusError
 from langchain_core.messages import HumanMessage
 
-from modulo.model_backends.anthropic import ANTHROPIC_BASE_URL, AnthropicBackend
-from modulo.model_backends.base import HealthResult, ProviderUnavailableError
+from farna.model_backends.anthropic import ANTHROPIC_BASE_URL, AnthropicBackend
+from farna.model_backends.base import HealthResult, ProviderUnavailableError
 
 _MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
@@ -19,7 +19,7 @@ def _request() -> httpx2.Request:
 
 @pytest.fixture
 def backend():
-    with patch("modulo.model_backends.anthropic.ChatAnthropic"):
+    with patch("farna.model_backends.anthropic.ChatAnthropic"):
         return AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
 
 
@@ -28,7 +28,7 @@ def test_anthropic_base_url_constant():
 
 
 def test_chat_anthropic_uses_default_params():
-    with patch("modulo.model_backends.anthropic.ChatAnthropic") as mock_chat:
+    with patch("farna.model_backends.anthropic.ChatAnthropic") as mock_chat:
         AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5", max_tokens=1024)
         mock_chat.assert_called_once_with(
             model="claude-haiku-4-5",
@@ -38,10 +38,10 @@ def test_chat_anthropic_uses_default_params():
 
 
 async def test_health_check_uses_anthropic_headers():
-    with patch("modulo.model_backends.anthropic.ChatAnthropic"):
+    with patch("farna.model_backends.anthropic.ChatAnthropic"):
         backend = AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")
     with patch(
-        "modulo.model_backends.anthropic.openai_compatible_health_check",
+        "farna.model_backends.anthropic.openai_compatible_health_check",
         new=AsyncMock(return_value=HealthResult(ok=True)),
     ) as mock_health:
         result = await backend.health_check()

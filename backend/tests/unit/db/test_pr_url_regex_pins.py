@@ -3,7 +3,7 @@
 The GitHub-PR-URL grammar is deliberately duplicated across layers, because
 a single shared definition cannot serve every consumer:
 
-* ``modulo.db`` may not import ``modulo.core`` (import-linter contract
+* ``farna.db`` may not import ``farna.core`` (import-linter contract
   ``db-does-not-import-core``), so ``db.crud.run`` cannot reuse the
   extractor's constant;
 * ``sandbox_policy`` must stay dependency-free (no LangGraph, no DB), so it
@@ -34,9 +34,9 @@ from __future__ import annotations
 
 import re
 
-import modulo.core.pipeline_engine.node_runner as node_runner
-import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
-import modulo.db.crud.run as run_crud
+import farna.core.pipeline_engine.node_runner as node_runner
+import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
+import farna.db.crud.run as run_crud
 
 #: The ONE canonical GitHub-PR-URL grammar every copy must compile verbatim.
 _PR_URL_PATTERN = r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+"

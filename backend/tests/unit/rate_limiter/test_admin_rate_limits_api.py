@@ -18,14 +18,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.unit.rate_limiter.helpers import make_settings
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.middleware import rate_limiter as rl_mod
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.api.routes.admin_rate_limits import router
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.rate_limiter import RateLimitRule
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.middleware import rate_limiter as rl_mod
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.api.routes.admin_rate_limits import router
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.rate_limiter import RateLimitRule
+from farna.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -61,7 +61,7 @@ def _make_mock_session() -> AsyncMock:
 def client() -> Generator[TestClient, None, None]:
     """Minimal app with only the admin rate-limits router wired in.
 
-    Uses a bare FastAPI app (not ``modulo.api.main``) so the suite stays
+    Uses a bare FastAPI app (not ``farna.api.main``) so the suite stays
     fast and never triggers MCP server startup or DB connection pooling.
     """
     mock_session = _make_mock_session()
@@ -111,7 +111,7 @@ class TestGetRateLimits:
     def test_get_reports_redis_mode_when_redis_is_available(self, client: TestClient, monkeypatch) -> None:
         """``mode`` is the admin-visible health signal: with Redis configured the
         route must report ``redis``, not the degraded ``in_memory``."""
-        monkeypatch.setattr("modulo.api.routes.admin_rate_limits.redis_available", True)
+        monkeypatch.setattr("farna.api.routes.admin_rate_limits.redis_available", True)
         resp = client.get("/api/v1/admin/rate-limits")
         assert resp.status_code == 200
         assert resp.json()["mode"] == "redis"

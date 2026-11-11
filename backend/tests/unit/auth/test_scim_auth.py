@@ -9,14 +9,14 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.models.problem import ProblemException
-from modulo.auth.scim_auth import (
+from farna.api.models.problem import ProblemException
+from farna.auth.scim_auth import (
     ScimPrincipal,
     get_scim_plan_context,
     get_scim_principal,
     require_scim_feature,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 
 def _settings(scim_token: str = "valid-scim-token", default_org_id: str = "") -> Settings:

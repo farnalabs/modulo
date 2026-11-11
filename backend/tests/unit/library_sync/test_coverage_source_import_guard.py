@@ -4,7 +4,7 @@ Historical failure (reproduced on 2026-10-11): running pytest with a
 single-module coverage source, e.g.
 
     pytest tests/unit/library_sync/test_sync.py \\
-        --cov=modulo.core.library_service.community --cov-report=
+        --cov=farna.core.library_service.community --cov-report=
 
 errored at fixture setup on every test with
 ``KeyError: 'pydantic.root_model'`` raised inside
@@ -60,7 +60,7 @@ def pytest_sessionstart(session):
     print("MCP_TYPES_IMPORT_OK", flush=True)
 '''
 
-_COV_SOURCE = "modulo.core.library_service.community"
+_COV_SOURCE = "farna.core.library_service.community"
 
 
 def test_single_module_cov_source_import_does_not_strand_pydantic_root_model(

@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     require_permission,
     require_system_or_org_admin,
     require_system_permission,
     require_target_org_role,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()
@@ -52,7 +52,7 @@ class TestRequirePermission:
         assert dep.permission_kind == "tenant"
 
     def test_unknown_permission_fails_fast_at_factory(self) -> None:
-        from modulo.auth.permissions import PermissionConfigurationError
+        from farna.auth.permissions import PermissionConfigurationError
 
         with pytest.raises(PermissionConfigurationError):
             require_permission("nonexistent.permission")
@@ -218,13 +218,13 @@ class TestRequireTargetOrgRoleMutations:
         assert excinfo.value.status_code == 403
 
     def test_invalid_min_role_is_configuration_error(self) -> None:
-        from modulo.auth.permissions import PermissionConfigurationError
+        from farna.auth.permissions import PermissionConfigurationError
 
         with pytest.raises(PermissionConfigurationError):
             require_target_org_role("org.email.manage", "superadmin")
 
     def test_min_role_mismatch_with_registry_is_configuration_error(self) -> None:
-        from modulo.auth.permissions import PermissionConfigurationError
+        from farna.auth.permissions import PermissionConfigurationError
 
         with pytest.raises(PermissionConfigurationError):
             require_target_org_role("org.email.manage", "operator")
@@ -283,7 +283,7 @@ class TestRequireInDevOperator:
         ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
     )
     def test_operator_allowed(self, permission: str) -> None:
-        from modulo.api.dependencies import require_in_dev_operator
+        from farna.api.dependencies import require_in_dev_operator
 
         assert require_in_dev_operator(_tenant("operator"), permission) is None
 
@@ -292,7 +292,7 @@ class TestRequireInDevOperator:
         ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
     )
     def test_admin_allowed(self, permission: str) -> None:
-        from modulo.api.dependencies import require_in_dev_operator
+        from farna.api.dependencies import require_in_dev_operator
 
         assert require_in_dev_operator(_tenant("admin"), permission) is None
 
@@ -301,7 +301,7 @@ class TestRequireInDevOperator:
         ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
     )
     def test_viewer_denied(self, permission: str) -> None:
-        from modulo.api.dependencies import require_in_dev_operator
+        from farna.api.dependencies import require_in_dev_operator
 
         with pytest.raises(HTTPException) as excinfo:
             require_in_dev_operator(_tenant("viewer"), permission)
@@ -314,7 +314,7 @@ class TestRequireInDevOperator:
         ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
     )
     def test_runner_denied(self, permission: str) -> None:
-        from modulo.api.dependencies import require_in_dev_operator
+        from farna.api.dependencies import require_in_dev_operator
 
         with pytest.raises(HTTPException) as excinfo:
             require_in_dev_operator(_tenant("runner"), permission)

@@ -37,7 +37,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0316_policy_gate_evaluation_mode"
 _PRE_UPGRADE_COLUMNS = {"id", "organisation_id", "eval_id", "node_id", "action", "version"}

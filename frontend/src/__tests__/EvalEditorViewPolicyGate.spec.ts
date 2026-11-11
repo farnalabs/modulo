@@ -36,7 +36,7 @@ const GATE_URL = '/api/v1/evals/{eval_id}/policy-gate'
 const GATE_TOGGLE_URL = '/api/v1/evals/{eval_id}/policy-gate/toggle'
 const EVAL_PUT_URL = '/api/v1/evals/{eval_id}'
 const BACKEND_EVALS_ROUTE = join(
-  __dirname, '..', '..', '..', 'backend', 'src', 'modulo', 'api', 'routes', 'evals.py',
+  __dirname, '..', '..', '..', 'backend', 'src', 'farna', 'api', 'routes', 'evals.py',
 )
 
 // openapi-fetch envelope helpers: non-2xx resolves as { data: undefined, error }

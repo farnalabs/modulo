@@ -30,7 +30,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows
+from farna.db.crud.guardrail_config import load_pipeline_guardrail_rows
 from tests.integration.test_guardrail_config_api import (
     _CONFIG_YAML,
     _apply,

@@ -16,9 +16,9 @@ import pytest
 from fastapi import HTTPException as FastAPIHTTPException
 from sqlalchemy.exc import ProgrammingError
 
-import modulo.api.mcp_server as ms
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
-from modulo.db.crud.pipeline import PipelineHasActiveRunsError
+import farna.api.mcp_server as ms
+from farna.core.mcp.scope_validator import MCPAuthorizationError
+from farna.db.crud.pipeline import PipelineHasActiveRunsError
 from tests.unit.api.test_mcp_server_coverage_gaps import _AuthContext, _make_session_context, _mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -28,13 +28,13 @@ _RESOURCE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _TEAM_B = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
 
-_MB_GET = "modulo.db.crud.model_backend.get_model_backend"
-_MB_UPDATE = "modulo.db.crud.model_backend.update_model_backend"
-_CI_GET = "modulo.db.crud.connector_instance.get_connector_instance"
-_CI_UPDATE = "modulo.db.crud.connector_instance.update_connector_instance"
-_MEMBERSHIP = "modulo.api.team_scope.team_membership_exists"
-_REBIND_GUARD = "modulo.api.routes.connectors._reject_re_scope_that_breaks_a_bound_pipeline"
-_AUDIT = "modulo.core.audit_logger.append_audit_event"
+_MB_GET = "farna.db.crud.model_backend.get_model_backend"
+_MB_UPDATE = "farna.db.crud.model_backend.update_model_backend"
+_CI_GET = "farna.db.crud.connector_instance.get_connector_instance"
+_CI_UPDATE = "farna.db.crud.connector_instance.update_connector_instance"
+_MEMBERSHIP = "farna.api.team_scope.team_membership_exists"
+_REBIND_GUARD = "farna.api.routes.connectors._reject_re_scope_that_breaks_a_bound_pipeline"
+_AUDIT = "farna.core.audit_logger.append_audit_event"
 
 
 def _row(*, org_id: uuid.UUID = _ORG_ID, owner: uuid.UUID | None = None, visibility: str = "org") -> SimpleNamespace:
@@ -169,11 +169,11 @@ class TestPipeline(_ToolBase):
         bindings = AsyncMock()
         team_check = AsyncMock()
         with (
-            patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=gate),
-            patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=transition),
-            patch("modulo.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=bindings),
-            patch("modulo.api.team_scope.validate_owner_team_for_create", new=team_check),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=update),
+            patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=gate),
+            patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=transition),
+            patch("farna.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=bindings),
+            patch("farna.api.team_scope.validate_owner_team_for_create", new=team_check),
+            patch("farna.db.crud.pipeline.update_pipeline", new=update),
         ):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, _TEAM_A, _ORG_ID)
         assert outcome == (None, _TEAM_A)
@@ -187,7 +187,7 @@ class TestPipeline(_ToolBase):
         principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         gone = FastAPIHTTPException(status_code=404, detail="Pipeline not found")
         with patch(
-            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=gone)
+            "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=gone)
         ):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
         assert outcome is None
@@ -196,9 +196,7 @@ class TestPipeline(_ToolBase):
         principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         boom = FastAPIHTTPException(status_code=403, detail="denied")
         with (
-            patch(
-                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=boom)
-            ),
+            patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=boom)),
             pytest.raises(FastAPIHTTPException),
         ):
             await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
@@ -210,13 +208,13 @@ class TestPipeline(_ToolBase):
         team_check = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
                 new=AsyncMock(return_value=locked),
             ),
-            patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-            patch("modulo.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
-            patch("modulo.api.team_scope.validate_owner_team_for_create", new=team_check),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=update),
+            patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+            patch("farna.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
+            patch("farna.api.team_scope.validate_owner_team_for_create", new=team_check),
+            patch("farna.db.crud.pipeline.update_pipeline", new=update),
         ):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
         assert outcome == (_TEAM_A, None)
@@ -226,13 +224,13 @@ class TestPipeline(_ToolBase):
         principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         with (
             patch(
-                "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+                "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
                 new=AsyncMock(return_value=_row(owner=None)),
             ),
-            patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-            patch("modulo.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
-            patch("modulo.api.team_scope.validate_owner_team_for_create", new=AsyncMock()),
-            patch("modulo.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+            patch("farna.api.routes.pipelines._enforce_stored_bindings_on_team_change", new=AsyncMock()),
+            patch("farna.api.team_scope.validate_owner_team_for_create", new=AsyncMock()),
+            patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
         ):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, _TEAM_A, _ORG_ID)
         assert outcome is None

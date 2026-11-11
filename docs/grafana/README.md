@@ -5,7 +5,7 @@ Pre-built Grafana dashboards for Farna Control's OpenTelemetry metrics. These pr
 > **Known gap (re-verified 2026-10-15):** the shipped collector config
 > (`configs/otel-collector.yml`) has **no `traces` pipeline and no spanmetrics
 > connector** - only a `metrics` pipeline, so spans are not ingested at all. Even
-> if they were, the bridge (`backend/src/modulo/otel_bridge/handler.py`) emits
+> if they were, the bridge (`backend/src/farna/otel_bridge/handler.py`) emits
 > spans named `modulo.pipeline.run` and `langgraph.chain/llm/tool.*`, not the
 > `pipeline.run` / `node.execute` names these dashboards filter on, with
 > `pipeline_id` / `organisation_id` truncated-hash attributes (there is no
@@ -13,7 +13,7 @@ Pre-built Grafana dashboards for Farna Control's OpenTelemetry metrics. These pr
 > instruments, and none of the two the cost dashboard queries
 > (`modulo_cost_usd_total`, `modulo_llm_tokens_total`), are emitted either.
 > (Sixteen *other* `modulo_cost_*` instruments **are** emitted, by
-> `backend/src/modulo/core/cost_controller/breakdown/metrics.py` - ledger,
+> `backend/src/farna/core/cost_controller/breakdown/metrics.py` - ledger,
 > component and probe counters. They are not the ones these panels query, and
 > the collector's Prometheus exporter prefixes them a second time - see
 > [Metric prefix](#metric-prefix) below.)

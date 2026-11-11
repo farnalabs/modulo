@@ -6,7 +6,7 @@ Asserts GraphValidator.validate_for_run() blocks on real DB-backed snapshots.
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.graph_validator import GraphValidator
+from farna.core.graph_validator import GraphValidator
 
 pytestmark = pytest.mark.integration
 

@@ -13,7 +13,7 @@ QA-lens additions cover mixed/edge inputs, non-string coercion, length-cap
 boundary semantics and idempotency so the defence is proven end-to-end.
 """
 
-from modulo.core.sanitize_log import (
+from farna.core.sanitize_log import (
     DEFAULT_LOG_LIMIT,
     sanitise_log_value,
 )

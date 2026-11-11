@@ -1,6 +1,6 @@
 """Structural validation tests for canonical library integration primitives.
 
-Every integration primitive exported by ``modulo.core.library.integrations``
+Every integration primitive exported by ``farna.core.library.integrations``
 must be a well-formed definition: expected metadata, a default config, and
 credential fields each describing a type, a description, and whether they are
 required.  No DB — pure data checks.
@@ -13,8 +13,8 @@ from typing import Any, cast
 
 import pytest
 
-from modulo.core.library.integrations import __all__ as integration_exports
-from modulo.core.library.integrations import definitions as integration_defs
+from farna.core.library.integrations import __all__ as integration_exports
+from farna.core.library.integrations import definitions as integration_defs
 
 from .helpers import INTEGRATIONS, VALID_CONNECTOR_BINDING_TYPES
 
@@ -96,9 +96,9 @@ def test_integration_names_are_unique() -> None:
 def test_connector_types_are_known() -> None:
     """connector_type must resolve to a registered ConnectorType, 'custom',
     or a workflow connector-binding type used by the pipeline library."""
-    from modulo.connectors.base import ConnectorType
-    from modulo.core.library.workflows import __all__ as workflow_exports
-    from modulo.core.library.workflows import definitions as workflow_defs
+    from farna.connectors.base import ConnectorType
+    from farna.core.library.workflows import __all__ as workflow_exports
+    from farna.core.library.workflows import definitions as workflow_defs
 
     binding_types = {
         step["connector_binding"]["type"]

@@ -25,9 +25,9 @@ def _valid_stream_payload() -> dict[str, Any]:
 def _make_client(mock_session: Any = None):
     from fastapi.testclient import TestClient
 
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.main import app
-    from modulo.settings import get_settings
+    from farna.api.dependencies import get_db_session
+    from farna.api.main import app
+    from farna.settings import get_settings
 
     async def _override_session():
         yield mock_session
@@ -40,7 +40,7 @@ def _make_client(mock_session: Any = None):
 
 # ── Real-route harness helpers ───────────────────────────────────────────
 #
-# These drive the REAL production route objects (modulo.api.main.app +
+# These drive the REAL production route objects (farna.api.main.app +
 # assistant routes) with dependency overrides for the seams the BDD
 # scenario owns (auth + engine db), and use-site-only seams patched at
 # the engine call. Nothing in production is reimplemented here.
@@ -52,7 +52,7 @@ def _restore_overrides(saved: dict[Any, Any]) -> Callable[[], None]:
     """Build a finalizer restoring dependency-overrides to their saved state."""
 
     def _restore() -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         for key, value in saved.items():
             if value is _MISSING:
@@ -65,8 +65,8 @@ def _restore_overrides(saved: dict[Any, Any]) -> Callable[[], None]:
 
 def _auth_overrides(role: str) -> dict[Any, Any]:
     """Build dependency overrides that authenticate as USER_ID with ``role``."""
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.auth.dependencies import get_current_tenant_user, get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 
     principal = TenantPrincipal(
         username="assistant-user",
@@ -98,7 +98,7 @@ def _install_overrides(request: pytest.FixtureRequest, overrides: dict[Any, Any]
     needs the real dependency chain; scenarios using the ``client`` fixture
     never reach that teardown.
     """
-    from modulo.api.main import app
+    from farna.api.main import app
 
     saved = {key: app.dependency_overrides.get(key, _MISSING) for key in overrides}
     app.dependency_overrides.update(overrides)
@@ -338,8 +338,8 @@ def create_assistant_session(provider: str, model: str, request, ctx) -> None:
     mock_ses = _make_mock_session(provider=provider, model=model, name="New Chat")
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.ChatSession", new_callable=MagicMock) as mock_cls,
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.ChatSession", new_callable=MagicMock) as mock_cls,
     ):
         inst = MagicMock()
         inst.id = mock_ses.id
@@ -380,7 +380,7 @@ def list_assistant_sessions(request, ctx) -> None:
     count_result.__iter__ = MagicMock(return_value=iter([]))
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -408,7 +408,7 @@ def get_assistant_session(request, ctx) -> None:
     mock_exec.scalar = MagicMock(return_value=0)
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -428,7 +428,7 @@ def get_assistant_session(request, ctx) -> None:
 @when(parsers.parse('I get a assistant session by id "{session_id}"'))
 def get_assistant_session_by_id(session_id: str, request, ctx) -> None:
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -460,7 +460,7 @@ def rename_assistant_session(request, ctx) -> None:
     ses = ctx.get("sessions", {}).get("session-1", _make_mock_session())
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -492,7 +492,7 @@ def delete_assistant_session(request, ctx) -> None:
     ses = ctx.get("sessions", {}).get("session-w-msgs", ctx.get("sessions", {}).get("session-1", _make_mock_session()))
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -524,7 +524,7 @@ def get_other_users_session(request, ctx) -> None:
     other_user_ses = _make_mock_session(account_id=uuid.uuid4())
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -564,7 +564,7 @@ def append_message(role: str, request, ctx, content: str = "Hello") -> None:
         ctx["sessions"]["session-1"] = ses
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -601,7 +601,7 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
     parent_id = ctx.get("parent_message_id", uuid.uuid4())
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -634,7 +634,7 @@ def append_message_with_parent(role: str, content: str, request, ctx) -> None:
 @when(parsers.parse('I append a "{role}" message to session "{session_id}"'))
 def append_message_to_session_id(role: str, session_id: str, request, ctx) -> None:
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -680,7 +680,7 @@ def list_messages_for_session(request, ctx) -> None:
     mock_exec.scalar = MagicMock(return_value=len(msgs))
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -700,7 +700,7 @@ def list_messages_for_session(request, ctx) -> None:
 @when(parsers.parse('I list messages for session "{session_id}"'))
 def list_messages_for_session_id(session_id: str, request, ctx) -> None:
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -735,7 +735,7 @@ def append_message_with_tool_calls(request, ctx) -> None:
     }
 
     with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -777,7 +777,7 @@ def get_admin_assistant_config(request, ctx) -> None:
     config_value = ctx.get("config", {})
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -798,9 +798,9 @@ def get_admin_assistant_config(request, ctx) -> None:
 
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
 
-        from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.api.main import app
+        from farna.auth.dependencies import get_current_user
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         viewer_auth = getattr(request.node, "_viewer_auth", False)
         if viewer_auth:
@@ -864,7 +864,7 @@ def _update_assistant_config(request: Any, ctx: dict, updates: dict) -> None:
     ctx["config"] = current
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -880,9 +880,9 @@ def _update_assistant_config(request: Any, ctx: dict, updates: dict) -> None:
         mock_exec.scalar_one_or_none = MagicMock(return_value=entry)
         mock_session_inst.execute = AsyncMock(return_value=mock_exec)
 
-        from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.api.main import app
+        from farna.auth.dependencies import get_current_user
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="testuser",
@@ -911,7 +911,7 @@ def create_skill(name: str, body: str, request, ctx) -> None:
         return
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -947,7 +947,7 @@ def list_org_skills(request, ctx) -> None:
     mock_exec.scalars = MagicMock(return_value=skills)
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -968,7 +968,7 @@ def update_org_skill(request, ctx) -> None:
     skill = next(iter(ctx.get("org_skills", {}).values()))
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -1000,7 +1000,7 @@ def delete_org_skill(request, ctx) -> None:
     skill = next(iter(ctx.get("org_skills", {}).values()))
 
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -1036,7 +1036,7 @@ def list_user_skills(request, ctx) -> None:
     mock_exec.scalars = MagicMock(return_value=mock_scalars)
 
     with (
-        patch("modulo.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=skills),
+        patch("farna.api.routes.me.get_user_skills", new_callable=AsyncMock, return_value=skills),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -1065,7 +1065,7 @@ def list_user_skills(request, ctx) -> None:
 @when(parsers.parse('I update an org skill by id "{skill_id}" with name "{name}"'))
 def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -1095,7 +1095,7 @@ def update_org_skill_by_id(skill_id: str, name: str, request, ctx) -> None:
 @when(parsers.parse('I delete an org skill by id "{skill_id}"'))
 def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
     with (
-        patch("modulo.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_assistant.set_rls_org", new_callable=AsyncMock),
     ):
         mock_session_inst = AsyncMock()
         harden_session_double(mock_session_inst)
@@ -1139,9 +1139,9 @@ def check_assistant_access(request, ctx) -> None:
     engine db double and the permission-mode seams are the scenario's own
     mocks, not invented new pieces.
     """
-    from modulo.api.dependencies import get_db_session
-    from modulo.api.main import app
-    from modulo.api.routes import assistant as assistant_routes
+    from farna.api.dependencies import get_db_session
+    from farna.api.main import app
+    from farna.api.routes import assistant as assistant_routes
 
     class _ChatSessionOwned:
         """ChatSession double owned by USER_ID (the Background's chat session)."""
@@ -1196,7 +1196,7 @@ def evaluate_assistant_access_control(ctx) -> None:
     calls the production function against a stored config row instead, so the
     scenarios cover the real gate rather than a copy of it.
     """
-    from modulo.core.assistant.config_service import AssistantConfigService
+    from farna.core.assistant.config_service import AssistantConfigService
 
     access_rules = ctx.get("access_rules") or {"user_ids": [], "team_ids": [], "org_roles": []}
     role = ctx.get("org_role", "admin")
@@ -1413,8 +1413,8 @@ def config_has_additional_guidance(guidance: str, request) -> None:
 
 @when("I GET available providers")
 def get_available_providers(request, ctx) -> None:
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
 
     viewer_auth = getattr(request.node, "_viewer_auth", False)
     if viewer_auth:
@@ -1424,7 +1424,7 @@ def get_available_providers(request, ctx) -> None:
         request.node._resp = resp
         return
 
-    from modulo.api.main import app
+    from farna.api.main import app
 
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
@@ -1623,8 +1623,8 @@ def _run_navigation_engine(ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[
     function under test is the same one the SSE stream loop uses, so the
     scenario asserts production behaviour rather than a reimplementation.
     """
-    from modulo.api.routes import assistant as assistant_routes
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.api.routes import assistant as assistant_routes
+    from farna.auth.jwt import TenantPrincipal
 
     req = assistant_routes.StreamRequest(**_valid_stream_payload())
     stream_ctx = assistant_routes._StreamContext(
@@ -1652,7 +1652,7 @@ def _run_navigation_engine(ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[
 
 @when("the assistant builds its navigation tool definitions")
 def build_navigation_tool_definitions(ctx) -> None:
-    from modulo.api.routes import assistant as assistant_routes
+    from farna.api.routes import assistant as assistant_routes
 
     ctx["nav_tool_names"] = sorted(assistant_routes.NAV_TOOL_NAMES)
 

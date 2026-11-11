@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
-from modulo.connectors.ticket_tracker.base import TicketFilter
-from modulo.connectors.ticket_tracker.github import GitHubTicketTracker
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult, HealthResult
+from farna.connectors.ticket_tracker.base import TicketFilter
+from farna.connectors.ticket_tracker.github import GitHubTicketTracker
 
 
 def _response(status_code: int, **kwargs: object) -> httpx.Response:

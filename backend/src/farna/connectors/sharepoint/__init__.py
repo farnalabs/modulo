@@ -1,0 +1,234 @@
+"""SharePointConnector — async Microsoft Graph API connector for SharePoint."""
+
+from collections.abc import Sequence
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+import httpx
+
+from farna.connectors._egress import egress_ssl_context
+from farna.connectors._safe_cursor import safe_cursor as _safe_cursor
+from farna.connectors._safe_page import safe_records as _safe_records
+from farna.connectors.base import (
+    ConnectorBase,
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorResult,
+    ConnectorType,
+    HealthResult,
+    health_check_failure,
+)
+from farna.core.ssrf import pinned_async_client_sync
+
+# Pagination query parameter name shared across list endpoints (S1192).
+_SKIP_TOKEN = "$skiptoken"  # nosec B105 — Graph pagination query-param name, not a credential
+
+
+class SharePointConnector(ConnectorBase):
+    """Read/write SharePoint sites, lists, and files via Microsoft Graph API.
+
+    Uses OAuth 2.0 Bearer token authentication.
+
+    Supported query resources:
+      "sites"      — list SharePoint sites; filters: {"search": "..."}
+      "lists"      — list lists in a site; filters: {"site_id": "..."}
+      "list_items" — get items from a list; filters: {"site_id": "...", "list_id": "..."}
+      "drive"      — list files in a drive; filters: {"site_id": "...", "drive_id": "...", "path": "..."}
+      "file"       — read file content; filters: {"site_id": "...", "drive_id": "...", "path": "..."}
+
+    Supported write resources:
+      "list_item"  — create a list item; data: {"site_id": "...", "list_id": "...", "fields": {...}}
+      "file"       — upload/update a file; data: {"site_id": "...", "drive_id": "...", "path": "...", "content": "..."}
+    """
+
+    _BASE_URL = "https://graph.microsoft.com/v1.0"
+
+    def _page(
+        self,
+        body: object,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str | None, int]:
+        """Safely extract records, next cursor, and total from a list page.
+
+        ``@odata.nextLink`` pagination cursors are only emitted when the link
+        is a non-empty string carrying a non-empty ``$skiptoken``, mirroring
+        the microsoft_teams / Snyk cursor-hardening programme.
+        """
+        records = _safe_records(body, "value")
+        next_cursor: str | None = None
+        if isinstance(body, dict):
+            next_link = body.get("@odata.nextLink", "")
+            if isinstance(next_link, str) and next_link:
+                skiptoken = parse_qs(urlparse(next_link).query).get(_SKIP_TOKEN, [""])[0]
+                next_cursor = _safe_cursor(skiptoken)
+        return records[: limit or len(records)], next_cursor, len(records)
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
+    @property
+    def connector_type(self) -> ConnectorType:
+        return ConnectorType.SHAREPOINT
+
+    def _client(self) -> httpx.AsyncClient:
+        return pinned_async_client_sync(
+            self._BASE_URL,
+            base_url=self._BASE_URL,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/json",
+            },
+            timeout=30,
+            verify=egress_ssl_context(self),
+        )
+
+    async def health_check(self) -> HealthResult:
+        """Verify connectivity by fetching the user's SharePoint sites root."""
+        try:
+            async with self._client() as client:
+                r = await client.get("/sites/root")
+
+            if r.status_code != 200:
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
+
+            site_info = r.json()
+            display_name = site_info.get("displayName", "") if isinstance(site_info, dict) else ""
+            return HealthResult(ok=True, detail=display_name)
+        except httpx.HTTPStatusError as exc:
+            return HealthResult(
+                ok=False,
+                detail=self._redacted_detail(f"SharePoint API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
+            )
+        except httpx.TimeoutException:
+            return HealthResult(ok=False, detail="SharePoint API timeout")
+        except httpx.ConnectError:
+            return HealthResult(ok=False, detail="SharePoint API connection error")
+        except ValueError as exc:
+            return health_check_failure(exc, self._redacted_detail)
+
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        async with self._client() as client:
+            match q.resource:
+                case "sites":
+                    return await self._query_sites(client, q)
+                case "lists":
+                    return await self._query_lists(client, q)
+                case "list_items":
+                    return await self._query_list_items(client, q)
+                case "drive":
+                    return await self._query_drive(client, q)
+                case "file":
+                    return await self._query_file(client, q)
+                case _:
+                    raise ValueError(f"Unsupported SharePoint resource: {q.resource!r}")
+
+    @staticmethod
+    def _page_params(q: ConnectorQuery, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Merge the limit/cursor pagination filters into request params."""
+        merged = dict(params or {})
+        if q.limit:
+            merged["$top"] = q.limit
+        if q.cursor:
+            merged[_SKIP_TOKEN] = q.cursor
+        return merged
+
+    async def _query_collection(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, Any],
+        limit: int,
+    ) -> ConnectorResult:
+        """GET a paged collection and wrap it as a ConnectorResult."""
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        records, next_cursor, total = self._page(r.json(), limit)
+        return ConnectorResult(records=records, next_cursor=next_cursor, total=total)
+
+    async def _query_sites(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, Any] = {}
+        search = q.filters.get("search")
+        if search:
+            params["search"] = search
+        return await self._query_collection(client, "/sites", self._page_params(q, params), q.limit)
+
+    async def _query_lists(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        if not site_id:
+            raise ValueError("SharePoint lists query requires 'site_id' filter")
+        return await self._query_collection(client, f"/sites/{site_id}/lists", self._page_params(q), q.limit)
+
+    async def _query_list_items(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        list_id = q.filters.get("list_id")
+        if not site_id or not list_id:
+            raise ValueError("SharePoint list_items query requires 'site_id' and 'list_id' filters")
+        url = f"/sites/{site_id}/lists/{list_id}/items"
+        return await self._query_collection(client, url, self._page_params(q), q.limit)
+
+    async def _query_drive(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        drive_id = q.filters.get("drive_id")
+        if not site_id or not drive_id:
+            raise ValueError("SharePoint drive query requires 'site_id' and 'drive_id' filters")
+        path = q.filters.get("path", "/")
+        if path == "/" or not path:
+            url = f"/sites/{site_id}/drives/{drive_id}/root/children"
+        else:
+            url = f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/children"
+        return await self._query_collection(client, url, self._page_params(q), q.limit)
+
+    async def _query_file(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        site_id = q.filters.get("site_id")
+        drive_id = q.filters.get("drive_id")
+        path = q.filters.get("path")
+        if not site_id or not drive_id or not path:
+            raise ValueError("SharePoint file query requires 'site_id', 'drive_id', and 'path' filters")
+        r = await client.get(f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content")
+        r.raise_for_status()
+        return ConnectorResult(records=[{"path": path, "content": r.text}])
+
+    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        async with self._client() as client:
+            match payload.resource:
+                case "list_item":
+                    site_id = payload.data.get("site_id")
+                    list_id = payload.data.get("list_id")
+                    fields = payload.data.get("fields")
+                    if not site_id or not list_id or fields is None:
+                        raise ValueError(
+                            "SharePoint list_item write requires 'site_id', 'list_id', and 'fields' in data",
+                        )
+                    r = await client.post(
+                        f"/sites/{site_id}/lists/{list_id}/items",
+                        json={"fields": fields},
+                    )
+                    r.raise_for_status()
+                    created: dict[str, Any] = r.json()
+                    return created
+
+                case "file":
+                    site_id = payload.data.get("site_id")
+                    drive_id = payload.data.get("drive_id")
+                    path = payload.data.get("path")
+                    content = payload.data.get("content")
+                    if not site_id or not drive_id or not path or content is None:
+                        raise ValueError(
+                            "SharePoint file write requires 'site_id', 'drive_id', 'path', and 'content' in data",
+                        )
+                    r = await client.put(
+                        f"/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content",
+                        content=content,
+                        headers={"Content-Type": "application/octet-stream"},
+                    )
+                    r.raise_for_status()
+                    result: dict[str, Any] = r.json()
+                    return result
+
+                case _:
+                    raise ValueError(f"Unsupported SharePoint write resource: {payload.resource!r}")

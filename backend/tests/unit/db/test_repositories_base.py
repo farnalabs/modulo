@@ -8,7 +8,7 @@ from sqlalchemy import Select, column
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories.base import BaseRepository, extract_orm_entity
+from farna.db.repositories.base import BaseRepository, extract_orm_entity
 
 
 class EntityWithOrg:

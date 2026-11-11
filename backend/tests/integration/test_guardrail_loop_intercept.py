@@ -21,14 +21,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.eval_engine import EvalEngine
-from modulo.core.guardrails.loop_intercept import (
+from farna.core.eval_engine import EvalEngine
+from farna.core.guardrails.loop_intercept import (
     LoopInterceptCallbackServer,
     LoopInterceptConfig,
     load_loop_intercept_guardrails,
     persist_loop_interception_audit,
 )
-from modulo.core.guardrails.sandbox_bridge import BridgeClient
+from farna.core.guardrails.sandbox_bridge import BridgeClient
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = [

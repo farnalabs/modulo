@@ -1,6 +1,6 @@
 """Route-level coverage tests for the per-agent runner bindings endpoints (FAR-592 / D6).
 
-Covers the list / replace / delete binding routes in ``modulo.api.routes.agents``:
+Covers the list / replace / delete binding routes in ``farna.api.routes.agents``:
 happy paths, agent-not-found (404), org-mismatch (404), the replace IntegrityError
 -> 409 mapping, and the list SQLAlchemyError -> 503 mapping.
 
@@ -20,11 +20,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -35,7 +35,7 @@ _BACKEND_ID = uuid.uuid4()
 _BINDING_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
-_PREFIX = "modulo.api.routes.agents."
+_PREFIX = "farna.api.routes.agents."
 # The route imports the binding CRUD functions by name, so they resolve from the
 # route module namespace. Patch there (not the crud module) for the route to pick
 # up the mocked implementations.

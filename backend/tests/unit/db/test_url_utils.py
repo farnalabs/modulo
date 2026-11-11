@@ -1,6 +1,6 @@
 """Unit tests for the promoted zero-dependency URL helpers (FAR-671, FAR-1440).
 
-``modulo.db.url_utils`` is the SINGLE implementation of the boot URL contract
+``farna.db.url_utils`` is the SINGLE implementation of the boot URL contract
 (container bootstrap, Settings validator, native launcher). These tests lock:
 
 * ``fix_database_url`` semantics — legacy prefix rewrites, ``sslmode``
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.db.url_utils import (
+from farna.db.url_utils import (
     derive_system_database_url,
     fix_database_url,
     split_engine_sslmode,

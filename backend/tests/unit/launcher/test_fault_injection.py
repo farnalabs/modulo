@@ -46,8 +46,8 @@ from typing import Any
 
 import pytest
 
-import modulo.launcher.secrets_file as secrets_file_module
-from modulo.launcher.initdb import (
+import farna.launcher.secrets_file as secrets_file_module
+from farna.launcher.initdb import (
     GATE_INITDB_PRE_RENAME,
     InitdbError,
     bootstrap_pgdata,
@@ -63,8 +63,8 @@ def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
     bypass_platform_seams(
         monkeypatch,
-        "modulo.launcher.secrets_file",
-        "modulo.launcher.initdb",
+        "farna.launcher.secrets_file",
+        "farna.launcher.initdb",
     )
 
 
@@ -87,7 +87,7 @@ _KILL_DRIVER = textwrap.dedent(
     import sys
     from pathlib import Path
 
-    import modulo.launcher.initdb as initdb
+    import farna.launcher.initdb as initdb
 
     def _fake_run(argv):
         index = argv.index("--pgdata")
@@ -140,13 +140,13 @@ def test_sigkill_mid_initdb_leaves_nothing_to_adopt_and_next_boot_heals(
     the recovery assertions run in-process with the fake runner instead:
     the sweep + fresh bootstrap land with the same modules under the test.
     """
-    from modulo.launcher.initdb import _REGISTERED_GATES  # noqa: F401  (import integrity)
+    from farna.launcher.initdb import _REGISTERED_GATES  # noqa: F401  (import integrity)
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     pgdata = data_dir / "pgdata"
 
-    from modulo.launcher.supervisor import reconcile_orphans
+    from farna.launcher.supervisor import reconcile_orphans
 
     env_extra = {"PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src")}
     proc = _spawn_kill_driver(pgdata, env_extra)
@@ -173,7 +173,7 @@ def test_sigkill_mid_initdb_leaves_nothing_to_adopt_and_next_boot_heals(
     # 4. The fresh bootstrap on the healed dir succeeds (fake runner).
     monkeypatch = pytest.MonkeyPatch()
     try:
-        monkeypatch.setattr("modulo.launcher.initdb._run_command", _fake_initdb_runner)
+        monkeypatch.setattr("farna.launcher.initdb._run_command", _fake_initdb_runner)
         bootstrap_pgdata(pgdata, password="fresh-pw")
     finally:
         monkeypatch.undo()
@@ -183,7 +183,7 @@ def test_sigkill_mid_initdb_leaves_nothing_to_adopt_and_next_boot_heals(
 @requires_posix
 def test_sigkill_mid_initdb_resume_completes_the_bootstrap(tmp_path: Path) -> None:
     """Resuming from the same deterministic gate completes the promotion."""
-    from modulo.launcher.initdb import _REGISTERED_GATES  # noqa: F401  (import integrity)
+    from farna.launcher.initdb import _REGISTERED_GATES  # noqa: F401  (import integrity)
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -221,7 +221,7 @@ def test_sigkill_debris_is_never_adopted_as_a_datadir(tmp_path: Path) -> None:
 def test_validate_target_dir_refuses_a_corrupt_cluster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """initdb refuses non-empty targets even when the fake runner succeeded."""
     monkeypatch.setattr(
-        "modulo.launcher.initdb._run_command",
+        "farna.launcher.initdb._run_command",
         _fake_initdb_runner_writes_stale_marks,
     )
     target = tmp_path / "pgdata"
@@ -280,7 +280,7 @@ def _build_crashy_supervisor(
     degraded_path: Path | None,
 ) -> tuple[object, FakeClock]:
     """A supervisor whose postgres child crashes on every tick."""
-    from modulo.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
+    from farna.launcher.supervisor import ChildSpec, Supervisor, SupervisorKnobs
 
     clock = FakeClock()
     supervisor = Supervisor(
@@ -327,7 +327,7 @@ def test_crash_ladder_trips_terminal_degraded_and_surfaces_in_status(
     backoff_max: float,
 ) -> None:
     """N crashes inside the window -> terminal degraded + status surfaced."""
-    from modulo.launcher.supervisor import (
+    from farna.launcher.supervisor import (
         DEGRADED_FILENAME,
         collect_status,
     )
@@ -440,7 +440,7 @@ def test_sliding_window_eviction_keeps_a_lone_crash_alive() -> None:
 @requires_posix
 def test_second_concurrent_start_refuses_naming_holder_pid_and_mode(tmp_path: Path) -> None:
     """A running start holds the lock; a second start refuses and names it."""
-    from modulo.launcher.supervisor import DataDirLock, DataDirLockError
+    from farna.launcher.supervisor import DataDirLock, DataDirLockError
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -464,7 +464,7 @@ def test_second_concurrent_start_refuses_naming_holder_pid_and_mode(tmp_path: Pa
 
 def test_entry_scrub_removes_the_poisoned_boot_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``scrub_os_environment`` (run_start's first action) clears the poison."""
-    from modulo.launcher.env_safety import scrub_os_environment
+    from farna.launcher.env_safety import scrub_os_environment
 
     monkeypatch.setenv("PGHOST", "foreign.example")
     monkeypatch.setenv("PGPASSWORD", "leaked-password")
@@ -491,7 +491,7 @@ def test_poisoned_pythonpath_child_loads_no_foreign_code(tmp_path: Path, monkeyp
     the child's environment, and the child must then be unable to load
     foreign code from it.
     """
-    from modulo.launcher.env_safety import scrub_environment
+    from farna.launcher.env_safety import scrub_environment
 
     poison_dir = tmp_path / "poison-tree"
     poison_dir.mkdir()
@@ -535,8 +535,8 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
     tmp_path: Path,
 ) -> None:
     """A pre-squatted port from state.json: doctor names the collision."""
-    from modulo.launcher.doctor import check_port_collisions
-    from modulo.launcher.state import LauncherState
+    from farna.launcher.doctor import check_port_collisions
+    from farna.launcher.state import LauncherState
 
     pg_port = 15432
     data_dir = tmp_path / "data"
@@ -569,7 +569,7 @@ def test_occupied_persisted_port_gets_a_precise_error_and_remediation(
 )
 def test_unwritable_datadir_refuses_the_boot_with_actionable_message(tmp_path: Path) -> None:
     """chmod 0500 the data dir; doctor must fail it with the actionable fix."""
-    from modulo.launcher.doctor import check_data_dir
+    from farna.launcher.doctor import check_data_dir
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -601,7 +601,7 @@ _requires_posix_secrets = pytest.mark.skipif(
 
 def _seed_populated_datadir(tmp_path: Path, *, key: bytes) -> tuple[Path, secrets_file_module.LauncherSecrets, Any]:
     """A bootstrapped-shaped data dir: secrets.json + state.json + cluster."""
-    from modulo.launcher.state import LauncherState, save_state
+    from farna.launcher.state import LauncherState, save_state
 
     state = LauncherState(postgres_port=15432, redis_port=16379, api_port=18000)
     secrets = secrets_file_module.LauncherSecrets(
@@ -637,7 +637,7 @@ def test_reinstall_reattaches_with_credential_continuity_no_re_bootstrap(
     reloaded = secrets_file_module.load_or_create(data_dir / secrets_file_module.SECRETS_FILENAME)
     # Idempotent credentials: the reload NEVER regenerates.
     assert reloaded == secrets
-    from modulo.launcher.state import load_state
+    from farna.launcher.state import load_state
 
     assert load_state(data_dir / "state.json", reloaded.state_hmac_key) == state_before
     # And the cluster's initdb sentinel is intact: no re-bootstrap happened.
@@ -684,7 +684,7 @@ def test_disk_full_drives_the_data_dir_check_to_a_quantified_failure(
     disk-full failure path is exercised — CI must never skip past it."""
     import shutil as shutil_module
 
-    from modulo.launcher import doctor as doctor_module
+    from farna.launcher import doctor as doctor_module
 
     mountpoint = _try_mount_tiny_tmpfs(tmp_path)
     data_dir = mountpoint / "data" if mountpoint is not None else tmp_path / "data"
@@ -717,7 +717,7 @@ def test_disk_full_drives_the_data_dir_check_to_a_quantified_failure(
 
 def test_newer_launcher_state_refuses_boot_cleanly(tmp_path: Path) -> None:
     """A state.json written by a NEWER launcher refuses the (older) boot."""
-    from modulo.launcher.state import SCHEMA_VERSION, LauncherState, StateVersionError, load_state, save_state
+    from farna.launcher.state import SCHEMA_VERSION, LauncherState, StateVersionError, load_state, save_state
 
     key = bytes(range(32))
     ahead = LauncherState(
@@ -735,7 +735,7 @@ def test_newer_launcher_state_refuses_boot_cleanly(tmp_path: Path) -> None:
 @pytest.mark.skipif(os.name != "posix", reason="/proc liveness is Linux-first (P1a)")
 def test_upgrade_swap_phase_refuses_a_live_holder_naming_pid(tmp_path: Path) -> None:
     """The destructive swap phase never races a LIVE lock holder."""
-    from modulo.launcher.upgrade import UpgradeError, assert_not_held
+    from farna.launcher.upgrade import UpgradeError, assert_not_held
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -748,7 +748,7 @@ def test_upgrade_swap_phase_refuses_a_live_holder_naming_pid(tmp_path: Path) -> 
 @requires_posix
 def test_restore_refuses_while_a_start_holds_the_data_dir_lock(tmp_path: Path) -> None:
     """restore/backup refuse while the launcher holds the exclusive lock."""
-    from modulo.launcher.supervisor import DataDirLock
+    from farna.launcher.supervisor import DataDirLock
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -757,7 +757,7 @@ def test_restore_refuses_while_a_start_holds_the_data_dir_lock(tmp_path: Path) -
     try:
         import click
 
-        from modulo.cli.backup import _acquire_data_lock
+        from farna.cli.backup import _acquire_data_lock
 
         with pytest.raises(click.ClickException) as excinfo:
             _acquire_data_lock(tmp_path / "data", mode="restore")

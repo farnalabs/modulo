@@ -9,11 +9,11 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -98,9 +98,9 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 def test_pipeline_references_404_for_nonexistent_backend(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=None),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=None),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{uuid.uuid4()}/pipeline-references")
     assert resp.status_code == 404
@@ -109,10 +109,10 @@ def test_pipeline_references_404_for_nonexistent_backend(client: TestClient) -> 
 def test_pipeline_references_empty_state(client: TestClient) -> None:
     page_result = MagicMock(items=[], total=0, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 200
@@ -131,12 +131,12 @@ def test_pipeline_references_pagination(client: TestClient) -> None:
     }
     page_result = MagicMock(items=[ref], total=5, page=2, page_size=1)
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
         patch(
-            "modulo.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result
+            "farna.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result
         ) as mock_refs,
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(
             f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references",
@@ -173,10 +173,10 @@ def test_pipeline_references_returns_both_types(client: TestClient) -> None:
     ]
     page_result = MagicMock(items=refs, total=2, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
-        patch("modulo.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 200
@@ -195,13 +195,13 @@ def test_pipeline_references_programming_error_returns_501(client: TestClient) -
     from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
         patch(
-            "modulo.api.routes.model_backends.list_pipeline_references_for_backend",
+            "farna.api.routes.model_backends.list_pipeline_references_for_backend",
             side_effect=ProgrammingError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 501
@@ -212,13 +212,13 @@ def test_pipeline_references_sqlalchemy_error_returns_503(client: TestClient) ->
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
         patch(
-            "modulo.api.routes.model_backends.list_pipeline_references_for_backend",
+            "farna.api.routes.model_backends.list_pipeline_references_for_backend",
             side_effect=SQLAlchemyError_("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 503
@@ -226,13 +226,13 @@ def test_pipeline_references_sqlalchemy_error_returns_503(client: TestClient) ->
 
 def test_pipeline_references_exception_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
+        patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
         patch(
-            "modulo.api.routes.model_backends.list_pipeline_references_for_backend",
+            "farna.api.routes.model_backends.list_pipeline_references_for_backend",
             side_effect=TypeError("unexpected None"),
         ),
-        patch("modulo.api.routes.model_backends.set_rls_org"),
-        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+        patch("farna.api.routes.model_backends.set_rls_org"),
+        patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}/pipeline-references")
     assert resp.status_code == 500

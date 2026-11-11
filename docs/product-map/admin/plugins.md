@@ -3,10 +3,10 @@ id: feat-plugins
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/plugins.py
-  - backend/src/modulo/core/plugin_registry
-  - backend/src/modulo/core/plugin_registry/__init__.py
-  - backend/src/modulo/util/__init__.py
+  - backend/src/farna/api/routes/plugins.py
+  - backend/src/farna/core/plugin_registry
+  - backend/src/farna/core/plugin_registry/__init__.py
+  - backend/src/farna/util/__init__.py
 unit-tests:
   - backend/tests/unit/api/test_plugin_registry_bdd.py
   - backend/tests/unit/plugin_registry/test_plugin_registry.py
@@ -22,8 +22,8 @@ status: partial
 # Plugin Registry
 
 Read-only registry surface for third-party plugins discovered at startup via
-standard `importlib.metadata` entry-point groups (`modulo.connectors`,
-`modulo.model_backends`, `modulo.evals`, `modulo.schema_types`). Administrators
+standard `importlib.metadata` entry-point groups (`farna.connectors`,
+`farna.model_backends`, `modulo.evals`, `modulo.schema_types`). Administrators
 see installed plugins, their full manifests, and health status over
 `/api/v1/plugins`; plugin install/uninstall/upgrade stays in pip. The admin UI
 is deferred from the MVP nav (`visibility: private_preview`, FAR-544), but the
@@ -34,7 +34,7 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 - [x] Plugins are discovered at startup and available through the registry's
       `list_plugins` / `get_plugin` queries
-      (`backend/src/modulo/core/plugin_registry/__init__.py`)
+      (`backend/src/farna/core/plugin_registry/__init__.py`)
 - [x] `GET /api/v1/plugins` lists every discovered plugin with
       `PLUGIN_ID`, `display_name`, `description`, `version`, `capabilities` and
       per-plugin health (patched-registry BDD + unit tests)
@@ -122,7 +122,7 @@ API surface ships and is gated by the `plugin_management` feature and the
   `AttributeError: 'X' object has no attribute '__name__'` instead of the
   documented `RuntimeError`, and `__cause__` was `None` so the plugin's real
   exception was lost entirely. Now labelled with the new
-  `modulo.util.callable_label`, which falls back to `type(x).__qualname__`;
+  `farna.util.callable_label`, which falls back to `type(x).__qualname__`;
   proved by unit tests AND by a real installed plugin whose entry point resolves
   to a callable-object builder. (2) MAJOR (resilience - closes the
   previously-deferred Known Gap below): `_load_entry_point` read

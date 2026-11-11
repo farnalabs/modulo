@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.scheduled_report import (
+from farna.db.crud.scheduled_report import (
     compute_initial_send,
     create_scheduled_report,
     delete_scheduled_report,
 )
-from modulo.db.models.scheduled_report import ScheduledReport
+from farna.db.models.scheduled_report import ScheduledReport
 
 
 def test_cost_report_compatibility_properties_read_canonical_json() -> None:
@@ -197,7 +197,7 @@ def test_compute_initial_send_rejects_unexpected_croniter_type() -> None:
     """If croniter's result shape ever changes, the contract fails loudly with
     a TypeError naming the type instead of leaking a string into a datetime
     column."""
-    with patch("modulo.db.crud.scheduled_report.croniter") as croniter_cls:
+    with patch("farna.db.crud.scheduled_report.croniter") as croniter_cls:
         croniter_cls.return_value.get_next.return_value = "2026-07-14"
         with pytest.raises(TypeError, match=r"croniter returned unexpected type: <class 'str'>"):
             compute_initial_send("daily", after=datetime(2026, 7, 13, tzinfo=UTC))

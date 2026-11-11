@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import update_pipeline_graph
+from farna.api.mcp_server import update_pipeline_graph
 from tests.unit.api.mock_session import make_session_scope
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -23,7 +23,7 @@ _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
 def _set_ctx(role: str | None) -> None:
-    from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+    from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
     _ctx_org_id.set(_ORG_ID)
     _ctx_role.set(role)
@@ -33,7 +33,7 @@ def _set_ctx(role: str | None) -> None:
 
 
 def _clear_ctx() -> None:
-    from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
+    from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
     _ctx_org_id.set(None)
     _ctx_role.set(None)
@@ -62,12 +62,12 @@ class TestUpdatePipelineGraphGuardrailStrip:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_nonadmin_cannot_strip_guardrail_binding(
         self,
         mock_replace_graph: AsyncMock,
@@ -83,7 +83,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         translates the ``GuardrailBindingStripDenied`` it raises into
         ``guardrail_strip_forbidden``. Without the service-layer guard this
         save would proceed (the bound node's guardrail would silently drop)."""
-        from modulo.db.crud.hitl_review_guard import GuardrailBindingStripDenied
+        from farna.db.crud.hitl_review_guard import GuardrailBindingStripDenied
 
         _set_ctx(role="operator")
         pipeline_id = uuid.uuid4()
@@ -113,12 +113,12 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert str(bound_node_id) in result["detail"]
         mock_replace_graph.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_admin_can_strip_guardrail_binding(
         self,
         mock_replace_graph: AsyncMock,
@@ -149,12 +149,12 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_nonadmin_unrelated_graph_changes_allowed(
         self,
         mock_replace_graph: AsyncMock,
@@ -187,12 +187,12 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_connector_binding_payload_reaches_shared_graph_write(
         self,
         mock_replace_graph: AsyncMock,
@@ -232,12 +232,12 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert written_binding["filters"] == {"path": "/workspace", "recursive": True}
         assert written_binding["data"] == {"include_hidden": False}
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_connector_binding_without_inputs_persists_no_null_keys(
         self,
         mock_replace_graph: AsyncMock,
@@ -293,11 +293,11 @@ class TestUpdatePipelineGraphHitlDescription:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_undescribed_node_level_hitl_review_rejected(
         self,
         mock_replace_graph: AsyncMock,
@@ -326,11 +326,11 @@ class TestUpdatePipelineGraphHitlDescription:
         assert "human-provided description" in result["detail"]
         mock_replace_graph.assert_not_awaited()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_described_node_level_hitl_review_succeeds(
         self,
         mock_replace_graph: AsyncMock,
@@ -387,18 +387,18 @@ class TestMcpGraphMaskingParity:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None))
-    @patch("modulo.db.crud.pipeline.get_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None))
+    @patch("farna.db.crud.pipeline.get_pipeline_graph")
     async def test_get_pipeline_graph_masks_node_env(
         self,
         mock_get_graph: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import get_pipeline_graph_tool
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.mcp_server import get_pipeline_graph_tool
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         mock_session.return_value.__aenter__.return_value = make_session_scope()
         mock_get_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
@@ -411,12 +411,12 @@ class TestMcpGraphMaskingParity:
         # Plain values pass through untouched (no over-masking).
         assert env["APP_URL"] == "https://example.com"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_update_resolves_masked_echo_and_masks_response(
         self,
         mock_replace_graph: AsyncMock,
@@ -426,8 +426,8 @@ class TestMcpGraphMaskingParity:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import update_pipeline_graph
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.mcp_server import update_pipeline_graph
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         secret_node = {**_MASK_SECRET_NODE}
         mock_get_pipeline.return_value = MagicMock(
@@ -456,12 +456,12 @@ class TestMcpGraphMaskingParity:
         # The tool response re-masked the node.
         assert result["nodes"][0]["env_vars"]["GOOGLE_API_KEY"] == SENSITIVE_VALUE_MASK
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows")
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.guardrail_config.load_pipeline_guardrail_rows")
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_update_drops_masked_echo_without_stored_counterpart(
         self,
         mock_replace_graph: AsyncMock,
@@ -471,8 +471,8 @@ class TestMcpGraphMaskingParity:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import update_pipeline_graph
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.mcp_server import update_pipeline_graph
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         mock_get_pipeline.return_value = MagicMock(
             id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**_MASK_SECRET_NODE}]
@@ -509,11 +509,11 @@ class TestUpdatePipelineGraphDispatchAndValidation:
     def teardown_method(self) -> None:
         _clear_ctx()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.api.mcp_server._reject_invalid_connector_bindings")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.api.mcp_server._reject_invalid_connector_bindings")
     async def test_a_dispatch_binding_to_a_non_ci_instance_blocks_the_write(
         self,
         mock_reject: AsyncMock,
@@ -547,9 +547,9 @@ class TestUpdatePipelineGraphDispatchAndValidation:
         assert result["error"] == "validation_failed"
         assert result["field"] == "connector_type"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._validate_graph_update", return_value=None)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._validate_graph_update", return_value=None)
+    @patch("farna.api.mcp_server._session")
     async def test_a_pydantic_validation_failure_is_surfaced(
         self,
         mock_session: AsyncMock,
@@ -606,11 +606,11 @@ class TestUpdatePipelineGraphConnectorNode:
             },
         }
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.pipeline.get_pipeline")
-    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
-    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.pipeline.get_pipeline")
+    @patch("farna.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("farna.db.crud.pipeline.replace_pipeline_graph")
     async def test_a_connector_node_binding_fields_reach_the_writer(
         self,
         mock_replace_graph: AsyncMock,
@@ -658,7 +658,7 @@ class TestUpdatePipelineGraphConnectorNode:
         node = self._connector_node()
         node["connector_binding"] = None
 
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=[node], edges=[])
 
         assert result["error"] == "validation_failed", result

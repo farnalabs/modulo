@@ -42,8 +42,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.cost_controller.finalize import _ledger_block
-from modulo.db.models.run import Run
+from farna.core.cost_controller.finalize import _ledger_block
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 

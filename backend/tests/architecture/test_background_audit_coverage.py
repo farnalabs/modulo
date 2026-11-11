@@ -15,7 +15,7 @@ This gate is the background counterpart of that ratchet, built the same way
   registration functions (``_system_functions`` / ``_runs_functions``), the
   ``CronJob(...)`` list, the ``_boot_seed("<name>")`` calls in ``api/main.py``,
   the ``reconcile_*`` / ``*_sweep`` / ``*_cleanup`` / ``seed_*`` functions
-  declared under ``src/modulo/core``, and (FAR-1574) every public function that
+  declared under ``src/farna/core``, and (FAR-1574) every public function that
   builds a ``SuiteRun`` row, are read from the source, so a NEW background path
   fails the gate until someone classifies it.
 * **Classify explicitly** — ``audited`` (with the file + literal marker that
@@ -64,10 +64,10 @@ from pathlib import Path
 from tests.unit._source_scan import iter_source_text
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-SRC_DIR = BACKEND_DIR / "src" / "modulo"
-CORE_DIR = BACKEND_DIR / "src" / "modulo" / "core"
-SAQ_WORKER_PATH = BACKEND_DIR / "src" / "modulo" / "core" / "saq_worker.py"
-API_MAIN_PATH = BACKEND_DIR / "src" / "modulo" / "api" / "main.py"
+SRC_DIR = BACKEND_DIR / "src" / "farna"
+CORE_DIR = BACKEND_DIR / "src" / "farna" / "core"
+SAQ_WORKER_PATH = BACKEND_DIR / "src" / "farna" / "core" / "saq_worker.py"
+API_MAIN_PATH = BACKEND_DIR / "src" / "farna" / "api" / "main.py"
 
 #: Mechanical pattern for the reconciler / seeder half of the enumeration.
 _RECONCILER_NAME = re.compile(r"^(reconcile_|seed_)|(_sweep|_reconcile|_cleanup)$")
@@ -170,8 +170,8 @@ def _gap(note: str) -> PathRecord:
     return PathRecord(classification=_GAP, note=note)
 
 
-_EXECUTOR = ("src/modulo/core/pipeline_engine/executor.py", 'event_type="run_started"')
-_TERMINAL_ADVANCE = ("src/modulo/core/run_terminal_advance.py", 'event_type="run.sweep_terminalised"')
+_EXECUTOR = ("src/farna/core/pipeline_engine/executor.py", 'event_type="run_started"')
+_TERMINAL_ADVANCE = ("src/farna/core/run_terminal_advance.py", 'event_type="run.sweep_terminalised"')
 
 #: The inventory. Keys are either a bare SAQ/reconciler function name or
 #: ``boot:<label>`` for an ``_boot_seed`` entry.
@@ -182,8 +182,8 @@ INVENTORY: dict[str, PathRecord] = {
     "execute_suite_run": _audited(
         # FAR-1561: the SAQ job records the start + terminal outcome of the
         # SuiteRun it just committed (post-commit, re-selected state guard).
-        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_started"'),
-        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_completed"'),
+        ("src/farna/core/saq_worker.py", 'event_type="suite_run_started"'),
+        ("src/farna/core/saq_worker.py", 'event_type="suite_run_completed"'),
     ),
     "fire_cron_trigger": _audited(_EXECUTOR),
     "fire_polling_trigger": _audited(_EXECUTOR),
@@ -191,7 +191,7 @@ INVENTORY: dict[str, PathRecord] = {
     "fire_suite_run_trigger": _audited(
         # FAR-1561: creation is recorded before enqueue (and the enqueue-failure
         # path records the terminal `failed` too) with a `pending` re-select guard.
-        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_created"'),
+        ("src/farna/core/saq_worker.py", 'event_type="suite_run_created"'),
     ),
     "fire_report_trigger": _exempt("trigger_bookkeeping"),
     # --- SuiteRun-creation entry points (public build_suite_run callers) --
@@ -205,27 +205,27 @@ INVENTORY: dict[str, PathRecord] = {
     # --- system-cron tasks (saq_worker._system_functions) -----------------
     "fire_due_triggers": _exempt("trigger_bookkeeping"),
     "dispatcher_reconcile": _audited(
-        ("src/modulo/core/cron_helpers.py", "_record_terminalisation_audits(terminalized_run_ids)"),
-        ("src/modulo/core/cron_helpers.py", 'event_type="run.sweep_terminalised"'),
+        ("src/farna/core/cron_helpers.py", "_record_terminalisation_audits(terminalized_run_ids)"),
+        ("src/farna/core/cron_helpers.py", 'event_type="run.sweep_terminalised"'),
     ),
-    "claim_expiry": _audited(("src/modulo/core/hitl_manager/expiry_job.py", 'event_type="hitl.claim_expired"')),
+    "claim_expiry": _audited(("src/farna/core/hitl_manager/expiry_job.py", 'event_type="hitl.claim_expired"')),
     "hitl_overdue": _exempt("notification_only"),
     "hitl_deadline_warning": _exempt("notification_only"),
-    "retention_cleanup": _audited(("src/modulo/core/saq_worker.py", 'event_type="run_retention_purge"')),
+    "retention_cleanup": _audited(("src/farna/core/saq_worker.py", 'event_type="run_retention_purge"')),
     "webhook_dedup_cleanup": _exempt("ephemeral_log_retention"),
     "expired_webhook_dedup_purge": _exempt("ephemeral_log_retention"),
     "trigger_events_cleanup": _exempt("ephemeral_log_retention"),
     "stale_run_recovery": _audited(
-        ("src/modulo/core/pipeline_execution.py", 'source="stale_run_recovery"'),
+        ("src/farna/core/pipeline_execution.py", 'source="stale_run_recovery"'),
         _TERMINAL_ADVANCE,
     ),
     "slot_reconciliation": _audited(
-        ("src/modulo/core/run_admission.py", 'source="slot_reconciliation"'),
+        ("src/farna/core/run_admission.py", 'source="slot_reconciliation"'),
         _TERMINAL_ADVANCE,
     ),
-    "hitl_park_sweep": _audited(("src/modulo/core/run_admission.py", 'event_type="hitl.run_parked"')),
+    "hitl_park_sweep": _audited(("src/farna/core/run_admission.py", 'event_type="hitl.run_parked"')),
     "runner_marker_sweep": _audited(
-        ("src/modulo/core/runner_capacity.py", 'actor_source="runner_marker_sweep"'),
+        ("src/farna/core/runner_capacity.py", 'actor_source="runner_marker_sweep"'),
         _TERMINAL_ADVANCE,
     ),
     "runner_workspace_reconcile": _exempt("infra_container_gc"),
@@ -254,8 +254,8 @@ INVENTORY: dict[str, PathRecord] = {
     # drives the reader with a raising stub, so no org-owned row changes; the
     # audit record is the deliberate, durable evidence.
     "run_kill_switch_drill": _audited(
-        ("src/modulo/core/guardrails/kill_switch_drill.py", "append_system_audit_event("),
-        ("src/modulo/core/guardrails/kill_switch_drill.py", '_KILL_SWITCH_DRILL_EVENT_TYPE = "kill_switch_drill"'),
+        ("src/farna/core/guardrails/kill_switch_drill.py", "append_system_audit_event("),
+        ("src/farna/core/guardrails/kill_switch_drill.py", '_KILL_SWITCH_DRILL_EVENT_TYPE = "kill_switch_drill"'),
     ),
     # --- reconcilers / sweep helpers declared under core/ -----------------
     "reconcile_facts": _exempt("derived_analytics"),
@@ -266,18 +266,18 @@ INVENTORY: dict[str, PathRecord] = {
     "reconcile_missing_classifications": _exempt("derived_state"),
     "reconcile_noop_evidence": _exempt("derived_state"),
     "reconcile_pipeline_slots": _audited(
-        ("src/modulo/core/run_admission.py", 'source="slot_reconciliation"'),
+        ("src/farna/core/run_admission.py", 'source="slot_reconciliation"'),
         _TERMINAL_ADVANCE,
     ),
     "reconcile_runner_dispatch_markers": _audited(
-        ("src/modulo/core/runner_capacity.py", 'event_type="run.sweep_terminalised"')
+        ("src/farna/core/runner_capacity.py", 'event_type="run.sweep_terminalised"')
     ),
     "reconcile_cron_registrations": _exempt("internal_bookkeeping"),
     "stale_run_recovery_sweep": _audited(
-        ("src/modulo/core/pipeline_execution.py", 'source="stale_run_recovery"'),
+        ("src/farna/core/pipeline_execution.py", 'source="stale_run_recovery"'),
         _TERMINAL_ADVANCE,
     ),
-    "maybe_alarm_approve_sweep": _audited(("src/modulo/core/hitl_manager/sweep_alarm.py", "append_audit_event")),
+    "maybe_alarm_approve_sweep": _audited(("src/farna/core/hitl_manager/sweep_alarm.py", "append_audit_event")),
     # FAR-1593: materialises the org's applied guardrail config onto a newly
     # created/cloned pipeline, inside the creating request's transaction
     # (``db.crud.pipeline.create_pipeline`` / ``_clone_pipeline_config``). It is
@@ -287,8 +287,8 @@ INVENTORY: dict[str, PathRecord] = {
     # request-surface audit (``pipeline_created`` on create, ``pipeline_cloned``
     # on clone).
     "seed_org_guardrail_rows_for_pipeline": _audited(
-        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_created", "pipeline"'),
-        ("src/modulo/api/routes/pipelines.py", 'audited("pipeline_cloned", "pipeline"'),
+        ("src/farna/api/routes/pipelines.py", 'audited("pipeline_created", "pipeline"'),
+        ("src/farna/api/routes/pipelines.py", 'audited("pipeline_cloned", "pipeline"'),
     ),
     # --- boot-time seeds declared under core/ -----------------------------
     "seed_default_alert_rules_for_org": _exempt("boot_default_config"),
@@ -302,7 +302,7 @@ INVENTORY: dict[str, PathRecord] = {
         # FAR-1561: the seeder appends a SYSTEM-actor `user_seeded` (and
         # `user_rehashed`, which can GRANT the admin role) in the seeding
         # transaction — grant and record commit atomically.
-        ("src/modulo/db/seed.py", 'event_type="user_seeded"'),
+        ("src/farna/db/seed.py", 'event_type="user_seeded"'),
     ),
     "boot:sso_providers": _exempt("boot_env_config"),
     "boot:system_schemas": _exempt("boot_default_config"),
@@ -321,14 +321,14 @@ INVENTORY: dict[str, PathRecord] = {
 
 def _saq_system_function_names() -> set[str]:
     """Names SAQ registers on the system worker (import-time, settings-free)."""
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     return {fn.__name__ for fn in sw._system_functions()}
 
 
 def _saq_runs_function_names() -> set[str]:
     """Names SAQ registers on the runs worker (import-time, settings-free)."""
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     return {fn.__name__ for _registered_name, fn in sw._runs_functions()}
 
@@ -391,7 +391,7 @@ def _suite_run_entry_point_names(*, sources: list[Path] | None = None) -> set[st
     must classify, not as an invisible side entrance to the SAQ seam.
 
     *sources* overrides the scanned files (test seam) — production callers
-    pass nothing and get the whole ``src/modulo`` tree.
+    pass nothing and get the whole ``src/farna`` tree.
     """
     if sources is None:
         scanned = list(iter_source_text(SRC_DIR))
@@ -435,7 +435,7 @@ def _boot_seed_labels() -> set[str]:
 
 def _reconciler_function_names() -> set[str]:
     """Module-level ``reconcile_`` / ``seed_`` / ``*_sweep|_reconcile|_cleanup``
-    functions declared anywhere under ``src/modulo/core``."""
+    functions declared anywhere under ``src/farna/core``."""
     names: set[str] = set()
     for path, source in iter_source_text(CORE_DIR):
         rel = path.relative_to(CORE_DIR).as_posix()

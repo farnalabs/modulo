@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_execution import (
+from farna.core.pipeline_execution import (
     PHASE_CAPACITY_CHECK,
     PHASE_CLAIMED,
     PHASE_EXECUTOR_RUNNING,
@@ -123,9 +123,9 @@ class TestZombieWatchdogReadsTracker:
         tracker.enter_phase(PHASE_LOADING_CONTEXT)
 
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
-            patch("modulo.core.pipeline_execution.get_settings") as mock_settings,
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock),
+            caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
+            patch("farna.core.pipeline_execution.get_settings") as mock_settings,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock),
         ):
             mock_settings.return_value.saq_setup_grace_seconds = 0
             await zombie_watchdog(
@@ -161,9 +161,9 @@ class TestZombieWatchdogReadsTracker:
         exec_task: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(999))
 
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
-            patch("modulo.core.pipeline_execution.get_settings") as mock_settings,
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock),
+            caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
+            patch("farna.core.pipeline_execution.get_settings") as mock_settings,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock),
         ):
             mock_settings.return_value.saq_setup_grace_seconds = 0
             await zombie_watchdog(
@@ -204,8 +204,8 @@ class TestZombieWatchdogReadsTracker:
         first_progress.set()
 
         with (
-            caplog.at_level(logging.INFO, logger="modulo.core.pipeline_execution"),
-            patch("modulo.core.pipeline_execution.get_settings") as mock_settings,
+            caplog.at_level(logging.INFO, logger="farna.core.pipeline_execution"),
+            patch("farna.core.pipeline_execution.get_settings") as mock_settings,
         ):
             mock_settings.return_value.saq_setup_grace_seconds = 600
             await zombie_watchdog(

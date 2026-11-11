@@ -32,15 +32,15 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
-from modulo.core.seed_data import demo_data as demo_mod
-from modulo.core.seed_data.cost_components import seed_cost_components
-from modulo.core.seed_data.demo_data import DemoOrgSpec, seed_demo_orgs
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.core.seed_data import demo_data as demo_mod
+from farna.core.seed_data.cost_components import seed_cost_components
+from farna.core.seed_data.demo_data import DemoOrgSpec, seed_demo_orgs
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
 
-COST_LOGGER = "modulo.core.seed_data.cost_components"
-DEMO_LOGGER = "modulo.core.seed_data.demo_data"
+COST_LOGGER = "farna.core.seed_data.cost_components"
+DEMO_LOGGER = "farna.core.seed_data.demo_data"
 
 ORG1 = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
 ORG2 = uuid.UUID("00000000-0000-0000-0000-0000000000f2")
@@ -102,7 +102,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 @pytest.fixture
 def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
-    # modulo.api.dependencies.get_or_create_session_factory).
+    # farna.api.dependencies.get_or_create_session_factory).
     return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 

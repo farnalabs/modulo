@@ -36,10 +36,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes import runs as runs_module
-from modulo.core import cron_helpers as ch
-from modulo.core import pipeline_execution as pe
-from modulo.core.worker_handoff import WORKER_LOST_ERROR_CODE
+from farna.api.routes import runs as runs_module
+from farna.core import cron_helpers as ch
+from farna.core import pipeline_execution as pe
+from farna.core.worker_handoff import WORKER_LOST_ERROR_CODE
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -189,8 +189,8 @@ async def test_writer_states_the_callers_reason_verbatim(reason: str, error_code
     session = _writer_session(SimpleNamespace(node_attempt_count=1))
     write = AsyncMock()
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value=None)),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value=None)),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", write),
     ):
         assert await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -219,8 +219,8 @@ async def test_writer_takes_the_run_row_for_update_inside_the_savepoint() -> Non
         return {}
 
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", _read),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", AsyncMock()),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", _read),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", AsyncMock()),
     ):
         assert await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -250,7 +250,7 @@ async def test_read_failure_leaves_the_callers_transaction_usable() -> None:
             sess.aborted = True
         raise RuntimeError("read aborted the transaction")
 
-    with patch("modulo.db.crud.run_node_outputs.read_run_markers", _failing_read):
+    with patch("farna.db.crud.run_node_outputs.read_run_markers", _failing_read):
         assert not await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
             run_id=_RUN,
@@ -268,9 +268,9 @@ async def test_read_failure_leaves_the_callers_transaction_usable() -> None:
 async def test_writer_is_best_effort_on_a_write_failure() -> None:
     session = _writer_session(SimpleNamespace(node_attempt_count=2))
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
         patch(
-            "modulo.db.crud.run_node_outputs.write_run_markers",
+            "farna.db.crud.run_node_outputs.write_run_markers",
             AsyncMock(side_effect=RuntimeError("write failed")),
         ),
     ):
@@ -290,8 +290,8 @@ async def test_writer_skips_when_the_run_row_is_not_visible() -> None:
     session = _writer_session(None)
     write = AsyncMock()
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", write),
     ):
         assert not await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -316,8 +316,8 @@ async def test_writer_is_bounded_by_a_client_side_timeout() -> None:
     session = _writer_session(SimpleNamespace(node_attempt_count=1))
     with (
         patch.object(ch, "_TERMINAL_TRIAGE_PERSIST_TIMEOUT", 0.05),
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", _hanging_read),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", AsyncMock()),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", _hanging_read),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", AsyncMock()),
     ):
         assert not await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -341,7 +341,7 @@ async def test_writer_propagates_cancellation() -> None:
         raise asyncio.CancelledError
 
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", _cancelled_read),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", _cancelled_read),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch.persist_terminal_triage_marker(
@@ -361,10 +361,10 @@ async def test_writer_preserves_concurrently_written_markers() -> None:
     write = AsyncMock()
     with (
         patch(
-            "modulo.db.crud.run_node_outputs.read_run_markers",
+            "farna.db.crud.run_node_outputs.read_run_markers",
             AsyncMock(return_value={"run:r:node:n1:1": {"deadline_triage": True}}),
         ),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", write),
     ):
         assert await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -571,7 +571,7 @@ async def test_worker_lost_triage_helper_swallows_a_generic_failure(caplog: pyte
     committed."""
     factory, session = _worker_lost_factory()
     writer = AsyncMock(return_value=True)
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_execution")
 
     with (
         patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
@@ -667,7 +667,7 @@ async def test_terminal_branch_persists_the_reaper_marker() -> None:
     with (
         patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
         patch.object(pe, "set_rls_org", AsyncMock()),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
         patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
         patch.object(pe, "_record_derived_deadline_cost", AsyncMock()),
         patch.object(ch, "persist_terminal_triage_marker", terminal_writer),
@@ -694,8 +694,8 @@ async def test_terminal_marker_projects_with_the_node_deadline_reason() -> None:
     session = _writer_session(SimpleNamespace(node_attempt_count=1))
     write = AsyncMock()
     with (
-        patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+        patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value={})),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", write),
     ):
         assert await ch.persist_terminal_triage_marker(
             session,  # type: ignore[arg-type]
@@ -731,7 +731,7 @@ async def test_redispatch_branch_persists_a_non_terminal_marker() -> None:
     with (
         patch.object(pe, "async_sessionmaker", MagicMock(return_value=factory)),
         patch.object(pe, "set_rls_org", AsyncMock()),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", AsyncMock(return_value=True)),
+        patch("farna.core.pipeline_execution.fail_run_terminal", AsyncMock(return_value=True)),
         patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
         patch.object(pe, "_record_derived_deadline_cost", AsyncMock()),
         patch.object(ch, "persist_terminal_triage_marker", terminal_writer),
@@ -767,7 +767,7 @@ async def test_redispatch_marker_coexists_with_the_terminal_marker_and_projects(
     terminal_key = f"terminal-triage:{_RUN}"
     with (
         patch(
-            "modulo.db.crud.run_node_outputs.read_run_markers",
+            "farna.db.crud.run_node_outputs.read_run_markers",
             AsyncMock(
                 return_value={
                     terminal_key: {
@@ -777,7 +777,7 @@ async def test_redispatch_marker_coexists_with_the_terminal_marker_and_projects(
                 }
             ),
         ),
-        patch("modulo.db.crud.run_node_outputs.write_run_markers", write),
+        patch("farna.db.crud.run_node_outputs.write_run_markers", write),
     ):
         assert await ch.persist_redispatch_triage_marker(
             session,  # type: ignore[arg-type]
@@ -810,10 +810,10 @@ async def test_node_deadline_triage_failure_never_fails_the_kill(caplog: pytest.
     fail = AsyncMock(return_value=True)
     derived = AsyncMock()
     deadlines, exec_task, stall, done = _deadline_kill_args()
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_execution")
     with (
         patch.object(pe, "set_rls_org", AsyncMock(side_effect=RuntimeError("db down"))),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
         patch.object(pe, "_record_node_deadline_watchdog_firing", AsyncMock()),
         patch.object(pe, "_record_derived_deadline_cost", derived),
     ):
@@ -836,7 +836,7 @@ async def test_node_deadline_triage_swallows_a_write_failure(caplog: pytest.LogC
     body directly, so a future reshuffle of the body cannot silently drop the
     handler's coverage.
     """
-    caplog.set_level(logging.WARNING, logger="modulo.core.pipeline_execution")
+    caplog.set_level(logging.WARNING, logger="farna.core.pipeline_execution")
     writer = AsyncMock(side_effect=RuntimeError("simulated write failure"))
     with patch.object(pe, "_write_node_deadline_triage_marker", writer):
         result = await pe._persist_node_deadline_triage(MagicMock(), str(_RUN), str(_ORG), redispatched=False)
@@ -846,7 +846,7 @@ async def test_node_deadline_triage_swallows_a_write_failure(caplog: pytest.LogC
     records = [
         record
         for record in caplog.records
-        if record.name == "modulo.core.pipeline_execution"
+        if record.name == "farna.core.pipeline_execution"
         and "pipeline_execution.node_deadline_triage_failed" in record.getMessage()
     ]
     assert len(records) == 1

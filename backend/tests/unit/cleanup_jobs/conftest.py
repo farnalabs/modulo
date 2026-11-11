@@ -12,8 +12,8 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.trigger_event import TriggerEvent
+from farna.db.models.base import Base
+from farna.db.models.trigger_event import TriggerEvent
 
 
 @pytest.fixture

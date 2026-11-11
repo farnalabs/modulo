@@ -9,10 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import get_settings
 from tests.bdd.conftest import _shared_state, make_mock_pipeline, make_mock_session, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -121,8 +121,8 @@ def get_viewmodel_with_view_as_team(
         _store_response(request, resp)
         return
 
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
 
     mock_session = make_mock_session()
 
@@ -145,29 +145,29 @@ def get_viewmodel_with_view_as_team(
     mock_runs_page = PageResult(items=[], total=0, page=1, page_size=10)
 
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.viewmodel.list_pipelines",
+            "farna.api.routes.viewmodel.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=mock_pipelines, total=len(mock_pipelines), page=1, page_size=20),
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_runs",
+            "farna.api.routes.viewmodel.list_runs",
             new_callable=AsyncMock,
             return_value=mock_runs_page,
         ),
         patch(
-            "modulo.api.routes.viewmodel.get_organisation",
+            "farna.api.routes.viewmodel.get_organisation",
             new_callable=AsyncMock,
             return_value=_make_mock_org(),
         ),
         patch(
-            "modulo.api.routes.viewmodel.get_account_by_id",
+            "farna.api.routes.viewmodel.get_account_by_id",
             new_callable=AsyncMock,
             return_value=_make_mock_account(),
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            "farna.api.routes.viewmodel.list_team_memberships_for_account",
             new_callable=AsyncMock,
             return_value=[],
         ),
@@ -184,8 +184,8 @@ def get_viewmodel_without_view_as_team(
     request: pytest.FixtureRequest,
     ctx,
 ) -> None:
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
 
     mock_session = make_mock_session()
 
@@ -208,29 +208,29 @@ def get_viewmodel_without_view_as_team(
     mock_runs_page = PageResult(items=[], total=0, page=1, page_size=10)
 
     with (
-        patch("modulo.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.viewmodel.set_rls_org", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.viewmodel.list_pipelines",
+            "farna.api.routes.viewmodel.list_pipelines",
             new_callable=AsyncMock,
             return_value=PageResult(items=mock_pipelines, total=len(mock_pipelines), page=1, page_size=20),
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_runs",
+            "farna.api.routes.viewmodel.list_runs",
             new_callable=AsyncMock,
             return_value=mock_runs_page,
         ),
         patch(
-            "modulo.api.routes.viewmodel.get_organisation",
+            "farna.api.routes.viewmodel.get_organisation",
             new_callable=AsyncMock,
             return_value=_make_mock_org(),
         ),
         patch(
-            "modulo.api.routes.viewmodel.get_account_by_id",
+            "farna.api.routes.viewmodel.get_account_by_id",
             new_callable=AsyncMock,
             return_value=_make_mock_account(),
         ),
         patch(
-            "modulo.api.routes.viewmodel.list_team_memberships_for_account",
+            "farna.api.routes.viewmodel.list_team_memberships_for_account",
             new_callable=AsyncMock,
             return_value=[],
         ),

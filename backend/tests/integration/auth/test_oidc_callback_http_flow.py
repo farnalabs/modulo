@@ -56,8 +56,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_settings
-from modulo.auth.secret_storage import encrypt_stored_secret
+from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_settings
+from farna.auth.secret_storage import encrypt_stored_secret
 
 pytestmark = pytest.mark.integration
 
@@ -372,7 +372,7 @@ class _AllFeaturesPlan:
 
 
 def _build_settings(frontend_url: str) -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/modulo_unused",
@@ -415,7 +415,7 @@ async def _make_oidc_client(app: Any, app_engine: AsyncEngine, frontend_url: str
 @pytest_asyncio.fixture
 async def oidc_app(app_engine: AsyncEngine):
     """Yield a client-builder, then clear the app's dependency overrides."""
-    from modulo.api.main import app
+    from farna.api.main import app
 
     async def build(frontend_url: str = _FRONTEND_BASE) -> AsyncClient:
         return await _make_oidc_client(app, app_engine, frontend_url)
@@ -458,8 +458,8 @@ def _bind_browser(client: AsyncClient, provider_id: str) -> str:
     scope — see the module docstring), so this installs the cookie a real
     browser would have received from the login redirect.
     """
-    from modulo.api.routes.sso import _OIDC_FLOW_COOKIE
-    from modulo.auth.sso import sign_state
+    from farna.api.routes.sso import _OIDC_FLOW_COOKIE
+    from farna.auth.sso import sign_state
 
     raw_state = str(uuid.uuid4())
     client.cookies.set(
@@ -539,7 +539,7 @@ def _idp_stubbed(world: _World, id_token: str):
         cls.side_effect = _StubClient
         stack.enter_context(
             patch(
-                "modulo.auth.sso.validate_outbound_url_async",
+                "farna.auth.sso.validate_outbound_url_async",
                 new=AsyncMock(return_value=None),
             )
         )

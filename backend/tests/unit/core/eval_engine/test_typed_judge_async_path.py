@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.execute_suite_run import _case_results_async
-from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO, run_evals_persist_before_decide
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.execute_suite_run import _case_results_async
+from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO, run_evals_persist_before_decide
 
 
 def _eval_def(*, eval_type: EvalType = EvalType.MODEL_JUDGE) -> EvalDefinition:

@@ -1,6 +1,6 @@
 """Unit tests for the shared safe-datetime coercion helper.
 
-``modulo.connectors._safe_datetime.safe_datetime`` guards ticket-tracker
+``farna.connectors._safe_datetime.safe_datetime`` guards ticket-tracker
 connectors (GitHub Issues, Trello) against corrupt or hostile
 ``created_at``/``updated_at``/``dateLastActivity`` response fields. A
 non-string or unparseable timestamp flowing into ``datetime.fromisoformat``
@@ -13,7 +13,7 @@ consistent across every consumer (mirrors ``test_safe_cursor`` /
 
 import pytest
 
-from modulo.connectors._safe_datetime import safe_datetime
+from farna.connectors._safe_datetime import safe_datetime
 
 
 @pytest.mark.parametrize(

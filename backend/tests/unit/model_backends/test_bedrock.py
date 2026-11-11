@@ -2,11 +2,11 @@
 
 from unittest.mock import patch
 
-from modulo.model_backends.bedrock import BedrockBackend
+from farna.model_backends.bedrock import BedrockBackend
 
 
 def test_default_region() -> None:
-    with patch("modulo.model_backends.bedrock.ChatBedrock") as mock_chat:
+    with patch("farna.model_backends.bedrock.ChatBedrock") as mock_chat:
         BedrockBackend(
             aws_access_key_id="AKIA123",
             aws_secret_access_key="secret123",

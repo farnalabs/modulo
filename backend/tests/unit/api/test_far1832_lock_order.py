@@ -35,11 +35,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -145,11 +145,11 @@ def test_r4_refusal_precedes_every_database_write(
         events.append("system_audit_append")
 
     with (
-        patch("modulo.db.crud.org_deletion.confirm_org_deletion", new=_record_confirm),
-        patch("modulo.db.crud.org_deletion.request_org_deletion", new=_record_request),
-        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
-        patch("modulo.api.routes.admin.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.admin.set_rls_user_context", new=AsyncMock()),
+        patch("farna.db.crud.org_deletion.confirm_org_deletion", new=_record_confirm),
+        patch("farna.db.crud.org_deletion.request_org_deletion", new=_record_request),
+        patch("farna.core.system_audit_logger.append_system_audit_event", new=_record_append),
+        patch("farna.api.routes.admin.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.admin.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.request(method, url, json=body)
 
@@ -226,9 +226,9 @@ def test_f6_delete_org_lock_precedes_the_system_audit_append(
         events.append("system_audit_append")
 
     with (
-        patch("modulo.api.routes.admin_orgs.get_organisation", new=_record_get),
-        patch("modulo.api.routes.admin_orgs.delete_organisation", new=_record_delete),
-        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
+        patch("farna.api.routes.admin_orgs.get_organisation", new=_record_get),
+        patch("farna.api.routes.admin_orgs.delete_organisation", new=_record_delete),
+        patch("farna.core.system_audit_logger.append_system_audit_event", new=_record_append),
     ):
         resp = system_admin_client.delete(_DELETE_ORG_URL)
 
@@ -260,9 +260,9 @@ def test_f6_failed_delete_never_reaches_the_append(system_admin_client: TestClie
         events.append("system_audit_append")
 
     with (
-        patch("modulo.api.routes.admin_orgs.get_organisation", new=_record_get),
-        patch("modulo.api.routes.admin_orgs.delete_organisation", new=_record_delete),
-        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
+        patch("farna.api.routes.admin_orgs.get_organisation", new=_record_get),
+        patch("farna.api.routes.admin_orgs.delete_organisation", new=_record_delete),
+        patch("farna.core.system_audit_logger.append_system_audit_event", new=_record_append),
     ):
         resp = system_admin_client.delete(_DELETE_ORG_URL)
 
@@ -290,9 +290,9 @@ def test_f6_refuses_the_callers_own_org_before_any_database_work(
         events.append("system_audit_append")
 
     with (
-        patch("modulo.api.routes.admin_orgs.get_organisation", new=_record_get),
-        patch("modulo.api.routes.admin_orgs.delete_organisation", new=_record_delete),
-        patch("modulo.core.system_audit_logger.append_system_audit_event", new=_record_append),
+        patch("farna.api.routes.admin_orgs.get_organisation", new=_record_get),
+        patch("farna.api.routes.admin_orgs.delete_organisation", new=_record_delete),
+        patch("farna.core.system_audit_logger.append_system_audit_event", new=_record_append),
     ):
         resp = system_admin_client.delete(f"/api/v1/admin/orgs/{_ORG_ID}")
 

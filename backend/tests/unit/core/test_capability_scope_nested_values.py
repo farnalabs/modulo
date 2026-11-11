@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.capability_scope import (
+from farna.core.capability_scope import (
     ScopeViolationError,
     _iter_nested_values,
     assert_no_secret_objects,

@@ -7,11 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.sql.dml import Delete as DeleteStmt
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -100,7 +100,7 @@ class TestAdminPurgeStaleRuns:
 
     def test_admin_purges_stale_runs_returns_200(self, client: TestClient) -> None:
         self._mock_session()
-        with patch("modulo.api.routes.admin.set_rls_org"):
+        with patch("farna.api.routes.admin.set_rls_org"):
             resp = client.post(self.URL, json={"older_than_days": 60})
 
         assert resp.status_code == 200
@@ -109,7 +109,7 @@ class TestAdminPurgeStaleRuns:
 
     def test_uses_delete_statement_with_org_scope(self, client: TestClient) -> None:
         session = self._mock_session()
-        with patch("modulo.api.routes.admin.set_rls_org") as mock_rls:
+        with patch("farna.api.routes.admin.set_rls_org") as mock_rls:
             resp = client.post(self.URL, json={"older_than_days": 30})
 
         assert resp.status_code == 200
@@ -127,7 +127,7 @@ class TestAdminPurgeStaleRuns:
             yield session
 
         app.dependency_overrides[get_db_session] = _override
-        with patch("modulo.api.routes.admin.set_rls_org"):
+        with patch("farna.api.routes.admin.set_rls_org"):
             resp = client.post(self.URL, json={})
 
         assert resp.status_code == 200

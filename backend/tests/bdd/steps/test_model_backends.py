@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models.model_backend import ModelBackend
 from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
@@ -432,15 +432,15 @@ def _drive_model_backend_crud(
     from cryptography.fernet import Fernet
     from fastapi.testclient import TestClient
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.auth.dependencies import (
         get_current_tenant_user,
         get_current_tenant_user_or_api_key,
         get_current_user,
     )
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.settings import Settings, get_settings
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.settings import Settings, get_settings
     from tests.unit.api.mock_session import configure_mock_session
 
     added: list[ModelBackend] = []
@@ -522,14 +522,14 @@ def _drive_model_backend_crud(
     try:
         client = TestClient(app)
         with (
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
             patch(
-                "modulo.api.routes.model_backends._run_health_check_on_save",
+                "farna.api.routes.model_backends._run_health_check_on_save",
                 new=AsyncMock(return_value=("ok", None)),
             ),
-            patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
-            patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()),
+            patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+            patch("farna.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()),
         ):
             if method == "GET":
                 ctx["response"] = client.get(path)
@@ -972,16 +972,16 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     from cryptography.fernet import Fernet
     from fastapi.testclient import TestClient
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.auth.dependencies import (
         get_current_tenant_user,
         get_current_tenant_user_or_api_key,
         get_current_user,
     )
-    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-    from modulo.db.models.model_backend import ModelBackend
-    from modulo.settings import Settings, get_settings
+    from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from farna.db.models.model_backend import ModelBackend
+    from farna.settings import Settings, get_settings
     from tests.unit.api.mock_session import configure_mock_session
 
     backend_id = uuid.uuid4()
@@ -1057,23 +1057,23 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
         client = TestClient(app)
         with (
             patch(
-                "modulo.api.routes.model_backends._run_health_check_on_save",
+                "farna.api.routes.model_backends._run_health_check_on_save",
                 new=AsyncMock(return_value=(health_status, health_detail)),
             ),
-            patch("modulo.api.routes.model_backends.set_rls_org"),
-            patch("modulo.api.routes.model_backends.set_rls_user_context"),
-            patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+            patch("farna.api.routes.model_backends.set_rls_org"),
+            patch("farna.api.routes.model_backends.set_rls_user_context"),
+            patch("farna.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
             patch(
-                "modulo.api.routes.model_backends.get_model_backend",
+                "farna.api.routes.model_backends.get_model_backend",
                 new_callable=AsyncMock,
                 return_value=mb,
             ),
         ):
             if method == "POST":
-                with patch("modulo.api.routes.model_backends.create_model_backend", return_value=mb):
+                with patch("farna.api.routes.model_backends.create_model_backend", return_value=mb):
                     ctx["response"] = client.post("/api/v1/model-backends", json=body)
             else:
-                with patch("modulo.api.routes.model_backends.update_model_backend", return_value=mb):
+                with patch("farna.api.routes.model_backends.update_model_backend", return_value=mb):
                     ctx["response"] = client.patch(f"/api/v1/model-backends/{backend_id}", json=body)
     finally:
         app.dependency_overrides.clear()

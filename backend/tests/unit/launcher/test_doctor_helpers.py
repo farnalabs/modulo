@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-import modulo.db.bootstrap_role as bootstrap_role
-import modulo.db.health_checks as health_checks
-from modulo.launcher.doctor import (
+import farna.db.bootstrap_role as bootstrap_role
+import farna.db.health_checks as health_checks
+from farna.launcher.doctor import (
     DoctorProbes,
     _cwd_env_file,
     _decode_proc_address,
@@ -36,8 +36,8 @@ from modulo.launcher.doctor import (
     check_redis,
     default_probes,
 )
-from modulo.launcher.secrets_file import LauncherSecrets
-from modulo.launcher.state import LauncherState, save_state
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import LauncherState, save_state
 from tests.unit.launcher.test_launcher_shared import minimal_probes
 
 
@@ -134,11 +134,11 @@ def test_load_state_readonly_integrity_error(tmp_path: Path, monkeypatch: pytest
     save_state(_state(), tmp_path / "state.json", bytes(range(32)))
 
     def _boom(_path: Path, _key: bytes) -> LauncherState:
-        from modulo.launcher.state import StateIntegrityError
+        from farna.launcher.state import StateIntegrityError
 
         raise StateIntegrityError("tampered")
 
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     monkeypatch.setattr(state_module, "load_state", _boom)
     state, err = _load_state_readonly(tmp_path)
@@ -209,7 +209,7 @@ def test_default_probes_service_probes_connect_with_mocks(tmp_path: Path, monkey
     the async connect bodies are covered without a live database."""
     secrets = _write_secrets(tmp_path)
     save_state(_state(), tmp_path / "state.json", secrets.state_hmac_key)
-    from modulo.launcher.state import load_state as _load
+    from farna.launcher.state import load_state as _load
 
     loaded_state = _load(tmp_path / "state.json", secrets.state_hmac_key)
 
@@ -251,7 +251,7 @@ def test_host_port_from_database_url_out_of_range_port_is_untyped_skip() -> None
 
 @pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
 def test_default_probes_port_owner_no_foreign_is_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     monkeypatch.setattr(doctor_module, "_port_owner_descriptions", lambda _port: [])
     probes = default_probes(tmp_path, _state())
@@ -260,7 +260,7 @@ def test_default_probes_port_owner_no_foreign_is_none(tmp_path: Path, monkeypatc
 
 @pytest.mark.skipif(sys.platform == "win32", reason="/proc listener inspection is POSIX-only (TODO(P3))")
 def test_default_probes_port_owner_describes_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.doctor as doctor_module
+    import farna.launcher.doctor as doctor_module
 
     monkeypatch.setattr(
         doctor_module,

@@ -1,0 +1,1430 @@
+"""Error-code registry for run/agent failure classification (agent-failure UX, phase 1).
+
+Single source of truth for the dotted error-code taxonomy
+(``<namespace>.<reason>``) described in the agent-failure-ux-proposal (§1, §3,
+§15.16). This module implements the write-time legacy→dotted mapping plus the
+registry lookups shared by ``_retry_after_policy``, the alert-rule matcher, and
+the notifier ``event_mapper`` — one table, three consumers, no drift (§3.2
+hard rules).
+
+The module is intentionally dependency-free (no DB, no settings import) so unit
+tests are fast and the registry is importable from any consumer.
+
+It also owns the shared error-text sanitizer (:func:`sanitize_error_text`) and
+the read-surface presenter (:func:`present_error`) used by the API/MCP layers
+and the SAQ task_failure writer — one redaction primitive, no drift.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import threading
+from dataclasses import dataclass
+from typing import Any
+
+from farna.core.secret_patterns import AWS_ACCESS_KEY_PATTERN, GITHUB_PAT_PATTERN
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ErrorCodeSpec:
+    """One registry entry: classification tag, retry default, alert severity, guidance."""
+
+    error_class: str
+    retryable: bool
+    alert_severity: str | None
+    guidance: str
+
+
+# Canonical dotted codes referenced from multiple places in this module
+# (registry keys, LEGACY_ALIASES targets, and the unmapped-code fallback).
+# Constants keep the registry and the alias table provably in sync — a
+# spelling change is a one-line edit (S1192).
+_CODE_HARNESS_UNKNOWN = "harness.unknown"
+_CODE_HARNESS_EXECUTOR_FAILED = "harness.executor_failed"
+_CODE_HARNESS_DISPATCH_FAILED = "harness.dispatch_failed"
+# FAR-604 P1: the heartbeat-stale slot-reconciliation sweep (run_admission)
+# terminalizes a run whose heartbeat froze past the stale threshold. A DISTINCT
+# code from ``harness.dispatch_failed`` (the legacy ``worker_lost`` alias) so
+# analytics can tell "never dispatched" from "dispatched, then the heartbeat
+# went silent and the slot was force-released".
+_CODE_HARNESS_HEARTBEAT_STALE = "harness.heartbeat_stale"
+# FAR-1627: the graceful worker-shutdown handoff (core.worker_handoff) releases
+# an in-flight run the instant its executing worker is shut down (deploy /
+# restart) and stamps THIS code — a distinct class from both
+# ``harness.dispatch_failed`` ("never dispatched") and
+# ``harness.heartbeat_stale`` (30-min TTL sweep). The raw legacy spelling
+# ``worker_lost`` keeps its historical ``harness.dispatch_failed`` alias (the
+# pre-FAR-1627 sweeps wrote it for a different class); the handback writes the
+# dotted registry key directly so it never resolves through that alias and
+# never resurrects the misattribution this ticket removes.
+_CODE_HARNESS_WORKER_LOST = "harness.worker_lost"
+# FAR-2076: the ``dispatcher_reconcile`` re-enqueue backstop is the LAST gate
+# before the enqueue, so it bounds every producer that can hand back a pending
+# run. A row it finds ALREADY beyond its pipeline's retry budget is
+# terminal-failed with THIS code rather than re-dispatched (which executed past
+# the policy) or silently skipped (which stranded the row until the age
+# backstop and misreported it as ``no_progress``). Registered (and aliased in
+# LEGACY_ALIASES as the raw ``retry_budget_exhausted`` spelling) so the one
+# fact that explains the terminalization is visible at the read boundary
+# instead of collapsing to ``harness.unknown`` / "Unknown error".
+_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED = "harness.retry_budget_exhausted"
+_CODE_NODE_TIMEOUT = "node.timeout"
+_CODE_NODE_RUNAWAY = "node.runaway"
+# FAR-1141: a ``dispatch`` node's ``await_completion`` window expired before the
+# customer's substrate reported a TERMINAL run status. Distinct from
+# ``node.timeout`` (the node's own deadline guard) because the node did exactly
+# what it was told — it waited, polled, and the EXTERNAL run never settled — and
+# from ``connector.*`` because no connector call failed: the substrate simply
+# stayed non-terminal for the whole window.
+_CODE_DISPATCH_WAIT_TIMEOUT = "dispatch.wait_timeout"
+_CODE_EVAL_BLOCKED = "eval.blocked"
+_CODE_CONTRACT_SCHEMA = "contract.schema"
+_CODE_SANDBOX_RATE_LIMITED = "sandbox.rate_limited"
+_CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
+# FAR-510: the finalize-time downgrade code for a sandbox_agent node whose
+# synthetic failure envelope was masked as a completed output.
+_CODE_SANDBOX_AGENT_FAILED = "sandbox.agent_failed"
+# Retryable code for a sandbox session that died leaving no output JSON
+# (session-lost / no-output stall family).
+_CODE_SANDBOX_NO_OUTPUT_JSON = "sandbox.no_output_json"
+# FAR-592 (D6): provision-time per-agent runner-binding resolution failure —
+# retryable config error; the D6 rollback trigger reads this code's rate.
+_CODE_SANDBOX_BINDING_RESOLUTION = "sandbox.binding_resolution"
+# FAR-592 (D6): the Local (host-subprocess) provider tier refused a
+# bindings-carrying agent without an explicit opt-in (D7-refusal posture).
+_CODE_SANDBOX_TIER_REFUSED = "sandbox.tier_refused"
+# FAR-802: managed workspace input error codes.
+_CODE_SANDBOX_INPUT_CREDENTIAL_FAILED = "sandbox.input_credential_failed"
+_CODE_SANDBOX_INPUT_CHECKOUT_FAILED = "sandbox.input_checkout_failed"
+_CODE_SANDBOX_INPUT_HOST_MISMATCH = "sandbox.input_host_mismatch"
+_CODE_SANDBOX_INPUT_RESOLUTION_FAILED = "sandbox.input_resolution_failed"
+_CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED = "sandbox.workspace_inputs_disabled"
+# FAR-1558 follow-up: the dispatch route resolved to a provider that was NEVER
+# dispatch-relevant (or its dispatch config is missing) — a deterministic
+# config fault raised only at dispatch by ``runner_dispatch`` as a typed
+# ``SandboxDispatchUnboundError``. The executor's generic catch publishes the
+# raw class name, so without this code the run resolved through
+# ``harness.unknown`` ("Unknown error") with the cause only in the detail.
+_CODE_SANDBOX_DISPATCH_UNBOUND = "sandbox.dispatch_unbound"
+_CODE_CAPACITY_ORG = "capacity.org"
+# FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
+# the upstream side-effect state is unknowable. This is a DISTINCT terminal
+# outcome — never collapsed into generic failure (it must surface for manual
+# confirm and be re-runnable with the same persisted idempotency key). The
+# dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
+# ("side-effect state unknown; never retried").
+_CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
+# Generic connector-returned failure. The connector has explicitly reported a
+# failed operation, so this is distinct from ``connector.side_effect_unknown``
+# (a raised/cancelled write whose upstream effect is unknowable).
+_CODE_CONNECTOR_FAILED = "connector.failed"
+_CODE_SCOPE_VIOLATION = "scope.violation"
+
+
+@dataclass(frozen=True)
+class KnownFix:
+    """One curated known-fix entry (FAR-706).
+
+    Matched over a run's RAW error text (``error_detail`` / retained stderr),
+    never on ``error_code`` alone — a generic code such as ``node.cancelled``
+    covers many distinct causes, and the whole point of this layer is to
+    surface the specific documented fix for a recurring raw signature.
+    """
+
+    fix_id: str
+    signature: str
+    title: str
+    body: str
+    link: str | None = None
+
+
+# Curated known-fixes KB (FAR-706). Static and code-driven — no DB table, no
+# migration. Start small: only signatures with a real, documented fix (the
+# dogfood AGENTS.md lessons / docs/agent-config.md). Do NOT invent entries.
+KNOWN_FIXES: tuple[KnownFix, ...] = (
+    KnownFix(
+        fix_id="heredoc_at_end_of_command",
+        signature="PYFAR647",
+        title="Here-document at the end of an agent command (missing trailing newline)",
+        body=(
+            'Bash failed at parse time with "here-document delimited by end-of-file '
+            "(wanted 'PYFAR647')\" before the agent ever started: the command ended "
+            "with a heredoc, and the run wrapper's `) > agent.log` got glued onto the "
+            "terminator line because no trailing newline followed it. Fix: never end "
+            "an agent_command with a heredoc — emit the payload as a base64 block "
+            "instead (`printf %s <b64> | base64 -d > /tmp/script.py && python3 "
+            "/tmp/script.py`), or guarantee a trailing newline after the terminator."  # NOSONAR S5443 - guidance text
+        ),
+    ),
+    KnownFix(
+        fix_id="session_interrupted_no_output",
+        signature="session interrupted",
+        title="Agent session interrupted before writing output.json",
+        body=(
+            "The wrapper's fallback fired because the agent exited without writing "
+            "output.json. Check run duration and no_output_reason to tell the causes "
+            "apart: died at the node/sandbox timeout → give the task more time (raise "
+            'timeout_seconds) or shrink the task; died mid-budget with "The operation '
+            'timed out" → the model-gateway provider timeout aborted the session — '
+            "raise the provider `timeout` in the sandbox's opencode config, not the "
+            "node timeout."
+        ),
+    ),
+    # A node-deadline kill is NOT a "session interrupted" case: the watchdog
+    # ends the dispatch without the wrapper's fallback string ever being
+    # written, so ``session_interrupted_no_output`` above can never match it.
+    # ``match_known_fixes`` scans ``error_detail`` only, and the two
+    # terminalisers (the in-process watchdog and the FAR-1999 durable reaper)
+    # both name the node-deadline bound — the shared substring is the
+    # signature. Without this entry a deadline-killed run rendered NO
+    # known-fix panel even though the remedy is well understood.
+    KnownFix(
+        fix_id="node_deadline_exceeded",
+        signature="node-deadline",
+        title="Node did not complete within its configured timeout_seconds (node-deadline kill)",
+        body=(
+            "The node-deadline watchdog ended the dispatch because the node did not "
+            "complete within its configured `timeout_seconds`; the cause is not "
+            "asserted. Read the run's `deadline_triage` entries and error_detail "
+            "before choosing a fix. If the agent was still producing output, it "
+            "simply ran out of budget: raise that node's `timeout_seconds` (a "
+            "sandbox node is capped at 3300s by E2B) or shrink the task. If the "
+            "triage entry shows no agent output at all, treat the "
+            "`no_output_reason` as the lead: a provider/session fault needs a "
+            "different fix from a genuinely long task."
+        ),
+        link="https://github.com/farnalabs/modulo/blob/main/docs/troubleshooting.md",
+    ),
+    KnownFix(
+        fix_id="sandbox_timeout_exceeds_e2b_cap",
+        signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
+        title="Sandbox node timeout exceeds the E2B 1-hour cap",
+        body=(
+            "The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, "
+            "so provisioning fails. Set `timeout_seconds` to 3300 or less to keep "
+            "provisioning headroom (FAR-511)."
+        ),
+        link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
+    ),
+    KnownFix(
+        fix_id="model_insufficient_funds",
+        signature="insufficient account funds",
+        title="Model provider account has insufficient funds (HTTP 402)",
+        body=(
+            'The model provider refused the request with HTTP 402 "Insufficient '
+            'account funds" — the provider account balance is exhausted, so every '
+            "run that calls it fails and a retry re-hits the same wall. Top up the "
+            "model provider's account balance (or point the agent at a backend with "
+            "credit), then re-run. This is a billing fault, not a transient gateway "
+            "error, so raising retries or node timeouts will not help."
+        ),
+        # No ``link``: the curated docs this KB points at (docs/agent-config.md)
+        # do not cover provider billing or credential top-up, and a link to an
+        # unrelated page would be worse than none. The actionable instruction
+        # lives in the body above.
+    ),
+)
+
+
+def match_known_fixes(detail: Any) -> list[KnownFix]:
+    """Return the curated known-fix entries whose signature appears in *detail*.
+
+    Matching is a case-insensitive substring test over the raw error text
+    (``error_detail`` carries retained stderr / failure summaries). Display-only
+    and fail-safe by contract (FAR-706): a missing, empty, non-string, or
+    pathological detail degrades to an empty list — never raises, so a bad
+    entry or input can never break a read surface.
+    """
+    try:
+        if detail is None:
+            return []
+        text = detail if isinstance(detail, str) else str(detail)
+        if not text:
+            return []
+        haystack = text.casefold()
+        return [fix for fix in KNOWN_FIXES if fix.signature.casefold() in haystack]
+    except Exception:
+        _log.warning("known_fixes.match_failed", exc_info=True)
+        return []
+
+
+ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
+    # --- agent (work verdict) codes -------------------------------------
+    "agent.failed": ErrorCodeSpec(
+        error_class="agent",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The agent reported it failed.",
+    ),
+    "agent.no_op": ErrorCodeSpec(
+        error_class="agent",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Completed, but no verifiable work.",
+    ),
+    "agent.stall": ErrorCodeSpec(
+        error_class="agent",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Run claimed by a worker but never dispatched a node (wedged worker); recovered by re-dispatch.",
+    ),
+    # --- contract (output) codes ----------------------------------------
+    _CODE_CONTRACT_SCHEMA: ErrorCodeSpec(
+        error_class="contract",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Output didn't match the schema.",
+    ),
+    "contract.no_output": ErrorCodeSpec(
+        error_class="contract",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Node produced no usable output.",
+    ),
+    # --- script (script-mode sandbox) codes ------------------------------
+    # FAR-296 Phase 2 stage-split contract: once a script-mode node's script
+    # PROCESS has started (the fencing lease is claimed), every fault is
+    # TERMINAL (never retryable) — re-dispatching could double-execute a
+    # side-effecting script. These are the post-claim terminal codes.
+    # ``script.schema_failed`` / ``script.no_output`` canonicalize to the
+    # existing contract.* codes (one string per failure class) — see
+    # LEGACY_ALIASES.
+    "script.failed": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox failed after the script process started (post-claim, terminal).",
+    ),
+    "script.invalid_output": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Script-mode sandbox produced invalid output after the script process started (post-claim, terminal).",
+    ),
+    "script.side_effect_unknown": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script terminated mid-execution, side-effect state unknown; never retried (needs human).",
+    ),
+    "script.session_lost": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox session was lost after the script process started (post-claim, terminal).",
+    ),
+    "script.budget_killed": ErrorCodeSpec(
+        error_class="script",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Script-mode sandbox exceeded its resource limits and was killed by "
+        "the platform-side runtime killer (post-claim, terminal).",
+    ),
+    # --- harness (machinery) codes ---------------------------------------
+    # ``harness.unknown`` is the fallback for unmapped legacy codes — any code
+    # that has no alias and no registry entry resolves here so presentation
+    # always has a resolvable code (§3.2). Non-retryable by default: an
+    # unclassified failure is never auto-retried (fail-safe default).
+    _CODE_HARNESS_UNKNOWN: ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Unclassified harness failure.",
+    ),
+    "harness.db.connection_lost": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Database connection lost.",
+    ),
+    "harness.state_serialization": ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Checkpoint state could not be serialized.",
+    ),
+    "harness.sdk_task_cancelled": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Sandbox SDK task was cancelled.",
+    ),
+    _CODE_HARNESS_EXECUTOR_FAILED: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Executor failed during dispatch.",
+    ),
+    "harness.executor_heartbeat_lost": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Executor heartbeat was lost.",
+    ),
+    _CODE_HARNESS_DISPATCH_FAILED: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Run was never dispatched.",
+    ),
+    # FAR-604 P1: registered (and aliased in LEGACY_ALIASES as the raw
+    # ``heartbeat_stale`` spelling the sweep writes) so the heartbeat-stale
+    # slot force-release never resolves through the ``harness.unknown``
+    # fallback and analytics buckets it as its own class, distinct from
+    # ``harness.dispatch_failed`` (never dispatched). Transient like the
+    # sibling harness codes; warning-level — a frozen heartbeat usually means
+    # a wedged worker or a DB storm, both worth watching.
+    _CODE_HARNESS_HEARTBEAT_STALE: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Heartbeat stale past threshold; concurrency slot force-released by reconciliation.",
+    ),
+    # FAR-1627: registered so the shutdown handoff's dotted spelling passes
+    # through unchanged (never ``harness.unknown``) and analytics bucket it as
+    # its own class — "worker shut down mid-run; claim released for
+    # re-dispatch". Transient like the sibling harness codes (the run is
+    # reset to pending for re-dispatch, not terminal-failed); warning-level
+    # because every deploy that kills an in-flight run should be visible.
+    _CODE_HARNESS_WORKER_LOST: ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "Worker executing the run was shut down (deploy or restart); "
+            "claim released and run handed back for re-dispatch."
+        ),
+    ),
+    # FAR-2076: the reconcile re-enqueue backstop found a pending run whose
+    # retry budget was already consumed, so it terminal-failed the row instead
+    # of granting another execution. Terminal by construction (no execution is
+    # left to grant — retrying would just re-hit this backstop), warning-level
+    # because a run reaching this gate means an upstream granting path
+    # over-counted, which is worth watching.
+    _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED: ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Run was not re-dispatched: its retry budget was already consumed, so "
+            "reconciliation terminal-failed it instead of granting another execution. "
+            "Raise the pipeline's retry_policy max_retries if more attempts are expected."
+        ),
+    ),
+    "harness.worker_failed": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Worker task failed.",
+    ),
+    "harness.node_cancelled": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Node was cancelled by the harness.",
+    ),
+    "harness.gate_creation_failed": ErrorCodeSpec(
+        error_class="harness",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A HITL gate could not be created.",
+    ),
+    "harness.late_write": ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance="A node wrote output after the run terminalized.",
+    ),
+    "harness.idempotency_gate": ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Delivery already sent; transient retry suppressed by the idempotency gate.",
+    ),
+    # --- connector (generic REST) codes ----------------------------------
+    # FAR-410: write-timeout / mid-send cancellation is a DISTINCT terminal
+    # state that must NOT masquerade as generic failure. It surfaces to the run
+    # viewer / HITL for manual confirm and is re-runnable with the SAME
+    # persisted idempotency key (never a fresh random per run).
+    _CODE_CONNECTOR_UNKNOWN: ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "Connector write was cancelled mid-send or raised an error; upstream side-effect state unknown. "
+            "Re-run with the same idempotency key or confirm manually."
+        ),
+    ),
+    # --- sandbox codes ---------------------------------------------------
+    _CODE_SANDBOX_NO_OUTPUT_JSON: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Sandbox produced no parseable output.",
+    ),
+    "sandbox.spawn": ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Sandbox could not be provisioned.",
+    ),
+    "sandbox.network": ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Sandbox network failure.",
+    ),
+    _CODE_SANDBOX_RATE_LIMITED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "E2B provisioner rate-limited sandbox creation (429) and the retry budget"
+            " is exhausted; this run failed terminally. Re-run once the provisioner"
+            " quota recovers."
+        ),
+    ),
+    _CODE_SANDBOX_QUEUE_TIMEOUT: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance=(
+            "Sandbox provisioning did not complete: either the rate-limit retry"
+            " budget was exhausted (repeated 429s), or the provisioning watchdog"
+            " fired because sandbox creation never returned within its bound."
+        ),
+    ),
+    # FAR-510: a sandbox_agent node whose synthetic failure path (generic
+    # exception, schema validation) RETURNED the stamped failure envelope
+    # (instead of raising) is downgraded from "complete" to "failed" at
+    # finalization. The executor writes this exact dotted spelling into
+    # ``runs.error_code`` (a registry key passes through ``map_legacy_code``
+    # unchanged) — otherwise the honest downgrade would present as
+    # ``harness.unknown``.
+    _CODE_SANDBOX_AGENT_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Sandbox agent execution failed; the run was downgraded from complete at finalization.",
+    ),
+    # FAR-592 (D6): retryable provision-time binding-resolution failure
+    # (backend gone/unhealthy/decrypt/malformed). The D6 rollback trigger
+    # monitors this code's rate via the error dashboard.
+    _CODE_SANDBOX_BINDING_RESOLUTION: ErrorCodeSpec(
+        error_class="config",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Agent runner binding could not be resolved at provision time; re-configure the binding.",
+    ),
+    # FAR-592 (D6): terminal — the Local host tier refuses standing-credential
+    # injection without an explicit profile opt-in.
+    _CODE_SANDBOX_TIER_REFUSED: ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Local provider tier refused runner bindings; opt in via the profile's "
+            "allow_runner_env_bindings flag or switch tiers."
+        ),
+    ),
+    # FAR-802: managed workspace input error codes. These surface when a
+    # managed input fails at runtime (credential, checkout, host-mismatch,
+    # resolution) or when the feature is explicitly disabled.
+    _CODE_SANDBOX_INPUT_CREDENTIAL_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input credential could not be resolved or was rejected.",
+    ),
+    _CODE_SANDBOX_INPUT_CHECKOUT_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input git checkout failed (clone/checkout error).",
+    ),
+    _CODE_SANDBOX_INPUT_HOST_MISMATCH: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Managed workspace input URL host does not match the connector's allowed host.",
+    ),
+    _CODE_SANDBOX_INPUT_RESOLUTION_FAILED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Managed workspace input ref (branch/tag/sha) could not be resolved.",
+    ),
+    _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED: ErrorCodeSpec(
+        error_class="sandbox",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Managed workspace inputs are disabled for this organisation or pipeline.",
+    ),
+    # FAR-1558 follow-up: the bundled-runner dispatch route rejected the
+    # pipeline-bound environment profile — a provider that was NEVER
+    # dispatch-relevant (local / inert local_docker), a missing dispatch
+    # binding (MODULO_DOCKER_HOST / kubernetes opt-in / image_ref), or a
+    # locked-policy mismatch. Raised ONLY at dispatch as the typed
+    # ``SandboxDispatchUnboundError``; the executor's generic catch publishes
+    # ``type(exc).__name__``, so the LEGACY_ALIASES entry below is what keeps
+    # the run out of the ``harness.unknown`` "Unknown error" slice. Config
+    # fault like its sibling ``sandbox.tier_refused``: the operator re-binds
+    # the profile, so it is terminal and never retried.
+    _CODE_SANDBOX_DISPATCH_UNBOUND: ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Environment profile is not dispatch-relevant (inert provider or missing "
+            "dispatch binding); re-bind the pipeline to a dispatch-capable profile."
+        ),
+    ),
+    # --- node guard codes ------------------------------------------------
+    _CODE_NODE_TIMEOUT: ErrorCodeSpec(
+        error_class="node",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Hit the timeout guard.",
+    ),
+    "node.deadline_exceeded": ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "A node did not complete within its configured timeout_seconds "
+            "(the node-deadline watchdog ended the dispatch). The cause is "
+            "not asserted here. A SANDBOX attempt may retain a "
+            "deadline_triage envelope (per-attempt output/log tail, "
+            "no_output_reason, stdout_length), and a run-level triage entry, "
+            "where one was written, carries run_attempt_count as data — but "
+            "not every terminalisation writes one, so deadline_triage may be "
+            "empty. Read the run's error_detail for what the terminaliser "
+            "observed."
+        ),
+    ),
+    _CODE_NODE_RUNAWAY: ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Hit the token budget.",
+    ),
+    "node.cancelled": ErrorCodeSpec(
+        error_class="node",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Node was cancelled.",
+    ),
+    # FAR-1141: the dispatch node's own wait guard expired. ``error_class`` is
+    # "node" (a node-level guard, like ``node.deadline_exceeded``) — NOT a new
+    # class, so the run-classifier's ``_SOURCE_ERROR_CLASSES`` still buckets it
+    # as a source/infra failure. ``retryable=False`` is the CONTRACT: the job was
+    # already fired on the customer's substrate, so an auto-retry would fire a
+    # SECOND external job (the executor's run-level ``retry_policy`` is the
+    # consumer that must never pick this up; the dispatch node is additionally
+    # persisted ``idempotent=false`` so every retry path is suppressed —
+    # api/routes/pipelines.py ``_validate_dispatch_node``).
+    _CODE_DISPATCH_WAIT_TIMEOUT: ErrorCodeSpec(
+        error_class="node",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Dispatched substrate run did not reach a terminal status within the node's "
+            "wait_timeout; never retried (a retry would fire a second external job)."
+        ),
+    ),
+    # --- run-level codes -------------------------------------------------
+    "run.superseded": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity=None,
+        guidance="Superseded by a newer run.",
+    ),
+    # FAR-1883: a capacity-queued run whose PIPELINE set a ``queue_timeout`` and
+    # whose created_at ("time queued") passed that window. This is a
+    # SUPERSESSION, not a failure: the run is ENDED (status ``rejected``)
+    # before it ever started, so it is visible and filterable and gets its own
+    # analytics bucket, but it must never enter failure counts/thresholds or
+    # page anyone. Deliberately distinct from ``capacity.timeout`` (the retired
+    # 120-minute terminal-FAIL): reusing that code's meaning would collapse a
+    # supersession into a failure. The queue-state alert (FAR-1343/FAR-1344)
+    # is the escalation path and fires whether or not a timeout is configured.
+    "queue.expired": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "Waited in the capacity queue past this pipeline's queue_timeout; the run was superseded before it started."
+        ),
+    ),
+    # FAR-1329: the dispatcher_reconcile AGE gate (``_terminalize_mid_graph_wedges``)
+    # writes the raw ``no_progress`` spelling — registered (and aliased below) in
+    # the same change that started writing it, so it never resolves through the
+    # ``harness.unknown`` fallback ("Unknown error"). Distinct from
+    # ``run.superseded`` on purpose: the age predicate
+    # (``running`` + ``dispatcher='saq'`` + ``started_at < now() - age``) never
+    # compares runs, so it used to label a stalled run "Superseded by a newer
+    # run." — a false cause that cost a full investigation (FAR-1318 / run
+    # 03721c8e). Terminal like its sibling (the run burned past the max
+    # plausible duration and was not retried by the gate); warning-level because
+    # a run that makes no progress for ~135 minutes is an infrastructure
+    # degradation worth watching, unlike a routine supersession.
+    "run.no_progress": ErrorCodeSpec(
+        error_class="run",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "No node progress within the reconcile age bound (~135 min); the run was "
+            "terminal-failed by dispatcher_reconcile's age gate."
+        ),
+    ),
+    # --- connector codes -------------------------------------------------
+    _CODE_CONNECTOR_FAILED: ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Connector reported that its operation failed.",
+    ),
+    "connector.invalid_key": ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Connector credentials are invalid.",
+    ),
+    # FAR-418: node-level capability_scope violation — a node used a connector /
+    # tool / run_context key excluded by its scope (deny-by-default). Permanent
+    # (re-dispatching would reproduce the same violation), so never retryable.
+    _CODE_SCOPE_VIOLATION: ErrorCodeSpec(
+        error_class="scope",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Node used a capability excluded by its capability_scope (connector/tool/context).",
+    ),
+    "connector.permission": ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Connector lacks permission.",
+    ),
+    "connector.rate_limit": ErrorCodeSpec(
+        error_class="connector",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Connector is temporarily rate limited.",
+    ),
+    "connector.network": ErrorCodeSpec(
+        error_class="connector",
+        retryable=True,
+        alert_severity="warning",
+        guidance="Connector network failure.",
+    ),
+    # --- provider (model backend) codes -----------------------------------
+    # Raw exception class names that executor's generic catch publishes
+    # (``type(exc).__name__``) for LLM-node failures. ``provider.authentication``
+    # and ``provider.billing`` are permanent (a bad/expired key, or an unfunded
+    # account); the others are transient infra states and match the analogous
+    # connector.transient retryable conventions. FAR-2006: a 401/402 from the
+    # provider gateway is detected from the retained sandbox output (opencode
+    # reports it as an error event / stderr line) — never as an
+    # ``AgentReturnContract`` failure, so without these two codes a whole night
+    # of provider refusals presented as a retryable ``sandbox.no_output_json``.
+    "provider.unavailable": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider is unavailable (gateway outage or upstream 5xx).",
+    ),
+    "provider.authentication": ErrorCodeSpec(
+        error_class="provider",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The model provider rejected the API key (invalid, expired, or revoked).",
+    ),
+    "provider.billing": ErrorCodeSpec(
+        error_class="provider",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The model provider refused the request for billing reasons (402 — insufficient funds, "
+            "quota exhausted, or payment required)."
+        ),
+    ),
+    "provider.rate_limited": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model provider rate-limited the request.",
+    ),
+    "provider.connection": ErrorCodeSpec(
+        error_class="provider",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A connection to the model provider failed.",
+    ),
+    # --- model (stdout-scanned provider failure) codes --------------------
+    # FAR-734: model-backend errors detected by scanning the retained agent
+    # stdout for terminal JSONL ``"type":"error"`` signatures.  These are
+    # DISTINCT from the provider.* codes (which map Python exception class
+    # names from the executor's generic catch) — the same underlying failure
+    # (e.g. a timeout) surfaces as provider.unavailable when caught as a
+    # Python exception, but as model.provider_timeout when detected post-hoc
+    # in retained stdout.  Retryability matches the provider.* counterpart.
+    "model.provider_timeout": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model backend timed out mid-session (detected from retained stdout).",
+    ),
+    "model_disabled": ErrorCodeSpec(
+        error_class="model",
+        retryable=False,
+        alert_severity="critical",
+        guidance="The model is disabled for the API key (detected from retained stdout).",
+    ),
+    "model.connection": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="A connection to the model backend failed (detected from retained stdout).",
+    ),
+    "model.rate_limited": ErrorCodeSpec(
+        error_class="model",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model backend rate-limited the request (detected from retained stdout).",
+    ),
+    # A billing fault is a hard blocker, not a transient one: the provider
+    # answers HTTP 402 "Insufficient account funds" and EVERY retry hits the
+    # same wall (each one burns a sandbox dispatch).  Non-retryable and
+    # critical, like ``model_disabled`` — both are credential/billing faults
+    # that only an operator can clear.  Distinct from ``model.rate_limited``
+    # (a quota that recovers on its own) and ``model.provider_timeout``.
+    "model.insufficient_funds": ErrorCodeSpec(
+        error_class="model",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The model provider refused the request for lack of funds (HTTP 402) — "
+            "top up the provider account balance, then re-run; retrying cannot succeed."
+        ),
+    ),
+    # --- capacity codes --------------------------------------------------
+    _CODE_CAPACITY_ORG: ErrorCodeSpec(
+        error_class="capacity",
+        retryable=True,
+        alert_severity=None,
+        guidance=(
+            "Org capacity exhausted: the run is queued waiting for org capacity, or"
+            " failed terminally because its retries ran out while the org cap stayed full."
+        ),
+    ),
+    "capacity.pipeline": ErrorCodeSpec(
+        error_class="capacity",
+        retryable=True,
+        alert_severity=None,
+        guidance="Queued — waiting for pipeline capacity.",
+    ),
+    "capacity.claim": ErrorCodeSpec(
+        error_class="capacity",
+        retryable=True,
+        alert_severity=None,
+        guidance="Claim capacity exhausted.",
+    ),
+    # HISTORICAL ONLY (FAR-1883): the stale-run sweep no longer writes
+    # ``capacity_timeout`` - capacity-queued runs wait indefinitely unless the
+    # pipeline opts into ``queue_timeout_seconds``, whose expiry writes the
+    # distinct ``queue.expired`` supersession code below. Retained so a
+    # pre-FAR-1883 row still resolves to its own class instead of
+    # ``harness.unknown``.
+    "capacity.timeout": ErrorCodeSpec(
+        error_class="capacity",
+        retryable=True,
+        alert_severity=None,
+        guidance="Capacity wait timed out (historical; superseded by queue.expired).",
+    ),
+    # --- hitl codes --------------------------------------------------------
+    # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
+    # the raw ``hitl_review_expired`` code — registered here (and aliased in
+    # LEGACY_ALIASES) so it never resolves through the ``harness.unknown``
+    # fallback and analytics buckets it as its own cancel class rather than
+    # "Unknown error". Terminal like the sibling terminalizer codes
+    # (``run.superseded``): the gate expired unanswered, never retried, and
+    # routine hygiene — no alert.
+    "hitl.review_expired": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "HITL review expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot."
+        ),
+    ),
+    # FAR-721: the zero-claim awaiting_human zombie terminalizer
+    # (``_terminalize_hitl_review_missing``) writes the raw
+    # ``hitl_review_missing`` code — registered here (and aliased in
+    # LEGACY_ALIASES) beside its sibling ``hitl.review_expired`` so it never
+    # resolves through the ``harness.unknown`` fallback (which rendered as
+    # "Unknown error") and analytics buckets it as its own cancel class.
+    # Same terminal, routine-hygiene posture as the sibling: the gate row was
+    # never created, never retried, no alert.
+    "hitl.review_missing": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance=(
+            "HITL gate was never created for an awaiting_human run; run terminalized "
+            "by dispatcher_reconcile to free its concurrency slot."
+        ),
+    ),
+    # FAR-1487: a HITL rejection with no reject route ENDS the run with the
+    # terminal ``rejected`` status. Not a failure (nothing broke) - no alert,
+    # never retried. ``hitl.superseded`` is the BOOKKEEPING variant: a newer
+    # version of the work item replaced a still-waiting review (coalesced
+    # supersede), so the older run ends ``rejected`` WITHOUT looking like a
+    # human said "no" (silent, like ``run.superseded``).
+    "hitl.rejected": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance="Rejected by a reviewer at a HITL gate with no reject route; the run ended.",
+    ),
+    "hitl.superseded": ErrorCodeSpec(
+        error_class="hitl",
+        retryable=False,
+        alert_severity=None,
+        guidance="Superseded by a newer version of the work item; the older review was closed and its run ended.",
+    ),
+    # --- eval codes ------------------------------------------------------
+    _CODE_EVAL_BLOCKED: ErrorCodeSpec(
+        error_class="eval",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Work done, but evals blocked or failed.",
+    ),
+    "eval.failed": ErrorCodeSpec(
+        error_class="eval",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Eval suite failed.",
+    ),
+    # --- judge codes (ADR 066 D6) -----------------------------------------
+    # A judge that produced NO verdict. These are the failed instrument, not a
+    # failed check (ADR 066 D18): every quality aggregate excludes
+    # ``outcome='error'`` rows from both its denominator and its failure count
+    # through the shared ``non_guardrail_eval_results_clause`` (dashboard,
+    # admin eval dashboard, variant batches, quality report and the compliance
+    # evidence index), as do the suite-run pass rate and the feedback eval-gap
+    # view. The rows stay persisted with a coded reason and a NULL score so the
+    # instrument failure remains auditable (a policy gate still fails closed).
+    # They are registered here so the first canonicalising consumer renders a
+    # real guidance string instead of "Unknown error".
+    "judge.timeout": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model judge did not answer before its bound; no verdict was produced.",
+    ),
+    "judge.malformed_response": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="warning",
+        guidance="The model judge returned a response that is not a valid verdict; no verdict was produced.",
+    ),
+    "judge.unavailable": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="No model judge was available to answer; no verdict was produced.",
+    ),
+    "judge.configuration": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The judge definition is misconfigured (missing/unresolvable field or backend); no verdict was produced."
+        ),
+    ),
+    # --- config codes ----------------------------------------------------
+    "config.error": ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Pipeline configuration is invalid.",
+    ),
+    "config.invalid": ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Pipeline configuration is invalid.",
+    ),
+    # FAR-1115: an agent node (model-backed by intent) whose agent resolves
+    # to no model_backend_id — a real misconfiguration that the old stub
+    # path silently masked as a successful execution with zero tokens.
+    "config.missing_model_backend": ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance="Agent node references an agent with no model backend configured.",
+    ),
+}
+
+
+LEGACY_ALIASES: dict[str, str] = {
+    # Agent verdict / work-truth (executor.run_failed publishes).
+    "executor_stalled": "agent.stall",
+    # Node guards.
+    "node_timeout": _CODE_NODE_TIMEOUT,
+    "TimeoutError": _CODE_NODE_TIMEOUT,
+    "node_deadline_exceeded": "node.deadline_exceeded",
+    "runaway": _CODE_NODE_RUNAWAY,
+    "runaway.tokens_exceeded": _CODE_NODE_RUNAWAY,
+    "node_cancelled": "node.cancelled",
+    # FAR-1141: the executor's generic catch publishes the raw exception class
+    # name (``type(exc).__name__``) for a dispatch node whose ``await_completion``
+    # window expired — canonicalized to the registry's never-retryable
+    # ``dispatch.wait_timeout`` entry so it never resolves through the
+    # ``harness.unknown`` fallback and never presents as a retryable timeout.
+    "DispatchWaitTimeoutError": _CODE_DISPATCH_WAIT_TIMEOUT,
+    # Run-level.
+    "executor_superseded": "run.superseded",
+    # FAR-1329: the age-bound wedge terminalizer writes ``no_progress`` — its
+    # own truthful code (see the ``run.no_progress`` registry entry) instead of
+    # the supersede vocabulary its predicate never justified.
+    "no_progress": "run.no_progress",
+    # Contract.
+    "output_rejected": _CODE_CONTRACT_SCHEMA,
+    # Executor maps manual/agent output schema validation failures to this
+    # domain code (PRD §8.9 error table) instead of a raw "ValueError".
+    "schema_validation_failure": _CODE_CONTRACT_SCHEMA,
+    # FAR-296 Phase 2: script-mode stage-split aliases. These canonicalize to
+    # ONE string per failure class — ``script.schema_failed`` is the same
+    # contract.schema class, ``script.no_output`` the same contract.no_output
+    # class. A script exception class name that the executor's generic catch
+    # publishes (``type(exc).__name__``) also resolves to its canonical code.
+    "script.schema_failed": _CODE_CONTRACT_SCHEMA,
+    "script.no_output": "contract.no_output",
+    "ScriptFailedError": "script.failed",
+    "ScriptInvalidOutputError": "script.invalid_output",
+    "ScriptSideEffectUnknownError": "script.side_effect_unknown",
+    "ScriptBudgetKilledError": "script.budget_killed",
+    # Harness machinery (§3.2). ``TypeError``/``OperationalError`` are the
+    # raw exception class names that executor's generic catch publishes.
+    "OperationalError": "harness.db.connection_lost",
+    "TypeError": "harness.state_serialization",
+    "NodeCancelledError": "harness.sdk_task_cancelled",
+    "SandboxNodeFailedError": _CODE_SANDBOX_NO_OUTPUT_JSON,
+    # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
+    # exhausted) are transient. The executor's generic catch publishes the raw
+    # exception class name (``SandboxRateLimitedError`` — our retryable wrapper,
+    # or the un-retried e2b ``RateLimitException``), both of which must resolve
+    # to the retryable ``sandbox.rate_limited`` code — never the permanent
+    # ``harness.unknown`` fallback.
+    "SandboxRateLimitedError": _CODE_SANDBOX_RATE_LIMITED,
+    "RateLimitException": _CODE_SANDBOX_RATE_LIMITED,
+    # FAR-296 Phase 4b: rate-limit retry exhaustion maps to the distinct
+    # ``sandbox.queue_timeout`` code (the "queue" for capacity timed out).
+    "SandboxQueueTimeoutError": _CODE_SANDBOX_QUEUE_TIMEOUT,
+    "SandboxRateLimitExhaustedError": _CODE_SANDBOX_QUEUE_TIMEOUT,
+    # FAR-296 Phase 4b: dispatch-time capacity gate maps to ``capacity.org``.
+    "SandboxCapacityExceededError": _CODE_CAPACITY_ORG,
+    # FAR-592 (D6): provision-time binding-resolution failures map to the
+    # retryable ``sandbox.binding_resolution`` code (D6 rollback-trigger
+    # signal); both the typed wrapper and the raw core class name publish.
+    # The dotted spellings are registry keys — map_legacy_code's alias lookup
+    # misses them and the registry check then passes them through unchanged,
+    # so no dotted alias entry is needed.
+    "SandboxBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
+    "AgentBindingResolutionError": _CODE_SANDBOX_BINDING_RESOLUTION,
+    # FAR-592 (D6): the Local tier refusal maps to the terminal
+    # ``sandbox.tier_refused`` code. Both the node-runner wrapper (what the
+    # executor sees via ``type(exc).__name__``) and the raw core class name
+    # publish.
+    "SandboxTierRefusedError": _CODE_SANDBOX_TIER_REFUSED,
+    "LocalProviderBindingsRefusedError": _CODE_SANDBOX_TIER_REFUSED,
+    # FAR-1558 follow-up: the dispatch route's typed refusal (raised ONLY at
+    # dispatch by ``bundled_runner.runner_dispatch`` when a pipeline-bound
+    # profile is not dispatch-relevant). The executor's generic catch publishes
+    # ``type(exc).__name__`` as the raw ``runs.error_code``; without this alias
+    # the run presented as ``harness.unknown`` / "Unknown error" with the named
+    # cause confined to ``error_detail``. Canonicalizes to its own registered
+    # code so analytics buckets it apart from genuinely unclassified failures.
+    "SandboxDispatchUnboundError": _CODE_SANDBOX_DISPATCH_UNBOUND,
+    "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
+    "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
+    "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
+    "never_dispatched": _CODE_HARNESS_DISPATCH_FAILED,
+    "dispatch_failed": _CODE_HARNESS_DISPATCH_FAILED,
+    "worker_lost": _CODE_HARNESS_DISPATCH_FAILED,
+    # FAR-604 P1: the heartbeat-stale slot-reconciliation sweep writes the raw
+    # ``heartbeat_stale`` spelling — canonicalized to its own registry entry
+    # (distinct from ``worker_lost``/``harness.dispatch_failed``) so analytics
+    # separates "never dispatched" from "dispatched, heartbeat went stale".
+    "heartbeat_stale": _CODE_HARNESS_HEARTBEAT_STALE,
+    "task_failure": "harness.worker_failed",
+    "gate_creation_failed": "harness.gate_creation_failed",
+    # FAR-228 raw code used by the executor's retry-suppression write.
+    "idempotency_gate": "harness.idempotency_gate",
+    # FAR-410: connector write-timeout / mid-send cancellation → distinct
+    # ``connector.side_effect_unknown`` (never collapsed into generic failure).
+    # ``connector_unknown`` is the raw exception/snake_case spelling;
+    # ``ConnectorUnknownError`` is the exception class name the executor's
+    # generic catch publishes (``type(exc).__name__``); ``connector.unknown`` is
+    # the prior dotted spelling kept for backward-compat.
+    # FAR-2090: connector node action failure (query/write/dispatch) →
+    # ``connector.side_effect_unknown``.
+    "connector_unknown": _CODE_CONNECTOR_UNKNOWN,
+    "ConnectorUnknownError": _CODE_CONNECTOR_UNKNOWN,
+    "connector.unknown": _CODE_CONNECTOR_UNKNOWN,
+    "ConnectorNodeFailedError": _CODE_CONNECTOR_UNKNOWN,
+    "connector_failed": _CODE_CONNECTOR_FAILED,
+    "ConnectorReportedFailure": _CODE_CONNECTOR_FAILED,
+    # Provider (model backend) exception class names published by executor's
+    # generic catch (``type(exc).__name__``) on LLM-node failures.
+    "RateLimitError": "provider.rate_limited",
+    "ProviderUnavailableError": "provider.unavailable",
+    "AuthenticationError": "provider.authentication",
+    "APIConnectionError": "provider.connection",
+    # Eval. Chunk 5c (FAR-1105) retired the suite-aggregate blocking machinery,
+    # so ``eval_suite_blocked`` is no longer WRITTEN — but runs that completed
+    # before the retirement still carry the raw spelling in ``runs.error_code``,
+    # and this read-/write-time alias is what canonicalizes them. Removing it
+    # would silently reclassify those historical rows as ``harness.unknown``
+    # (and drop them from the ``eval.blocked`` analytics slice), so it is kept
+    # deliberately alongside sibling backward-compat aliases.
+    "eval_blocked": _CODE_EVAL_BLOCKED,
+    "eval_suite_blocked": _CODE_EVAL_BLOCKED,
+    # Config.
+    "configuration_error": "config.error",
+    # FAR-1115: agent node with no model backend configured.
+    "NodeMissingModelBackendError": "config.missing_model_backend",
+    # Capacity.
+    "claim_cap_exhausted": "capacity.claim",
+    # FAR-648: the dispatcher_reconcile expired-HITL-gate terminalizer writes
+    # the raw code — canonicalized to the ``hitl.review_expired`` registry entry
+    # beside its sibling terminalizer aliases above (never ``harness.unknown``).
+    "hitl_review_expired": "hitl.review_expired",
+    # FAR-721: the zero-claim awaiting_human zombie terminalizer writes the
+    # raw ``hitl_review_missing`` code — canonicalized to its own registry
+    # entry beside its sibling terminalizer alias above (never
+    # ``harness.unknown``).
+    "hitl_review_missing": "hitl.review_missing",
+    # FAR-2076: the reconcile re-enqueue backstop's terminal code. Rows written
+    # before it emitted the dotted spelling carry the bare form, so the alias
+    # keeps them resolving to the registry entry rather than collapsing to
+    # ``harness.unknown``.
+    "retry_budget_exhausted": _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
+    "pipeline_capacity": "capacity.pipeline",
+    "org_capacity_limited": _CODE_CAPACITY_ORG,
+    "capacity_timeout": "capacity.timeout",
+    # FAR-418: scope violation (legacy snake_case spelling canonicalized to
+    # scope.violation).
+    "scope_violation": _CODE_SCOPE_VIOLATION,
+    "ScopeViolationError": _CODE_SCOPE_VIOLATION,
+    # FAR-734: model-backend errors detected from retained stdout (snake_case
+    # spellings for backward compat — these are written by the stdout scanner
+    # and must resolve to the dotted registry entries above, never
+    # ``harness.unknown``).  ``model_disabled`` is already a registry key so
+    # no alias entry is needed (map_legacy_code passes it through unchanged).
+    "model_provider_timeout": "model.provider_timeout",
+    "model_connection": "model.connection",
+    "model_rate_limited": "model.rate_limited",
+    # Sibling snake_case spelling for the HTTP 402 billing code, so the model
+    # family canonicalizes uniformly through ``map_legacy_code`` /
+    # ``expand_code_variants`` (a filter on either spelling resolves it).
+    "model_insufficient_funds": "model.insufficient_funds",
+}
+
+
+# ---------------------------------------------------------------------------
+# Unmapped-fallback signal (FAR-589 D3b) + map-key uniqueness guard
+# ---------------------------------------------------------------------------
+
+# The ``harness.unknown`` fallback choke point emits a DISTINCT, queryable
+# signal carrying the unmapped code (usually an exception class name the
+# executor's generic catch published). Analytics canonicalizes unknown classes
+# away, so the log event is the only place the raw name survives. Emitted once
+# per distinct code per process: read surfaces (analytics bucketing, runs list,
+# present_error) hit ``map_legacy_code`` per row, so an unconditional warning
+# would flood the log — the FIRST occurrence per code per process is the
+# signal, and a bounded seen-set keeps memory flat.
+_UNMAPPED_CODE_SIGNAL_MAX = 256
+_unmapped_code_signal_seen: set[str] = set()
+_unmapped_code_signal_lock = threading.Lock()
+
+
+def _emit_unmapped_code_signal(code: str) -> None:
+    """Emit ``harness.unknown.fallback`` once per distinct unmapped code.
+
+    The event extra carries the unmapped code verbatim (the class name a
+    map-miss would otherwise lose) so the fallback is queryable and the
+    rollbacks' ``unmapped-fallback events > 0`` tripwires have a defined
+    signal to read.
+    """
+    with _unmapped_code_signal_lock:
+        if code in _unmapped_code_signal_seen or len(_unmapped_code_signal_seen) >= _UNMAPPED_CODE_SIGNAL_MAX:
+            return
+        _unmapped_code_signal_seen.add(code)
+    _log.warning(
+        "harness.unknown.fallback",
+        extra={"unmapped_code": code},
+    )
+
+
+def _reset_unmapped_code_signal_for_tests() -> None:
+    """Clear the per-process seen-set (test isolation only)."""
+    with _unmapped_code_signal_lock:
+        _unmapped_code_signal_seen.clear()
+
+
+def error_code_map_conflicts() -> list[str]:
+    """Bare-name uniqueness guard over the registry + alias maps (FAR-589 D3b).
+
+    The registry and alias tables map both dotted codes and BARE names
+    (exception class names / legacy snake_case spellings). Python silently
+    drops a duplicated literal key at import, and :func:`map_legacy_code`
+    checks ``LEGACY_ALIASES`` FIRST — so one bare name claimed by both maps
+    with different targets changes meaning depending on lookup order, and a
+    bare name must never be silently ambiguous. Returns human-readable
+    conflict descriptions; an EMPTY list is a clean map:
+
+    1. a key present in BOTH maps whose canonical resolutions differ
+       (the alias silently shadows the registry entry);
+    2. an alias key that duplicates a registry key even to the SAME target
+       (the bare name is ambiguous about which table owns it);
+    3. an alias target that does not resolve through the registry
+       (``class_for``/``is_retryable`` would silently degrade to
+       ``"unknown"`` / non-retryable).
+
+    The unit-test suite asserts this stays empty on every change to either
+    map — a guard test, not a runtime raise (an import-time raise would turn
+    a map edit into a fleet-wide import failure).
+    """
+    conflicts = [
+        f"key {key!r} exists in both ERROR_CODE_REGISTRY and LEGACY_ALIASES "
+        f"(registry passthrough vs alias target {LEGACY_ALIASES[key]!r})"
+        for key in sorted(set(ERROR_CODE_REGISTRY) & set(LEGACY_ALIASES))
+    ]
+    conflicts.extend(
+        f"alias {alias!r} -> {target!r} is not a registry key"
+        for alias, target in sorted(LEGACY_ALIASES.items())
+        if target not in ERROR_CODE_REGISTRY
+    )
+    return conflicts
+
+
+def map_legacy_code(code: str | None) -> str:
+    """Map a (legacy or already-dotted) error code to its canonical dotted code.
+
+    Legacy codes are resolved through :data:`LEGACY_ALIASES`; already-dotted
+    registry codes pass through unchanged. Unmapped codes fall back to
+    ``harness.unknown`` (§3.2) so presentation always has a resolvable code —
+    and each FIRST unmapped code per process emits the distinct
+    ``harness.unknown.fallback`` signal carrying the raw name (usually the
+    exception class name analytics canonicalizes away).
+    """
+    if not code:
+        return _CODE_HARNESS_UNKNOWN
+    resolved = LEGACY_ALIASES.get(code)
+    if resolved is not None:
+        return resolved
+    if code in ERROR_CODE_REGISTRY:
+        return code
+    _emit_unmapped_code_signal(code)
+    return _CODE_HARNESS_UNKNOWN
+
+
+def class_for(code: str | None) -> str:
+    """Return the error class tag for a code (``"agent"``, ``"harness"``, ...).
+
+    Unmapped codes resolve through ``harness.unknown`` to the ``harness`` class;
+    ``"unknown"`` is returned only if the registry entry itself is missing.
+    """
+    canonical = map_legacy_code(code)
+    spec = ERROR_CODE_REGISTRY.get(canonical)
+    if spec is None:
+        return "unknown"
+    return spec.error_class
+
+
+def is_retryable(code: str | None) -> bool:
+    """Return the registry's default retryability for a code (default False)."""
+    canonical = map_legacy_code(code)
+    spec = ERROR_CODE_REGISTRY.get(canonical)
+    if spec is None:
+        return False
+    return spec.retryable
+
+
+def should_notify_terminal_failure(code: str | None) -> bool:
+    """Whether a terminal run failure with *code* should dispatch ``EVENT_RUN_FAILED``.
+
+    DELIBERATELY NARROW (noise control): notify only for a code that is BOTH
+    non-retryable AND ``alert_severity == "critical"`` — the operator-actionable
+    class (billing/credential faults such as ``model.insufficient_funds`` and
+    ``provider.authentication``) where every retry re-hits the same wall and a
+    silent failure can strand a pipeline indefinitely.
+
+    Everything else stays silent: retryable codes (a transient infra blip,
+    including ``sandbox.no_output_json``), non-critical codes
+    (``run.no_progress``, ``agent.no_op``), and the derived-cost paths. An
+    unknown, absent or unmapped code resolves through ``harness.unknown``
+    (non-retryable, ``warning``) and therefore does NOT notify — fail closed on
+    noise, never on safety. Never raises.
+    """
+    try:
+        canonical = map_legacy_code(code)
+    except Exception:  # pragma: no cover - map_legacy_code is total, defence in depth
+        _log.warning("error_codes.notify_severity_lookup_failed", extra={"code": str(code)}, exc_info=True)
+        return False
+    spec = ERROR_CODE_REGISTRY.get(canonical)
+    if spec is None:
+        return False
+    return (not spec.retryable) and spec.alert_severity == "critical"
+
+
+def expand_code_variants(code: str) -> set[str]:
+    """All raw DB values equivalent to *code* (dotted, legacy, or exception class name).
+
+    The API presents canonical dotted codes while ``runs.error_code`` /
+    ``run_daily_facts.error_code`` are written raw (legacy snake_case / class
+    names), so a filter must match every spelling that maps to the same
+    canonical code.
+    """
+    canonical = map_legacy_code(code)
+    variants = {code, canonical}
+    for legacy, dotted in LEGACY_ALIASES.items():
+        if dotted == canonical:
+            variants.add(legacy)
+    return variants
+
+
+def known_error_codes() -> set[str]:
+    """All raw DB code spellings that resolve to a KNOWN canonical code.
+
+    The union of every registry key and every legacy alias. Any raw code NOT in
+    this set is exactly what :func:`map_legacy_code` falls back to
+    ``harness.unknown`` — i.e. the raw rows the analytics "Unknown error"
+    dimension slice shows (``bucket_rows`` canonicalizes unmapped raw codes
+    into that slice, and the facts table stores raw codes, never the literal
+    dotted aggregate).
+
+    ``harness.unknown`` itself IS in the set — it is a registry key and passes
+    through ``map_legacy_code`` unchanged. Consumers that need the EXACT raw
+    rows the unknown slice shows must subtract it
+    (``known_error_codes() - {"harness.unknown"}``): a raw literal
+    ``harness.unknown`` row is bucketed into the unknown slice (registry
+    passthrough) and must therefore still match the unknown filter, while
+    every other known spelling is excluded.
+    """
+    return set(ERROR_CODE_REGISTRY) | set(LEGACY_ALIASES)
+
+
+# ---------------------------------------------------------------------------
+# Shared error-text sanitizer + read-surface presenter (run-failure UX)
+# ---------------------------------------------------------------------------
+
+# Hard cap BEFORE any regex runs — bounds the ReDoS surface (an attacker who can
+# reach error_detail must not be able to feed an unbounded string into the
+# pattern engine). ``runs.error_detail`` is ``Text`` (widened from String(5000)
+# by migration 0199), so error-detail writes pass ``limit=None``; this default
+# still caps every other sanitizer caller (stack traces, context JSON, ...).
+_ERROR_DETAIL_HARD_LIMIT = 5000
+
+# Redaction patterns — char-class-only, NO alternations with nested quantifiers
+# (the codebase's own (a|b)+ ReDoS lesson). Each pattern is a single anchored
+# literal prefix + a flat char class + a flat quantifier, so worst-case work is
+# linear in the (capped) input. The AWS-key and GitHub fine-grained-PAT formats
+# are sourced from the canonical shared list in
+# :mod:`modulo.core.secret_patterns` so the secret-format knowledge is never
+# duplicated or drifted across redaction sites.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"),
+    # The body class includes ``-`` so the hyphenated vendor segments match:
+    # after the ``sk-`` prefix the current OpenAI key shapes run
+    # ``sk-proj-…``, ``sk-svcacct-…``, ``sk-None-…`` and OpenRouter runs
+    # ``sk-or-v1-…`` — a plain-alphanumeric body stops at the first hyphen
+    # and would leak those keys unredacted (FAR-613: persisted briefing
+    # content passes through this sanitizer). Short innocuous strings are
+    # unaffected: the 8-char minimum still applies to the whole body.
+    re.compile(r"sk-[A-Za-z0-9-]{8,}"),
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"sk_live_[A-Za-z0-9]{8,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"gh[ousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{8,}"),
+    AWS_ACCESS_KEY_PATTERN,
+    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+    # ``r`` (Slack rotateable tokens) aligned with the canonical shared list
+    # in :mod:`modulo.core.secret_patterns` (``xox[baprs]-``) — the two
+    # sites had drifted apart and a ``xoxr-`` token escaped this sanitizer.
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"://[^:\s@]+:[^@\s]+@"),
+    re.compile(r"secret_[A-Za-z0-9]{16,}"),
+    re.compile(r"npm_[A-Za-z0-9]{20,}"),
+    GITHUB_PAT_PATTERN,
+    # Vendor connector credential formats (FAR-513 defense-in-depth). These
+    # mirror the credential values the vendor connectors hold so a token that
+    # escapes a connector boundary is still caught by the sanitizer even when
+    # the value-based connector redaction was not applied.
+    re.compile(r"lin_api_[A-Za-z0-9]{20,}"),
+    re.compile(r"(?:DD-API-KEY|DD-APPLICATION-KEY)[\s:=]+[0-9A-Fa-f]{32}"),
+    re.compile(r"(?i)n8n[\s_-]*(?:api[\s_-]*)?(?:key|token)[\s:=]+[A-Z0-9]{20,}"),
+    re.compile(r"u\+[0-9A-Fa-f]{20,}"),
+    re.compile(r"xapp-[A-Za-z0-9-]{10,}"),
+    re.compile(r"(?i)sentry[_-]?(?:auth[_-]?token|token|dsn)[\s:=]+[A-Z0-9]{32,}"),
+)
+
+# Hard control characters (NUL, bell, vertical tab, form feed, C0 except
+# \n \t \r, DEL). Printable text, newlines, tabs and carriage returns pass
+# through untouched — the sanitizer is a NO-OP for clean strings.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_error_text(text: Any, limit: int | None = _ERROR_DETAIL_HARD_LIMIT) -> str:
+    """Control-char strip + secret-pattern redaction for error detail.
+
+    Idempotent and a NO-OP for clean strings (the redacted replacement never
+    matches a secret pattern). Input is capped at *limit* code points (default
+    :data:`_ERROR_DETAIL_HARD_LIMIT`) BEFORE any regex runs — a ReDoS defense
+    that bounds the pattern-engine input. Pass ``limit=None`` to skip the cap
+    (used for the ``runs.error_detail`` column, which was widened to ``Text`` by
+    migration 0199). Non-str input is coerced via ``str()`` — never raises.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    capped = text if limit is None else text[:limit]
+    sanitized = _CONTROL_CHARS.sub("", capped)
+    for pattern in _SECRET_PATTERNS:
+        sanitized = pattern.sub("<redacted>", sanitized)
+    return sanitized
+
+
+def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None, str | None]:
+    """Present one run's error for a read surface (sanitize + truncate).
+
+    * ``code`` is canonicalized to the dotted taxonomy via
+      :func:`map_legacy_code` so every read surface presents a resolvable
+      dotted code (legacy ``executor_stalled`` → ``agent.stall``, unmapped
+      codes → ``harness.unknown``). ``None`` stays ``None`` — a missing code
+      is never turned into ``harness.unknown`` (callers rely on error_code
+      being absent).
+    * ``detail``: ``None`` → ``None``; otherwise :func:`sanitize_error_text`
+      then a code-point-safe truncate to *limit* with a ``…`` suffix when cut.
+      Python ``str`` slicing never splits a multi-byte character.
+    * Never raises on a non-str detail (coerced via ``str()``).
+
+    Returns ``(code, detail)`` ready for the response dict.
+    """
+    if code is not None:
+        code = map_legacy_code(code)
+    if detail is None:
+        return code, None
+    cleaned = sanitize_error_text(detail)
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit] + "…"
+    return code, cleaned

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider import ExecResult, WorkspaceSpec
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 
 @pytest.fixture
@@ -701,7 +701,7 @@ async def test_runtime_override_key_reaches_create_not_legacy_env(
     Fails without the fix: ``AsyncSandbox.create`` is called with no
     ``api_key=`` and the SDK would resolve ``E2B_API_KEY`` (stale) itself.
     """
-    from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+    from farna.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.setenv("E2B_API_KEY", "stale-legacy-env-key")
@@ -730,7 +730,7 @@ def test_create_workspace_fails_closed_without_any_key(
 ) -> None:
     """FAR-1171: fail-closed preserved — no override, no env -> typed refusal
     before any sandbox call can be attempted."""
-    from modulo.core.runtime_config.store import RuntimeConfigStore
+    from farna.core.runtime_config.store import RuntimeConfigStore
 
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     RuntimeConfigStore.reset()
@@ -746,13 +746,13 @@ def test_create_workspace_fails_closed_without_any_key(
 
 
 def test_is_runtime_provider_subclass() -> None:
-    from modulo.core.runtime_provider import RuntimeProvider
+    from farna.core.runtime_provider import RuntimeProvider
 
     assert issubclass(E2BRuntimeProvider, RuntimeProvider)
 
 
 def test_register_with_hub() -> None:
-    from modulo.core.runtime_provider.hub import RuntimeProviderHub
+    from farna.core.runtime_provider.hub import RuntimeProviderHub
 
     hub = RuntimeProviderHub()
     provider = E2BRuntimeProvider(api_key="sk-test")

@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 
@@ -69,7 +69,7 @@ def client() -> Generator[TestClient, None, None]:
 class TestGetRuntimeConfigErrorHandling:
     def test_exception_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=RuntimeError("unexpected"),
         ):
             resp = client.get("/api/v1/admin/runtime-config")
@@ -79,7 +79,7 @@ class TestGetRuntimeConfigErrorHandling:
 
     def test_value_error_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=ValueError("bad value"),
         ):
             resp = client.get("/api/v1/admin/runtime-config")
@@ -89,7 +89,7 @@ class TestGetRuntimeConfigErrorHandling:
 
     def test_type_error_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=TypeError("wrong type"),
         ):
             resp = client.get("/api/v1/admin/runtime-config")
@@ -101,7 +101,7 @@ class TestGetRuntimeConfigErrorHandling:
 class TestPutRuntimeConfigErrorHandling:
     def test_exception_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=RuntimeError("unexpected"),
         ):
             resp = client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": "DEBUG"}})
@@ -149,7 +149,7 @@ class TestPutRuntimeConfigErrorHandling:
 class TestPostReloadErrorHandling:
     def test_exception_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=RuntimeError("unexpected"),
         ):
             resp = client.post("/api/v1/admin/runtime-config/reload")
@@ -159,7 +159,7 @@ class TestPostReloadErrorHandling:
 
     def test_value_error_becomes_500(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin_runtime_config.get_runtime_config_store",
+            "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=ValueError("bad value"),
         ):
             resp = client.post("/api/v1/admin/runtime-config/reload")

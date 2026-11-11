@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
-from modulo.core import pipeline_execution as pe
-from modulo.core.pipeline_engine.executor import SandboxCapacityExceededError
+from farna.core import cron_helpers as ch
+from farna.core import pipeline_execution as pe
+from farna.core.pipeline_engine.executor import SandboxCapacityExceededError
 
 ORG = uuid.uuid4()
 
@@ -63,7 +63,7 @@ class TestDeferCapacityDeniedRun:
         _patch_session_factory(monkeypatch)
         run_id = uuid.uuid4()
         update = AsyncMock(return_value=object())
-        with patch("modulo.db.crud.run.update_run_status", new=update):
+        with patch("farna.db.crud.run.update_run_status", new=update):
             landed = await pe.defer_capacity_denied_run_to_awaiting_human(
                 MagicMock(), str(run_id), str(ORG), claim_token="tok-9"
             )
@@ -83,7 +83,7 @@ class TestDeferCapacityDeniedRun:
 
     async def test_reset_reports_false_when_the_fence_rejects(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_session_factory(monkeypatch)
-        with patch("modulo.db.crud.run.update_run_status", new=AsyncMock(return_value=None)):
+        with patch("farna.db.crud.run.update_run_status", new=AsyncMock(return_value=None)):
             landed = await pe.defer_capacity_denied_run_to_awaiting_human(
                 MagicMock(), str(uuid.uuid4()), str(ORG), claim_token="stale"
             )
@@ -230,7 +230,7 @@ class TestFencedWriterRefundContract:
     no-op on the unfenced ORM path)."""
 
     async def test_refund_without_claim_token_is_refused(self) -> None:
-        from modulo.db.crud.run import update_run_status
+        from farna.db.crud.run import update_run_status
 
         with pytest.raises(ValueError, match="refund_claim_count requires claim_token"):
             await update_run_status(

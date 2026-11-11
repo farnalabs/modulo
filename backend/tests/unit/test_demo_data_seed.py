@@ -22,18 +22,18 @@ from typing import Self
 import pytest
 from sqlalchemy import TextClause
 
-from modulo.core.license import (
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.license_signing import LicenseSigningError
-from modulo.core.registry.crypto import generate_keypair
-from modulo.core.seed_data import demo_data as demo_mod
-from modulo.core.seed_data.demo_data import DEMO_ORGS, seed_demo_org
-from modulo.db.models.account import Account
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
+from farna.core.license_signing import LicenseSigningError
+from farna.core.registry.crypto import generate_keypair
+from farna.core.seed_data import demo_data as demo_mod
+from farna.core.seed_data.demo_data import DEMO_ORGS, seed_demo_org
+from farna.db.models.account import Account
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
 
 _KP = generate_keypair()
 _TEST_PRIV = _KP["private_key"]
@@ -50,7 +50,7 @@ def _patch_get_settings(monkeypatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _use_test_license_key() -> Generator[None, None, None]:
-    # The license public key is global module state in modulo.core.license and is
+    # The license public key is global module state in farna.core.license and is
     # clobbered by other test modules' autouse fixtures (e.g. stripe fulfilment
     # resets it to the builtin dev key). Pin it per-test so this module's signed
     # licenses always verify against the matching test public key, regardless of
@@ -298,7 +298,7 @@ async def test_seed_demo_org_requires_private_key_for_team(monkeypatch) -> None:
 
 
 async def test_resolve_plan_context_returns_per_org_tier(monkeypatch) -> None:
-    from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry, resolve_plan_context
+    from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry, resolve_plan_context
 
     # Stub the DB tier-catalog lookup — we only care that the ORG license's
     # tier flows through resolve_plan_context unchanged.
@@ -306,7 +306,7 @@ async def test_resolve_plan_context_returns_per_org_tier(monkeypatch) -> None:
         return DbPlanContext(FeatureFlagRegistry(current_tier=plan_id, has_license_key=has_license_key))
 
     monkeypatch.setattr(
-        "modulo.core.feature_flags.DbPlanContext.from_db",
+        "farna.core.feature_flags.DbPlanContext.from_db",
         classmethod(_fake_from_db),
     )
 

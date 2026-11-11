@@ -3,17 +3,17 @@ id: feat-apply
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/cli/apply/__init__.py
-  - backend/src/modulo/cli/apply/loader.py
-  - backend/src/modulo/cli/apply/models.py
-  - backend/src/modulo/cli/apply/plan.py
-  - backend/src/modulo/cli/apply/executor.py
-  - backend/src/modulo/cli/apply/drift.py
-  - backend/src/modulo/cli/apply/pipeline_apply.py
-  - backend/src/modulo/cli/apply/trigger_apply.py
-  - backend/src/modulo/core/pipeline_engine/git_content.py
-  - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/core/secrets_backend/references.py
+  - backend/src/farna/cli/apply/__init__.py
+  - backend/src/farna/cli/apply/loader.py
+  - backend/src/farna/cli/apply/models.py
+  - backend/src/farna/cli/apply/plan.py
+  - backend/src/farna/cli/apply/executor.py
+  - backend/src/farna/cli/apply/drift.py
+  - backend/src/farna/cli/apply/pipeline_apply.py
+  - backend/src/farna/cli/apply/trigger_apply.py
+  - backend/src/farna/core/pipeline_engine/git_content.py
+  - backend/src/farna/core/graph_validator/__init__.py
+  - backend/src/farna/core/secrets_backend/references.py
 unit-tests:
   - backend/tests/unit/cli/test_apply_cli.py
   - backend/tests/unit/cli/test_apply_loader.py
@@ -66,7 +66,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       `entities.pipelines` / `entities.triggers`; duplicate names per kind
       (triggers keyed `pipeline/name`) and trigger forward-references to a
       pipeline declared only in a LATER document are load-time errors
-      (`backend/src/modulo/cli/apply/loader.py`,
+      (`backend/src/farna/cli/apply/loader.py`,
       `backend/tests/unit/cli/test_apply_loader.py`)
 - [x] Secrets are refs-only: backend `api_key` / `credential_ref` and trigger
       `config_json` secret-shaped entries must be `${env:VAR}` or
@@ -77,7 +77,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       missing/foreign key fails the entity with a typed
       `credential_reference_error` (422) naming the key, and `hmac_secret` /
       `signing_secret` are Fernet-encrypted server-side on write
-      (`backend/src/modulo/cli/apply/models.py`, `test_apply_models.py`)
+      (`backend/src/farna/cli/apply/models.py`, `test_apply_models.py`)
 - [x] A model backend credential may instead be declared as
       `credential_ref: <key>` (FAR-1216): the declarative short form naming a
       bare org-vault key. Exactly one of `api_key` / `credential_ref` is
@@ -124,7 +124,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       `config_json` compared on the desired key set with masked secrets
       stripped symmetrically and `daily_spend_limit` quantized to the column's
       4dp scale) – runtime state (`next_fire_at`, `streak_epoch`, ...) never
-      produces drift (`backend/src/modulo/cli/apply/plan.py`,
+      produces drift (`backend/src/farna/cli/apply/plan.py`,
       `test_apply_plan.py`)
 - [x] Entities apply in dependency order `schemas -> model_backends ->
       pipelines -> triggers` with per-entity containment (one failure moves
@@ -134,7 +134,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       same-version-different-content schema versions are blocked (never
       silently diverged); missing/ambiguous agent or duplicated live-name
       references are blocked, apply never auto-creates agents
-      (`backend/src/modulo/cli/apply/executor.py`,
+      (`backend/src/farna/cli/apply/executor.py`,
       `test_apply_executor.py`, `test_apply_pipeline.py`,
       `test_apply_trigger.py`)
 - [x] Backend writes are verified: the server-side health-check endpoint
@@ -143,7 +143,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       as plain success (`test_apply_executor.py`)
 - [x] `--refresh-secrets` re-sends trigger configs whose secrets rotated,
       because the server masks stored secrets and cannot tell a rotated value
-      from an unchanged one (`backend/src/modulo/cli/apply/__init__.py`,
+      from an unchanged one (`backend/src/farna/cli/apply/__init__.py`,
       `test_apply_executor.py`)
 - [x] Exit codes: `--dry-run`/`--plan` always exits 0; real apply exits 1 when
       any entity was blocked or failed (including backend health-check
@@ -159,7 +159,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       no entry) plus a managed-field added/removed/modified breakdown for
       drifted schemas / model backends / triggers (keyed `<kind>:<name>`),
       and the table output prefixes verbs (`drift create` / `drift update`)
-      plus per-entity drift detail lines (`backend/src/modulo/cli/apply/drift.py`,
+      plus per-entity drift detail lines (`backend/src/farna/cli/apply/drift.py`,
       `test_apply_drift.py`)
 - [x] Git-sourced content (FAR-220): a sandbox_agent node's `agent_prompt` /
       `agent_commands` items / `script_command` may be a whole-field
@@ -215,8 +215,8 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       `model_fields_set`), each declared limit is hashed into the canonical
       `managed_view()` so the generic plan diff reports drift on it, and the
       executor writes them into the create/PATCH payload only when declared
-      (`backend/src/modulo/cli/apply/models.py`,
-      `backend/src/modulo/cli/apply/pipeline_apply.py`,
+      (`backend/src/farna/cli/apply/models.py`,
+      `backend/src/farna/cli/apply/pipeline_apply.py`,
       `backend/tests/unit/cli/test_apply_models.py`)
 - [x] Pipeline Paused execution state (FAR-1530): `modulo apply` can PAUSE a
       pipeline declaratively with a declared `run_enabled: false` - an opt-in,
@@ -230,9 +230,9 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       view so `--diff` reports drift against a running pipeline and converges by
       calling `POST .../pause` AFTER the create/PATCH; a dry-run never pauses and
       an already-paused pipeline is `unchanged` with no writes
-      (`backend/src/modulo/cli/apply/models.py`
+      (`backend/src/farna/cli/apply/models.py`
       `_run_enabled_may_only_pause` / `manages_run_enabled`,
-      `backend/src/modulo/cli/apply/pipeline_apply.py`,
+      `backend/src/farna/cli/apply/pipeline_apply.py`,
       `backend/tests/unit/cli/test_apply_run_enabled.py`)
 
 ## Known Gaps
@@ -285,7 +285,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
 - 2026-09-19: **product-map review pass** – closed the
   "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
   BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
-  `modulo.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
+  `farna.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
   validators (single + multi-document YAML merge, duplicate names within and
   across documents, empty config, trigger forward-references), refs-only
   secrets (`resolve_secret_refs`: env-ref resolution, missing-var and
@@ -312,5 +312,5 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
   (FAR-681), which had `product_map` refs from four routes but no
   `docs/product-map/` entry, so the graph root's "all registered manifest
   features have a tracker" promise was false. Behaviors verified against
-  `backend/src/modulo/cli/apply/*`, the `tests/unit/cli/test_apply_*` suites
+  `backend/src/farna/cli/apply/*`, the `tests/unit/cli/test_apply_*` suites
   and `tests/unit/api/test_apply_api_key_auth.py`. Status: covered.

@@ -26,12 +26,12 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.run import Run
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.run import Run
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0328_evidence_index_aggregate_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0327_runs_execution_attempt_count"

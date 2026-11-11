@@ -1,0 +1,3532 @@
+"""Library primitive REST API — browse, export, import, rate."""
+
+import copy
+import json
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal, Self, cast
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from pydantic import BaseModel, Field, ValidationError, model_validator
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_RESOURCE_ALREADY_EXISTS
+from farna.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from farna.api.dependencies import get_db_session, require_in_dev_operator, require_permission
+from farna.api.middleware.sensitive_mask import mask_pipeline_graph_node, resolve_and_reject_mask_sentinels
+from farna.api.models.team_visibility import TeamVisibilityMixin
+from farna.api.routes.lifecycle_maps import LifecycleMapResponse
+from farna.api.team_scope import validate_owner_team_for_create
+from farna.auth.dependencies import get_current_tenant_user, require_system_admin
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import grants_permit
+from farna.auth.team_rbac import ORG_ROLE_HIERARCHY
+from farna.core.audit_coverage import audited
+from farna.core.connector_refs import connector_ref_type_id
+from farna.core.feature_flags import get_registry
+from farna.core.library_service import (
+    CommunityPrimitiveReadOnlyError,
+    ContributionInvalidTransitionError,
+    ContributionNotFoundError,
+    _bump_version,
+    contribute_primitive,
+    copy_to_adapt,
+    get_primitive,
+    get_primitive_by_slug,
+    list_org_contributions,
+    list_primitives,
+    notify_importers_of_update,
+    publish_contribution,
+)
+from farna.core.library_service.grant import (
+    AlreadyGrantedError,
+    GrantError,
+    NotCommunitySourcedError,
+    grant_collection_agents,
+)
+from farna.core.library_service.grant import (
+    InstallNotFoundError as GrantInstallNotFoundError,
+)
+from farna.core.library_service.install import (
+    CollectionInstallError,
+    CollectionNotPublishedError,
+    PinResolutionError,
+    install_collection,
+)
+from farna.core.library_service.primitive_types import (
+    COLLECTION_PIN_TYPES,
+    MAX_COLLECTION_PINS,
+    PRIMITIVE_TYPES,
+)
+from farna.core.library_service.runnability import compute_runnable
+from farna.core.library_service.uninstall import (
+    InstallNotFoundError,
+    UninstallError,
+    uninstall_collection,
+)
+from farna.core.library_service.upgrade import (
+    CollectionUpgradeError,
+    NoUpdateAvailableError,
+    UpgradeInstallNotFoundError,
+    detect_collection_update,
+    find_newer_version,
+    upgrade_collection,
+)
+from farna.core.lifecycle_map.import_export import (
+    PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE,
+)
+from farna.core.lifecycle_map.import_export import (
+    LifecycleMapBundleError,
+    materialize_map_from_primitive,
+)
+from farna.core.lifecycle_map.validation import LifecycleMapContentError, LifecycleMapPipelineConflictError
+from farna.core.pipeline_engine.git_content import GitContentRefError
+from farna.core.team_visibility import (
+    ConnectorBindingMissingError,
+    connector_team_mismatch_detail,
+    extract_connector_bindings,
+    find_connector_team_mismatches,
+)
+from farna.core.workflow_import_export import (
+    export_pipeline_bundle,
+    export_pipeline_bundle_v2,
+    extract_bundle_json_from_zip,
+    get_existing_agent_names,
+    get_existing_pipeline_names,
+    materialize_import,
+    resolve_connector_type,
+    resolve_model_backend,
+    resolve_schema,
+    suggest_import_name,
+)
+from farna.db.crud.base import PageResult
+from farna.db.crud.library_primitive import (
+    create_library_primitive,
+    get_library_primitive,
+    restore_library_primitive,
+    soft_delete_library_primitive,
+    update_library_primitive,
+)
+from farna.db.crud.pipeline import (
+    create_pipeline,
+    enforce_manual_node_output_schemas,
+    get_pipeline,
+    strip_declared_policy_gates,
+)
+from farna.db.crud.rating import (
+    CopyToAdaptError,
+    DuplicateRatingError,
+    RatingCooldownError,
+    SelfRatingError,
+    get_rating_aggregate,
+    list_abuse_reports,
+    list_ratings_for_primitive,
+    review_abuse_report,
+    submit_abuse_report,
+    submit_rating,
+    update_primitive_ratings_aggregate,
+)
+from farna.db.models.collection_install import CollectionInstall, CollectionInstallEntity
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.team import Team
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.settings import Settings, get_settings
+from farna.util import sanitise_log_value as _sanitise_log_value
+
+_CODE_LIBRARY_SEARCH = "library.search"
+_GRANT_LIBRARY_SEARCH_IN_DEV = "library.search.in_dev"
+_VISIBILITY_PATTERN = "^(org|team)$"
+_CODE_LIBRARY_WRITE = "library.write"
+
+_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
+    "The library feature is temporarily unavailable due to a database issue. Please retry."
+)
+_CODE_LIBRARY_MANAGE = "library.manage"
+_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_endpoint"
+_CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
+_CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
+_MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
+
+
+_MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
+
+router = APIRouter(prefix="/api/v1/libraries", tags=["libraries"])
+
+
+def _split_primitive_types(raw: str | None) -> list[str] | None:
+    """Split a comma-separated ``primitive_types`` query value into a list.
+
+    Returns ``None`` when the value is empty so callers can treat it as
+    "no type filter".
+    """
+    if not raw:
+        return None
+    types = [t.strip() for t in raw.split(",") if t.strip()]
+    return types or None
+
+
+def _can_access_lifecycle_map_primitives(principal: TenantPrincipal, *, dev_mode: bool = True) -> bool:
+    """Return whether the caller has the retained internal lifecycle-map grant."""
+    if not dev_mode:
+        return False
+    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
+        return False
+    return grants_permit(principal.key_grants, _GRANT_LIBRARY_SEARCH_IN_DEV)
+
+
+def _reject_lifecycle_map_primitive_access(
+    principal: TenantPrincipal,
+    primitive: LibraryPrimitive | None,
+    *,
+    dev_mode: bool,
+) -> None:
+    """Reject direct mutation/copy of lifecycle-map primitives outside dev mode."""
+    if (
+        primitive is not None
+        and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and not _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Primitive not found",
+        )
+
+
+def _require_lifecycle_map_internal_access(principal: TenantPrincipal) -> None:
+    """Require the existing operator/grant/developer-mode gate for lifecycle maps."""
+    require_in_dev_operator(
+        principal,
+        _GRANT_LIBRARY_SEARCH_IN_DEV,
+        require_dev_mode=True,
+        settings=get_settings(),
+    )
+
+
+async def _require_lifecycle_map_primitive_access(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    primitive_id: uuid.UUID,
+) -> None:
+    """Hide ratings and abuse reports for lifecycle-map primitives."""
+    primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    if (
+        primitive is not None
+        and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and not _can_access_lifecycle_map_primitives(
+            principal,
+            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+        )
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
+
+
+def _filter_lifecycle_map_types(
+    principal: TenantPrincipal,
+    primitive_type: str | None,
+    primitive_types: list[str] | None,
+    *,
+    dev_mode: bool = True,
+) -> tuple[str | None, str | None]:
+    """Hide lifecycle-map primitives from ordinary library callers at the query boundary."""
+    if _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode):
+        return primitive_type, ",".join(primitive_types) if primitive_types is not None else None
+    if primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
+        return "__hidden_lifecycle_map__", None
+    if not primitive_types:
+        # ``None`` (no filter) and ``[]`` (separator-only value) both mean "no
+        # type restriction requested". Neither may clear the filter entirely,
+        # or every primitive type (including lifecycle_map) leaks through.
+        return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE)
+    filtered_types = [ptype for ptype in primitive_types if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE]
+    if filtered_types:
+        return primitive_type, ",".join(filtered_types)
+    return "__hidden_lifecycle_map__", None
+
+
+def _conflict_error() -> HTTPException:
+    """HTTP 409 for a resource that already exists (e.g. slug collision)."""
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=MSG_RESOURCE_ALREADY_EXISTS,
+    )
+
+
+def _not_implemented_error() -> HTTPException:
+    """HTTP 501 when the library tables/migrations are not yet present."""
+    return HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_FEATURE_NOT_AVAILABLE,
+    )
+
+
+def _unavailable_error() -> HTTPException:
+    """HTTP 503 for a transient database failure while serving the library."""
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE,
+    )
+
+
+async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
+    """Establish the org + user RLS context for a library transaction."""
+    await set_rls_org(session, principal.organisation_id)
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+
+@dataclass(frozen=True)
+class _PrimitiveListQuery:
+    """Grouped query parameters for the library browse endpoint."""
+
+    page: int
+    page_size: int
+    cursor: str | None
+    primitive_type: str | None
+    primitive_types: str | None
+    search: str | None
+    source: str | None
+    include_in_dev: bool
+
+
+@dataclass(frozen=True)
+class _BundleResolution:
+    """Collected state produced by resolving an import bundle."""
+
+    pipeline_name: str
+    warnings: list[str]
+    resolved_schemas: list[dict[str, Any]]
+    resolved_connectors: list[dict[str, Any]]
+    resolved_model_backends: list[dict[str, Any]]
+    name_conflicts: list[dict[str, str]]
+    available_teams: list[dict[str, Any]]
+
+
+def _require_organisation_id(principal: TenantPrincipal) -> uuid.UUID:
+    """Return the principal's organisation id or reject the request."""
+    if principal.organisation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_MSG_ORGANISATION_ID_REQUIRED,
+        )
+    return principal.organisation_id
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+
+def _trust_tier_for(source: str, verified: bool | None) -> str | None:
+    """Compute the trust tier label from a primitive's provenance."""
+    if source == "modulo":
+        return "modulo"
+    if source == "registry" and verified is True:
+        return "green"
+    if source == "registry":
+        return "amber"
+    return None
+
+
+class LibraryPrimitiveResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    source: str
+    primitive_type: str
+    name: str
+    slug: str
+    description: str | None
+    author: str
+    version: str
+    tags: list[str]
+    content_json: dict[str, Any]
+    source_url: str | None
+    forked_from: uuid.UUID | None
+    checksum: str | None
+    ed25519_signature: str | None
+    verified: bool | None
+    trust_tier: str | None = None
+    tier: str = "native"
+    download_count: int | None
+    average_rating: float | None
+    review_count: int | None
+    owner_team_id: uuid.UUID | None
+    visibility: str
+    created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
+    auto_update: bool = True
+    status: str | None = None
+    manifest_pins: list[dict[str, Any]] | None = None
+    trust_header: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _compute_trust_tier(self) -> Self:
+        self.trust_tier = _trust_tier_for(self.source, self.verified)
+        return self
+
+    @model_validator(mode="after")
+    def _mask_composite_graph_credentials(self) -> Self:
+        """Mask credential-bearing node fields in a composite primitive's content (FAR-1380).
+
+        A ``composite`` library primitive stores its sub-pipeline graph in
+        ``content_json`` with the SAME credential-bearing node fields
+        (``env_vars`` / ``context_files`` / ``composite_parameter_values`` /
+        ``parameter_overrides``) a pipeline graph stores — so anyone holding
+        ``library.search`` could read a contributor's plaintext credentials
+        back out of the library. Every read surface that serialises a
+        ``LibraryPrimitiveResponse`` (list, get, create, patch, delete, restore,
+        adapt, community contribute/list/publish, community entry install)
+        passes through this validator, so the shipped
+        :func:`modulo.api.middleware.sensitive_mask.mask_pipeline_graph_node`
+        per-node masker covers them all at one chokepoint. Non-composite
+        primitives pass through untouched; a masker failure is impossible to
+        leak through (``mask_pipeline_graph_node`` scrubs fail-closed).
+        """
+        if self.primitive_type != "composite":
+            return self
+        content = self.content_json
+        nodes = content.get("nodes")
+        if not isinstance(nodes, list):
+            return self
+        masked_content = dict(content)
+        masked_content["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+        self.content_json = masked_content
+        return self
+
+
+class LibraryPrimitiveListResponse(BaseModel):
+    items: list[LibraryPrimitiveResponse]
+    total: int
+    page: int
+    page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+_PRIMITIVE_TYPE_PATTERN = f"^({'|'.join(PRIMITIVE_TYPES)})$"
+
+
+_COMPOSITE_CONTENT_KEYS = ("nodes", "edges")
+
+
+def _assert_composite_content_json(primitive_type: str, content_json: dict[str, Any] | None) -> None:
+    """Reject a composite primitive whose ``content_json`` lacks the graph body.
+
+    A ``composite`` primitive's ``content_json`` is the sub-pipeline graph
+    (``{"nodes": [...], "edges": [...]}``) that ``_build_pipeline_from_template``
+    and the composite routes consume. Reject a payload missing either key at the
+    boundary (422) instead of persisting a broken primitive.
+    """
+    if primitive_type != "composite":
+        return
+    content = content_json or {}
+    for key in _COMPOSITE_CONTENT_KEYS:
+        if key not in content or not isinstance(content[key], list):
+            raise ValueError(f"content_json for primitive_type 'composite' must include a '{key}' list")
+
+
+class LibraryPrimitiveCreate(TeamVisibilityMixin):
+    primitive_type: str = Field(pattern=_PRIMITIVE_TYPE_PATTERN)
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    tags: list[str] = Field(default_factory=list)
+    content_json: dict[str, Any]
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
+    tier: Literal["native", "preview", "in_dev"] = Field(default="native")
+
+    @model_validator(mode="after")
+    def _validate_composite_content_json(self) -> Self:
+        """Composite primitives store a graph body; reject a structurally empty one."""
+        _assert_composite_content_json(self.primitive_type, self.content_json)
+        return self
+
+
+class LibraryPrimitiveUpdate(TeamVisibilityMixin):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    tags: list[str] | None = None
+    content_json: dict[str, Any] | None = None
+    owner_team_id: uuid.UUID | None = None
+    visibility: str | None = Field(default=None, pattern=_VISIBILITY_PATTERN)
+    auto_update: bool | None = None
+    tier: Literal["native", "preview", "in_dev"] | None = None
+
+
+class RatingSubmit(BaseModel):
+    thumbs_up: bool
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class RatingResponse(BaseModel):
+    """One rating as the API renders it.
+
+    ``account_id`` mirrors the ``PrimitiveRating`` ORM column exactly (an
+    earlier ``user_id`` name had no ORM counterpart, so ``model_validate``
+    failed on every real row); ``None`` for an anonymous/removed account.
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    account_id: uuid.UUID | None
+    thumbs_up: bool
+    comment: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RatingAggregateResponse(BaseModel):
+    average_rating: float | None
+    review_count: int
+
+
+class RatingListResponse(BaseModel):
+    items: list[RatingResponse]
+    total: int
+
+
+class AbuseReportSubmit(BaseModel):
+    rating_id: uuid.UUID | None = None
+    reason: str = Field(..., min_length=10, max_length=500)
+
+
+class AbuseReportResponse(BaseModel):
+    """The 201 body of ``POST /{primitive_id}/ratings/abuse``.
+
+    ``reporter_account_id`` mirrors the ``PrimitiveAbuseReport`` ORM column
+    exactly (an earlier ``reporter_user_id`` name had no ORM counterpart, so
+    ``model_validate`` raised ``ValidationError`` — which ``handle_db_errors``
+    maps to 422 — on every real report).
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
+    reason: str
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueItem(BaseModel):
+    """One report as the moderation queue renders it.
+
+    Field names mirror the ``PrimitiveAbuseReport`` ORM columns exactly, so
+    this shape validates against a real, flushed row.
+    """
+
+    id: uuid.UUID
+    primitive_id: uuid.UUID
+    rating_id: uuid.UUID | None
+    reporter_account_id: uuid.UUID | None
+    reason: str
+    status: str
+    reviewed_at: datetime | None
+    reviewer_account_id: uuid.UUID | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AbuseReportQueueResponse(BaseModel):
+    items: list[AbuseReportQueueItem]
+    total: int
+
+
+class AbuseReportResolveRequest(BaseModel):
+    """The moderation decision to RECORD on a report.
+
+    ``reviewed`` — the report is upheld (the flagged rating was judged to
+    violate the rules); ``dismissed`` — the report is rejected. Either value
+    only stamps ``status`` / ``reviewed_at`` / ``reviewer_account_id`` on the
+    REPORT row: resolving a report does NOT remove, hide or alter the rating
+    it points at. There is no rating-delete path in the product, and adding
+    one is a separate product decision.
+    """
+
+    status: Literal["reviewed", "dismissed"]
+
+
+class ImportBundleResponse(BaseModel):
+    warnings: list[str] = Field(default_factory=list)
+    pipeline_name: str
+    bundle_json: str = ""
+    resolved_schemas: list[dict[str, Any]] = Field(default_factory=list)
+    resolved_connectors: list[dict[str, Any]] = Field(default_factory=list)
+    resolved_model_backends: list[dict[str, Any]] = Field(default_factory=list)
+    name_conflicts: list[dict[str, str]] = Field(default_factory=list)
+    available_teams: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ImportConfirmRequest(BaseModel):
+    bundle_json: str
+    owner_team_id: uuid.UUID | None = None
+    schema_overrides: dict[str, str] | None = None
+    schema_version_overrides: dict[str, str] | None = None
+    connector_overrides: dict[str, str] | None = None
+    model_backend_overrides: dict[str, str] | None = None
+    pipeline_name_override: str | None = None
+
+
+class CopyToAdaptRequest(BaseModel):
+    target_team_id: uuid.UUID | None = None
+
+
+class AnalyseBundleRequest(BaseModel):
+    bundle: dict[str, Any]
+
+
+class CreatePipelineFromTemplateRequest(BaseModel):
+    name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="Overrides the template's default pipeline name",
+    )
+    description: str | None = Field(
+        None,
+        max_length=2000,
+        description="Overrides the template's default description",
+    )
+
+
+class PipelineFromTemplateResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    name: str
+    description: str | None
+    visibility: str
+    template_source_id: uuid.UUID
+    agent_count: int
+    edge_count: int
+    ready_to_run: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Library Collection authoring (FAR-760)
+# ---------------------------------------------------------------------------
+
+_COLLECTION_PIN_TYPES_ALLOWED = COLLECTION_PIN_TYPES
+
+
+async def _require_library_collection_flag(org_id: uuid.UUID) -> None:
+    """Reject the request when the ``library_collection`` feature flag is off."""
+    registry = get_registry()
+    if not await registry.resolve_flag("library_collection", org_id=org_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library collections are not enabled for this organisation",
+        )
+
+
+class CollectionPin(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=255)
+    version: str = Field(..., min_length=1, max_length=50)
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    manifest_pins: list[CollectionPin] = Field(default_factory=list)
+    owner_team_id: uuid.UUID | None = None
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
+
+
+class CollectionUpdateRequest(BaseModel):
+    manifest_pins: list[CollectionPin] = Field(default_factory=list)
+
+
+class CollectionResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    name: str
+    slug: str
+    description: str | None
+    status: str | None
+    version: str | None = None
+    manifest_pins: list[dict[str, Any]] | None
+    trust_header: dict[str, Any] | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+async def _lookup_pin_primitive(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    slug: str,
+    version: str,
+) -> LibraryPrimitive | None:
+    """Resolve a manifest pin's slug@version to its backing primitive.
+
+    Returns ``None`` only when the primitive genuinely does not exist. A
+    database failure is NOT folded into that ``None`` (FAR-1483): it
+    propagates to the caller, where the route's ``except SQLAlchemyError``
+    arm logs it and answers 503. Swallowing here made a DB outage
+    indistinguishable from a bad pin, so the publish endpoint reported a
+    misleading 422 "unknown primitive" while the database was down.
+    """
+    stmt = select(LibraryPrimitive).where(
+        LibraryPrimitive.organisation_id == org_id,
+        LibraryPrimitive.slug == slug,
+        LibraryPrimitive.version == version,
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def _validate_manifest_pins(
+    pins: list[dict[str, Any]],
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> list[str]:
+    """Validate collection manifest pins per ADR 032.
+
+    Returns a list of error messages (empty = valid). Each pin must resolve to an
+    existing primitive of an allowed type (see COLLECTION_PIN_TYPES); disallowed
+    types (composite/integration/lifecycle_map) are rejected.
+    """
+    errors: list[str] = []
+    if not pins:
+        errors.append("manifest_pins must not be empty")
+        return errors
+    if len(pins) > MAX_COLLECTION_PINS:
+        errors.append(f"manifest_pins must not exceed {MAX_COLLECTION_PINS} items")
+        return errors
+
+    seen: set[tuple[str, str]] = set()
+    for pin in pins:
+        slug = pin.get("slug", "")
+        version = pin.get("version", "")
+        if not slug or not version:
+            errors.append(f"pin must have non-empty slug and version: {pin}")
+            continue
+        key = (slug, version)
+        if key in seen:
+            errors.append(f"duplicate pin: {slug}@{version}")
+            continue
+        seen.add(key)
+
+        prim = await _lookup_pin_primitive(session, org_id, slug, version)
+        if prim is None:
+            errors.append(f"pin references unknown primitive: {slug}@{version}")
+            continue
+        if prim.primitive_type not in _COLLECTION_PIN_TYPES_ALLOWED:
+            errors.append(
+                f"Pin type '{prim.primitive_type}' is not allowed in collections. "
+                f"Allowed types: {', '.join(sorted(_COLLECTION_PIN_TYPES_ALLOWED))}",
+            )
+
+    return errors
+
+
+def _collection_response(prim: LibraryPrimitive) -> CollectionResponse:
+    """Build a CollectionResponse from a LibraryPrimitive ORM instance."""
+    return CollectionResponse(
+        id=prim.id,
+        organisation_id=prim.organisation_id,
+        name=prim.name,
+        slug=prim.slug,
+        description=prim.description,
+        status=prim.status,
+        version=prim.version,
+        manifest_pins=prim.manifest_pins,
+        trust_header=prim.trust_header,
+        created_at=prim.created_at,
+        updated_at=prim.updated_at,
+    )
+
+
+async def _load_draft_collection(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> LibraryPrimitive:
+    """Fetch a collection primitive and enforce it is a draft collection.
+
+    Raises 404 when the primitive is absent, 400 when it is not a
+    ``library_collection`` primitive, and 400 when it is not in the ``draft``
+    state (only draft collections can be mutated or published). Centralised so
+    the update/publish endpoints share a single validation path.
+    """
+    prim = await get_primitive(session, org_id, primitive_id)
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        )
+    if prim.primitive_type != "library_collection":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a collection primitive",
+        )
+    if prim.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot mutate a collection with status '{prim.status}'",
+        )
+    return prim
+
+
+# ---------------------------------------------------------------------------
+# List / Browse
+# ---------------------------------------------------------------------------
+
+
+_log = logging.getLogger(__name__)
+
+
+@router.get("")
+@handle_db_errors("library.list_library_primitives_endpoint")
+async def list_library_primitives_endpoint(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+    primitive_type: str | None = None,
+    primitive_types: str | None = None,
+    search: str | None = None,
+    source: str | None = None,
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> LibraryPrimitiveListResponse:
+    if include_in_dev:
+        require_in_dev_operator(principal, _GRANT_LIBRARY_SEARCH_IN_DEV)
+    dev_mode = getattr(get_settings(), "modulo_dev_mode", True)
+    requested_types = _split_primitive_types(primitive_types)
+    if primitive_types and requested_types is None:
+        requested_types = []
+    if primitive_type is not None and requested_types is None and primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE:
+        filtered_primitive_type: str | None = primitive_type
+        filtered_primitive_types: str | None = None
+    else:
+        filtered_primitive_type, filtered_primitive_types = _filter_lifecycle_map_types(
+            principal,
+            primitive_type,
+            requested_types,
+            dev_mode=dev_mode,
+        )
+    query = _PrimitiveListQuery(
+        page=page,
+        page_size=page_size,
+        cursor=cursor,
+        primitive_type=filtered_primitive_type,
+        primitive_types=filtered_primitive_types,
+        search=search,
+        source=source,
+        include_in_dev=include_in_dev,
+    )
+    result = await _fetch_primitives(session, principal, query)
+    items = _validate_primitive_items(result.items)
+    return _build_primitive_list_response(items, result)
+
+
+def _validate_primitive_items(items: list[LibraryPrimitive]) -> list[LibraryPrimitiveResponse]:
+    """Validate ORM primitives into response models, mapping failures to HTTP 500."""
+    try:
+        return [LibraryPrimitiveResponse.model_validate(p) for p in items]
+    except Exception:
+        _log.exception("LibraryPrimitiveResponse.model_validate failed on %d items", len(items))
+        if items:
+            _log.exception(
+                "first item type=%s id=%s",
+                type(items[0]).__name__,
+                getattr(items[0], "id", "?"),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to parse library primitives. The schema may be out of sync with the database.",
+        ) from None
+
+
+def _build_primitive_list_response(
+    items: list[LibraryPrimitiveResponse],
+    result: PageResult[LibraryPrimitive],
+) -> LibraryPrimitiveListResponse:
+    """Build the paged list response, mapping construction failures to HTTP 500."""
+    try:
+        return LibraryPrimitiveListResponse(
+            items=items,
+            total=result.total,
+            page=result.page,
+            page_size=result.page_size,
+            next_cursor=result.next_cursor,
+            has_more=result.has_more,
+        )
+    except Exception:
+        _log.exception("LibraryPrimitiveListResponse construction failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build library primitives response.",
+        ) from None
+
+
+async def _fetch_primitives(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    query: _PrimitiveListQuery,
+) -> PageResult[LibraryPrimitive]:
+    """Query the library primitives list, translating DB failures to HTTP errors."""
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            include_community = query.source != "local"
+            return await list_primitives(
+                session,
+                principal.organisation_id,
+                primitive_type=query.primitive_type,
+                primitive_types=(
+                    query.primitive_types
+                    if isinstance(query.primitive_types, list)
+                    else _split_primitive_types(query.primitive_types)
+                ),
+                search=query.search,
+                page=query.page,
+                page_size=query.page_size,
+                include_community=include_community,
+                source=query.source,
+                cursor=query.cursor,
+                excluded_tiers=[] if query.include_in_dev else None,
+            )
+    except ProgrammingError:
+        _log.exception("library.list_library_primitives_endpoint")
+        _log.warning(
+            "list_library_primitives_endpoint: ProgrammingError — missing DB table or migration",
+            exc_info=True,
+        )
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("list_library_primitives_endpoint: SQLAlchemyError — transient DB failure")
+        raise _unavailable_error() from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_library_primitives_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing library primitives.",
+        ) from None
+
+
+@router.get("/ping")
+@handle_db_errors("library.ping")
+async def ping() -> dict[str, bool]:
+    return {"pong": True}
+
+
+@router.get("/{primitive_id}")
+@handle_db_errors("library.get_library_primitive_endpoint")
+async def get_library_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> LibraryPrimitiveResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is not None and (
+                primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
+                and not _can_access_lifecycle_map_primitives(
+                    principal,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+            ):
+                primitive = None
+    except IntegrityError:
+        _log.exception("library.get_library_primitive_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.get_library_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("get_library_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if primitive is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        )
+    return LibraryPrimitiveResponse.model_validate(primitive)
+
+
+# ---------------------------------------------------------------------------
+# Create / Update / Delete
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_primitive_created", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.create_library_primitive_endpoint")
+async def create_library_primitive_endpoint(
+    req: LibraryPrimitiveCreate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> LibraryPrimitiveResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            if req.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                _require_lifecycle_map_internal_access(principal)
+            existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
+                )
+            write_content = req.content_json
+            if req.primitive_type == "composite" and isinstance(write_content.get("nodes"), list):
+                # FAR-1374 parity: resolve masked echoes first (a create has no
+                # stored counterpart to resolve against), then fail closed with
+                # 422 on any sentinel the resolve could not map — composite
+                # sub-graphs store the caller's declared credential values
+                # as-is, and a submitted mask sentinel is never persisted.
+                write_content = dict(write_content)
+                write_content["nodes"] = resolve_and_reject_mask_sentinels(list(write_content["nodes"]), None)
+            prim = await create_library_primitive(
+                session,
+                org_id=principal.organisation_id,
+                source="local",
+                primitive_type=req.primitive_type,
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
+                author=principal.account_id.hex,
+                version="1.0",
+                tags=req.tags,
+                content_json=write_content,
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
+                account_id=principal.account_id,
+                tier=req.tier,
+            )
+    except IntegrityError:
+        _log.exception("library.create_library_primitive_endpoint")
+        _log.warning(
+            "create_library_primitive_endpoint: IntegrityError — slug collision on %s/%s",
+            _sanitise_log_value(req.primitive_type),
+            _sanitise_log_value(req.slug),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Primitive with type '{req.primitive_type}' and slug '{req.slug}' already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.create_library_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_library_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return LibraryPrimitiveResponse.model_validate(prim)
+
+
+@router.patch(
+    "/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_primitive_updated", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.update_library_primitive_endpoint")
+async def update_library_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    req: LibraryPrimitiveUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> LibraryPrimitiveResponse:
+    updates = req.model_dump(exclude_unset=True)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
+            if "content_json" in updates and existing is not None:
+                try:
+                    _assert_composite_content_json(existing.primitive_type, updates["content_json"])
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=str(exc),
+                    ) from None
+                if existing.primitive_type == "composite" and isinstance(updates["content_json"].get("nodes"), list):
+                    # FAR-1181 + FAR-1374 parity: a PATCH round-tripping the
+                    # masked GET resolves mask echoes against the stored
+                    # composite sub-graph BEFORE the write (the echo is
+                    # restored to the stored value), and a sentinel the
+                    # resolve cannot map is refused 422 instead of being
+                    # dropped or persisted.
+                    updates["content_json"] = dict(updates["content_json"])
+                    updates["content_json"]["nodes"] = resolve_and_reject_mask_sentinels(
+                        list(updates["content_json"]["nodes"]),
+                        [n for n in (existing.content_json or {}).get("nodes", []) if isinstance(n, dict)],
+                    )
+            prim = await update_library_primitive(session, primitive_id, updates)
+    except IntegrityError:
+        _log.exception("library.update_library_primitive_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.update_library_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("update_library_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        )
+    return LibraryPrimitiveResponse.model_validate(prim)
+
+
+@router.delete(
+    "/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_primitive_deleted", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.delete_library_primitive_endpoint")
+async def delete_library_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> LibraryPrimitiveResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
+            prim = await soft_delete_library_primitive(session, primitive_id)
+
+    except IntegrityError:
+        _log.exception("library.delete_library_primitive_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.delete_library_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("delete_library_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        )
+    return LibraryPrimitiveResponse.model_validate(prim)
+
+
+@router.post(
+    "/{primitive_id}/restore",
+    dependencies=[
+        Depends(audited("library_primitive_restored", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.restore_library_primitive_endpoint")
+async def restore_library_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> LibraryPrimitiveResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            existing = await get_library_primitive(session, primitive_id, include_deleted=True)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+            prim = await restore_library_primitive(session, primitive_id)
+    except ProgrammingError:
+        _log.exception("library.restore_library_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("restore_library_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if prim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found or not deleted",
+        )
+    return LibraryPrimitiveResponse.model_validate(prim)
+
+
+# ---------------------------------------------------------------------------
+# Copy-to-adapt
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{primitive_id}/adapt",
+    dependencies=[
+        Depends(audited("library_primitive_adapted", "library_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.copy_to_adapt_endpoint")
+async def copy_to_adapt_endpoint(
+    primitive_id: uuid.UUID,
+    req: CopyToAdaptRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.copy"),
+) -> LibraryPrimitiveResponse:
+    try:
+        # #1793: validate target_team_id (org existence + membership) in its own
+        # short transaction BEFORE copy_to_adapt opens its own org txn.
+        async with session.begin():
+            await validate_owner_team_for_create(session, principal, req.target_team_id)
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
+        result = await copy_to_adapt(
+            session,
+            principal.organisation_id,
+            primitive_id,
+            target_team_id=req.target_team_id,
+            created_by=principal.account_id,
+            org_role=principal.org_role,
+            via_mcp=False,
+        )
+    except CommunityPrimitiveReadOnlyError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Community primitives may only be adapted via the browser UI, not via MCP.",
+        ) from None
+    except LookupError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Primitive {primitive_id} not found",
+        ) from None
+    except IntegrityError:
+        _log.exception("library.copy_to_adapt_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.copy_to_adapt_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("copy_to_adapt_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return LibraryPrimitiveResponse.model_validate(result)
+
+
+# ---------------------------------------------------------------------------
+# Workflow export
+# ---------------------------------------------------------------------------
+
+
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - serialises the pipeline to a downloadable bundle and returns it; the
+# export path only runs SELECTs (core.workflow_import_export.export_pipeline_bundle).
+@router.post("/export/{pipeline_id}")
+@handle_db_errors("library.export_pipeline_endpoint")
+async def export_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    format: str = Query("v1", pattern="^(v1|v2)$"),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> Response:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if pipeline is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Pipeline {pipeline_id} not found",
+                )
+            if format == "v2":
+                yaml_str = await export_pipeline_bundle_v2(session, pipeline_id)
+            else:
+                bundle_bytes = await export_pipeline_bundle(session, pipeline_id)
+    except IntegrityError:
+        _log.exception("library.export_pipeline_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.export_pipeline_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("export_pipeline_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in pipeline.name)
+    if format == "v2":
+        return Response(
+            content=yaml_str,
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.modulo.yaml"',
+            },
+        )
+    return Response(
+        content=bundle_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.modulo.zip"',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflow import — step 1: analyse bundle
+# ---------------------------------------------------------------------------
+
+
+async def _analyse_bundle(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+) -> ImportBundleResponse:
+    """Shared analysis logic — validates a bundle and returns resolution state."""
+    bundle = copy.deepcopy(bundle)  # avoid mutating caller's dict
+    try:
+        resolution = await _resolve_import_bundle(session, principal, bundle)
+    except IntegrityError:
+        _log.exception("library._analyse_bundle")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.warning("_analyse_bundle: ProgrammingError — missing DB table or migration", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library._analyse_bundle")
+        _log.warning("_analyse_bundle: SQLAlchemyError — database connection failure", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again later.",
+        ) from None
+
+    return ImportBundleResponse(
+        warnings=resolution.warnings,
+        pipeline_name=resolution.pipeline_name,
+        bundle_json=json.dumps(bundle, default=str),
+        resolved_schemas=resolution.resolved_schemas,
+        resolved_connectors=resolution.resolved_connectors,
+        resolved_model_backends=resolution.resolved_model_backends,
+        name_conflicts=resolution.name_conflicts,
+        available_teams=resolution.available_teams,
+    )
+
+
+async def _resolve_import_bundle(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+) -> _BundleResolution:
+    """Resolve every reference in the bundle inside one RLS-scoped transaction."""
+    warnings: list[str] = []
+    resolved_schemas: list[dict[str, Any]] = []
+    resolved_connectors: list[dict[str, Any]] = []
+    resolved_model_backends_list: list[dict[str, Any]] = []
+    name_conflicts: list[dict[str, str]] = []
+
+    async with session.begin():
+        await _set_rls_context(session, principal)
+
+        pipeline_info = bundle.get("pipeline", {})
+        pipeline_name = pipeline_info.get("name", "Unnamed Pipeline")
+        await _resolve_pipeline_name_conflict(
+            session,
+            principal,
+            pipeline_name,
+            name_conflicts,
+            warnings,
+        )
+
+        await _resolve_bundle_schemas(
+            session,
+            principal,
+            bundle,
+            resolved_schemas,
+            warnings,
+        )
+
+        connector_instance_map = await _resolve_bundle_connectors(
+            session,
+            principal,
+            bundle,
+            resolved_connectors,
+            warnings,
+        )
+
+        mb_id_by_name = await _resolve_bundle_model_backends(
+            session,
+            principal,
+            bundle,
+            resolved_model_backends_list,
+            warnings,
+        )
+
+        _warn_duplicate_agent_names(bundle, warnings)
+        await _resolve_existing_agent_conflicts(
+            session,
+            principal,
+            bundle,
+            name_conflicts,
+            warnings,
+        )
+        _bind_connector_instances_to_graph(pipeline_info, connector_instance_map)
+        _bind_model_backends_to_agents(bundle, mb_id_by_name)
+
+        teams = await _fetch_available_teams(session, principal)
+
+    available_teams = [{"id": str(t.id), "name": t.name} for t in teams]
+
+    return _BundleResolution(
+        pipeline_name=pipeline_name,
+        warnings=warnings,
+        resolved_schemas=resolved_schemas,
+        resolved_connectors=resolved_connectors,
+        resolved_model_backends=resolved_model_backends_list,
+        name_conflicts=name_conflicts,
+        available_teams=available_teams,
+    )
+
+
+async def _fetch_available_teams(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+) -> list[Team]:
+    """Return the org's non-deleted teams for the import team picker."""
+    teams_result = await session.execute(
+        select(Team).where(
+            Team.organisation_id == principal.organisation_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    return list(teams_result.scalars())
+
+
+async def _resolve_pipeline_name_conflict(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_name: str,
+    name_conflicts: list[dict[str, str]],
+    warnings: list[str],
+) -> None:
+    """Warn when the bundle's pipeline name already exists in the org."""
+    existing_pipeline_names = await get_existing_pipeline_names(session, principal.organisation_id)
+    if pipeline_name in existing_pipeline_names:
+        suggested = suggest_import_name(existing_pipeline_names, pipeline_name)
+        name_conflicts.append(
+            {
+                "type": "pipeline",
+                "original": pipeline_name,
+                "suggested": suggested,
+            }
+        )
+        warnings.append(f"Pipeline '{pipeline_name}' already exists. Suggested: '{suggested}'.")
+
+
+async def _resolve_bundle_schemas(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_schemas: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    """Resolve every schema in the bundle, stamping resolved ids onto the bundle."""
+    for schema in bundle.get("schemas", []):
+        result = await resolve_schema(session, principal.organisation_id, schema)
+        resolved_schemas.append(result)
+        if result.get("schema_id"):
+            schema["_resolved_id"] = result["schema_id"]
+            schema["_resolved_version"] = result["version"]
+        if result.get("warning"):
+            warnings.append(result["warning"])
+
+
+async def _resolve_bundle_connectors(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_connectors: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, str]:
+    """Resolve the distinct connector types referenced by bundle agents."""
+    seen_connector_types: set[str] = set()
+    connector_instance_map: dict[str, str] = {}
+    for agent in bundle.get("agents", []):
+        for ref in agent.get("connector_type_refs", []):
+            ctid = connector_ref_type_id(ref)
+            if ctid and ctid not in seen_connector_types:
+                seen_connector_types.add(ctid)
+                result = await resolve_connector_type(session, principal.organisation_id, ctid)
+                resolved_connectors.append(result)
+                if result.get("instance_id"):
+                    connector_instance_map[ctid] = result["instance_id"]
+                if result.get("warning"):
+                    warnings.append(result["warning"])
+    return connector_instance_map
+
+
+async def _resolve_bundle_model_backends(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    resolved_model_backends: list[dict[str, Any]],
+    warnings: list[str],
+) -> dict[str, str]:
+    """Resolve every model backend in the bundle, mapping name -> backend id."""
+    for mb in bundle.get("model_backends", []):
+        result = await resolve_model_backend(session, principal.organisation_id, mb)
+        resolved_model_backends.append(result)
+        if result.get("model_backend_id"):
+            mb["_resolved_model_backend_id"] = result["model_backend_id"]
+        if result.get("warning"):
+            warnings.append(result["warning"])
+
+    mb_id_by_name: dict[str, str] = {}
+    for mb in bundle.get("model_backends", []):
+        rid = mb.get("_resolved_model_backend_id")
+        if rid:
+            mb_id_by_name[mb.get("name", "")] = rid
+    return mb_id_by_name
+
+
+def _warn_duplicate_agent_names(bundle: dict[str, Any], warnings: list[str]) -> None:
+    """Warn when two agents inside the bundle share the same name."""
+    agent_names_in_bundle = [a.get("name", "") for a in bundle.get("agents", [])]
+    seen_names: set[str] = set()
+    for aname in agent_names_in_bundle:
+        if aname and aname in seen_names:
+            warnings.append(f"Duplicate agent name '{aname}' found in bundle. Each agent must have a unique name.")
+        if aname:
+            seen_names.add(aname)
+
+
+async def _resolve_existing_agent_conflicts(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    bundle: dict[str, Any],
+    name_conflicts: list[dict[str, str]],
+    warnings: list[str],
+) -> None:
+    """Warn when a bundle agent's name collides with an existing org agent."""
+    existing_agent_names = await get_existing_agent_names(session, principal.organisation_id)
+    for agent in bundle.get("agents", []):
+        aname = agent.get("name", "")
+        if aname in existing_agent_names:
+            suggested = suggest_import_name(existing_agent_names, aname)
+            name_conflicts.append(
+                {
+                    "type": "agent",
+                    "original": aname,
+                    "suggested": suggested,
+                }
+            )
+            warnings.append(f"Agent '{aname}' already exists. Suggested: '{suggested}'.")
+
+
+def _bind_connector_instances_to_graph(
+    pipeline_info: dict[str, Any],
+    connector_instance_map: dict[str, str],
+) -> None:
+    """Stamp resolved connector instance ids onto graph node bindings."""
+    for node in pipeline_info.get("graph_nodes_json", []):
+        binding = node.get("connector_binding", {})
+        if isinstance(binding, dict):
+            ctid = binding.get("connector_type_id", "")
+            if ctid and ctid in connector_instance_map:
+                binding["instance_id"] = connector_instance_map[ctid]
+
+
+def _bind_model_backends_to_agents(
+    bundle: dict[str, Any],
+    mb_id_by_name: dict[str, str],
+) -> None:
+    """Stamp resolved model backend ids onto bundle agents by name.
+
+    Runner bindings are deliberately NOT stamped here (FAR-592 qa F9): the
+    dead ``_resolved_model_backend_id`` write was never read —
+    ``_apply_agent_bindings`` resolves each binding through the override map,
+    a stamped id when present, or the org backend by name, so a separate
+    binding-stamp loop on this path is redundant.
+    """
+    for agent in bundle.get("agents", []):
+        mb_name = agent.get("model_backend_name", "")
+        if mb_name and mb_name in mb_id_by_name:
+            agent["model_backend_id"] = mb_id_by_name[mb_name]
+
+
+async def _read_zip_upload(file: UploadFile) -> bytes:
+    """Validate and read an uploaded .zip file, enforcing the size limit."""
+    name = file.filename or ""
+    if not name.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .zip or .modulo.zip files are accepted",
+        )
+    if file.size and file.size > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+        )
+    zip_bytes = await file.read()
+    if len(zip_bytes) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Upload size exceeds maximum of {_MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+        )
+    return zip_bytes
+
+
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - parses the uploaded zip and returns the bundle analysis; it persists
+# nothing (the actual write happens on /import/confirm, which IS audited).
+@router.post("/import/upload-zip")
+@handle_db_errors("library.upload_zip_and_analyse_endpoint")
+async def upload_zip_and_analyse_endpoint(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> ImportBundleResponse:
+    """Upload a .modulo.zip file, extract bundle.json, and return analysis.
+
+    Replaces the client-side ZIP parsing for a reliable server-side extraction.
+    """
+    zip_bytes = await _read_zip_upload(file)
+    try:
+        bundle = extract_bundle_json_from_zip(zip_bytes)
+    except (LookupError, json.JSONDecodeError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from None
+
+    return await _analyse_bundle(session, principal, bundle)
+
+
+# FAR-1472 audit-coverage exemption (audit_coverage_baseline.txt): read-only
+# POST - resolves bundle references and returns warnings/conflicts; it persists
+# nothing (the actual write happens on /import/confirm, which IS audited).
+@router.post("/import/analyse")
+@handle_db_errors("library.analyse_import_bundle_endpoint")
+async def analyse_import_bundle_endpoint(
+    req: AnalyseBundleRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> ImportBundleResponse:
+    """Analyse a bundle JSON and return resolution warnings + available teams.
+
+    Accepts raw JSON body with bundle content, or use /import/upload-zip
+    to upload a .modulo.zip file directly.
+    """
+    return await _analyse_bundle(session, principal, req.bundle)
+
+
+# ---------------------------------------------------------------------------
+# Workflow import — step 2: confirm and materialize
+# ---------------------------------------------------------------------------
+
+
+async def _enforce_imported_connector_team_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None,
+    bindings: list[dict[str, Any]],
+) -> None:
+    """FAR-1515 MAJOR 4: a confirmed import must not bypass the connector gate.
+
+    ``materialize_import`` accepts an ``owner_team_id``, rewires each node's
+    ``connector_binding`` to a real org connector, and writes the graph — with
+    no team check of its own, so an import could persist a team pipeline
+    pinning ANOTHER TEAM's team-private connector, which every graph-save path
+    refuses. (An org-visibility connector is shared across the organisation and
+    is never refused — FAR-1618.) ``bindings`` are the REWIRED bindings
+    materialize just returned (after rewiring, in hand without a second read),
+    and this runs INSIDE the import transaction, so the named 409 rolls the
+    whole import back rather than leaving half-created entities.
+
+    An empty binding list is a no-op — the gate has nothing to judge.
+    """
+    if not bindings:
+        return
+    try:
+        mismatches = await find_connector_team_mismatches(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=owner_team_id,
+            connector_bindings=bindings,
+        )
+    except ConnectorBindingMissingError as exc:
+        # FAR-1515 CRITICAL 1: same named 409 as the graph-save paths — an
+        # unresolvable binding must not import any more than it must save.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(mismatches),
+        )
+
+
+@router.post(
+    "/import/confirm",
+    dependencies=[Depends(audited("library_import_confirmed", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.confirm_import_endpoint")
+async def confirm_import_endpoint(
+    req: ImportConfirmRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> dict[str, Any]:
+    """Confirm and execute the import.
+
+    Parses the bundle, resolves all references, and creates real database
+    entities: Schema/SchemaVersion, Agent, Pipeline, PipelineEdge, and a
+    LibraryPrimitive for the workflow.
+    """
+    try:
+        bundle = json.loads(req.bundle_json)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid bundle JSON",
+        ) from None
+
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            result = await materialize_import(
+                session,
+                org_id=principal.organisation_id,
+                created_by=principal.account_id,
+                bundle=bundle,
+                owner_team_id=req.owner_team_id,
+                pipeline_name_override=req.pipeline_name_override,
+                model_backend_overrides=req.model_backend_overrides,
+                schema_id_overrides=req.schema_overrides,
+                schema_version_overrides=req.schema_version_overrides,
+                connector_instance_overrides=req.connector_overrides,
+            )
+            # FAR-1515 MAJOR 4: the import rewires and writes the graph with
+            # the import's owner team — gate the REWIRED bindings materialize
+            # just returned the same way every graph-save path does, inside
+            # the same transaction.
+            await _enforce_imported_connector_team_gate(
+                session,
+                org_id=principal.organisation_id,
+                owner_team_id=req.owner_team_id,
+                bindings=list(result.get("connector_bindings") or []),
+            )
+    except GitContentRefError as exc:
+        _log.warning("confirm_import_endpoint: unpinned git-content agent prompt rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except ValueError as exc:
+        # FAR-1846: ``materialize_import`` rejects an invalid bundle with the
+        # module's bad-input idiom (``ValueError``) — an unsupported format
+        # version, or a sandbox-only field (egress_policy / egress_allowlist /
+        # read_only / git_credentials / single_pr_per_run) on a non-sandbox
+        # node. Without this arm the shared ``handle_db_errors`` backstop maps
+        # the uncaught ValueError to a generic 500, hiding which node/field the
+        # caller must repair. ``GitContentRefError`` (a ValueError subclass)
+        # has its own arm above. ``pydantic.ValidationError`` is also a
+        # ValueError but keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.confirm_import_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.warning("confirm_import_endpoint: ProgrammingError — missing DB table or migration", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.confirm_import_endpoint")
+        _log.warning("confirm_import_endpoint: SQLAlchemyError — database connection failure", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection failed. Please try again later.",
+        ) from None
+
+    return {
+        "status": "imported",
+        "pipeline_id": result["pipeline_id"],
+        "pipeline_name": result["pipeline_name"],
+        "primitive_id": result["primitive_id"],
+        "agent_count": result["agent_count"],
+        "edge_count": result["edge_count"],
+        "schema_count": result["schema_count"],
+        "warnings": result.get("warnings", []),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ratings
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{primitive_id}/ratings")
+@handle_db_errors("library.list_ratings_endpoint")
+async def list_ratings_endpoint(
+    primitive_id: uuid.UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> RatingListResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
+            result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
+    except IntegrityError:
+        _log.exception("library.list_ratings_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.list_ratings_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("list_ratings_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return RatingListResponse(
+        items=[RatingResponse.model_validate(r) for r in result.items],
+        total=result.total,
+    )
+
+
+@router.get("/{primitive_id}/ratings/aggregate")
+@handle_db_errors("library.get_rating_aggregate_endpoint")
+async def get_rating_aggregate_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> RatingAggregateResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
+            avg, count = await get_rating_aggregate(session, primitive_id)
+    except IntegrityError:
+        _log.exception("library.get_rating_aggregate_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.get_rating_aggregate_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("get_rating_aggregate_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return RatingAggregateResponse(
+        average_rating=float(avg) if avg is not None else None,
+        review_count=count,
+    )
+
+
+@router.post(
+    "/{primitive_id}/ratings",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("rating_submitted", "rating", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.submit_rating_endpoint")
+async def submit_rating_endpoint(
+    primitive_id: uuid.UUID,
+    req: RatingSubmit,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> RatingResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
+            rating = await submit_rating(
+                session,
+                org_id=principal.organisation_id,
+                primitive_id=primitive_id,
+                thumbs_up=req.thumbs_up,
+                comment=req.comment,
+                account_id=principal.account_id,
+            )
+            await update_primitive_ratings_aggregate(session, primitive_id)
+    except SelfRatingError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except DuplicateRatingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except RatingCooldownError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e)) from e
+    except CopyToAdaptError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except IntegrityError as e:
+        _log.exception("library.submit_rating_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from e
+    except ProgrammingError:
+        _log.exception("library.submit_rating_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("submit_rating_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return RatingResponse.model_validate(rating)
+
+
+@router.post(
+    "/{primitive_id}/ratings/abuse",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("abuse_report_submitted", "abuse_report", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.submit_abuse_report_endpoint")
+async def submit_abuse_report_endpoint(
+    primitive_id: uuid.UUID,
+    req: AbuseReportSubmit,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> AbuseReportResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
+            report = await submit_abuse_report(
+                session,
+                org_id=principal.organisation_id,
+                primitive_id=primitive_id,
+                rating_id=req.rating_id,
+                reporter_account_id=principal.account_id,
+                reason=req.reason,
+            )
+    except IntegrityError:
+        _log.exception("library.submit_abuse_report_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.submit_abuse_report_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("submit_abuse_report_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return AbuseReportResponse.model_validate(report)
+
+
+# ---------------------------------------------------------------------------
+# Abuse-report moderation queue (FAR-1753)
+#
+# A report is FILED by any org member (POST /{primitive_id}/ratings/abuse)
+# and TRIAGED here by library managers. Resolving a report RECORDS A DECISION
+# on the report row — it never touches the reported rating itself.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/abuse-reports")
+@handle_db_errors(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+async def list_abuse_reports_endpoint(
+    status_filter: Literal["pending", "reviewed", "dismissed"] | None = Query(default=None, alias="status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueResponse:
+    """List this organisation's abuse-report queue, newest first.
+
+    Read-only triage view: optionally narrowed with ``?status=pending`` (the
+    default queue), ``reviewed`` or ``dismissed``. Org-scoped by the caller's
+    ``organisation_id``; reporting a decision on a row is done via the resolve
+    endpoint, not here.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await list_abuse_reports(
+                session,
+                principal.organisation_id,
+                status_filter=status_filter,
+                page=page,
+                page_size=page_size,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_LIST_ABUSE_REPORTS)
+        _log.exception("list_abuse_reports_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return AbuseReportQueueResponse(
+        items=[AbuseReportQueueItem.model_validate(report) for report in result.items],
+        total=result.total,
+    )
+
+
+@router.post(
+    "/admin/abuse-reports/{report_id}/resolve",
+    dependencies=[Depends(audited("abuse_report_reviewed", "abuse_report", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+async def review_abuse_report_endpoint(
+    report_id: uuid.UUID,
+    req: AbuseReportResolveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> AbuseReportQueueItem:
+    """Record a moderation decision on one abuse report.
+
+    Sets ``status`` to ``reviewed`` (report upheld) or ``dismissed`` (report
+    rejected) and stamps ``reviewed_at`` and ``reviewer_account_id`` from the
+    authenticated principal.
+
+    **Resolving a report RECORDS A DECISION — it does NOT remove the rating.**
+    Only the report row changes; the flagged rating stays published, because
+    there is no rating-delete path in the product and adding one is a
+    separate product decision.
+
+    A report belonging to another organisation is invisible here (explicit
+    ``org_id`` predicate + RLS), so it answers 404 rather than leaking its
+    existence.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await review_abuse_report(
+                session,
+                report_id,
+                org_id=principal.organisation_id,
+                new_status=req.status,
+                reviewer_account_id=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_LIBRARY_REVIEW_ABUSE_REPORT)
+        _log.exception("review_abuse_report_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Abuse report not found",
+        )
+    return AbuseReportQueueItem.model_validate(report)
+
+
+# ---------------------------------------------------------------------------
+# Create pipeline from template
+# ---------------------------------------------------------------------------
+
+
+def _build_pipeline_from_template(
+    primitive: Any,
+    name_override: str | None,
+    description_override: str | None,
+) -> tuple[Any, str | None, list[dict[str, Any]], list[dict[str, Any]], int, int]:
+    """Extract pipeline structure from a library primitive's content_json.
+
+    Returns (name, description, graph_nodes, edges, agent_count, edge_count).
+    """
+    content = primitive.content_json
+    agents = content.get("agents", [])
+    # FAR-1666: a template install cannot carry the template's declared policy
+    # gates (evals/gates are not cloned), so strip the blocks before they can be
+    # persisted as INERT declarations — with a loud, recorded warning.
+    graph_nodes, dropped_policy_gates = strip_declared_policy_gates(content.get("graph_nodes", []))
+    if dropped_policy_gates:
+        _log.warning(
+            "policy_gate declaration(s) stripped when installing pipeline template %s: %s",
+            _sanitise_log_value(getattr(primitive, "id", "?")),
+            "; ".join(dropped_policy_gates),
+        )
+    edges = content.get("edges", [])
+
+    name = name_override or getattr(primitive, "name", "Pipeline from Template")
+    description = description_override or getattr(primitive, "description", None)
+
+    # Build a map from template string IDs to stable UUIDs so PipelineEdge
+    # foreign keys (Uuid columns) don't crash on human-readable IDs.
+    node_id_map = _build_template_node_id_map(graph_nodes)
+
+    pipeline_nodes = _convert_template_nodes(graph_nodes, agents, node_id_map)
+    pipeline_edges = _convert_template_edges(edges, node_id_map)
+
+    return name, description, pipeline_nodes, pipeline_edges, len(agents), len(edges)
+
+
+def _build_template_node_id_map(graph_nodes: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each template node's human-readable id to a stable UUID string."""
+    node_id_map: dict[str, str] = {}
+    for node in graph_nodes:
+        tid = node.get("id", "")
+        if tid:
+            node_id_map[tid] = str(uuid.uuid4())
+    return node_id_map
+
+
+def _node_label(
+    node: dict[str, Any],
+    agents: list[dict[str, Any]],
+    agent_index: int | None,
+) -> str:
+    """Compute the display label for a template node.
+
+    Manual-gate nodes always prefer their own label; otherwise an in-range
+    ``agent_index`` falls back to the referenced agent's name.
+    """
+    if node.get("node_type") == "manual":
+        return cast(str, node.get("label", "Manual Gate"))
+    if agent_index is not None and agent_index < len(agents):
+        return cast(str, node.get("label") or agents[agent_index].get("name", "Agent"))
+    return cast(str, node.get("label", "Node"))
+
+
+def _convert_template_nodes(
+    graph_nodes: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    node_id_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert template graph nodes to pipeline graph nodes.
+
+    Template nodes use ``agent_index`` to reference template agents. The
+    agent definition is embedded in the node metadata so the frontend can
+    resolve it later when the user configures real agents.
+    """
+    pipeline_nodes: list[dict[str, Any]] = []
+    for node in graph_nodes:
+        tid = node.get("id", "")
+        agent_index = node.get("agent_index")
+        pipeline_node: dict[str, Any] = {
+            "id": node_id_map.get(tid, tid or str(uuid.uuid4())),
+            "node_type": node.get("node_type", "agent"),
+            "position": node.get("position", {"x": 0, "y": 0}),
+            "label": _node_label(node, agents, agent_index),
+        }
+        if agent_index is not None and agent_index < len(agents):
+            pipeline_node["template_agent"] = agents[agent_index]
+        if node.get("node_type") == "manual":
+            # FAR-889: carry every output-schema form through to the pipeline
+            # node so the write-path guard accepts template manual gates.
+            pipeline_node["output_schema_id"] = node.get("output_schema_id")
+            pipeline_node["output_schema_pin"] = node.get("output_schema_pin")
+            pipeline_node["output_schema_json"] = node.get("output_schema_json")
+
+        pipeline_nodes.append(pipeline_node)
+    return pipeline_nodes
+
+
+def _convert_template_edges(
+    edges: list[dict[str, Any]],
+    node_id_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert template edges to pipeline edge format.
+
+    Source/target are mapped through ``node_id_map`` so human-readable
+    template IDs become UUIDs.
+    """
+    pipeline_edges: list[dict[str, Any]] = []
+    for edge in edges:
+        old_source = edge.get("source", edge.get("source_node_id", ""))
+        old_target = edge.get("target", edge.get("target_node_id", ""))
+        pipeline_edge = {
+            "id": str(uuid.uuid4()),
+            "source_node_id": node_id_map.get(old_source, old_source),
+            "target_node_id": node_id_map.get(old_target, old_target),
+            "edge_type": edge.get("edge_type", "normal"),
+        }
+        hitl_config = edge.get("hitl_review_config")
+        if hitl_config:
+            pipeline_edge["hitl_review_config"] = hitl_config
+        pipeline_edges.append(pipeline_edge)
+    return pipeline_edges
+
+
+def _add_pipeline_edges(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline: Any,
+    edges: list[dict[str, Any]],
+) -> None:
+    """Persist converted template edges as PipelineEdge rows for a new pipeline."""
+    for edge_data in edges:
+        session.add(
+            PipelineEdge(
+                id=uuid.uuid4(),
+                organisation_id=org_id,
+                pipeline_id=pipeline.id,
+                source_node_id=uuid.UUID(edge_data["source_node_id"]),
+                target_node_id=uuid.UUID(edge_data["target_node_id"]),
+                edge_type=edge_data["edge_type"],
+                condition_expression=edge_data.get("condition_expression"),
+                hitl_review_config=edge_data.get("hitl_review_config"),
+                source_port=edge_data.get("source_port", "out"),
+                target_port=edge_data.get("target_port", "in"),
+            )
+        )
+
+
+def _pipeline_from_template_response(
+    pipeline: Any,
+    primitive_id: uuid.UUID,
+    agent_count: int,
+    edge_count: int,
+) -> PipelineFromTemplateResponse:
+    """Build the pipeline-from-template response from a freshly created pipeline."""
+    return PipelineFromTemplateResponse(
+        id=pipeline.id,
+        organisation_id=pipeline.organisation_id,
+        name=pipeline.name,
+        description=pipeline.description,
+        visibility=pipeline.visibility,
+        template_source_id=primitive_id,
+        agent_count=agent_count,
+        edge_count=edge_count,
+        ready_to_run=True,
+        created_at=pipeline.created_at,
+        updated_at=pipeline.updated_at,
+    )
+
+
+@router.post(
+    "/{primitive_id}/create-pipeline",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
+async def create_pipeline_from_template_endpoint(
+    primitive_id: uuid.UUID,
+    req: CreatePipelineFromTemplateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+) -> PipelineFromTemplateResponse:
+    try:
+        # TOCTOU fix (#328): the primitive read MUST happen inside the same
+        # transaction as the pipeline create.  Previously the read was outside
+        # the transaction, so a concurrent delete/modify could create a pipeline
+        # from a stale or deleted source.
+        async with session.begin():
+            await _set_rls_context(session, principal)
+
+            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+
+            if primitive.primitive_type != "pipeline_template":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Primitive type '{primitive.primitive_type}' is not a pipeline_template",
+                )
+
+            name, description, graph_nodes, edges, agent_count, edge_count = _build_pipeline_from_template(
+                primitive,
+                req.name,
+                req.description,
+            )
+
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name=name,
+                account_id=principal.account_id,
+                description=description,
+                run_context_defaults={"library_source_id": str(primitive_id), "library_template_name": primitive.name},
+            )
+            # FAR-889: reject manual nodes without output schemas at write time.
+            enforce_manual_node_output_schemas(graph_nodes)
+            pipeline.graph_nodes_json = graph_nodes
+            _add_pipeline_edges(session, principal.organisation_id, pipeline, edges)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception(_CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE)
+        raise _not_implemented_error() from None
+
+    return _pipeline_from_template_response(pipeline, primitive_id, agent_count, edge_count)
+
+
+@router.post(
+    "/{primitive_id}/create-lifecycle-map",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("lifecycle_map_created", "lifecycle_map", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.create_lifecycle_map_from_primitive_endpoint")
+async def create_lifecycle_map_from_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.copy"),
+    settings: Settings = Depends(get_settings),
+) -> LifecycleMapResponse:
+    """Copy-to-adapt a ``lifecycle_map`` library primitive into a real map.
+
+    Creates a NEW lifecycle map in the org from the primitive's exported
+    content (name collisions are suffixed with "(imported)"), so a shared map
+    can be copied and adapted without touching the source.
+    """
+    require_in_dev_operator(
+        principal,
+        _GRANT_LIBRARY_SEARCH_IN_DEV,
+        require_dev_mode=True,
+        settings=settings,
+    )
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if primitive.primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(f"Primitive type '{primitive.primitive_type}' is not '{LIFECYCLE_MAP_PRIMITIVE_TYPE}'"),
+                )
+            lifecycle_map = await materialize_map_from_primitive(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                primitive=primitive,
+            )
+            await session.refresh(lifecycle_map)
+    except LifecycleMapPipelineConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    except IntegrityError:
+        _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_lifecycle_map_from_primitive_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return LifecycleMapResponse.model_validate(lifecycle_map)
+
+
+# ---------------------------------------------------------------------------
+# Community contribution endpoints
+# ---------------------------------------------------------------------------
+
+
+class CommunityContributeRequest(BaseModel):
+    primitive_type: str = Field(
+        ...,
+        pattern=_PRIMITIVE_TYPE_PATTERN,
+    )
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    tags: list[str] = Field(default_factory=list)
+    content_json: dict[str, Any]
+    source_url: str | None = None
+
+
+class CommunityContributionListResponse(BaseModel):
+    items: list[LibraryPrimitiveResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.post(
+    "/community/contribute",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("contribution_created", "contribution", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.community_contribute_endpoint")
+async def community_contribute_endpoint(
+    req: CommunityContributeRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> LibraryPrimitiveResponse:
+    """Submit a community library contribution."""
+    try:
+        org_id = _require_organisation_id(principal)
+        if req.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
+            _require_lifecycle_map_internal_access(principal)
+        submitted_content = req.content_json
+        if req.primitive_type == "composite" and isinstance(submitted_content.get("nodes"), list):
+            # FAR-1374 parity with the library create/patch gates: a composite
+            # contribution stores a caller-submitted sub-graph; a fresh mask
+            # sentinel (no stored counterpart exists on contribute) is refused
+            # 422 rather than persisted into a draft contribution row.
+            submitted_content = dict(submitted_content)
+            submitted_content["nodes"] = resolve_and_reject_mask_sentinels(list(submitted_content["nodes"]), None)
+        result = await contribute_primitive(
+            session,
+            org_id=org_id,
+            created_by=principal.account_id,
+            primitive_type=req.primitive_type,
+            name=req.name,
+            slug=req.slug,
+            description=req.description,
+            tags=req.tags,
+            content_json=submitted_content,
+            source_url=req.source_url,
+        )
+    except IntegrityError:
+        _log.exception("library.community_contribute_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.community_contribute_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("community_contribute_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return LibraryPrimitiveResponse.model_validate(result)
+
+
+@router.get("/community/contributions")
+@handle_db_errors("library.list_community_contributions_endpoint")
+async def list_community_contributions_endpoint(
+    contribution_status: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> CommunityContributionListResponse:
+    """List the org's own community contributions, optionally filtered by status."""
+    try:
+        org_id = _require_organisation_id(principal)
+        try:
+            result = await list_org_contributions(
+                session,
+                org_id,
+                contribution_status=contribution_status,
+                page=page,
+                page_size=page_size,
+            )
+        except IntegrityError:
+            _log.exception("library.list_community_contributions_endpoint")
+            raise _conflict_error() from None
+        except ProgrammingError:
+            _log.exception("library.list_community_contributions_endpoint")
+            _log.warning(
+                "list_community_contributions_endpoint: ProgrammingError — missing DB table or migration",
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=MSG_FEATURE_NOT_AVAILABLE,
+            ) from None
+        except SQLAlchemyError:
+            _log.exception("list_community_contributions_endpoint: SQLAlchemyError")
+            raise _unavailable_error() from None
+        if not _can_access_lifecycle_map_primitives(
+            principal,
+            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+        ):
+            result.items = [p for p in result.items if p.primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE]
+            result.total = len(result.items)
+        items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("list_community_contributions_endpoint: unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while listing contributions.",
+        ) from None
+    return CommunityContributionListResponse(
+        items=items,
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+    )
+
+
+@router.post(
+    "/admin/library/community/publish/{primitive_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("contribution_published", "contribution", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("library.admin_publish_contribution_endpoint")
+async def admin_publish_contribution_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+    _: None = Depends(require_system_admin),
+) -> LibraryPrimitiveResponse:
+    """Publish a community contribution to the community library (admin only)."""
+    try:
+        org_id = _require_organisation_id(principal)
+        result = await publish_contribution(
+            session,
+            org_id,
+            primitive_id,
+        )
+    except ContributionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Contribution {primitive_id} not found",
+        ) from None
+    except ContributionInvalidTransitionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.admin_publish_contribution_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.admin_publish_contribution_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("admin_publish_contribution_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return LibraryPrimitiveResponse.model_validate(result)
+
+
+# ---------------------------------------------------------------------------
+# Collection authoring lifecycle (FAR-760)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/collections",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_collection_created", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.create_collection_endpoint")
+async def create_collection_endpoint(
+    req: CollectionCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
+) -> CollectionResponse:
+    """Create a new library collection (status=draft)."""
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            existing = await get_primitive_by_slug(session, org_id, "library_collection", req.slug)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Collection with slug '{req.slug}' already exists",
+                )
+            prim = await create_library_primitive(
+                session,
+                org_id=org_id,
+                source="local",
+                primitive_type="library_collection",
+                name=req.name,
+                slug=req.slug,
+                description=req.description,
+                author=principal.account_id.hex,
+                version="1.0",
+                tags=[],
+                # ``manifest_pins`` is the CANONICAL key the install/upgrade
+                # readers look for (and what the in-code registry seed data
+                # writes). The previous ``"pins"`` key was never read back, so
+                # API-authored collections resolved no pins on install.
+                content_json={"manifest_pins": [p.model_dump() for p in req.manifest_pins]},
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=req.owner_team_id,
+                visibility=req.visibility,
+                account_id=principal.account_id,
+                tier="native",
+            )
+            prim.status = "draft"
+            prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
+            await session.flush()
+    except IntegrityError:
+        _log.exception("library.create_collection_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Collection with slug '{req.slug}' already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.create_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return _collection_response(prim)
+
+
+@router.patch(
+    "/collections/{primitive_id}",
+    dependencies=[
+        Depends(audited("library_collection_updated", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.update_collection_endpoint")
+async def update_collection_endpoint(
+    primitive_id: uuid.UUID,
+    req: CollectionUpdateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
+) -> CollectionResponse:
+    """Update a draft collection's manifest pins."""
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await _load_draft_collection(session, org_id, primitive_id)
+            prim.manifest_pins = [p.model_dump() for p in req.manifest_pins]
+            prim.content_json = {"manifest_pins": prim.manifest_pins}
+            await session.flush()
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.update_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("update_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return _collection_response(prim)
+
+
+@router.post(
+    "/collections/{primitive_id}/publish",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_published", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.publish_collection_endpoint")
+async def publish_collection_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
+) -> CollectionResponse:
+    """Publish a draft collection — validates pins and sets status=published."""
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await _load_draft_collection(session, org_id, primitive_id)
+
+            pins = prim.manifest_pins or []
+            errors = await _validate_manifest_pins(pins, session, org_id)
+            if errors:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Validation failed: {'; '.join(errors)}",
+                )
+
+            prim.status = "published"
+            await session.flush()
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.publish_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "library.publish_collection_endpoint")
+        _log.exception("publish_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    # FAR-759: back-propagate the published version to installed orgs and fork
+    # copies via the existing update machinery (no-op when the collection has
+    # no version group). Runs OUTSIDE the route transaction — the notifier
+    # opens its own, and fails open with a log.
+    await notify_importers_of_update(session, org_id, prim.id)
+    return _collection_response(prim)
+
+
+# ---------------------------------------------------------------------------
+# Collection install / uninstall (FAR-762)
+# ---------------------------------------------------------------------------
+
+
+class CollectionUninstallRequest(BaseModel):
+    install_id: uuid.UUID
+
+
+class CollectionInstallResponse(BaseModel):
+    install_id: uuid.UUID
+    collection_id: uuid.UUID
+    collection_version: str | None
+    organisation_id: uuid.UUID
+    status: str
+    community_sourced: bool = False
+    agents_granted: bool = False
+    resolved_manifest: dict[str, Any] | None = None
+    connector_checklist: list[dict[str, Any]] | None = None
+    installed_entities: list[dict[str, Any]] | None = None
+    runnable: bool = False
+    # FAR-759: cheap update-available surfacing (full delta on the
+    # ``.../update`` endpoint).
+    update_available: bool = False
+    available_version: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CollectionInstallListResponse(BaseModel):
+    items: list[CollectionInstallResponse]
+
+
+class CollectionUninstallResponse(BaseModel):
+    install_id: str
+    deleted: list[dict[str, str]]
+    detached: list[dict[str, str]]
+    blocked: list[dict[str, str]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Collection version-upgrade / "update available" flow (FAR-759)
+# ---------------------------------------------------------------------------
+
+
+class CollectionUpdateEntity(BaseModel):
+    """One installed entity a delta entry maps to."""
+
+    entity_type: str
+    entity_id: uuid.UUID
+    modified: bool
+
+
+class CollectionDeltaEntry(BaseModel):
+    """Per-pin delta entry, grouped under the entity type it affects."""
+
+    entity_type: str
+    slug: str | None
+    from_version: str | None
+    to_version: str | None
+    change: Literal["added", "changed", "unchanged", "removed"]
+    action: Literal["upgrade", "unchanged", "report", "manual"]
+    entities: list[CollectionUpdateEntity] = Field(default_factory=list)
+
+
+class CollectionUpdateDelta(BaseModel):
+    schemas: list[CollectionDeltaEntry] = Field(default_factory=list)
+    agents: list[CollectionDeltaEntry] = Field(default_factory=list)
+    pipelines: list[CollectionDeltaEntry] = Field(default_factory=list)
+
+
+class CollectionUpdateResponse(BaseModel):
+    update_available: bool
+    current_version: str | None
+    available_version: str | None
+    available_version_id: uuid.UUID | None
+    delta: CollectionUpdateDelta | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CollectionUpgradeReconciledItem(BaseModel):
+    slug: str
+    entity_type: str
+    entity_id: str
+
+
+class CollectionUpgradePreservedItem(BaseModel):
+    slug: str
+    entity_type: str
+    entity_id: str
+    reason: str = "modified"
+
+
+class CollectionUpgradeReportedItem(BaseModel):
+    slug: str
+    change: str
+    entity_type: str
+
+
+class CollectionUpgradeResponse(BaseModel):
+    install_id: str
+    from_version: str | None
+    to_version: str
+    reconciled: list[CollectionUpgradeReconciledItem] = Field(default_factory=list)
+    preserved: list[CollectionUpgradePreservedItem] = Field(default_factory=list)
+    reported: list[CollectionUpgradeReportedItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+async def _update_info(session: AsyncSession, install: CollectionInstall) -> tuple[bool, str | None]:
+    """Cheap update-available check for install responses (no full delta)."""
+    collection = await session.get(LibraryPrimitive, install.collection_id)
+    if collection is None:
+        return False, None
+    newer = await find_newer_version(session, install, collection)
+    if newer is None:
+        return False, None
+    return True, newer.version
+
+
+async def _load_installed_entities(
+    session: AsyncSession,
+    install_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Derive an install's entity list from the ``collection_install_entity`` child rows.
+
+    FAR-1754: the child table is the SINGLE source of truth for "what this
+    install wrote" — the same fact is no longer duplicated into a parent JSON
+    column, so the API response can never diverge from what uninstall acts on.
+    Ordered by the child table's primary key for a deterministic response.
+
+    MUST be called INSIDE the endpoint's ``async with session.begin():`` block
+    while the org RLS context is live. The child table's FORCE-RLS policy is
+    parent-derived and FAILS CLOSED when ``app.organisation_id`` is unset
+    (migration 0207's ``_ENTITY_ORG_SCOPE``); that GUC is set with
+    ``set_config(..., is_local=true)`` — transaction-scoped — so a
+    post-transaction call would silently see zero rows on Postgres. Callers
+    thread the loaded list into :func:`_install_response`.
+    """
+    stmt = (
+        select(CollectionInstallEntity)
+        .where(CollectionInstallEntity.install_id == install_id)
+        .order_by(CollectionInstallEntity.entity_type, CollectionInstallEntity.entity_id)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [{"entity_type": row.entity_type, "entity_id": str(row.entity_id)} for row in rows]
+
+
+@dataclass(frozen=True)
+class _InstallFacts:
+    """The DB-derived facts every install response carries (FAR-1782)."""
+
+    runnable: bool
+    update_available: bool
+    available_version: str | None
+
+
+async def _load_install_facts(session: AsyncSession, install: CollectionInstall) -> _InstallFacts:
+    """Compute an install's runnability + update-availability facts.
+
+    FAR-1782: EVERY read behind these facts is org-RLS'd — ``compute_runnable``
+    touches ``model_backends`` and ``_update_info`` reads ``library_primitives``
+    — and the org GUC is set with ``set_config(..., is_local=true)``, i.e. it
+    expires with the transaction that set it. This helper therefore MUST be
+    called INSIDE the endpoint's ``async with session.begin():`` block, while
+    :func:`_set_rls_context` is live: a post-transaction call silently sees
+    zero rows on Postgres (``runnable`` always ``False``, ``update_available``
+    always ``None``) and never errors or logs. The response builder
+    (:func:`_install_response`) is pure precisely so it cannot re-introduce
+    that read.
+    """
+    runnable = await compute_runnable(session, install.install_id)
+    update_available, available_version = await _update_info(session, install)
+    return _InstallFacts(
+        runnable=runnable,
+        update_available=update_available,
+        available_version=available_version,
+    )
+
+
+def _install_response(
+    install: CollectionInstall,
+    installed_entities: list[dict[str, Any]],
+    facts: _InstallFacts,
+) -> CollectionInstallResponse:
+    """Build the standard install response (runnability + update surfacing).
+
+    Pure builder: ``installed_entities`` and ``facts`` are both derived by the
+    CALLER inside the endpoint's org-RLS transaction (via
+    :func:`_load_installed_entities` / :func:`_load_install_facts`) and
+    threaded in — the entity/model-backend/primitive tables' fail-closed RLS
+    policies hide every row from a post-transaction query, so deriving any of
+    them here would silently return zero rows / ``False`` on Postgres
+    (FAR-1754, FAR-1782).
+    """
+    return CollectionInstallResponse(
+        install_id=install.install_id,
+        collection_id=install.collection_id,
+        collection_version=install.collection_version,
+        organisation_id=install.organisation_id,
+        status=install.status,
+        community_sourced=install.community_sourced,
+        agents_granted=install.agents_granted,
+        resolved_manifest=install.resolved_manifest,
+        connector_checklist=install.connector_checklist,
+        installed_entities=installed_entities,
+        runnable=facts.runnable,
+        update_available=facts.update_available,
+        available_version=facts.available_version,
+        created_at=install.created_at,
+    )
+
+
+async def _install_collection_in_transaction(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    primitive_id: uuid.UUID,
+) -> tuple[CollectionInstall, list[dict[str, Any]], _InstallFacts]:
+    """Install a collection and run the post-install gates in one transaction.
+
+    Extracted from :func:`install_collection_endpoint` so the route keeps a
+    flat failure-mapping ``except`` chain while the transaction body — the
+    connector-team gate, the RLS-scoped entity load and the RLS-scoped
+    response facts — stays in one place.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        install = await install_collection(
+            session,
+            org_id=org_id,
+            created_by=principal.account_id,
+            collection_id=primitive_id,
+        )
+        # FAR-1515 MAJOR 4: a collection install materialises the same
+        # rewired graph as a workflow import — run the same connector-team
+        # gate (collection installs carry no owner team, so only the
+        # team-private-connector direction can fire). Rolls the whole
+        # install back with the import it guards. The freshly-created
+        # pipeline is read back inside the same transaction; a manifest
+        # without a pipeline id (test doubles, partial provenance) has
+        # nothing to gate.
+        installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
+        if installed_pipeline_id:
+            # The manifest is SERVER data written by the install itself, so
+            # a malformed id is a server-side defect, not caller input.
+            # Parse it HERE (its own try/except) rather than letting the
+            # bundle-validation ``except ValueError`` arm below remap it:
+            # that arm exists for invalid *caller* bundles, and answering a
+            # corrupt manifest with a 422 would blame the caller for a 500.
+            # str() accepts both the real str id and a UUID instance.
+            try:
+                installed_pipeline_uuid = uuid.UUID(str(installed_pipeline_id))
+            except ValueError:
+                _log.exception(
+                    "install_collection_endpoint: resolved manifest carries a malformed pipeline_id %r",
+                    installed_pipeline_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Collection install manifest is corrupt: pipeline_id is not a valid UUID.",
+                ) from None
+            installed_pipeline = await get_pipeline(session, installed_pipeline_uuid, organisation_id=org_id)
+            await _enforce_imported_connector_team_gate(
+                session,
+                org_id=org_id,
+                owner_team_id=None,
+                bindings=(
+                    extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
+                    if installed_pipeline is not None
+                    else []
+                ),
+            )
+        # FAR-1754: load the entity list while the org RLS context is
+        # still live — the child table's policy fails CLOSED outside the
+        # transaction, so a post-transaction load would silently return [].
+        installed_entities = await _load_installed_entities(session, install.install_id)
+        # FAR-1782: same rule for the runnability / update-available reads —
+        # they touch org-RLS'd tables and must be evaluated in this
+        # transaction, never after it.
+        facts = await _load_install_facts(session, install)
+    return install, installed_entities, facts
+
+
+@router.post(
+    "/collections/{primitive_id}/install",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("library_collection_installed", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.install_collection_endpoint")
+async def install_collection_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+) -> CollectionInstallResponse:
+    """Install a published collection into the organisation.
+
+    Requires the AND union of: library.copy + schema.create + agent.create +
+    pipeline.create (all resolve to 'operator' role).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        install, installed_entities, facts = await _install_collection_in_transaction(
+            session,
+            principal,
+            org_id,
+            primitive_id,
+        )
+    except GitContentRefError as exc:
+        _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except CollectionNotPublishedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except PinResolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except CollectionInstallError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except ValueError as exc:
+        # FAR-1846: a collection install materialises a bundle through
+        # ``materialize_import`` (``core/library_service/install.py``), so the
+        # same invalid-bundle ``ValueError`` rejections (unsupported format
+        # version, sandbox-only fields on a non-sandbox node) reach this route.
+        # Map them to 422 naming the offending node/field instead of letting
+        # the shared ``handle_db_errors`` backstop answer a generic 500.
+        # ``CollectionInstallError`` and ``GitContentRefError`` (ValueError
+        # subclass) have their own arms above; ``pydantic.ValidationError``
+        # keeps its established mapping in the shared backstop.
+        if isinstance(exc, ValidationError):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.install_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.install_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.install_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    # Compute runnability on read + update-available surfacing (FAR-759); both
+    # were derived inside the transaction above (FAR-1782).
+    return _install_response(install, installed_entities, facts)
+
+
+@router.post(
+    "/collections/{primitive_id}/uninstall",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_uninstalled", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.uninstall_collection_endpoint")
+async def uninstall_collection_endpoint(
+    primitive_id: uuid.UUID,
+    req: CollectionUninstallRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> CollectionUninstallResponse:
+    """Uninstall a collection, removing or detaching entities as appropriate.
+
+    Modified entities (whose provenance was already cleared by the user) are
+    detached rather than deleted.
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await uninstall_collection(
+                session,
+                org_id=org_id,
+                install_id=req.install_id,
+                collection_id=primitive_id,
+            )
+    except InstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except UninstallError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.uninstall_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.uninstall_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.uninstall_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return CollectionUninstallResponse(
+        install_id=result["install_id"],
+        deleted=result["deleted"],
+        detached=result["detached"],
+        blocked=result.get("blocked", []),
+    )
+
+
+@router.get(
+    "/collections/{primitive_id}/installs",
+)
+@handle_db_errors("library.list_collection_installs_endpoint")
+async def list_collection_installs_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> CollectionInstallListResponse:
+    """List install records for a collection."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            from farna.db.models.collection_install import CollectionInstall
+
+            stmt = (
+                select(CollectionInstall)
+                .where(
+                    CollectionInstall.collection_id == primitive_id,
+                    CollectionInstall.organisation_id == org_id,
+                )
+                .order_by(CollectionInstall.created_at.desc())
+            )
+            installs = list((await session.execute(stmt)).scalars())
+            # FAR-1754: load each install's entity list while the org RLS
+            # context is still live (the child policy fails closed outside
+            # the transaction) — one query per install, mirroring the
+            # per-install response build below.
+            entities_by_install: dict[uuid.UUID, list[dict[str, Any]]] = {
+                install.install_id: await _load_installed_entities(session, install.install_id) for install in installs
+            }
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # too, so they are evaluated here, inside the same transaction.
+            facts_by_install: dict[uuid.UUID, _InstallFacts] = {
+                install.install_id: await _load_install_facts(session, install) for install in installs
+            }
+    except ProgrammingError:
+        _log.exception("library.list_collection_installs_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.list_collection_installs_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    items: list[CollectionInstallResponse] = [
+        _install_response(install, entities_by_install[install.install_id], facts_by_install[install.install_id])
+        for install in installs
+    ]
+
+    return CollectionInstallListResponse(items=items)
+
+
+# ---------------------------------------------------------------------------
+# Community execution gate — grant access (FAR-764 / ADR 032 D2)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/collections/{primitive_id}/installs/{install_id}/grant",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("collection_agents_granted", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.grant_collection_agents_endpoint")
+async def grant_collection_agents_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> CollectionInstallResponse:
+    """Grant tool/connector access for community-sourced collection agents.
+
+    Flips ``agents_granted`` on the install record.  Only applies to
+    community-sourced installs; raises 400 for non-community installs.
+    Idempotent: granting an already-granted install returns the record as-is.
+    """
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            install = await grant_collection_agents(
+                session,
+                org_id=org_id,
+                install_id=install_id,
+            )
+            # FAR-1754: load the entity list while the org RLS context is
+            # still live (the child policy fails closed outside the
+            # transaction); thread it into the response below.
+            installed_entities = await _load_installed_entities(session, install.install_id)
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # as well, so they are evaluated in this same transaction.
+            facts = await _load_install_facts(session, install)
+    except GrantInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except NotCommunitySourcedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except AlreadyGrantedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except GrantError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.grant_collection_agents_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.grant_collection_agents_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.grant_collection_agents_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return _install_response(install, installed_entities, facts)
+
+
+@router.get(
+    "/collections/{primitive_id}/installs/{install_id}",
+)
+@handle_db_errors("library.get_collection_install_endpoint")
+async def get_collection_install_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> CollectionInstallResponse:
+    """Get a single install record for a collection."""
+    org_id = _require_organisation_id(principal)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            from farna.db.models.collection_install import CollectionInstall
+
+            install = await session.get(CollectionInstall, install_id)
+            # A soft-deleted (uninstalled) install is retired history: treat it
+            # exactly like an absent row. ``session.get`` can resolve it from
+            # the session identity map, bypassing the global ``deleted_at IS
+            # NULL`` filter, so the guard is explicit.
+            if (
+                install is None
+                or install.deleted_at is not None
+                or install.collection_id != primitive_id
+                or install.organisation_id != org_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Install {install_id} not found for collection {primitive_id}",
+                )
+            # FAR-1754: load the entity list while the org RLS context is
+            # still live (the child policy fails closed outside the
+            # transaction); thread it into the response below.
+            installed_entities = await _load_installed_entities(session, install.install_id)
+            # FAR-1782: the runnability / update-available reads are org-RLS'd
+            # as well, so they are evaluated in this same transaction.
+            facts = await _load_install_facts(session, install)
+    except HTTPException:
+        raise
+    except ProgrammingError:
+        _log.exception("library.get_collection_install_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.get_collection_install_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return _install_response(install, installed_entities, facts)
+
+
+# ---------------------------------------------------------------------------
+# Collection version-upgrade endpoints (FAR-759)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/collections/{primitive_id}/versions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited("library_collection_version_created", "library_collection", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
+@handle_db_errors("library.create_collection_version_endpoint")
+async def create_collection_version_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
+) -> CollectionResponse:
+    """Create the next draft version of a published, org-owned collection.
+
+    Copies the manifest pins and links both rows through ``version_group_id``
+    (the library's existing version machinery). The draft must then be
+    published via the existing publish endpoint, which back-propagates
+    ``update_available_version_id`` to installed orgs (FAR-759).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await get_primitive(session, org_id, primitive_id)
+            if prim is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if prim.primitive_type != "library_collection":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not a collection primitive",
+                )
+            if prim.organisation_id != org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only org-owned collections can be versioned",
+                )
+            if prim.status != "published":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot version a collection with status '{prim.status}'",
+                )
+
+            # One draft sibling at a time — publish it before versioning again.
+            draft_stmt = select(LibraryPrimitive).where(
+                LibraryPrimitive.organisation_id == org_id,
+                LibraryPrimitive.primitive_type == "library_collection",
+                LibraryPrimitive.slug == prim.slug,
+                LibraryPrimitive.status == "draft",
+                LibraryPrimitive.deleted_at.is_(None),
+            )
+            if (await session.execute(draft_stmt)).scalars().first() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Collection '{prim.slug}' already has a draft version — publish it before creating another",
+                )
+
+            # Seed the version group on the current row when missing, so both
+            # rows link through version_group_id (library version machinery).
+            group_id = prim.version_group_id or prim.id
+            if prim.version_group_id is None:
+                prim.version_group_id = group_id
+
+            new_prim = LibraryPrimitive(
+                organisation_id=org_id,
+                source=prim.source,
+                primitive_type="library_collection",
+                name=prim.name,
+                slug=prim.slug,
+                description=prim.description,
+                author=prim.author,
+                version=_bump_version(prim.version),
+                tags=list(prim.tags) if prim.tags else [],
+                content_json=copy.deepcopy(prim.content_json or {}),
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=prim.owner_team_id,
+                visibility=prim.visibility,
+                account_id=prim.account_id,
+                auto_update=prim.auto_update,
+                tier=prim.tier,
+                status="draft",
+                version_group_id=group_id,
+                manifest_pins=copy.deepcopy(prim.manifest_pins or []),
+            )
+            session.add(new_prim)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception("library.create_collection_version_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.create_collection_version_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_collection_version_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return _collection_response(new_prim)
+
+
+@router.get(
+    "/collections/{primitive_id}/installs/{install_id}/update",
+)
+@handle_db_errors("library.get_collection_update_endpoint")
+async def get_collection_update_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> CollectionUpdateResponse:
+    """Surface the update-available state and per-entity delta for an install.
+
+    The delta is grouped per entity type (schemas / agents / pipelines) and
+    classifies every manifest pin as added / changed / unchanged / removed,
+    with the installed entities each pin maps to and whether each entity was
+    operator-modified (preserved on upgrade).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await detect_collection_update(
+                session,
+                org_id=org_id,
+                install_id=install_id,
+                collection_id=primitive_id,
+            )
+    except UpgradeInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.get_collection_update_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.get_collection_update_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    delta: CollectionUpdateDelta | None = None
+    if report["delta"] is not None:
+        delta = CollectionUpdateDelta(**report["delta"])
+    return CollectionUpdateResponse(
+        update_available=report["update_available"],
+        current_version=report["current_version"],
+        available_version=report["available_version"],
+        available_version_id=report["available_version_id"],
+        delta=delta,
+        warnings=report["warnings"],
+    )
+
+
+@router.post(
+    "/collections/{primitive_id}/installs/{install_id}/upgrade",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_upgraded", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.upgrade_collection_endpoint")
+async def upgrade_collection_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> CollectionUpgradeResponse:
+    """Upgrade an installed collection to its newest published version.
+
+    Operator-initiated only (no auto-updates). Unmodified entities whose pin
+    changed are reconciled in place; operator-modified entities are preserved
+    and reported; added/removed pins and structural pipeline-graph changes are
+    reported without action. The install record then points at the new
+    version row.
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await upgrade_collection(
+                session,
+                org_id=org_id,
+                created_by=principal.account_id,
+                install_id=install_id,
+                collection_id=primitive_id,
+            )
+    except UpgradeInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except NoUpdateAvailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
+    except CollectionUpgradeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.upgrade_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.upgrade_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.upgrade_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return CollectionUpgradeResponse(
+        install_id=report["install_id"],
+        from_version=report["from_version"],
+        to_version=report["to_version"],
+        reconciled=[CollectionUpgradeReconciledItem(**item) for item in report["reconciled"]],
+        preserved=[CollectionUpgradePreservedItem(**item) for item in report["preserved"]],
+        reported=[CollectionUpgradeReportedItem(**item) for item in report["reported"]],
+        warnings=report["warnings"],
+    )

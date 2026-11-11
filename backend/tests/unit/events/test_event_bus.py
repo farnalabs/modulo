@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.events import event_bus as eb
-from modulo.core.events.event_bus import EventBus
+from farna.core.events import event_bus as eb
+from farna.core.events.event_bus import EventBus
 from tests.unit.events._helpers import drain_background_tasks
 
 
@@ -217,7 +217,7 @@ def test_redis_broadcast_without_running_loop_skips_broadcast(caplog: pytest.Log
     the best-effort Redis broadcast fails open with a log."""
     broker = AsyncMock()
     bus = EventBus(redis_broker=broker)
-    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.events.event_bus"):
         bus._redis_broadcast_if_configured("org-1", {"type": "run"})
     broker.publish.assert_not_awaited()
     assert not eb._background_tasks
@@ -422,7 +422,7 @@ async def test_configure_event_bus_propagates_cancellation_from_close() -> None:
 async def test_deliver_local_without_org_id_warns(caplog: pytest.LogCaptureFixture) -> None:
     """A malformed event with no/blank org_id is dropped with a warning."""
     bus = EventBus()
-    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.events.event_bus"):
         await bus.deliver_local({"type": "run", "id": "r-1"})
         await bus.deliver_local({"org_id": "", "type": "run", "id": "r-1"})
     assert "event_bus.deliver_local_missing_org_id" in caplog.text
@@ -431,7 +431,7 @@ async def test_deliver_local_without_org_id_warns(caplog: pytest.LogCaptureFixtu
 async def test_broadcast_redis_only_without_broker_warns(caplog: pytest.LogCaptureFixture) -> None:
     """broadcast_redis_only with no broker is a logged no-op (fail-open)."""
     bus = EventBus()
-    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.events.event_bus"):
         await bus.broadcast_redis_only("org-1", _event(rid="r-1", version=0))
     assert "event_bus.redis_broadcast_skipped" in caplog.text
 

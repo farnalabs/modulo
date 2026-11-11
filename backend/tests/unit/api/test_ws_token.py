@@ -10,18 +10,18 @@ from fastapi.testclient import TestClient
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import (
     AuthenticatedPrincipal,
     TenantPrincipal,
     create_access_token,
     create_ws_token,
     decode_principal,
 )
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import (
     configure_mock_session,
     configure_rls_preamble,
@@ -229,7 +229,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
     try:
         with patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value="admin"),
         ):
             yield TestClient(app)
@@ -300,7 +300,7 @@ def test_ws_token_removed_member_returns_401(mock_session: AsyncMock) -> None:
     )
     try:
         with patch(
-            "modulo.api.routes.auth.resolve_role_from_membership",
+            "farna.api.routes.auth.resolve_role_from_membership",
             new=AsyncMock(return_value=None),
         ):
             resp = TestClient(app).post("/api/v1/auth/ws-token")
@@ -319,7 +319,7 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
         yield mock_session
 
     # Build a valid refresh token for the test user
-    from modulo.auth.jwt import create_refresh_token
+    from farna.auth.jwt import create_refresh_token
 
     settings = _make_settings()
     refresh_token = create_refresh_token(
@@ -342,11 +342,11 @@ def test_refresh_removed_member_returns_401_without_advancing_sequence(mock_sess
     try:
         with (
             patch(
-                "modulo.api.routes.auth.resolve_role_from_membership",
+                "farna.api.routes.auth.resolve_role_from_membership",
                 new=AsyncMock(return_value=None),
             ) as _rls,
             patch(
-                "modulo.api.routes.auth.advance_sequence",
+                "farna.api.routes.auth.advance_sequence",
                 new=advance,
             ) as _adv,
         ):

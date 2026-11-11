@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.secrets_backend.vault import VaultSecretsBackend
+from farna.core.secrets_backend.vault import VaultSecretsBackend
 
 pytestmark = [
     pytest.mark.usefixtures("vault_env"),
@@ -21,8 +21,8 @@ pytestmark = [
 @pytest.fixture
 def mock_hvac() -> MagicMock:
     with (
-        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.vault._hvac") as mh,
+        patch("farna.core.secrets_backend.vault._MODULE_AVAILABLE", True),
+        patch("farna.core.secrets_backend.vault._hvac") as mh,
     ):
         mh.exceptions.InvalidPath = type("InvalidPath", (Exception,), {})
         mh.exceptions.Forbidden = type("Forbidden", (Exception,), {})
@@ -343,7 +343,7 @@ class TestVaultSecretsBackend:
 
     def test_constructor_raises_without_hvac(self) -> None:
         with (
-            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", False),
+            patch("farna.core.secrets_backend.vault._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="hvac"),
         ):
             VaultSecretsBackend()
@@ -351,7 +351,7 @@ class TestVaultSecretsBackend:
     async def test_ensure_client_raises_without_hvac(self, mock_hvac: MagicMock) -> None:
         backend = VaultSecretsBackend()
         with (
-            patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", False),
+            patch("farna.core.secrets_backend.vault._MODULE_AVAILABLE", False),
             pytest.raises(RuntimeError, match="hvac"),
         ):
             await backend._ensure_client()

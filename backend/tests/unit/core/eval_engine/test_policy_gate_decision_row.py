@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from modulo.core.eval_engine.policy_gate import (
+from farna.core.eval_engine.policy_gate import (
     EvalPolicySnapshot,
     EvalResultView,
     EvalView,
@@ -143,7 +143,7 @@ class TestResolvedActionVocabularyUnchanged:
     """
 
     def test_resolved_action_values_constant_unchanged(self) -> None:
-        from modulo.db.models.policy_gate_decision import RESOLVED_ACTION_VALUES
+        from farna.db.models.policy_gate_decision import RESOLVED_ACTION_VALUES
 
         assert RESOLVED_ACTION_VALUES == ("continue", "warn", "block", "escalate")
 
@@ -162,7 +162,7 @@ class TestResolvedActionVocabularyUnchanged:
         """
         import uuid as _uuid
 
-        from modulo.core.eval_engine.policy_gate import (
+        from farna.core.eval_engine.policy_gate import (
             HumanDecision,
             HumanGateView,
             resolve_human_evaluation,

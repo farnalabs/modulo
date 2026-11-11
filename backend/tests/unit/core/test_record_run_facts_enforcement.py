@@ -19,11 +19,11 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.analytics import record_run_facts
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import RunDailyFact
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.core.analytics import record_run_facts
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.run_node_outputs import RunNodeOutput
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs", "run_daily_facts"}
 
@@ -93,10 +93,10 @@ def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 # Mock the dimension reads so record_run_facts doesn't need pipelines/teams/snapshots tables.
 _DIMENSION_PATCHER = patch(
-    "modulo.core.analytics._snapshot_dimensions", new_callable=AsyncMock, return_value=(None, None, None)
+    "farna.core.analytics._snapshot_dimensions", new_callable=AsyncMock, return_value=(None, None, None)
 )
 _GRAPH_PATCHER = patch(
-    "modulo.core.analytics._snapshot_graph_dimensions", new_callable=AsyncMock, return_value=(0, 0, None)
+    "farna.core.analytics._snapshot_graph_dimensions", new_callable=AsyncMock, return_value=(0, 0, None)
 )
 
 

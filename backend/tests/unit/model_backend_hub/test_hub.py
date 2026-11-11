@@ -13,7 +13,7 @@ import pytest
 from cryptography.fernet import Fernet
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from modulo.core.model_backend_hub import (
+from farna.core.model_backend_hub import (
     _ERROR_DETAIL_MAX_LENGTH,
     BackendDecryptError,
     BackendNotFoundError,
@@ -22,8 +22,8 @@ from modulo.core.model_backend_hub import (
     _backend_class,
     _extract_fixture_map,
 )
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.model_backends.base import HealthResult, ModelBackendBase
+from farna.core.secrets_backend import create_secrets_backend
+from farna.model_backends.base import HealthResult, ModelBackendBase
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,13 +37,13 @@ def test_import_does_not_load_provider_adapters() -> None:
     script = """
 import json
 import sys
-import modulo.core.model_backend_hub
+import farna.core.model_backend_hub
 
 provider_modules = sorted(
     name
     for name in sys.modules
-    if name.startswith("modulo.model_backends.")
-    and name != "modulo.model_backends.base"
+    if name.startswith("farna.model_backends.")
+    and name != "farna.model_backends.base"
 )
 print(json.dumps(provider_modules))
 """
@@ -226,7 +226,7 @@ async def test_find_healthy_fallback_unregistered_logs_warning():
     hub.mark_unhealthy(primary)
     hub._fallbacks[primary] = [unregistered]
 
-    with patch("modulo.core.model_backend_hub.logger.warning") as mock_warn, pytest.raises(BackendUnavailableError):
+    with patch("farna.core.model_backend_hub.logger.warning") as mock_warn, pytest.raises(BackendUnavailableError):
         await hub.get(primary)
     mock_warn.assert_called_once()
     args, _kwargs = mock_warn.call_args
@@ -449,7 +449,7 @@ async def test_initialise_anthropic():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "sk-ant-test"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.anthropic.ChatAnthropic"):
+        with patch("farna.model_backends.anthropic.ChatAnthropic"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -464,7 +464,7 @@ async def test_initialise_openai():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.module.ChatOpenAI"):
+        with patch("farna.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -494,7 +494,7 @@ async def test_initialise_ollama():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "", "base_url": "http://localhost:11434/v1"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.module.ChatOpenAI"):
+        with patch("farna.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -509,7 +509,7 @@ async def test_initialise_ollama_defaults_base_url():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": ""}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.module.ChatOpenAI"):
+        with patch("farna.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -526,7 +526,7 @@ async def test_initialise_forwards_default_params_to_backend():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'),
-        patch("modulo.model_backends.module.ChatOpenAI") as mock_chat,
+        patch("farna.model_backends.module.ChatOpenAI") as mock_chat,
     ):
         hub = ModelBackendHub()
         await hub.initialise([mb], secrets_backend=backend)
@@ -538,7 +538,7 @@ async def test_initialise_forwards_default_params_to_backend():
 
 async def test_initialise_plugin_fallback_backend():
     """When a provider is not built-in, hub falls back to the plugin registry."""
-    from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+    from farna.core.plugin_registry import PluginManifest, PluginRegistry
 
     class _PluginBackend(ModelBackendBase):
         def __init__(self, api_key: str = "", model_id: str = "", **kwargs: Any) -> None:
@@ -584,7 +584,7 @@ async def test_initialise_plugin_fallback_backend():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", return_value='{"api_key": "ck-test"}'),
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=reg),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=reg),
     ):
         hub = ModelBackendHub()
         await hub.initialise([mb], secrets_backend=backend)
@@ -651,7 +651,7 @@ async def test_initialise_self_referencing_fallback_does_not_crash():
     secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(secrets_backend, "get_secret", return_value='{"api_key": ""}'),
-        patch("modulo.model_backends.module.ChatOpenAI"),
+        patch("farna.model_backends.module.ChatOpenAI"),
     ):
         hub = ModelBackendHub()
         hub._fallbacks[primary_id] = [primary_id]
@@ -672,7 +672,7 @@ async def test_initialise_plugin_build_failure_skips_backend():
     secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(secrets_backend, "get_secret", return_value='{"api_key": "ck-test"}'),
-        patch("modulo.core.model_backend_hub.get_plugin_registry") as mock_reg,
+        patch("farna.core.model_backend_hub.get_plugin_registry") as mock_reg,
     ):
         mock_reg.return_value.has_model_backend.return_value = True
         mock_reg.return_value.build_model_backend.side_effect = RuntimeError("Plugin crash")
@@ -753,7 +753,7 @@ async def test_aexit_logs_warning_when_aclose_raises_and_does_not_propagate():
     backend = _ClosingFakeBackend(aclose_side_effect=RuntimeError("transport close failed"))
     hub.register(bid, backend)
 
-    with patch("modulo.core.model_backend_hub.logger.warning") as mock_warn:
+    with patch("farna.core.model_backend_hub.logger.warning") as mock_warn:
         # The exception must not propagate out of the async with block.
         async with hub:
             pass
@@ -798,7 +798,7 @@ def test_register_overwrite_logs_warning():
     hub = ModelBackendHub()
     bid = uuid.uuid4()
     hub.register(bid, _FakeBackend(bid="first"))
-    with patch("modulo.core.model_backend_hub.logger.warning") as mock_warn:
+    with patch("farna.core.model_backend_hub.logger.warning") as mock_warn:
         hub.register(bid, _FakeBackend(bid="second"))
     mock_warn.assert_called_once()
     assert hub._backends[bid].backend_id == "second"
@@ -960,8 +960,8 @@ async def test_initialise_decrypt_ciphertext_success_path():
     settings.fernet_key = key
     with (
         patch.object(secrets_backend, "get_secret", side_effect=KeyError(str(mb.id))),
-        patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.model_backends.anthropic.ChatAnthropic"),
+        patch("farna.settings.get_settings", return_value=settings),
+        patch("farna.model_backends.anthropic.ChatAnthropic"),
     ):
         hub = ModelBackendHub()
         await hub.initialise([mb], secrets_backend=secrets_backend)
@@ -1084,7 +1084,7 @@ async def test_failover_event_audit_logger_failure_isolated():
     async def _bad_audit(event: dict[str, Any]) -> None:
         raise RuntimeError("audit logger down")
 
-    with patch("modulo.core.model_backend_hub.logger.exception") as mock_log:
+    with patch("farna.core.model_backend_hub.logger.exception") as mock_log:
         result = await hub.get_with_rotation(primary, audit_logger=_bad_audit)
     mock_log.assert_called_once()
     assert result.backend is hub._backends[fallback]
@@ -1124,51 +1124,51 @@ def test_mark_unhealthy_unknown_backend_raises():
 
 
 def test_build_backend_bedrock_missing_credentials():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="aws_access_key_id"):
         _build_backend("bedrock", "model", {}, {})
 
 
 def test_build_backend_bedrock_missing_secret():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="aws_secret_access_key"):
         _build_backend("bedrock", "model", {"aws_access_key_id": "x"}, {})
 
 
 def test_build_backend_vertexai_missing_project():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="project"):
         _build_backend("vertexai", "model", {}, {})
 
 
 def test_build_backend_api_key_provider_missing_key():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="api_key"):
         _build_backend("cohere", "model", {}, {})
 
 
 def test_build_backend_azure_missing_endpoint():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="azure_endpoint"):
         _build_backend("azure_openai", "model", {"api_key": "x"}, {})
 
 
 def test_build_backend_watsonx_missing_project_id():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="project_id"):
         _build_backend("watsonx", "model", {"api_key": "x"}, {})
 
 
 def test_build_backend_bedrock_success():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend(
             "bedrock",
@@ -1181,9 +1181,9 @@ def test_build_backend_bedrock_success():
 
 
 def test_build_backend_vertexai_success():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend("vertexai", "model", {"project": "proj"}, {})
     assert isinstance(backend, _KWVFakeBackend)
@@ -1191,9 +1191,9 @@ def test_build_backend_vertexai_success():
 
 
 def test_build_backend_azure_success():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend(
             "azure_openai",
@@ -1206,9 +1206,9 @@ def test_build_backend_azure_success():
 
 
 def test_build_backend_watsonx_success():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend("watsonx", "model", {"api_key": "x", "project_id": "proj"}, {})
     assert isinstance(backend, _KWVFakeBackend)
@@ -1216,8 +1216,8 @@ def test_build_backend_watsonx_success():
 
 
 def test_build_backend_openai_compatible_default_base_url():
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
     backend = _build_backend("ollama", "model", {"api_key": ""}, {})
     assert isinstance(backend, OpenAICompatibleBackend)
@@ -1225,8 +1225,8 @@ def test_build_backend_openai_compatible_default_base_url():
 
 
 def test_build_backend_openai_no_default_base_url():
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
     backend = _build_backend("openai", "model", {"api_key": "x"}, {})
     assert isinstance(backend, OpenAICompatibleBackend)
@@ -1234,8 +1234,8 @@ def test_build_backend_openai_no_default_base_url():
 
 
 def test_build_backend_plugin_missing_api_key_raises():
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+    from farna.core.model_backend_hub import _build_backend
+    from farna.core.plugin_registry import PluginManifest, PluginRegistry
 
     reg = PluginRegistry()
     reg.register_model_backend(
@@ -1244,15 +1244,15 @@ def test_build_backend_plugin_missing_api_key_raises():
         PluginManifest(PLUGIN_ID="pkg-nokey", display_name="NoKey", description="", version="1"),
     )
     with (
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=reg),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=reg),
         pytest.raises(ValueError, match="api_key"),
     ):
         _build_backend("plugin_no_key", "model", {}, {})
 
 
 def test_build_backend_plugin_cancelled_propagates():
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.core.plugin_registry import PluginManifest, PluginRegistry
+    from farna.core.model_backend_hub import _build_backend
+    from farna.core.plugin_registry import PluginManifest, PluginRegistry
 
     def _cancelling_builder(api_key: str, model_id: str, **kwargs: Any) -> ModelBackendBase:
         raise asyncio.CancelledError
@@ -1264,14 +1264,14 @@ def test_build_backend_plugin_cancelled_propagates():
         PluginManifest(PLUGIN_ID="pkg-cancel", display_name="Cancel", description="", version="1"),
     )
     with (
-        patch("modulo.core.model_backend_hub.get_plugin_registry", return_value=reg),
+        patch("farna.core.model_backend_hub.get_plugin_registry", return_value=reg),
         pytest.raises(asyncio.CancelledError),
     ):
         _build_backend("plugin_cancel", "model", {"api_key": "x"}, {})
 
 
 def test_build_backend_unknown_provider():
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     with pytest.raises(ValueError, match="Unknown model backend provider"):
         _build_backend("no_such_provider", "model", {"api_key": "x"}, {})
@@ -1280,9 +1280,9 @@ def test_build_backend_unknown_provider():
 def test_build_backend_forwards_default_params_to_class_backend():
     """default_params must be forwarded to non-OpenAI-compatible backends
     (e.g. cohere) alongside api_key and model_id."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend(
             "cohere",
@@ -1302,9 +1302,9 @@ def test_build_backend_forwards_default_params_to_class_backend():
 
 def test_build_backend_forwards_default_params_to_bedrock():
     """default_params must be forwarded to the bedrock backend."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
-    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+    with patch("farna.core.model_backend_hub._backend_class") as mock_cls:
         mock_cls.return_value = _KWVFakeBackend
         backend = _build_backend(
             "bedrock",
@@ -1324,8 +1324,8 @@ def test_build_backend_forwards_default_params_to_bedrock():
 
 def test_build_backend_openai_compatible_uses_explicit_base_url():
     """A creds-supplied base_url must override the provider default."""
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
     backend = _build_backend(
         "ollama",
@@ -1339,10 +1339,10 @@ def test_build_backend_openai_compatible_uses_explicit_base_url():
 
 def test_build_backend_openai_compatible_forwards_default_params():
     """default_params must reach the OpenAI-compatible backend constructor."""
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
-    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+    with patch("farna.model_backends.module.ChatOpenAI") as mock_chat:
         backend = _build_backend("openai", "gpt-4o", {"api_key": "x"}, {"temperature": 0.5})
     assert isinstance(backend, OpenAICompatibleBackend)
     assert mock_chat.call_args.kwargs["temperature"] == 0.5
@@ -1356,9 +1356,9 @@ def test_build_backend_openai_compatible_forwards_default_params():
 async def test_build_backend_custom_returns_stub_backend():
     """provider='custom' builds a hub-compatible backend wrapping a StubModelBackend
     wired with the fixture map; async invoke returns the canned response."""
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.base import ModelBackendBase
-    from modulo.model_backends.stub.backend import StubModelBackend
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.base import ModelBackendBase
+    from farna.model_backends.stub.backend import StubModelBackend
 
     backend = _build_backend(
         "custom",
@@ -1374,7 +1374,7 @@ async def test_build_backend_custom_returns_stub_backend():
 
 async def test_build_backend_custom_reads_fixture_map_from_default_params():
     """default_params fixture_map is preferred over creds for provider='custom'."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     backend = _build_backend(
         "custom",
@@ -1388,8 +1388,8 @@ async def test_build_backend_custom_reads_fixture_map_from_default_params():
 
 async def test_build_backend_custom_no_fixture_raises_unexpected_input():
     """A custom stub with no fixture map raises UnexpectedInputError on input."""
-    from modulo.core.model_backend_hub import _build_backend
-    from modulo.model_backends.stub.backend import UnexpectedInputError
+    from farna.core.model_backend_hub import _build_backend
+    from farna.model_backends.stub.backend import UnexpectedInputError
 
     backend = _build_backend("custom", "demo-model", {"api_key": "demo"}, {})
     with pytest.raises(UnexpectedInputError):
@@ -1398,7 +1398,7 @@ async def test_build_backend_custom_no_fixture_raises_unexpected_input():
 
 def test_build_backend_custom_backend_id():
     """The custom stub advertises the expected hub-scoped backend id."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     backend = _build_backend("custom", "demo-model", {"api_key": "demo", "fixture_map": {}}, {})
     assert backend.backend_id == "custom/stub"
@@ -1406,7 +1406,7 @@ def test_build_backend_custom_backend_id():
 
 async def test_build_backend_custom_health_check_ok():
     """The custom stub reports healthy via the underlying StubModelBackend."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     backend = _build_backend("custom", "demo-model", {"api_key": "demo", "fixture_map": {}}, {})
     result = await backend.health_check()
@@ -1416,7 +1416,7 @@ async def test_build_backend_custom_health_check_ok():
 
 async def test_build_backend_custom_stream_yields_fixture():
     """The custom stub streams the canned fixture response chunk-wise."""
-    from modulo.core.model_backend_hub import _build_backend
+    from farna.core.model_backend_hub import _build_backend
 
     backend = _build_backend(
         "custom",
@@ -1446,7 +1446,7 @@ async def test_initialise_custom_provider_registers_and_invokes():
     settings.fernet_key = key
     with (
         patch.object(secrets_backend, "get_secret", side_effect=KeyError(str(mb.id))),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         hub = ModelBackendHub()
         await hub.initialise([mb], secrets_backend=secrets_backend)

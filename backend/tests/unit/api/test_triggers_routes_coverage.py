@@ -27,27 +27,27 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
 
 # Aliased: the route handler's own name starts with ``test_``, so importing it
 # unaliased would make pytest try to COLLECT it as a test function.
-from modulo.api.routes.triggers import PollingTestRequest, _require_team_gate_in_txn
-from modulo.api.routes.triggers import test_polling_condition as polling_test_route
-from modulo.api.team_scope import TeamGateDenial
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
-from modulo.core.team_visibility import (
+from farna.api.routes.triggers import PollingTestRequest, _require_team_gate_in_txn
+from farna.api.routes.triggers import test_polling_condition as polling_test_route
+from farna.api.team_scope import TeamGateDenial
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.exceptions import OrgDeletedError, PipelineNotRunnableError
+from farna.core.team_visibility import (
     ConnectorBindingMissingError,
     ConnectorTeamMismatch,
     connector_team_mismatch,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.trigger import Trigger
-from modulo.settings import Settings, get_settings
+from farna.db.models.base import Base
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.trigger import Trigger
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -60,7 +60,7 @@ _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
 _RUNTIME = RuntimeError("kaboom")
 
-_PREFIX = "modulo.api.routes.triggers."
+_PREFIX = "farna.api.routes.triggers."
 
 
 def _make_settings() -> Settings:
@@ -936,9 +936,9 @@ def test_test_polling_condition_cross_team_connector_is_denied(client: tuple[Tes
     the pipeline context is forwarded, and without it the cross-team refusal
     below never fires (the read proceeds instead).
     """
-    from modulo.db.models.connector_instance import ConnectorInstance
-    from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.connector_instance import ConnectorInstance
+    from farna.db.models.pipeline import Pipeline
+    from farna.db.models.trigger import Trigger
 
     http, session = client
     connector_id = uuid.uuid4()
@@ -1075,11 +1075,11 @@ async def test_test_polling_condition_real_autobegin_false_session_returns_poll_
 
             with (
                 patch(
-                    "modulo.settings.get_settings",
+                    "farna.settings.get_settings",
                     return_value=MagicMock(fernet_key="b" * 44, redis_url="", modulo_db="sqlite"),
                 ),
                 patch(
-                    "modulo.core.secrets_backend.create_secrets_backend",
+                    "farna.core.secrets_backend.create_secrets_backend",
                     return_value=_FakeSecretsBackend(),
                 ),
             ):
@@ -1223,11 +1223,11 @@ def test_update_trigger_happy_path_returns_serialized(client: tuple[TestClient, 
 
 
 # ---------------------------------------------------------------------------
-# DELETE / POST restore — CRUD via modulo.db.crud.trigger
+# DELETE / POST restore — CRUD via farna.db.crud.trigger
 # ---------------------------------------------------------------------------
 
 
-_CRUD_TRIGGER = "modulo.db.crud.trigger"
+_CRUD_TRIGGER = "farna.db.crud.trigger"
 
 
 def test_delete_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:

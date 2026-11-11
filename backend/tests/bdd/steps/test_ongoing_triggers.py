@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/ongoing.feature")
@@ -110,7 +110,7 @@ class _RoutedSession:
 
 
 def _make_trigger(**overrides: Any) -> MagicMock:
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.trigger import Trigger
 
     defaults: dict[str, Any] = {
         "id": uuid.uuid4(),
@@ -201,7 +201,7 @@ def _when_ongoing_topup_runs(request: Any) -> None:
         patch.object(ch, "_count_ongoing_runs", new_callable=AsyncMock, return_value=ctx["in_flight"]),
         patch.object(ch, "_org_is_paused_degraded", new_callable=AsyncMock, return_value=ctx["org_paused"]),
         patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-        patch("modulo.db.crud.run.create_run", create_run),
+        patch("farna.db.crud.run.create_run", create_run),
     ):
         created = asyncio.run(
             ch._ongoing_topup(

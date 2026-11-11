@@ -15,7 +15,7 @@ rules:
       ADR 063 step 1 (FAR-1957): the MCP human_only gate
       (``mcp_server._check_human_only_gate``) MUST derive
       ``non_browser_credential`` from the shared authority resolver
-      (``modulo.auth.human_linkage.resolve_human_linkage``), never a hard-coded
+      (``farna.auth.human_linkage.resolve_human_linkage``), never a hard-coded
       ``True``. A constant ``True`` denies EVERY MCP caller regardless of
       credential class — the pre-ADR-063 behaviour that made a human's own
       MCP harness unable to exercise their own HITL authority. It must not
@@ -25,4 +25,4 @@ rules:
     severity: ERROR
     paths:
       include:
-        - "**/backend/src/modulo/api/mcp_server.py"
+        - "**/backend/src/farna/api/mcp_server.py"

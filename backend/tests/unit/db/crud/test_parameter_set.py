@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import apply_updates
-from modulo.db.crud.parameter_set import (
+from farna.db.crud.base import apply_updates
+from farna.db.crud.parameter_set import (
     create_set,
     delete_set,
     get_set,

@@ -25,15 +25,15 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.constants import MSG_ORGANISATION_NOT_FOUND
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.api.routes import admin_org_feature_flags as route_module
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.auth.permissions import PERMISSIONS, is_delegable
-from modulo.core.feature_flags import FeatureFlag
-from modulo.settings import Settings, get_settings
+from farna.api.constants import MSG_ORGANISATION_NOT_FOUND
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.api.routes import admin_org_feature_flags as route_module
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.permissions import PERMISSIONS, is_delegable
+from farna.core.feature_flags import FeatureFlag
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -229,7 +229,7 @@ class TestSetFlag:
             patch.object(route_module, "apply_org_settings_patch_or_404", AsyncMock(return_value={})),
             patch.object(route_module, "_invalidate_cache", AsyncMock()),
             patch(
-                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
                 new=audit,
             ),
         )
@@ -302,7 +302,7 @@ class TestClearFlag:
             patch.object(route_module, "apply_org_settings_patch_or_404", AsyncMock(return_value={})) as apply_mock,
             patch.object(route_module, "_invalidate_cache", AsyncMock()) as cache_mock,
             patch(
-                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
                 new=audit,
             ),
         ):
@@ -332,7 +332,7 @@ class TestClearFlag:
         with (
             patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())),
             patch(
-                "modulo.api.routes._org_settings.update_org_settings_patch",
+                "farna.api.routes._org_settings.update_org_settings_patch",
                 AsyncMock(side_effect=LookupError("organisation not found")),
             ),
         ):
@@ -438,12 +438,12 @@ class TestCoarseAuditOutcome:
             recorded.append(kwargs["payload"])
 
         with (
-            patch("modulo.core.audit_coverage.append_audit_event_isolated", new=capture),
+            patch("farna.core.audit_coverage.append_audit_event_isolated", new=capture),
             patch.object(route_module, "_build_registry", AsyncMock(return_value=_mock_registry())),
             patch.object(route_module, "apply_org_settings_patch_or_404", AsyncMock(return_value={})),
             patch.object(route_module, "_invalidate_cache", AsyncMock()),
             patch(
-                "modulo.api.routes.admin_feature_flags.append_audit_event_isolated",
+                "farna.api.routes.admin_feature_flags.append_audit_event_isolated",
                 new=AsyncMock(),
             ),
         ):

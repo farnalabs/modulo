@@ -1,6 +1,6 @@
 """Decision-record purge + FK-classification helpers (FAR-1102 chunk 4).
 
-Unit tests for ``modulo.db.crud.policy_gate_decision`` and the wiring of
+Unit tests for ``farna.db.crud.policy_gate_decision`` and the wiring of
 ``purge_org_decision_records`` into both org-deletion paths:
 
 - ``is_policy_gate_decision_fk_error`` classification (exact constraint names,
@@ -32,38 +32,38 @@ def _decision_fk_error(constraint: str) -> IntegrityError:
 
 class TestIsPolicyGateDecisionFkError:
     def test_exact_gate_org_constraint(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = _decision_fk_error("fk_policy_gate_decisions_gate_org")
         assert is_policy_gate_decision_fk_error(exc) is True
 
     def test_exact_eval_org_constraint(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = _decision_fk_error("fk_policy_gate_decisions_eval_org")
         assert is_policy_gate_decision_fk_error(exc) is True
 
     def test_unknown_constraint_name_substring_match(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = _decision_fk_error("RS_POLICY_GATE_DECISIONS_EVAL_ORG")
         assert is_policy_gate_decision_fk_error(exc) is True
 
     def test_unrelated_constraint(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = _decision_fk_error("fk_eval_results_run_org")
         assert is_policy_gate_decision_fk_error(exc) is False
 
     def test_missing_constraint_name_is_not_classified(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = IntegrityError("stmt", {}, Exception("violates foreign key constraint"))
         assert is_policy_gate_decision_fk_error(exc) is False
 
     def test_constraint_name_on_orig_is_used(self) -> None:
         """Some DBAPI adapters hang the name off ``exc.orig``, not the wrapper."""
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         orig = Exception("violates foreign key constraint")
         orig.constraint_name = "fk_policy_gate_decisions_eval_org"
@@ -72,14 +72,14 @@ class TestIsPolicyGateDecisionFkError:
         assert is_policy_gate_decision_fk_error(exc) is True
 
     def test_missing_orig_is_not_classified(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = IntegrityError("stmt", {}, None)
         assert is_policy_gate_decision_fk_error(exc) is False
 
     def test_asyncpg_message_constraint_name_is_parsed(self) -> None:
         """asyncpg surfaces the name only in the error message text."""
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         orig = Exception(
             'insert or update on table "policy_gate_decisions" violates '
@@ -90,13 +90,13 @@ class TestIsPolicyGateDecisionFkError:
         assert is_policy_gate_decision_fk_error(exc) is True
 
     def test_asyncpg_message_without_closing_quote_is_not_classified(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         exc = IntegrityError("stmt", {}, Exception('violates foreign key constraint "unterminated'))
         assert is_policy_gate_decision_fk_error(exc) is False
 
     def test_non_integrity_error_is_never_classified(self) -> None:
-        from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
+        from farna.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 
         err = RuntimeError("connection reset")
         err.constraint_name = "fk_policy_gate_decisions_gate_org"  # type: ignore[attr-defined]
@@ -108,7 +108,7 @@ class TestPurgeOrgDecisionRecords:
     async def test_deletes_rows_for_org(self) -> None:
         from sqlalchemy import Delete
 
-        from modulo.db.crud.policy_gate_decision import purge_org_decision_records
+        from farna.db.crud.policy_gate_decision import purge_org_decision_records
 
         result = MagicMock(rowcount=3)
         session = MagicMock(spec=AsyncSession)
@@ -122,7 +122,7 @@ class TestPurgeOrgDecisionRecords:
 
     @pytest.mark.asyncio
     async def test_zero_rows_returns_zero(self) -> None:
-        from modulo.db.crud.policy_gate_decision import purge_org_decision_records
+        from farna.db.crud.policy_gate_decision import purge_org_decision_records
 
         result = MagicMock(rowcount=0)
         session = MagicMock(spec=AsyncSession)
@@ -142,7 +142,7 @@ class TestOrgDeletionPath3PurgesFirst:
 
     @pytest.mark.asyncio
     async def test_purge_called_before_org_hard_delete(self) -> None:
-        import modulo.db.crud.org_deletion as org_deletion
+        import farna.db.crud.org_deletion as org_deletion
 
         order: list[str] = []
         purge = AsyncMock(side_effect=lambda *a, **kw: order.append("purge"))
@@ -166,15 +166,15 @@ class TestOrgDeletionPath3PurgesFirst:
 
         with (
             patch(
-                "modulo.db.crud.org_deletion._count_non_terminal_runs",
+                "farna.db.crud.org_deletion._count_non_terminal_runs",
                 AsyncMock(return_value=0),
             ),
-            patch("modulo.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
+            patch("farna.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
             patch(
-                "modulo.db.crud.org_deletion.batch_delete_old_terminal_runs",
+                "farna.db.crud.org_deletion.batch_delete_old_terminal_runs",
                 AsyncMock(return_value=0),
             ),
-            patch("modulo.db.crud.policy_gate_decision.purge_org_decision_records", purge),
+            patch("farna.db.crud.policy_gate_decision.purge_org_decision_records", purge),
         ):
             result = await org_deletion.confirm_org_deletion(session, _ORG_ID, "never-checked", immediate=True)
 
@@ -184,7 +184,7 @@ class TestOrgDeletionPath3PurgesFirst:
 
     @pytest.mark.asyncio
     async def test_purge_ran_for_force_with_live_runs(self) -> None:
-        import modulo.db.crud.org_deletion as org_deletion
+        import farna.db.crud.org_deletion as org_deletion
 
         purge = AsyncMock()
         org = MagicMock()
@@ -196,10 +196,10 @@ class TestOrgDeletionPath3PurgesFirst:
         session.flush = AsyncMock()
 
         with (
-            patch("modulo.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=5)),
-            patch("modulo.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
-            patch("modulo.db.crud.org_deletion.batch_delete_old_terminal_runs", AsyncMock(return_value=2)),
-            patch("modulo.db.crud.policy_gate_decision.purge_org_decision_records", purge),
+            patch("farna.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=5)),
+            patch("farna.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
+            patch("farna.db.crud.org_deletion.batch_delete_old_terminal_runs", AsyncMock(return_value=2)),
+            patch("farna.db.crud.policy_gate_decision.purge_org_decision_records", purge),
         ):
             result = await org_deletion.confirm_org_deletion(session, _ORG_ID, "skipped", immediate=True, force=True)
 
@@ -212,7 +212,7 @@ class TestOrgDeletionPath6PurgesFirst:
 
     @pytest.mark.asyncio
     async def test_purge_called_before_org_hard_delete(self) -> None:
-        import modulo.db.crud.organisation as organisation
+        import farna.db.crud.organisation as organisation
 
         order: list[str] = []
         purge = AsyncMock(side_effect=lambda *a, **kw: order.append("purge"))
@@ -224,11 +224,11 @@ class TestOrgDeletionPath6PurgesFirst:
         session.flush = AsyncMock()
 
         with (
-            patch("modulo.db.crud.organisation.get_organisation", AsyncMock(return_value=org)),
-            patch("modulo.db.crud.agent_runner_binding.delete_org_binding_rows", AsyncMock()),
-            patch("modulo.db.rls.set_rls_org", AsyncMock()),
-            patch("modulo.db.rls.set_rls_execution_context", AsyncMock()),
-            patch("modulo.db.crud.policy_gate_decision.purge_org_decision_records", purge),
+            patch("farna.db.crud.organisation.get_organisation", AsyncMock(return_value=org)),
+            patch("farna.db.crud.agent_runner_binding.delete_org_binding_rows", AsyncMock()),
+            patch("farna.db.rls.set_rls_org", AsyncMock()),
+            patch("farna.db.rls.set_rls_execution_context", AsyncMock()),
+            patch("farna.db.crud.policy_gate_decision.purge_org_decision_records", purge),
         ):
             deleted = await organisation.delete_organisation(session, _ORG_ID)
 

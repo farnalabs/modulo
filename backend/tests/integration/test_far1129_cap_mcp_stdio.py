@@ -1,6 +1,6 @@
 """FAR-1129 cap-mcp: MCP reachable over a REAL JSON-RPC stdio transport.
 
-The repo ships an MCP server (``modulo.api.mcp_server``) but no consumer ever
+The repo ships an MCP server (``farna.api.mcp_server``) but no consumer ever
 talks to an MCP server at the wire level — the capability is only proven by
 unit tests that mock ``mcp`` internals. Here we run a real ``FastMCP`` server
 from the repo's own ``mcp`` dependency as a subprocess and drive it through the

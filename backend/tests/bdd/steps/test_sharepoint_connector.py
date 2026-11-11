@@ -32,7 +32,7 @@ def ctx() -> dict:
 
 @given("a SharePoint connector configured with valid token")
 def sharepoint_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.sharepoint import SharePointConnector
+    from farna.connectors.sharepoint import SharePointConnector
 
     ctx["connector"] = SharePointConnector(token="test_sharepoint_token")
     ctx["valid"] = True
@@ -40,7 +40,7 @@ def sharepoint_connector_valid(ctx: dict) -> None:
 
 @given("a SharePoint connector configured with invalid credentials")
 def sharepoint_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.sharepoint import SharePointConnector
+    from farna.connectors.sharepoint import SharePointConnector
 
     ctx["connector"] = SharePointConnector(token="bad_token")
     ctx["valid"] = False
@@ -60,7 +60,7 @@ def sharepoint_health_check(ctx: dict) -> None:
 
 @when("the connector lists sites")
 def sharepoint_query_sites(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     sites = {
         "value": [
@@ -75,7 +75,7 @@ def sharepoint_query_sites(ctx: dict) -> None:
 
 @when(parsers.parse('the connector lists items in list "{list_id}" of site "{site_id}"'))
 def sharepoint_query_list_items(list_id: str, site_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     items = {
         "value": [
@@ -98,7 +98,7 @@ def sharepoint_query_list_items(list_id: str, site_id: str, ctx: dict) -> None:
     )
 )
 def sharepoint_write_list_item(list_id: str, site_id: str, title: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     created = {"id": "new-item-1", "fields": {"Title": title}}
     with respx.mock:
@@ -117,7 +117,7 @@ def sharepoint_write_list_item(list_id: str, site_id: str, title: str, ctx: dict
 
 @when(parsers.parse('the connector reads file "{path}" from site "{site_id}" drive "{drive_id}"'))
 def sharepoint_query_file(path: str, site_id: str, drive_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     content = "Hello, SharePoint!"
     with respx.mock:

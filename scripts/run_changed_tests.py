@@ -22,6 +22,8 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 from scripts.git_hook_env import strip_git_hook_context_vars
 
+MAX_TEST_FILES = 20
+
 
 def _changed_unit_tests() -> list[str]:
     result = subprocess.run(
@@ -65,6 +67,13 @@ def main() -> int:
 
     # Strip the repo-root 'backend/' prefix so the paths resolve from backend/.
     test_paths = [p[len("backend/") :] for p in changed]
+    if len(test_paths) > MAX_TEST_FILES:
+        print(
+            f"Notice: {len(test_paths)} unit test files changed (mass change/sweep). "
+            f"Running sample of {MAX_TEST_FILES} files to stay within pre-commit time and command-line bounds (CI runs the full suite).",
+            file=sys.stderr,
+        )
+        test_paths = test_paths[:MAX_TEST_FILES]
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
     # Defence in depth for the gated-suite warning gate installed by

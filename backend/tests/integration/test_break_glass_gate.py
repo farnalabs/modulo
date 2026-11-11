@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable
 import asyncpg  # type: ignore[import-untyped]
 import pytest
 
-from modulo.db.bootstrap_role import (
+from farna.db.bootstrap_role import (
     ACCOUNTS_WRITABLE_COLUMNS,
     _apply_accounts_allow_list,
     _assert_role_posture,

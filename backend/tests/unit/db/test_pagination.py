@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import select
 
-from modulo.db.crud.pagination import CursorPaginator
-from modulo.db.models.pipeline import Pipeline
+from farna.db.crud.pagination import CursorPaginator
+from farna.db.models.pipeline import Pipeline
 
 
 def _make_session() -> AsyncMock:

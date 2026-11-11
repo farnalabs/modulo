@@ -81,7 +81,7 @@ webhook payloads are sent to hardcoded endpoints.
 
 - Delivery retries: up to 4 attempts (1 initial + 3 retries) with backoff
   delays of 1s, 5s, 30s (`MAX_ATTEMPTS` / `RETRY_DELAYS` in
-  `backend/src/modulo/core/notifier/__init__.py`); a 429 `Retry-After`
+  `backend/src/farna/core/notifier/__init__.py`); a 429 `Retry-After`
   response header is honored (capped at 60s)
 - Signing: HMAC-SHA256 with per-webhook secret
 - Payload: JSON body with run/event context

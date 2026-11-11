@@ -3,16 +3,16 @@ id: feat-runtime
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/admin_runtime_config.py
-  - backend/src/modulo/api/routes/admin_rate_limits.py
-  - backend/src/modulo/api/routes/admin_housekeeping.py
-  - backend/src/modulo/api/routes/admin_run_retention.py
-  - backend/src/modulo/api/middleware/rate_limiter.py
-  - backend/src/modulo/api/routes/admin.py
-  - backend/src/modulo/core/runtime_config/store.py
-  - backend/src/modulo/core/runtime_config/key_bridge.py
-  - backend/src/modulo/core/housekeeping.py
-  - backend/src/modulo/db/crud/policy_gate_decision.py
+  - backend/src/farna/api/routes/admin_runtime_config.py
+  - backend/src/farna/api/routes/admin_rate_limits.py
+  - backend/src/farna/api/routes/admin_housekeeping.py
+  - backend/src/farna/api/routes/admin_run_retention.py
+  - backend/src/farna/api/middleware/rate_limiter.py
+  - backend/src/farna/api/routes/admin.py
+  - backend/src/farna/core/runtime_config/store.py
+  - backend/src/farna/core/runtime_config/key_bridge.py
+  - backend/src/farna/core/housekeeping.py
+  - backend/src/farna/db/crud/policy_gate_decision.py
 unit-tests:
   - backend/tests/unit/api/test_admin_runtime_config.py
   - backend/tests/unit/api/test_admin_housekeeping.py
@@ -78,7 +78,7 @@ purging old run data.
       (canonicalized `variant_groups.variants[].snapshot_id`); a
       run-referenced edit snapshot fails loudly on delete through the
       `ondelete=RESTRICT` FK rather than being silently removed
-      (`backend/src/modulo/core/housekeeping.py`,
+      (`backend/src/farna/core/housekeeping.py`,
       `backend/tests/unit/core/test_edit_snapshot_retention.py`,
       `backend/tests/unit/core/test_housekeeping_scanners.py`,
       `backend/tests/integration/test_far1815_edit_snapshot_retention.py`)
@@ -117,7 +117,7 @@ purging old run data.
 - [x] All three streaming exports (run-retention export, audit `/scan`,
       analytics `/scan`) prime their body generator through the shared
       `prime_stream` helper and re-emit it through the shared
-      `reemit_primed_stream` helper (`backend/src/modulo/api/db_error_handling.py`),
+      `reemit_primed_stream` helper (`backend/src/farna/api/db_error_handling.py`),
       so a start-up failure maps to the SAME HTTP status a non-streaming
       endpoint would answer (IntegrityError -> 409, ProgrammingError -> 501,
       SQLSTATE 55P03 -> 409, ValidationError -> 422, SQLAlchemyError -> 503,
@@ -136,7 +136,7 @@ purging old run data.
   (NDJSON, one record per line, final `{"_complete":true}` sentinel on complete
   exhaustion only) and recorded that all three streaming exports now share one
   `prime_stream` / `reemit_primed_stream` implementation
-  (`backend/src/modulo/api/db_error_handling.py`) instead of three hand-rolled
+  (`backend/src/farna/api/db_error_handling.py`) instead of three hand-rolled
   copies whose narrower exception mapping silently downgraded IntegrityError /
   lock-timeout / ValidationError to 503/500. Contract mirrored in
   `frontend/src/manifest.yaml` and the in-product download warning.

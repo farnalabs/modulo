@@ -8,9 +8,9 @@ import re
 
 from sqlalchemy import CheckConstraint, Integer, UniqueConstraint
 
-from modulo.db.models.eval import _VALID_EVAL_TYPES, Eval
-from modulo.db.models.policy_gate import PolicyGate
-from modulo.db.models.policy_gate_decision import PolicyGateDecision
+from farna.db.models.eval import _VALID_EVAL_TYPES, Eval
+from farna.db.models.policy_gate import PolicyGate
+from farna.db.models.policy_gate_decision import PolicyGateDecision
 
 # -----------------------------------------------------------------------
 # C14: version columns exist as Integer, not nullable, with server default "1"

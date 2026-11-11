@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.cost_controller.finalize import (
+from farna.core.cost_controller.finalize import (
     _accumulate_agent_tokens,
     _enforce_agent_token_budgets,
     derive_node_agent_map,
@@ -271,7 +271,7 @@ async def test_finalize_cost_budget_exceeded_overrides_terminal_write() -> None:
     PRD error message through update_run_status — the SAME atomic write."""
     from unittest.mock import patch
 
-    from modulo.core.cost_controller.finalize import finalize_cost
+    from farna.core.cost_controller.finalize import finalize_cost
 
     run = MagicMock()
     run.id = uuid.uuid4()
@@ -290,20 +290,20 @@ async def test_finalize_cost_budget_exceeded_overrides_terminal_write() -> None:
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
 
     with (
-        patch("modulo.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
-        patch("modulo.core.cost_controller.finalize.build_cost_breakdown", return_value=([], Decimal(0))),
+        patch("farna.core.cost_controller.finalize.load_live_components", new=AsyncMock(return_value=[])),
+        patch("farna.core.cost_controller.finalize.build_cost_breakdown", return_value=([], Decimal(0))),
         # Carry the real unified refs cap: bare MagicMock coerces to 1 and the
         # terminal finalise path caches it in the process-wide work_item_refs_cap
         # lru_cache, dropping every later co-located test's refs.
-        patch("modulo.settings.get_settings", return_value=MagicMock(modulo_work_item_refs_cap=100)),
-        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+        patch("farna.settings.get_settings", return_value=MagicMock(modulo_work_item_refs_cap=100)),
+        patch("farna.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
     ):
 
         async def _fake_enforce(session: Any, *, run: Any, usage: Any) -> tuple[str, str, str] | None:
             return ("budget_exceeded", "budget_exceeded", "This run exceeded its token budget.")
 
         with patch(
-            "modulo.core.cost_controller.finalize._enforce_agent_token_budgets",
+            "farna.core.cost_controller.finalize._enforce_agent_token_budgets",
             new=AsyncMock(side_effect=_fake_enforce),
         ):
             await finalize_cost(
@@ -331,7 +331,7 @@ async def test_finalize_cost_budget_exceeded_overrides_terminal_write() -> None:
 
 
 def test_budget_exceeded_is_a_terminal_status() -> None:
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.db.models.run import TERMINAL_STATUSES
 
     assert "budget_exceeded" in TERMINAL_STATUSES
 
@@ -339,7 +339,7 @@ def test_budget_exceeded_is_a_terminal_status() -> None:
 def test_run_model_check_constraint_allows_budget_exceeded() -> None:
     from sqlalchemy import CheckConstraint
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     table_args = Run.__table_args__
     check_sql = " ".join(
@@ -349,7 +349,7 @@ def test_run_model_check_constraint_allows_budget_exceeded() -> None:
 
 
 def test_run_status_whitelist_includes_budget_exceeded() -> None:
-    from modulo.db.crud.run import RUN_STATUS_WHITELIST
+    from farna.db.crud.run import RUN_STATUS_WHITELIST
 
     assert "budget_exceeded" in RUN_STATUS_WHITELIST
 
@@ -358,8 +358,8 @@ def test_run_status_whitelist_includes_budget_exceeded() -> None:
 async def sqlite_runs_engine():
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from modulo.db.models.base import Base
-    from modulo.db.models.run import Run
+    from farna.db.models.base import Base
+    from farna.db.models.run import Run
 
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
@@ -376,8 +376,8 @@ async def test_update_run_status_persists_budget_exceeded_with_completed_at(sqli
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.crud.run import update_run_status
-    from modulo.db.models.run import Run
+    from farna.db.crud.run import update_run_status
+    from farna.db.models.run import Run
 
     factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)
     org_id = uuid.uuid4()

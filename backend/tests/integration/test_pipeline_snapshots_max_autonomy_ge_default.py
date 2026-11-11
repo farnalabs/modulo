@@ -42,7 +42,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY, resolve_autonomy
+from farna.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY, resolve_autonomy
 
 pytestmark = pytest.mark.integration
 
@@ -105,7 +105,7 @@ def _upgrade_statements() -> dict[str, str]:
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     # Skip fileConfig: its default disable_existing_loggers=True would disable
     # every module logger not listed in alembic.ini for the rest of the pytest
     # session (breaks caplog assertions in later tests). Same as migrated_db_url.

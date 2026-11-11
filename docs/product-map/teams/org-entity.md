@@ -3,16 +3,16 @@ id: feat-teams-org-entity
 prd: 9.1, 6.2
 delivery-tasks: []
 code:
-  - backend/src/modulo/db/models/organisation.py
-  - backend/src/modulo/db/models/org_membership.py
-  - backend/src/modulo/db/crud/organisation.py
-  - backend/src/modulo/db/crud/org_membership.py
-  - backend/src/modulo/db/crud/org_deletion.py
-  - backend/src/modulo/core/system_audit_logger.py
-  - backend/src/modulo/db/rls.py
-  - backend/src/modulo/api/routes/admin_orgs.py
-  - backend/src/modulo/api/routes/admin.py
-  - backend/src/modulo/api/routes/viewmodel.py
+  - backend/src/farna/db/models/organisation.py
+  - backend/src/farna/db/models/org_membership.py
+  - backend/src/farna/db/crud/organisation.py
+  - backend/src/farna/db/crud/org_membership.py
+  - backend/src/farna/db/crud/org_deletion.py
+  - backend/src/farna/core/system_audit_logger.py
+  - backend/src/farna/db/rls.py
+  - backend/src/farna/api/routes/admin_orgs.py
+  - backend/src/farna/api/routes/admin.py
+  - backend/src/farna/api/routes/viewmodel.py
   - frontend/src/views/AdminOrgSettingsView.vue
   - frontend/src/views/AdminSystemOrgsView.vue
 unit-tests:

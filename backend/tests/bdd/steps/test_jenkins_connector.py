@@ -31,7 +31,7 @@ def ctx() -> dict:
 
 @given(parsers.parse('a Jenkins connector configured with job "{job}"'))
 def jenkins_connector_job(ctx: dict, job: str) -> None:
-    from modulo.connectors.jenkins import JenkinsConnector
+    from farna.connectors.jenkins import JenkinsConnector
 
     ctx["connector"] = JenkinsConnector(username="admin", token="secret", base_url=_BASE)
     ctx["job"] = job
@@ -40,7 +40,7 @@ def jenkins_connector_job(ctx: dict, job: str) -> None:
 
 @given("a Jenkins connector configured with invalid credentials")
 def jenkins_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.jenkins import JenkinsConnector
+    from farna.connectors.jenkins import JenkinsConnector
 
     ctx["connector"] = JenkinsConnector(username="admin", token="secret", base_url=_BASE)
     ctx["valid"] = False
@@ -60,7 +60,7 @@ def jenkins_health_check(ctx: dict) -> None:
 
 @when("the connector triggers a build")
 def jenkins_trigger_run(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     with respx.mock:
         respx.post(f"{_BASE}/job/{ctx['job']}/build").mock(
@@ -73,7 +73,7 @@ def jenkins_trigger_run(ctx: dict) -> None:
 
 @when("the connector triggers a build with parameters")
 def jenkins_trigger_run_with_parameters(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     with respx.mock:
         respx.post(f"{_BASE}/job/{ctx['job']}/buildWithParameters").mock(
@@ -88,7 +88,7 @@ def jenkins_trigger_run_with_parameters(ctx: dict) -> None:
 
 @then("the build is queued successfully")
 def jenkins_build_queued(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     run = ctx["run"]
     assert run is not None, "No triggered build"
@@ -103,7 +103,7 @@ def jenkins_build_queued_with_parameters(ctx: dict) -> None:
 
 @when(parsers.parse('the connector checks status of build "{build}"'))
 def jenkins_get_run_status(ctx: dict, build: str) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     body = {
         "id": build,
@@ -122,7 +122,7 @@ def jenkins_get_run_status(ctx: dict, build: str) -> None:
 
 @then("the build status is returned")
 def jenkins_build_status(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     run = ctx["run"]
     assert run is not None, "No build status"
@@ -132,7 +132,7 @@ def jenkins_build_status(ctx: dict) -> None:
 
 @when("the connector lists recent builds")
 def jenkins_list_runs(ctx: dict) -> None:
-    from modulo.connectors.base import CIRunStatus
+    from farna.connectors.base import CIRunStatus
 
     runs = [
         {

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.openapi.
+"""Unit tests for farna.api.openapi.
 
 The OpenAPI document must describe the body this API actually sends. FastAPI
 auto-declares a ``422`` response shaped like its own ``HTTPValidationError``
@@ -12,7 +12,7 @@ the schema the document advertises.
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
 
-from modulo.api.openapi import (
+from farna.api.openapi import (
     PROBLEM_DETAIL_NAME,
     PROBLEM_DETAIL_REF,
     VALIDATION_ERROR_REF,
@@ -29,7 +29,7 @@ def _documented_responses(document: dict, status: str):
 
 
 def _live_document() -> dict:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return app.openapi()
 
@@ -131,7 +131,7 @@ class TestLiveDocument:
         assert all(schema == {"$ref": PROBLEM_DETAIL_REF} for schema in bodies)
 
     def test_real_validation_error_body_matches_the_declared_schema(self) -> None:
-        from modulo.api.main import app
+        from farna.api.main import app
 
         client = TestClient(app)
         response = client.get("/api/v1/schemas", params=[("_fresh", "null")])

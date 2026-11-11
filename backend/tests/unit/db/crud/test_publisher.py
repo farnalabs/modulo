@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.publisher import (
+from farna.db.crud.base import PageResult
+from farna.db.crud.publisher import (
     TRUST_TIER_AMBER,
     TRUST_TIER_GREEN,
     create_publisher,

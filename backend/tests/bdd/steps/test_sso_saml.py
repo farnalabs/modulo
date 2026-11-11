@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import get_anonymous_plan_context, get_plan_context
-from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_anonymous_plan_context, get_plan_context
+from farna.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 
 with suppress(FileNotFoundError, OSError):
     scenarios("../features/auth/sso_saml.feature")
@@ -126,7 +126,7 @@ def _saml_settings(license_key: str = _VALID_LICENSE_KEY) -> Settings:
 
 
 def _setup_saml_client(license_key: str = _VALID_LICENSE_KEY, custom_plan: Any = None) -> None:
-    from modulo.api.main import app as _app
+    from farna.api.main import app as _app
 
     if custom_plan is not None:
         _plan = custom_plan
@@ -229,7 +229,7 @@ def group_mapping_configured(idp_group: str, team_id: str, role: str, ctx: dict[
 @when("I initiate SAML login")
 def initiate_saml_login(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_saml_client(ctx.get("license_key", _VALID_LICENSE_KEY), ctx.get("custom_plan"))
-    with patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
+    with patch("farna.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         resp = client.get("/api/v1/auth/saml/login", follow_redirects=False)
         _store_response(request, ctx, resp)
@@ -256,10 +256,10 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
     encoded = _make_saml_response(email, name)
 
     with (
-        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
-        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        patch("farna.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("farna.auth.sso.ModuloSamlAuth") as mock_handler,
+        patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         mock_handler.return_value.process_response.return_value = {
@@ -306,11 +306,11 @@ def acs_valid_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
 @when("the SAML ACS endpoint receives a malformed SAMLResponse")
 def acs_malformed_response(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_saml_client()
-    from modulo.auth.saml_handler import SamlAuthError
+    from farna.auth.saml_handler import SamlAuthError
 
     with (
-        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
+        patch("farna.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("farna.auth.sso.ModuloSamlAuth") as mock_handler,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         mock_handler.return_value.process_response.side_effect = SamlAuthError("SAML Assertion is malformed or invalid")
@@ -338,12 +338,12 @@ def acs_with_groups(groups: str, request: Any, ctx: dict[str, Any], client: Any)
     encoded = _make_saml_response(email, name, groups=group_list)
 
     with (
-        patch("modulo.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
-        patch("modulo.auth.sso.ModuloSamlAuth") as mock_handler,
-        patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-        patch("modulo.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
-        patch("modulo.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
-        patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+        patch("farna.auth.sso._saml_fetch_idp_metadata", new_callable=AsyncMock) as mock_fetch,
+        patch("farna.auth.sso.ModuloSamlAuth") as mock_handler,
+        patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+        patch("farna.auth.sso._lookup_provider_by_entity_id", new_callable=AsyncMock) as mock_lookup,
+        patch("farna.auth.sso.apply_group_mappings", new_callable=AsyncMock) as mock_apply,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
     ):
         mock_fetch.return_value = _SAMPLE_IDP_METADATA
         mock_handler.return_value.process_response.return_value = {

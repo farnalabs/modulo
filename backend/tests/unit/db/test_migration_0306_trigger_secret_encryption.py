@@ -16,7 +16,7 @@ Structural + behavioural contract (no Postgres needed — the bind is mocked):
   instead of silently persisting (half-encrypted secrets are never ok).
 * **Vocabulary parity** — the migration's secret-key set is pinned equal to
   the canonical write-path helper's set
-  (``modulo.api.routes.triggers._SECRET_CONFIG_KEYS``) so the two cannot
+  (``farna.api.routes.triggers._SECRET_CONFIG_KEYS``) so the two cannot
   drift.
 * **No downgrade** — ``downgrade()`` does nothing: un-encrypting secrets
   into plaintext on rollback would be a security regression.
@@ -34,10 +34,10 @@ from unittest.mock import MagicMock, patch
 
 from cryptography.fernet import Fernet
 
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0306_trigger_secret_encryption"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0305_guardrail_escalate_action"
@@ -99,7 +99,7 @@ def _run_upgrade(configs: list[dict[str, Any]]) -> tuple[MagicMock, ModuleType]:
     with (
         patch.object(module, "op") as op,
         patch.object(module, "_fernet_key", return_value=_KEY),
-        patch("modulo.auth.secret_storage.encrypt_stored_secret") as encrypt,
+        patch("farna.auth.secret_storage.encrypt_stored_secret") as encrypt,
     ):
         encrypt.side_effect = lambda value, key: Fernet(key.encode()).encrypt(value.encode())
         op.get_bind.return_value = bind
@@ -193,7 +193,7 @@ class TestUpgrade:
         with (
             patch.object(module, "op") as op,
             patch.object(module, "_fernet_key", return_value=_KEY),
-            patch("modulo.auth.secret_storage.encrypt_stored_secret", side_effect=ValueError("bad")),
+            patch("farna.auth.secret_storage.encrypt_stored_secret", side_effect=ValueError("bad")),
         ):
             op.get_bind.return_value = bind
             try:
@@ -208,7 +208,7 @@ class TestUpgrade:
 
 class TestVocabularyParity:
     def test_secret_key_set_matches_the_canonical_helper(self) -> None:
-        from modulo.api.routes.triggers import _SECRET_CONFIG_KEYS
+        from farna.api.routes.triggers import _SECRET_CONFIG_KEYS
 
         module = _load_migration()
         assert module._SECRET_CONFIG_KEYS == _SECRET_CONFIG_KEYS

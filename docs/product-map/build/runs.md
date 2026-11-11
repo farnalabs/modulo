@@ -3,29 +3,29 @@ id: feat-runs
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/runs.py
-  - backend/src/modulo/api/routes/run_ws.py
-  - backend/src/modulo/api/routes/viewmodel.py
-  - backend/src/modulo/api/routes/dashboard.py
-  - backend/src/modulo/api/routes/lifecycle_maps.py
-  - backend/src/modulo/api/routes/analytics.py
-  - backend/src/modulo/db/crud/run.py
-  - backend/src/modulo/core/pipeline_engine/classify.py
-  - backend/src/modulo/core/pipeline_execution.py
-  - backend/src/modulo/core/exceptions.py
-  - backend/src/modulo/db/models/run.py
-  - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
-  - backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py
-  - backend/src/modulo/db/models/run_attempt.py
-  - backend/src/modulo/db/crud/run_attempts.py
-  - backend/src/modulo/db/migrations/versions/0329_run_attempts.py
-  - backend/src/modulo/db/crud/run_node_outputs.py
-  - backend/src/modulo/db/models/run_node_outputs.py
-  - backend/src/modulo/db/migrations/versions/0337_per_node_completion.py
-  - backend/src/modulo/core/pipeline_engine/executor.py
+  - backend/src/farna/api/routes/runs.py
+  - backend/src/farna/api/routes/run_ws.py
+  - backend/src/farna/api/routes/viewmodel.py
+  - backend/src/farna/api/routes/dashboard.py
+  - backend/src/farna/api/routes/lifecycle_maps.py
+  - backend/src/farna/api/routes/analytics.py
+  - backend/src/farna/db/crud/run.py
+  - backend/src/farna/core/pipeline_engine/classify.py
+  - backend/src/farna/core/pipeline_execution.py
+  - backend/src/farna/core/exceptions.py
+  - backend/src/farna/db/models/run.py
+  - backend/src/farna/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
+  - backend/src/farna/db/migrations/versions/0288_runs_execution_origin.py
+  - backend/src/farna/db/models/run_attempt.py
+  - backend/src/farna/db/crud/run_attempts.py
+  - backend/src/farna/db/migrations/versions/0329_run_attempts.py
+  - backend/src/farna/db/crud/run_node_outputs.py
+  - backend/src/farna/db/models/run_node_outputs.py
+  - backend/src/farna/db/migrations/versions/0337_per_node_completion.py
+  - backend/src/farna/core/pipeline_engine/executor.py
   - frontend/src/components/runs/RunAttemptHistory.vue
-  - backend/src/modulo/core/line_diff.py
-  - backend/src/modulo/core/cost_controller
+  - backend/src/farna/core/line_diff.py
+  - backend/src/farna/core/cost_controller
   - frontend/src/utils/runUtils.ts
   - frontend/src/lib/api/runs.ts
 unit-tests:
@@ -85,7 +85,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       member of the owning team (never an unscoped read). The same predicate applies
       to `GET /runs`, `GET /stats` (on both the Postgres and the portable path) and
       `GET /stats/heatmap`; higher org roles keep the org-wide read
-      (`backend/src/modulo/db/crud/run.py` `list_runs` / `get_run_stats` /
+      (`backend/src/farna/db/crud/run.py` `list_runs` / `get_run_stats` /
       `get_run_heatmap`, `db/crud/team_scope.account_team_scope_clause`,
       `backend/tests/unit/test_runs_stats.py`,
       `backend/tests/unit/api/test_runs_endpoint.py`)
@@ -98,7 +98,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       raised write whose upstream effect is unknowable – joining the distinct
       reasons into `error_detail`. Only `connector`/`dispatch` nodes are inspected,
       so an agent output that merely embeds a failed artifact never downgrades a run
-      (`backend/src/modulo/core/pipeline_engine/executor.py`
+      (`backend/src/farna/core/pipeline_engine/executor.py`
       `_downgrade_connector_failures`,
       `backend/tests/unit/pipeline_engine/test_executor.py`)
 - [x] `GET /runs/{id}` returns run detail including current status, blocked partial

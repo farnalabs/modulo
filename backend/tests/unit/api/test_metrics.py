@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -76,8 +76,8 @@ def _set_principal(role: str) -> None:
 def test_web_vitals_viewer_allowed(client: TestClient) -> None:
     _set_principal("viewer")
     with (
-        patch("modulo.api.routes.metrics.set_rls_org"),
-        patch("modulo.api.routes.metrics.set_rls_user_context"),
+        patch("farna.api.routes.metrics.set_rls_org"),
+        patch("farna.api.routes.metrics.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/metrics/web-vitals",
@@ -89,8 +89,8 @@ def test_web_vitals_viewer_allowed(client: TestClient) -> None:
 def test_web_vitals_admin_allowed(client: TestClient) -> None:
     _set_principal("admin")
     with (
-        patch("modulo.api.routes.metrics.set_rls_org"),
-        patch("modulo.api.routes.metrics.set_rls_user_context"),
+        patch("farna.api.routes.metrics.set_rls_org"),
+        patch("farna.api.routes.metrics.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/metrics/web-vitals",
@@ -127,7 +127,7 @@ def _empty_summary_result() -> MagicMock:
 
 
 def test_read_endpoints_carry_metrics_ingest_permission() -> None:
-    from modulo.api.routes import metrics
+    from farna.api.routes import metrics
 
     for name in ("get_web_vitals_summary", "get_web_vitals_timeseries"):
         params = inspect.signature(getattr(metrics, name)).parameters
@@ -141,8 +141,8 @@ def test_web_vitals_summary_viewer_allowed(client: TestClient) -> None:
     assert _mock_session is not None
     _mock_session.execute = AsyncMock(return_value=_empty_summary_result())
     with (
-        patch("modulo.api.routes.metrics.set_rls_org"),
-        patch("modulo.api.routes.metrics.set_rls_user_context"),
+        patch("farna.api.routes.metrics.set_rls_org"),
+        patch("farna.api.routes.metrics.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/metrics/web-vitals/summary?days=7")
     assert resp.status_code == 200
@@ -166,8 +166,8 @@ def test_web_vitals_timeseries_viewer_allowed(client: TestClient) -> None:
     assert _mock_session is not None
     _mock_session.execute = AsyncMock(return_value=_empty_summary_result())
     with (
-        patch("modulo.api.routes.metrics.set_rls_org"),
-        patch("modulo.api.routes.metrics.set_rls_user_context"),
+        patch("farna.api.routes.metrics.set_rls_org"),
+        patch("farna.api.routes.metrics.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/metrics/web-vitals/timeseries?metric_name=LCP&days=7")
     assert resp.status_code == 200

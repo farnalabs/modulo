@@ -23,12 +23,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -82,8 +82,8 @@ def _make_run(
 
 @pytest.fixture(autouse=True)
 def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.runs as runs_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.routes.runs as runs_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(runs_module.get_run, "return_value", None)
@@ -155,8 +155,8 @@ class TestIoRoundTrip:
 
     def _get_io(self, client: TestClient, run: MagicMock) -> dict[str, Any]:
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
         assert resp.status_code == 200
@@ -282,8 +282,8 @@ class TestIoLogTotals:
 
     def _get_io(self, client: TestClient, run: MagicMock) -> dict[str, Any]:
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
         assert resp.status_code == 200

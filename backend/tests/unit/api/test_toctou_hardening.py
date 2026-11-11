@@ -28,29 +28,29 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from modulo.api.routes.pipelines import _reapply_team_gate_inside_mutation_txn
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.error_tracking import DEFAULT_ALERT_RULES, seed_default_alert_rules_for_org
-from modulo.core.exceptions import RateLimitConflictError
-from modulo.db.crud.run import _is_unique_violation, create_run
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.journey import Journey
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.models.team import Team
-from modulo.db.models.team_membership import TeamMembership
+from farna.api.routes.pipelines import _reapply_team_gate_inside_mutation_txn
+from farna.auth.jwt import TenantPrincipal
+from farna.core.error_tracking import DEFAULT_ALERT_RULES, seed_default_alert_rules_for_org
+from farna.core.exceptions import RateLimitConflictError
+from farna.db.crud.run import _is_unique_violation, create_run
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.journey import Journey
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.system_config import SystemConfig
+from farna.db.models.team import Team
+from farna.db.models.team_membership import TeamMembership
 
 _MIGRATION_FILE = (
-    Path(__file__).parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
+    Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
 )
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -60,7 +60,7 @@ _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000d1")
 
 
 def _enr_index_columns() -> set[str]:
-    from modulo.db.models.error_notification_rule import ErrorNotificationRule
+    from farna.db.models.error_notification_rule import ErrorNotificationRule
 
     for idx in ErrorNotificationRule.__table__.indexes:
         if idx.name == "uq_enr_org_active":
@@ -94,13 +94,13 @@ class TestRateLimitConflictError:
 
 class TestErrorNotificationRuleDeletedAt:
     def test_model_has_deleted_at_column(self) -> None:
-        from modulo.db.models.error_notification_rule import ErrorNotificationRule
+        from farna.db.models.error_notification_rule import ErrorNotificationRule
 
         col = ErrorNotificationRule.__table__.c.deleted_at
         assert col.nullable is True
 
     def test_partial_unique_index_exists(self) -> None:
-        from modulo.db.models.error_notification_rule import ErrorNotificationRule
+        from farna.db.models.error_notification_rule import ErrorNotificationRule
 
         index_names = [idx.name for idx in ErrorNotificationRule.__table__.indexes]
         assert "uq_enr_org_active" in index_names
@@ -664,7 +664,7 @@ class TestTeamGateBoundedLockWait:
         tuned = MagicMock()
         tuned.mutation_row_lock_timeout_ms = 1234
 
-        with patch("modulo.db.crud.row_lock.get_settings", return_value=tuned):
+        with patch("farna.db.crud.row_lock.get_settings", return_value=tuned):
             await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
 
         timeout_calls = [params for sql, params in log if "lock_timeout" in sql]
@@ -673,7 +673,7 @@ class TestTeamGateBoundedLockWait:
 
     def test_lock_timeout_settings_default_is_unchanged(self) -> None:
         """The settings field must default to the value the constant shipped with."""
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",

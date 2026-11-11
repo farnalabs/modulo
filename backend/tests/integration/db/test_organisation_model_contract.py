@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.db.models.organisation import Organisation
+from farna.db.models.organisation import Organisation
 
 pytestmark = pytest.mark.integration
 

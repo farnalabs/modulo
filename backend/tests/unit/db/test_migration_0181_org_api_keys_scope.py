@@ -30,7 +30,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0181_org_api_keys_scope"
 
@@ -201,7 +201,7 @@ class TestSymmetryAndModelParity:
         assert "sa.CheckConstraint(" in code
 
     def test_model_matches_upgraded_schema(self) -> None:
-        from modulo.db.models.api_key import OrgApiKey
+        from farna.db.models.api_key import OrgApiKey
 
         column = OrgApiKey.__table__.c.scope
         assert isinstance(column.type, sa.String)

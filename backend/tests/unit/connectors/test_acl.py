@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ACL_OPERATION_BY_CONNECTOR_METHOD,
     ConnectorACL,
     ConnectorPayload,
@@ -14,7 +14,7 @@ from modulo.connectors.base import (
     connector_binding_denied_acl_operations,
     unrestricted_allowed_operations,
 )
-from modulo.core.connector_hub import _TracedConnector
+from farna.core.connector_hub import _TracedConnector
 
 
 def test_acl_org_visibility():

@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
-from modulo.db.crud.schema import SchemaDeletionProtectedError, delete_schema
+from farna.core.graph_validator import GraphValidator, ValidationResult
+from farna.db.crud.schema import SchemaDeletionProtectedError, delete_schema
 from tests.unit.graph_validator._helpers import (
     schema_version_row as _schema_version_row,
 )

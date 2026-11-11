@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.trigger_engine.slack_app_mention import (
+from farna.core.trigger_engine.slack_app_mention import (
     DuplicateWebhookError,
     SlackAppMentionParseError,
     SlackChallengeNotFoundError,
@@ -147,7 +147,7 @@ class TestVerifySlackSignature:
             calls.append((a, b))
             return real(a, b)
 
-        monkeypatch.setattr("modulo.core.trigger_engine.slack_app_mention.hmac.compare_digest", _spy)
+        monkeypatch.setattr("farna.core.trigger_engine.slack_app_mention.hmac.compare_digest", _spy)
         assert verify_slack_signature(body, _SIGNING_SECRET, ts, sig) is True
         assert len(calls) == 1
 
@@ -344,7 +344,7 @@ def _body(payload: dict[str, Any]) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _not_paused() -> Any:
-    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
+    with patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
         yield
 
 
@@ -357,7 +357,7 @@ async def test_handle_app_mention_success() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock):
+    with patch("farna.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock):
         run, te, input_payload = await handle_app_mention(
             session,
             trigger_id=trigger.id,
@@ -389,7 +389,7 @@ async def test_handle_app_mention_applies_payload_mapping() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock) as mock_create:
+    with patch("farna.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock) as mock_create:
         _, _, input_payload = await handle_app_mention(
             session,
             trigger_id=trigger.id,
@@ -415,7 +415,7 @@ async def test_handle_app_mention_duplicate_event_deduped() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     with (
-        patch("modulo.core.trigger_engine.slack_app_mention.create_run") as mock_create,
+        patch("farna.core.trigger_engine.slack_app_mention.create_run") as mock_create,
         pytest.raises(DuplicateWebhookError),
     ):
         await handle_app_mention(
@@ -504,7 +504,7 @@ async def test_handle_app_mention_non_mention_event_skipped() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     with (
-        patch("modulo.core.trigger_engine.slack_app_mention.create_run") as mock_create,
+        patch("farna.core.trigger_engine.slack_app_mention.create_run") as mock_create,
         pytest.raises(SlackEventTypeError),
     ):
         await handle_app_mention(
@@ -533,7 +533,7 @@ async def test_handle_app_mention_parse_failure_logs_event() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     with (
-        patch("modulo.core.trigger_engine.slack_app_mention.create_run") as mock_create,
+        patch("farna.core.trigger_engine.slack_app_mention.create_run") as mock_create,
         pytest.raises(SlackAppMentionParseError),
     ):
         await handle_app_mention(
@@ -560,7 +560,7 @@ async def test_handle_app_mention_concurrency_queues_anyway() -> None:
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
     run_mock = MagicMock(id=uuid.uuid4())
-    with patch("modulo.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock):
+    with patch("farna.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock):
         run, te, _ = await handle_app_mention(
             session,
             trigger_id=trigger.id,
@@ -591,10 +591,10 @@ async def test_handle_app_mention_rate_limit_exceeded() -> None:
     ts = str(int(time.time()))
     sig = _slack_sig(body, _SIGNING_SECRET, ts)
 
-    from modulo.core.trigger_engine import PipelineRateLimitError
+    from farna.core.trigger_engine import PipelineRateLimitError
 
     with (
-        patch("modulo.core.trigger_engine.slack_app_mention.create_run") as mock_create,
+        patch("farna.core.trigger_engine.slack_app_mention.create_run") as mock_create,
         pytest.raises(PipelineRateLimitError),
     ):
         await handle_app_mention(
@@ -621,7 +621,7 @@ async def test_handle_app_mention_busy_lock_raises() -> None:
     payload = _app_mention_payload()
     body = _body(payload)
 
-    from modulo.core.trigger_engine import TriggerBusyError
+    from farna.core.trigger_engine import TriggerBusyError
 
     with pytest.raises(TriggerBusyError):
         await handle_app_mention(

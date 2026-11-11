@@ -23,8 +23,8 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.compliance import evidence_index as evidence_index_module
-from modulo.compliance.artifacts import (
+from farna.compliance import evidence_index as evidence_index_module
+from farna.compliance.artifacts import (
     ARTIFACT_AUDIT_CHAIN,
     ARTIFACT_AUTONOMY_CHANGE,
     ARTIFACT_BUILD_IDENTITY,
@@ -37,7 +37,7 @@ from modulo.compliance.artifacts import (
     PROVENANCE_CUSTOMER_SUPPLIED,
     PROVENANCE_OBSERVED,
 )
-from modulo.compliance.evidence_index import (
+from farna.compliance.evidence_index import (
     AUTONOMY_DEMOTION_EVENT,
     AUTONOMY_PROMOTION_EVENT,
     STATUS_ABSENT,
@@ -48,19 +48,19 @@ from modulo.compliance.evidence_index import (
     EvidenceIndexIncompleteError,
     build_evidence_index,
 )
-from modulo.compliance.pack import load_mapping_pack
-from modulo.core.eval_engine import EvalType
-from modulo.db.crud.hitl_review_config import human_only_effective
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from farna.compliance.pack import load_mapping_pack
+from farna.core.eval_engine import EvalType
+from farna.db.crud.hitl_review_config import human_only_effective
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
 
 _NEEDED_TABLES = {
     "accounts",

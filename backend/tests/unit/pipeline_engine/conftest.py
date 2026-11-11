@@ -22,7 +22,7 @@ import pytest
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecProcess,
     ExecResult,
     ExecStreamChunk,
@@ -230,7 +230,7 @@ def install_fake_dispatch(
     """
     provider = FakeDispatchProvider(ref=ref, **kwargs)
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_dispatch_provider",
+        "farna.core.pipeline_engine.node_runner._build_dispatch_provider",
         AsyncMock(return_value=provider),
     )
     return provider
@@ -247,7 +247,7 @@ def fake_file_io(monkeypatch: pytest.MonkeyPatch) -> FakeFileIOProvider:
     provider = FakeFileIOProvider()
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        "farna.core.pipeline_engine.node_runner._build_file_io_provider",
         MagicMock(return_value=provider),
     )
     return provider
@@ -264,4 +264,4 @@ def _interrupt_without_graph_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     def raise_interrupt(value: Any) -> None:
         raise GraphInterrupt((Interrupt(value=value),))
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.node_runner.interrupt", raise_interrupt)
+    monkeypatch.setattr("farna.core.pipeline_engine.node_runner.interrupt", raise_interrupt)

@@ -29,9 +29,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy.exc import InvalidRequestError, MissingGreenlet, PendingRollbackError, SQLAlchemyError
 
-import modulo.api.mcp_server as ms
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.api.mcp_server import _tool_db_shell, create_schema, list_api_keys
+import farna.api.mcp_server as ms
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.api.mcp_server import _tool_db_shell, create_schema, list_api_keys
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import USER_ID, AuthContext, make_session_context
 
@@ -175,7 +175,7 @@ class TestToolPayloadSessionContract(_McpContext):
     async def test_shared_classifier_writes_its_own_log_record(self, caplog: pytest.LogCaptureFixture) -> None:
         """Proof of reuse: the log key comes from db_error_handling, not a fork."""
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.api.db_error_handling"),
+            caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"),
             _tool_env(db_create_schema=InvalidRequestError(_SESSION_CONTRACT_MSG)),
         ):
             await create_schema(name="s")
@@ -200,11 +200,11 @@ class TestShellLogsEverySqlalchemyFailure:
         async def handler() -> dict[str, Any]:
             raise InvalidRequestError(_SESSION_CONTRACT_MSG)
 
-        with caplog.at_level(logging.ERROR, logger="modulo.api.mcp_server"):
+        with caplog.at_level(logging.ERROR, logger="farna.api.mcp_server"):
             result = await handler()
 
         _assert_session_contract(result)
-        shell_records = [record for record in caplog.records if record.name == "modulo.api.mcp_server"]
+        shell_records = [record for record in caplog.records if record.name == "farna.api.mcp_server"]
         assert [record.getMessage() for record in shell_records] == [constant], shell_records
 
     async def test_transient_failure_logs_exactly_once(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -214,9 +214,9 @@ class TestShellLogsEverySqlalchemyFailure:
         async def handler() -> dict[str, Any]:
             raise SQLAlchemyError("down")
 
-        with caplog.at_level(logging.ERROR, logger="modulo.api.mcp_server"):
+        with caplog.at_level(logging.ERROR, logger="farna.api.mcp_server"):
             result = await handler()
 
         assert result["error"] == "database_unavailable", result
-        shell_records = [record for record in caplog.records if record.name == "modulo.api.mcp_server"]
+        shell_records = [record for record in caplog.records if record.name == "farna.api.mcp_server"]
         assert [record.getMessage() for record in shell_records] == [constant], shell_records

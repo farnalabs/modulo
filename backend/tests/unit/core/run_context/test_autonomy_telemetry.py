@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.run_context import autonomy_telemetry as at
+from farna.core.run_context import autonomy_telemetry as at
 
 pytestmark = pytest.mark.asyncio
 
@@ -40,14 +40,14 @@ def _session_factory() -> Any:
 
 
 async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -91,14 +91,14 @@ async def test_emits_event_with_expected_payload(monkeypatch: pytest.MonkeyPatch
 
 
 async def test_noop_when_session_factory_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     mock = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", mock)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     await at.emit_autonomy_telemetry(
         None,
@@ -114,14 +114,14 @@ async def test_noop_when_session_factory_missing(monkeypatch: pytest.MonkeyPatch
 
 
 async def test_invalid_gate_outcome_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     mock = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", mock)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     await at.emit_autonomy_telemetry(
         _session_factory,
@@ -137,7 +137,7 @@ async def test_invalid_gate_outcome_is_skipped(monkeypatch: pytest.MonkeyPatch) 
 
 
 async def test_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     async def _boom(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("db down")
@@ -145,8 +145,8 @@ async def test_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "append_audit_event", _boom)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     # Must not raise — telemetry failures must never break a run.
     await at.emit_autonomy_telemetry(
@@ -166,14 +166,14 @@ async def test_failure_is_fail_open(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     async def _cancel(*args: Any, **kwargs: Any) -> None:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(al, "append_audit_event", _cancel)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     # Documented contract: cancellation is NOT a telemetry failure. The
     # broad fail-open handler must never swallow CancelledError, or a run
@@ -190,14 +190,14 @@ async def test_cancelled_error_propagates(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_noop_when_org_id_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     mock = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", mock)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     await at.emit_autonomy_telemetry(
         _session_factory,
@@ -216,14 +216,14 @@ async def test_append_helper_noop_without_session_or_org(monkeypatch: pytest.Mon
     """The shared append helper no-ops when either the session factory or the
     org id is missing — callers that run without a session must not be
     penalised (mirrors the emitters' own guards)."""
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
     set_org = AsyncMock()
     set_ctx = AsyncMock()
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", set_org)
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", set_ctx)
+    monkeypatch.setattr("farna.db.rls.set_rls_org", set_org)
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", set_ctx)
 
     await at._append_run_autonomy_event(
         None,
@@ -247,12 +247,12 @@ async def test_append_helper_noop_without_session_or_org(monkeypatch: pytest.Mon
 
 
 async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     await at.emit_autonomy_telemetry(
         _session_factory,
@@ -273,12 +273,12 @@ async def test_nullable_fields_are_serialized_as_none(monkeypatch: pytest.Monkey
 
 
 async def test_human_only_flag_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.core.audit_logger as al
+    import farna.core.audit_logger as al
 
     append = AsyncMock()
     monkeypatch.setattr(al, "append_audit_event", append)
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
     await at.emit_autonomy_telemetry(
         _session_factory,

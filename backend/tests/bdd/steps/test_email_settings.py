@@ -33,7 +33,7 @@ def email_ctx() -> dict[str, Any]:
 @pytest.fixture(autouse=True)
 def _reset_email_send_limiter() -> None:
     """Start every scenario with a fresh test-send budget for every org."""
-    from modulo.api.routes import admin_email as admin_email_mod
+    from farna.api.routes import admin_email as admin_email_mod
 
     admin_email_mod.test_send_limiter.reset()
     yield
@@ -41,7 +41,7 @@ def _reset_email_send_limiter() -> None:
 
 
 def _make_org(settings_json: dict[str, Any] | None = None) -> MagicMock:
-    from modulo.db.models.organisation import Organisation
+    from farna.db.models.organisation import Organisation
 
     org = MagicMock(spec=Organisation)
     org.id = _ORG_ID
@@ -70,11 +70,11 @@ def _seed_session(ctx: dict[str, Any]) -> AsyncMock:
 
 
 def _build_app(ctx: dict[str, Any]) -> FastAPI:
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.api.routes.admin_email import router as email_router
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.api.routes.admin_email import router as email_router
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     app = FastAPI()
     app.include_router(email_router)
@@ -89,7 +89,7 @@ def _build_app(ctx: dict[str, Any]) -> FastAPI:
         )
 
     def _settings() -> Any:
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         return Settings(
             database_url="sqlite+aiosqlite:///./test.db",
@@ -156,7 +156,7 @@ def _given_relay_ok(email_ctx: dict[str, Any]) -> None:
 
 @given(parsers.parse('the SMTP relay rejects the test email with "{message}"'))
 def _given_relay_fails(message: str, email_ctx: dict[str, Any]) -> None:
-    from modulo.core.email_service import EmailSendingError
+    from farna.core.email_service import EmailSendingError
 
     email_ctx["_send_error"] = EmailSendingError(message)
 
@@ -166,7 +166,7 @@ def _given_rate_limit_exhausted(email_ctx: dict[str, Any]) -> None:
     """Consume every test-send slot for the shared org id up front."""
     import asyncio
 
-    from modulo.api.routes import admin_email as admin_email_mod
+    from farna.api.routes import admin_email as admin_email_mod
 
     async def _exhaust() -> None:
         for _ in range(admin_email_mod.test_send_limiter.limit):
@@ -180,7 +180,7 @@ def _when_get_settings(email_ctx: dict[str, Any], request) -> None:
     if getattr(request.node, "_viewer_auth", False):
         email_ctx["_viewer"] = True
     org = _make_org(email_ctx.get("_settings_json"))
-    with patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)):
+    with patch("farna.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)):
         _call("GET", _ORG_PATH, email_ctx, request)
 
 
@@ -188,8 +188,8 @@ def _when_get_settings(email_ctx: dict[str, Any], request) -> None:
 def _when_put_timeout(timeout: int, email_ctx: dict[str, Any], request) -> None:
     org = _make_org(email_ctx.get("_settings_json"))
     with (
-        patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
-        patch("modulo.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
+        patch("farna.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
+        patch("farna.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
     ):
         _call(
             "PUT",
@@ -211,8 +211,8 @@ def _when_put_timeout(timeout: int, email_ctx: dict[str, Any], request) -> None:
 def _when_put_long_password(size: int, email_ctx: dict[str, Any], request) -> None:
     org = _make_org(email_ctx.get("_settings_json"))
     with (
-        patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
-        patch("modulo.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
+        patch("farna.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
+        patch("farna.api.routes.admin_email.update_org_settings_patch", AsyncMock(return_value=org.settings_json)),
     ):
         _call(
             "PUT",
@@ -232,14 +232,14 @@ def _when_put_long_password(size: int, email_ctx: dict[str, Any], request) -> No
 @when(parsers.parse('I POST a test email to "{to}" for the test organisation'))
 def _when_post_test(to: str, email_ctx: dict[str, Any], request) -> None:
     org = _make_org(email_ctx.get("_settings_json"))
-    with patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)):
+    with patch("farna.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)):
         if email_ctx.get("_send_ok"):
             send = MagicMock(return_value=True)
         elif email_ctx.get("_send_error"):
             send = MagicMock(side_effect=email_ctx["_send_error"])
         else:
             send = MagicMock(return_value=True)
-        with patch("modulo.api.routes.admin_email.send_email", send) as mock_send:
+        with patch("farna.api.routes.admin_email.send_email", send) as mock_send:
             _call(
                 "POST",
                 f"{_ORG_PATH}/test",
@@ -254,8 +254,8 @@ def _when_post_test(to: str, email_ctx: dict[str, Any], request) -> None:
 def _when_post_test_header_injection(email_ctx: dict[str, Any], request) -> None:
     org = _make_org(email_ctx.get("_settings_json"))
     with (
-        patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
-        patch("modulo.api.routes.admin_email.send_email", MagicMock(return_value=True)) as mock_send,
+        patch("farna.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
+        patch("farna.api.routes.admin_email.send_email", MagicMock(return_value=True)) as mock_send,
     ):
         _call(
             "POST",
@@ -269,7 +269,7 @@ def _when_post_test_header_injection(email_ctx: dict[str, Any], request) -> None
 
 @then("no test email is sent to the SMTP relay")
 def _then_no_send(email_ctx: dict[str, Any]) -> None:
-    import modulo.api.routes.admin_email as admin_email_mod
+    import farna.api.routes.admin_email as admin_email_mod
 
     if email_ctx.get("_send_attempts") is not None:
         assert email_ctx["_send_attempts"] == 0

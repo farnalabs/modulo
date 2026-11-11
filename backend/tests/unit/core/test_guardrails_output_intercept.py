@@ -25,16 +25,16 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-import modulo.core.guardrails.redaction_mode as redaction_mode
-import modulo.core.pipeline_engine.executor as executor_mod
-from modulo.core.eval_engine import (
+import farna.core.guardrails.redaction_mode as redaction_mode
+import farna.core.pipeline_engine.executor as executor_mod
+from farna.core.eval_engine import (
     EvalDefinition,
     EvalEngine,
     EvalType,
     GuardrailMisroutedError,
 )
-from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
-from modulo.core.guardrails import (
+from farna.core.eval_engine.eval_definition_write import create_or_update_eval
+from farna.core.guardrails import (
     GuardrailBlockedError,
     GuardrailConfig,
     GuardrailConfigError,
@@ -42,28 +42,28 @@ from modulo.core.guardrails import (
     run_interception_pass,
     run_interception_pass_async,
 )
-from modulo.core.guardrails.config import (
+from farna.core.guardrails.config import (
     GuardrailConfigItem,
     GuardrailConfigSet,
     config_item_from_engine_definition,
     to_eval_config,
     validate_config_set,
 )
-from modulo.core.guardrails.output_intercept import (
+from farna.core.guardrails.output_intercept import (
     exclude_output_interception_definitions,
     filter_output_interception_definitions,
     is_output_interception,
     read_output_interception_flags,
     run_output_interception_async,
 )
-from modulo.core.guardrails.redaction_mode import (
+from farna.core.guardrails.redaction_mode import (
     DESTROY_TOKEN_PREFIX,
     GuardrailRedactionMechanismError,
     destroy_candidates,
     destroy_token,
     resolve_guardrail_destroy_pepper,
 )
-from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
+from farna.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
 
 _ORG_ID = uuid.uuid4()
 
@@ -136,7 +136,7 @@ def test_destroy_redaction_replaces_only_matching_spans_leaving_surroundings():
     pattern = r"SECRET_[A-Z0-9]{8}"
     payload = {"body": "before SECRET_ABC12345 after"}
     with unittest.mock.patch(
-        "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+        "farna.core.guardrails.resolve_guardrail_destroy_pepper",
         return_value="pepper",
     ):
         redacted, entries = apply_redaction_masks(
@@ -159,7 +159,7 @@ def test_destroy_redaction_without_pepper_fails_closed():
     payload = {"body": "vital SECRET_ABC12345"}
     with (
         unittest.mock.patch(
-            "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+            "farna.core.guardrails.resolve_guardrail_destroy_pepper",
             return_value="",
         ),
         pytest.raises(GuardrailRedactionMechanismError),
@@ -175,7 +175,7 @@ def test_destroy_redaction_without_pepper_fails_closed():
 
 def test_destroy_redaction_non_string_leaf_becomes_one_token():
     with unittest.mock.patch(
-        "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+        "farna.core.guardrails.resolve_guardrail_destroy_pepper",
         return_value="pepper",
     ):
         redacted, entries = apply_redaction_masks(
@@ -223,7 +223,7 @@ async def test_destroy_mechanism_error_through_async_pass_surfaces_fail_closed()
     envelope = {"body": "free SECRET_ABC12345"}
     with (
         unittest.mock.patch(
-            "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+            "farna.core.guardrails.resolve_guardrail_destroy_pepper",
             return_value="",
         ),
         pytest.raises(GuardrailRedactionMechanismError),
@@ -247,7 +247,7 @@ def test_destroy_mode_in_live_pass_with_pepper_destroys_and_does_not_block():
     ]
     envelope = {"body": "free SECRET_ABC12345"}
     with unittest.mock.patch(
-        "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+        "farna.core.guardrails.resolve_guardrail_destroy_pepper",
         return_value="pepper",
     ):
         outcome = run_interception_pass(EvalEngine(), guardrail_defs, envelope)
@@ -345,7 +345,7 @@ def test_validate_config_set_destroy_requires_configured_pepper_fail_closed():
     config_set = GuardrailConfigSet.model_validate({"version": 1, "guardrails": [item.model_dump()]})
     with (
         unittest.mock.patch(
-            "modulo.core.guardrails.config.resolve_guardrail_destroy_pepper",
+            "farna.core.guardrails.config.resolve_guardrail_destroy_pepper",
             return_value="",
         ),
         pytest.raises(GuardrailConfigError),
@@ -353,7 +353,7 @@ def test_validate_config_set_destroy_requires_configured_pepper_fail_closed():
         validate_config_set(config_set)
     # With the pepper configured the SAME authoring succeeds.
     with unittest.mock.patch(
-        "modulo.core.guardrails.config.resolve_guardrail_destroy_pepper",
+        "farna.core.guardrails.config.resolve_guardrail_destroy_pepper",
         return_value="pepper",
     ):
         validate_config_set(config_set)
@@ -814,7 +814,7 @@ def test_destroy_redaction_duplicate_candidate_is_replaced_once():
     duplicate is skipped — the per-candidate loop never re-replaces."""
     payload = {"body": "SECRET_ABC12345 SECRET_ABC12345"}
     with unittest.mock.patch(
-        "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+        "farna.core.guardrails.resolve_guardrail_destroy_pepper",
         return_value="pepper",
     ):
         redacted, entries = apply_redaction_masks(
@@ -977,7 +977,7 @@ async def test_run_output_guardrails_destroy_mechanism_error_blocks():
     executor = _output_executor(_flags_session_factory())
     with (
         unittest.mock.patch(
-            "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+            "farna.core.guardrails.resolve_guardrail_destroy_pepper",
             return_value="",
         ),
         pytest.raises(GuardrailBlockedError) as excinfo,

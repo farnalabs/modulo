@@ -14,14 +14,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as node_runner
-from modulo.core.pipeline_engine.node_runner import (
+import farna.core.pipeline_engine.node_runner as node_runner
+from farna.core.pipeline_engine.node_runner import (
     SandboxBindingResolutionError,
     SandboxQueueTimeoutError,
     SandboxTierRefusedError,
     make_sandbox_agent_fn,
 )
-from modulo.core.runner_bindings import AgentBindingResolutionError, LocalProviderBindingsRefusedError
+from farna.core.runner_bindings import AgentBindingResolutionError, LocalProviderBindingsRefusedError
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_ID = str(uuid.uuid4())
@@ -97,7 +97,7 @@ async def test_e2b_dispatch_sees_resolved_binding_and_node_wins() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=_resolve),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=_resolve),
     ):
         result = await fn(_run_state())
 
@@ -121,7 +121,7 @@ async def test_local_tier_refusal_raises_before_sandbox_create() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=_refuse),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=_refuse),
         pytest.raises(SandboxTierRefusedError),
     ):
         await fn(_run_state())
@@ -139,7 +139,7 @@ async def test_resolution_failure_raises_before_sandbox_create() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=_fail),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=_fail),
         pytest.raises(SandboxBindingResolutionError),
     ):
         await fn(_run_state())
@@ -158,7 +158,7 @@ async def test_generic_binding_resolution_error_classifies_retryable() -> None:
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
         patch(
-            "modulo.core.runner_bindings.resolve_agent_bindings",
+            "farna.core.runner_bindings.resolve_agent_bindings",
             new=AsyncMock(side_effect=RuntimeError("secrets backend down")),
         ),
         pytest.raises(SandboxBindingResolutionError),
@@ -177,7 +177,7 @@ async def test_agent_without_bindings_skips_resolution() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock()) as resolve_mock,
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock()) as resolve_mock,
     ):
         result = await fn(_run_state())
 
@@ -206,7 +206,7 @@ async def test_provisioning_watchdog_fires_on_stuck_dispatching(monkeypatch: pyt
     monkeypatch.setattr(node_runner, "_sandbox_provisioning_timeout", lambda: 0.2)
     with (
         patch("e2b.AsyncSandbox.create", new=_hang_create),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         pytest.raises(SandboxQueueTimeoutError),
     ):
         await fn(_run_state())
@@ -223,7 +223,7 @@ async def test_healthy_provisioning_is_not_falsely_failed(monkeypatch: pytest.Mo
     monkeypatch.setattr(node_runner, "_sandbox_binding_resolve_timeout", lambda: 0.2)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
     ):
         result = await fn(_run_state())
 
@@ -244,7 +244,7 @@ async def test_binding_resolution_timeout_classifies_retryable(monkeypatch: pyte
     monkeypatch.setattr(node_runner, "_sandbox_binding_resolve_timeout", lambda: 0.2)
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_script_sandbox_mock())) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=_hang_resolve),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=_hang_resolve),
         pytest.raises(SandboxBindingResolutionError),
     ):
         await fn(_run_state())
@@ -267,7 +267,7 @@ async def test_real_e2b_provider_error_surfaced_in_failure_envelope() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=_raise_provider),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
     ):
         result = await fn(_run_state())
 

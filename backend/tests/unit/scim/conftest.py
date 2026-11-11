@@ -1,7 +1,7 @@
 """Test configuration for SCIM unit tests.
 
 Sets minimal env vars so ``get_settings()`` (called by module-level imports
-in ``modulo.api.main``) can construct a ``Settings`` instance. Shared
+in ``farna.api.main``) can construct a ``Settings`` instance. Shared
 constants and factories live in ``helpers.py``; the SCIM ``audited()`` seams
 and the dependency-override lifecycle live here so every SCIM test module
 gets them exactly once.
@@ -33,10 +33,10 @@ def stub_scim_audit() -> Generator[None, None, None]:
     (and its fail-closed policy) still runs. Covered end-to-end for the real
     resolver by ``TestScimAuditPrincipal``."""
 
-    from modulo.api.main import app
-    from modulo.api.routes.scim import get_scim_audit_principal
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.core.audit_coverage import audit_session
+    from farna.api.main import app
+    from farna.api.routes.scim import get_scim_audit_principal
+    from farna.auth.jwt import TenantPrincipal
+    from farna.core.audit_coverage import audit_session
     from tests.unit.api.mock_session import configure_mock_session
 
     async def _audit_session() -> AsyncGenerator[AsyncMock, None]:
@@ -72,10 +72,10 @@ def scim_client() -> Generator[Callable[..., TestClient], None, None]:
     a failing assertion cannot leak state into the next test.
     """
 
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
-    from modulo.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
-    from modulo.settings import get_settings
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
+    from farna.auth.scim_auth import ScimPrincipal, get_scim_plan_context, get_scim_principal
+    from farna.settings import get_settings
 
     installed: list[Callable[..., object]] = []
 

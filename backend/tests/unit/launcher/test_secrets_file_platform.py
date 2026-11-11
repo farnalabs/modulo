@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-import modulo.launcher.secrets_file as secrets_file_module
-from modulo.launcher.secrets_file import SecretsFileError, load_or_create
+import farna.launcher.secrets_file as secrets_file_module
+from farna.launcher.secrets_file import SecretsFileError, load_or_create
 
 
 def test_assert_supported_platform_refuses_windows_until_acl_validation(

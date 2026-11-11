@@ -34,15 +34,15 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
-from modulo.core.housekeeping import _scan_empty_lifecycle_maps, scan_all
-from modulo.db.models.account import Account
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.secret import Secret
+from farna.auth.jwt import create_access_token
+from farna.core.housekeeping import _scan_empty_lifecycle_maps, scan_all
+from farna.db.models.account import Account
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.secret import Secret
 
 pytestmark = pytest.mark.integration
 
@@ -319,8 +319,8 @@ class TestMcpPerformHousekeepingDeletedCountOnPostgres:
         self,
         db_engine: AsyncEngine,
     ) -> None:
-        from modulo.api.mcp_server import _delete_housekeeping_groups
-        from modulo.core.housekeeping import ENTITY_MODEL_MAP
+        from farna.api.mcp_server import _delete_housekeeping_groups
+        from farna.core.housekeeping import ENTITY_MODEL_MAP
 
         batch = await _seed_cleanup_batch(db_engine, slug_prefix="far1857mcp")
         errors: list[dict[str, str]] = []

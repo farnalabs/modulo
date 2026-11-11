@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.dialects import postgresql
 
-import modulo.core.pipeline_execution as pe
-from modulo.core import cron_helpers as ch
+import farna.core.pipeline_execution as pe
+from farna.core import cron_helpers as ch
 
 pytestmark = pytest.mark.integration
 _ORG = uuid.uuid4()
@@ -55,11 +55,11 @@ class TestRetryOffByOne:
     def test_after_process_only_fails_run_when_retries_exhausted(self) -> None:
         from saq import Status
 
-        from modulo.core.error_tracking.saq_hooks import _classify
+        from farna.core.error_tracking.saq_hooks import _classify
 
         # FAILED (retries exhausted) execute_run job -> fail the run.
         out = _classify(
-            "modulo.core.saq_worker.execute_run",
+            "farna.core.saq_worker.execute_run",
             Status.FAILED,
             "boom",
             {"run_id": "r-1", "org_id": "o-1"},
@@ -72,11 +72,11 @@ class TestRetryOffByOne:
         # once all N attempts are exhausted, never after attempt 1.
         for mid_retry in (Status.QUEUED, Status.ACTIVE, Status.NEW, Status.COMPLETE):
             assert (
-                _classify("modulo.core.saq_worker.execute_run", mid_retry, None, {"run_id": "r-1"})["action"] == "noop"
+                _classify("farna.core.saq_worker.execute_run", mid_retry, None, {"run_id": "r-1"})["action"] == "noop"
             )
 
         # fire_* failure -> ingest_error (no run state).
-        out2 = _classify("modulo.core.saq_worker.fire_cron_trigger", Status.FAILED, "x", {"org_id": "o-1"})
+        out2 = _classify("farna.core.saq_worker.fire_cron_trigger", Status.FAILED, "x", {"org_id": "o-1"})
         assert out2["action"] == "ingest_error"
 
 
@@ -503,7 +503,7 @@ class TestFireDueTriggersSingleFire:
 
 class TestCostProbeCron:
     def test_cost_probe_uses_5_field_every_5_min(self) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
         assert jobs["cost_probe"].cron == "*/5 * * * *"
@@ -518,7 +518,7 @@ class TestSaqAlerting:
     def test_trigger_period_is_fixed_schedule_cadence(self) -> None:
         from datetime import UTC, datetime
 
-        import modulo.core.error_tracking as et
+        import farna.core.error_tracking as et
 
         now = datetime.now(UTC)
         assert et._trigger_period_seconds("cron", "0 * * * *", "UTC", {}, now) == 3600
@@ -528,8 +528,8 @@ class TestSaqAlerting:
         assert et._trigger_period_seconds("cron", "not-a-cron", "UTC", {}, now) is None
 
     async def test_retry_storm_alert_threshold(self) -> None:
-        import modulo.core.error_tracking as et
-        from modulo.db import rls
+        import farna.core.error_tracking as et
+        from farna.db import rls
 
         with (
             patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=_FakeFactory()),
@@ -550,8 +550,8 @@ class TestSaqAlerting:
     async def test_missed_fire_alerts_silent_low_cadence_trigger(self) -> None:
         from datetime import UTC, datetime, timedelta
 
-        import modulo.core.error_tracking as et
-        from modulo.db import rls
+        import farna.core.error_tracking as et
+        from farna.db import rls
 
         trigger_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -583,8 +583,8 @@ class TestSaqAlerting:
     async def test_missed_fire_skips_fresh_and_brand_new_triggers(self) -> None:
         from datetime import UTC, datetime, timedelta
 
-        import modulo.core.error_tracking as et
-        from modulo.db import rls
+        import farna.core.error_tracking as et
+        from farna.db import rls
 
         now = datetime.now(UTC)
         fresh = SimpleNamespace(

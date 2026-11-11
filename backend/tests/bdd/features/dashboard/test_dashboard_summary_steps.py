@@ -1,7 +1,7 @@
 """Step definitions for Home Dashboard Summary BDD scenarios (PRD §8.20).
 
 Wires the scenarios in ``dashboard_summary.feature`` to the real
-``GET /api/v1/dashboard/summary`` route (``modulo/api/routes/dashboard.py``)
+``GET /api/v1/dashboard/summary`` route (``farna/api/routes/dashboard.py``)
 through the shared TestClient + mock-session pattern used by
 ``test_hitl_trends_steps.py``. The session dispatches the route's org
 aggregation queries (active pipelines, status counts, teams, eval stats,
@@ -21,11 +21,11 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from tests.bdd.conftest import harden_session_double
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 
 scenarios("dashboard_summary.feature")
 
@@ -174,8 +174,8 @@ def _make_admin_client(session: AsyncMock | None = None) -> Generator[TestClient
     if session is None:
         session = _make_summary_session()
     with (
-        patch("modulo.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
+        patch("farna.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
     ):
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:

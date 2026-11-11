@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.eval_engine.typed_judge.config import (
+from farna.core.eval_engine.typed_judge.config import (
     TYPED_ANSWER_CONTRACT,
     parse_typed_judge_config,
     validate_typed_judge_config,

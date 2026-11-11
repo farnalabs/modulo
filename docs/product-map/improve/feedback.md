@@ -3,8 +3,8 @@ id: feat-feedback
 prd: 8.20
 adr: []
 code:
-  - backend/src/modulo/api/routes/feedback.py
-  - backend/src/modulo/core/feedback_manager
+  - backend/src/farna/api/routes/feedback.py
+  - backend/src/farna/core/feedback_manager
 unit-tests:
   - backend/tests/unit/api/test_feedback_endpoint.py
   - backend/tests/unit/core/feedback_manager/test_feedback_manager.py

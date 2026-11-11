@@ -130,7 +130,7 @@ This audit examines every review stage in Farna Control to verify that reviewing
 
 ### B. Code Change (Optional – Validation Warning)
 
-In `backend/src/modulo/core/eval_engine/__init__.py` or graph validator: add a warning when a `model_judge` eval definition references the same `model_backend_id` as its parent node's `model_backend_id`. This is a soft warning, not a block.
+In `backend/src/farna/core/eval_engine/__init__.py` or graph validator: add a warning when a `model_judge` eval definition references the same `model_backend_id` as its parent node's `model_backend_id`. This is a soft warning, not a block.
 
 ---
 

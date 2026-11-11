@@ -5,7 +5,7 @@ time, so it is surfaced as a hard error (RETRY_POLICY_MALFORMED). ``None`` /
 ``{}`` (no policy) are the valid no-policy defaults.
 """
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import codes_of as _codes
 
 

@@ -26,8 +26,8 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 
 pytestmark = [
     pytest.mark.integration,

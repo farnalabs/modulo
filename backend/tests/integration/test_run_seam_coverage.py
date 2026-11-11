@@ -10,8 +10,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.run import create_run
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run import create_run
+from farna.db.rls import set_rls_org
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = pytest.mark.integration

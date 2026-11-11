@@ -10,13 +10,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.api_key import _UNSET, ApiKeyScopeError
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.api_key import _UNSET, ApiKeyScopeError
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -100,7 +100,7 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="admin")):
+    with patch("farna.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="admin")):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -134,7 +134,7 @@ def runner_client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="runner")):
+    with patch("farna.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="runner")):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -158,7 +158,7 @@ def operator_client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="operator")):
+    with patch("farna.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="operator")):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -171,9 +171,9 @@ def operator_client() -> Generator[TestClient, None, None]:
 def test_create_api_key_returns_201(client: TestClient) -> None:
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -188,10 +188,10 @@ def test_create_api_key_emits_api_key_created_audit(client: TestClient) -> None:
     key = _make_key()
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -222,10 +222,10 @@ def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -235,9 +235,9 @@ def test_create_api_key_audit_failure_does_not_block_creation(client: TestClient
 def test_create_api_key_returns_full_key_once(client: TestClient) -> None:
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_abc123")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_abc123")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "k", "role": "runner"})
     assert resp.json()["key_value"] == "mk_abc123"
@@ -251,9 +251,9 @@ def test_create_api_key_rejects_admin_role(client: TestClient) -> None:
 def test_create_api_key_with_expires_at(client: TestClient) -> None:
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -304,9 +304,9 @@ def test_list_api_keys_returns_typed_human_and_service_rows(client: TestClient) 
         },
     ]
     with (
-        patch("modulo.api.routes.api_keys.list_api_keys", return_value=entries),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.list_api_keys", return_value=entries),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/api-keys")
     assert resp.status_code == 200
@@ -323,9 +323,9 @@ def test_list_api_keys_returns_typed_human_and_service_rows(client: TestClient) 
 
 def test_revoke_api_key_returns_200(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -339,10 +339,10 @@ def test_revoke_api_key_emits_api_key_revoked_audit(client: TestClient) -> None:
     revoked_key.scope = "user"
     revoked_key.lookup_prefix = "zzzz9999"
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=revoked_key),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.api_keys.revoke_api_key", return_value=revoked_key),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -367,10 +367,10 @@ def test_revoke_api_key_not_found_does_not_emit_audit(client: TestClient) -> Non
     """A 404 revoke (unknown key) must not fire the revoke audit event."""
     audit = AsyncMock(return_value=MagicMock())
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=None),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", new=audit),
+        patch("farna.api.routes.api_keys.revoke_api_key", return_value=None),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", new=audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -384,10 +384,10 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
         raise RuntimeError("audit boom")
 
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.core.audit_logger.append_audit_event", side_effect=_raise_audit),
+        patch("farna.api.routes.api_keys.revoke_api_key", return_value=_make_key()),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.core.audit_logger.append_audit_event", side_effect=_raise_audit),
     ):
         resp = client.delete(f"/api/v1/api-keys/{_KEY_ID}")
     assert resp.status_code == 200
@@ -396,9 +396,9 @@ def test_revoke_api_key_audit_failure_does_not_fail_revocation(client: TestClien
 
 def test_revoke_api_key_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.revoke_api_key", return_value=None),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.revoke_api_key", return_value=None),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -440,9 +440,9 @@ def test_update_api_key_returns_200(client: TestClient) -> None:
     key.name = "Updated Key"
     key.role = "runner"
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -458,9 +458,9 @@ def test_update_api_key_partial_name(client: TestClient) -> None:
     key = _make_key()
     key.name = "Only Name Updated"
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -484,11 +484,11 @@ def test_update_api_key_admin_on_org_scoped_key_is_422(client: TestClient) -> No
     org-scoped key refuses the promotion as a client error (422), never 500."""
     with (
         patch(
-            "modulo.api.routes.api_keys.update_api_key",
+            "farna.api.routes.api_keys.update_api_key",
             side_effect=ApiKeyScopeError("role 'admin' is permitted only for user-scoped API keys"),
         ),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -507,12 +507,12 @@ def test_update_api_key_admin_with_team_is_422(client: TestClient) -> None:
     mock_plan.feature_enabled.return_value = True
     with (
         patch(
-            "modulo.api.routes.api_keys.update_api_key",
+            "farna.api.routes.api_keys.update_api_key",
             side_effect=ApiKeyScopeError("team-scoped API keys cannot have admin role"),
         ),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -533,13 +533,13 @@ def test_create_api_key_admin_with_team_is_422(client: TestClient) -> None:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
-        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
-        patch("modulo.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("farna.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("farna.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
+        patch("farna.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -551,9 +551,9 @@ def test_create_api_key_admin_with_team_is_422(client: TestClient) -> None:
 
 def test_update_api_key_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=None),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=None),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{uuid.uuid4()}",
@@ -568,10 +568,10 @@ def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_team_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_team_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -586,7 +586,7 @@ def test_create_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 def test_create_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
-    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+    with patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
         resp = operator_client.post(
             "/api/v1/api-keys",
             json={"name": "Team Key", "role": "operator", "team_id": str(_TEAM_ID)},
@@ -597,11 +597,11 @@ def test_create_api_key_with_team_id_requires_admin(operator_client: TestClient)
 def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org") as mock_org,
-        patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
-        patch("modulo.core.audit_logger.set_rls_org") as mock_audit_org,
-        patch("modulo.core.audit_logger.set_rls_user_context") as mock_audit_ctx,
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")),
+        patch("farna.api.routes.api_keys.set_rls_org") as mock_org,
+        patch("farna.api.routes.api_keys.set_rls_user_context") as mock_ctx,
+        patch("farna.core.audit_logger.set_rls_org") as mock_audit_org,
+        patch("farna.core.audit_logger.set_rls_user_context") as mock_audit_ctx,
     ):
         client.post("/api/v1/api-keys", json={"name": "k", "role": "operator"})
     # The main create tx establishes RLS via the route-module helpers...
@@ -616,9 +616,9 @@ def test_create_api_key_calls_set_rls_user_context(client: TestClient) -> None:
 
 def test_list_api_keys_calls_set_rls_user_context(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.api_keys.list_api_keys", return_value=[]),
-        patch("modulo.api.routes.api_keys.set_rls_org") as mock_org,
-        patch("modulo.api.routes.api_keys.set_rls_user_context") as mock_ctx,
+        patch("farna.api.routes.api_keys.list_api_keys", return_value=[]),
+        patch("farna.api.routes.api_keys.set_rls_org") as mock_org,
+        patch("farna.api.routes.api_keys.set_rls_user_context") as mock_ctx,
     ):
         client.get("/api/v1/api-keys")
     mock_org.assert_awaited_once()
@@ -632,10 +632,10 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -650,7 +650,7 @@ def test_update_api_key_with_team_id_returns_team_id(client: TestClient) -> None
 def test_update_api_key_with_team_id_requires_admin(operator_client: TestClient) -> None:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
-    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+    with patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
         resp = operator_client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
             json={"name": "k", "team_id": str(_TEAM_ID)},
@@ -662,9 +662,9 @@ def test_update_api_key_with_expires_at(client: TestClient) -> None:
     key = _make_key()
     key.name = "Expiring Key"
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -681,16 +681,16 @@ def test_update_api_key_service_ttl_ceiling_maps_to_422(client: TestClient) -> N
     the create path maps); the update handler must surface it as 422 with the
     ceiling message, mirroring ``_mint_api_key``.
     """
-    from modulo.auth.api_key import ApiKeyTtlError
+    from farna.auth.api_key import ApiKeyTtlError
 
     too_long = (datetime.now(UTC) + timedelta(days=400)).isoformat()
     with (
         patch(
-            "modulo.api.routes.api_keys.update_api_key",
+            "farna.api.routes.api_keys.update_api_key",
             side_effect=ApiKeyTtlError("Keys owned by a service account expire within 365 days"),
         ) as update,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -732,9 +732,9 @@ def test_create_api_key_strips_whitespace_name(client: TestClient) -> None:
     key = _make_key()
     key.name = "Stripped Key"
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")) as create,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")) as create,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "  Stripped Key  ", "role": "operator"})
     assert resp.status_code == 201
@@ -753,9 +753,9 @@ def test_update_api_key_strips_whitespace_name(client: TestClient) -> None:
     key = _make_key()
     key.name = "Trimmed"
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -776,16 +776,16 @@ def test_create_api_key_with_unknown_team_returns_409(client: TestClient) -> Non
     mock_plan.feature_enabled.return_value = True
     with (
         patch(
-            "modulo.api.routes.api_keys.create_api_key",
+            "farna.api.routes.api_keys.create_api_key",
             side_effect=IntegrityError(
                 "stmt",
                 {},
                 Exception("insert or update on table 'org_api_keys' violates foreign key constraint"),
             ),
         ),
-        patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -800,9 +800,9 @@ def test_update_api_key_clears_team_id(client: TestClient) -> None:
     key.name = "Widened Key"
     key.team_id = None
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -822,9 +822,9 @@ def test_update_api_key_without_team_id_passes_unset_sentinel(client: TestClient
     key.name = "Scoped Key"
     key.team_id = _TEAM_ID
     with (
-        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
@@ -838,7 +838,7 @@ def test_update_api_key_clear_team_requires_admin(operator_client: TestClient) -
     """Clearing the team scope is an admin-only operation (same as setting it)."""
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
-    with patch("modulo.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
+    with patch("farna.api.routes.api_keys.resolve_plan_context", return_value=mock_plan):
         resp = operator_client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
             json={"name": "k", "team_id": None},
@@ -863,15 +863,15 @@ def test_create_user_scoped_key_flag_on(client: TestClient) -> None:
     key = _make_key()
     key.scope = "user"
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("farna.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
         # FAR-1477: the mint path reads the ``api_key_grants`` flag STRICT for
         # user-scoped keys (to apply the 90-day cap); stub it ON so the test
         # exercises the happy path rather than the 503 flag-unavailable branch.
-        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_user_key")) as mint,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
+        patch("farna.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_user_key")) as mint,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -891,13 +891,13 @@ def test_create_user_scoped_admin_key_flag_on(client: TestClient) -> None:
     key.scope = "user"
     key.role = "admin"
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
-        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_admin_key")) as mint,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
-        patch("modulo.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()) as cap,
+        patch("farna.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        patch("farna.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_admin_key")) as mint,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()),
+        patch("farna.api.routes.api_keys._enforce_mint_cap", new=AsyncMock()) as cap,
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -914,8 +914,8 @@ def test_create_user_scoped_key_flag_off_rejected_422(client: TestClient) -> Non
     """Flag OFF ⇒ minting a user-scoped key is REJECTED 422 — never silently
     downgraded to an org key."""
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(False)),
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+        patch("farna.api.routes.api_keys.get_registry", return_value=_flag_registry(False)),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -931,8 +931,8 @@ def test_create_user_scoped_key_flag_read_failure_fails_closed(client: TestClien
     registry = MagicMock()
     registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=registry),
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+        patch("farna.api.routes.api_keys.get_registry", return_value=registry),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -947,11 +947,11 @@ def test_create_grant_bearing_key_flag_on_mints_with_grants(client: TestClient) 
     passes the grants through to the create call."""
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
-        patch("modulo.api.routes.api_keys._enforce_grants_mint_cap", new=AsyncMock()) as cap,
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_grant_key")) as mint,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.api_keys._enforce_grants_mint_cap", new=AsyncMock()) as cap,
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_grant_key")) as mint,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -966,8 +966,8 @@ def test_create_grant_bearing_key_flag_off_rejected_422(client: TestClient) -> N
     """A grant-bearing create with the flag OFF is rejected 422 — never a silent
     downgrade to a legacy full-role key (which would WIDEN access)."""
     with (
-        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+        patch("farna.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
     ):
         resp = client.post(
             "/api/v1/api-keys",
@@ -992,11 +992,11 @@ def test_create_org_key_default_scope_no_quota(client: TestClient) -> None:
     key = _make_key()
     key.scope = "org"
     with (
-        patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(False)) as registry,
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_org_key")) as mint,
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
+        patch("farna.api.routes.api_keys.get_registry", return_value=_flag_registry(False)) as registry,
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_org_key")) as mint,
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys._enforce_user_key_quota", new=AsyncMock()) as quota,
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Org Key", "role": "operator"})
     assert resp.status_code == 201
@@ -1010,7 +1010,7 @@ def test_create_org_key_default_scope_no_quota(client: TestClient) -> None:
 def test_update_api_key_rejects_scope_payload_422(client: TestClient) -> None:
     """The caller scope is IMMUTABLE: a PUT payload carrying ``scope`` is
     rejected 422, never applied or silently ignored."""
-    with patch("modulo.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
+    with patch("farna.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
         resp = client.put(
             f"/api/v1/api-keys/{_KEY_ID}",
             json={"name": "k", "scope": "user"},
@@ -1022,7 +1022,7 @@ def test_update_api_key_rejects_scope_payload_422(client: TestClient) -> None:
 
 def test_update_api_key_without_scope_still_works(client: TestClient) -> None:
     """A PUT payload that does NOT mention scope is unaffected."""
-    with patch("modulo.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
+    with patch("farna.api.routes.api_keys.update_api_key", return_value=_make_key()) as update:
         resp = client.put(f"/api/v1/api-keys/{_KEY_ID}", json={"name": "Renamed"})
     assert resp.status_code == 200
     update.assert_awaited_once()
@@ -1051,7 +1051,7 @@ class TestUserKeyQuota:
 
     @staticmethod
     def _principal() -> Any:
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.auth.jwt import TenantPrincipal
 
         return TenantPrincipal(
             username="u",
@@ -1070,7 +1070,7 @@ class TestUserKeyQuota:
         """
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from farna.api.routes.api_keys import _enforce_user_key_quota
 
         session, executed = self._session(9)
         try:
@@ -1083,7 +1083,7 @@ class TestUserKeyQuota:
     async def test_at_quota_rejected_429(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from farna.api.routes.api_keys import _enforce_user_key_quota
 
         session, _executed = self._session(10)
         with pytest.raises(HTTPException) as excinfo:
@@ -1095,7 +1095,7 @@ class TestUserKeyQuota:
     async def test_account_row_locked_for_update(self) -> None:
         """TOCTOU: the account row is locked FOR UPDATE so concurrent mints
         serialise and the second re-counts after the first commits."""
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from farna.api.routes.api_keys import _enforce_user_key_quota
 
         session, _executed = self._session(0)
         await _enforce_user_key_quota(session, self._principal())
@@ -1106,7 +1106,7 @@ class TestUserKeyQuota:
     @pytest.mark.asyncio
     async def test_count_filters_active_user_keys_per_account_org(self) -> None:
         """Revoked keys do not count; the count is scoped per-(account, org)."""
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from farna.api.routes.api_keys import _enforce_user_key_quota
 
         session, executed = self._session(0)
         await _enforce_user_key_quota(session, self._principal())
@@ -1121,7 +1121,7 @@ class TestUserKeyQuota:
     async def test_missing_account_denies_403(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
+        from farna.api.routes.api_keys import _enforce_user_key_quota
 
         session, _executed = self._session(0, account=None)
         with pytest.raises(HTTPException) as excinfo:
@@ -1153,8 +1153,8 @@ class TestUserKeyQuotaConcurrentMint:
     async def test_second_concurrent_mint_sees_post_commit_count(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_user_key_quota
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.api.routes.api_keys import _enforce_user_key_quota
+        from farna.auth.jwt import TenantPrincipal
 
         principal = TenantPrincipal(
             username="u",

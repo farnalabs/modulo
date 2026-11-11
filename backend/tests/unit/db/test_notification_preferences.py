@@ -16,8 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.notifier.event_mapper import _EVENT_CONFIG, notification_categories
-from modulo.db.crud.notifications import (
+from farna.core.notifier.event_mapper import _EVENT_CONFIG, notification_categories
+from farna.db.crud.notifications import (
     apply_prefs_filter,
     count_notifications_for_user,
     create_notification,
@@ -28,10 +28,10 @@ from modulo.db.crud.notifications import (
     get_unread_count,
     set_notification_preferences,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.notification import Dismissal, Notification, NotificationPreference
-from modulo.db.models.org_membership import OrgMembership
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.notification import Dismissal, Notification, NotificationPreference
+from farna.db.models.org_membership import OrgMembership
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -261,7 +261,7 @@ async def test_prefs_read_failure_fails_open_on_all_four_read_paths(
         )
     await session.commit()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.crud.notifications"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.crud.notifications"):
         dashboard = await get_dashboard_notifications(session, org_id=_ORG, user_id=_USER, min_level="debug", limit=50)
         listed = await get_notifications_for_user(session, org_id=_ORG, user_id=_USER, limit=50)
         count = await count_notifications_for_user(session, org_id=_ORG, user_id=_USER)

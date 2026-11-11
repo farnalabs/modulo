@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 
 def _node_event(inner: dict[str, Any], name: str = "node-a") -> dict[str, Any]:
@@ -82,12 +82,12 @@ def _make_executor(
             yield session
 
         executor._session_factory = _fake_factory
-        monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_org", AsyncMock())
-        monkeypatch.setattr("modulo.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_org", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.executor.set_rls_execution_context", AsyncMock())
         # The post-node eval path delegates persistence to eval_persist_order,
         # which imports the RLS helpers into its own module namespace.
-        monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
-        monkeypatch.setattr("modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_org", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context", AsyncMock())
     return executor, session
 
 
@@ -127,7 +127,7 @@ def _json_schema_eval_def(*, failure_behaviour: str = "warn", node_id: str | Non
 
 async def test_passing_json_schema_eval_completes_and_persists(monkeypatch: pytest.MonkeyPatch):
     """A passing json_schema eval -> run completes; result persisted passed=True."""
-    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+    from farna.db.models.eval_result import EvalResult as EvalResultModel
 
     session = _RecordingSession()
     executor, _ = _make_executor(session, monkeypatch)
@@ -216,7 +216,7 @@ async def test_warn_eval_failure_logs_warning_and_run_continues(monkeypatch: pyt
     eval_def = _json_schema_eval_def(failure_behaviour="warn")
     event = _node_event({"other": "nope"})
 
-    with caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"):
+    with caplog.at_level("WARNING", logger="farna.core.pipeline_engine.executor"):
         result, broker = await _run_stream_graph(
             [event],
             {"node-a": [eval_def]},
@@ -235,7 +235,7 @@ async def test_warn_eval_failure_logs_warning_and_run_continues(monkeypatch: pyt
 
 async def test_persistence_writes_correct_org_run_node_eval_ids(monkeypatch: pytest.MonkeyPatch):
     """Eval results are written to eval_results with correct org/run/node/eval ids."""
-    from modulo.db.models.eval_result import EvalResult as EvalResultModel
+    from farna.db.models.eval_result import EvalResult as EvalResultModel
 
     session = _RecordingSession()
     executor, _ = _make_executor(session, monkeypatch)

@@ -223,7 +223,7 @@ environment with live runs.*
 
 ## 7. Implementation notes (this change)
 
-- **New module:** `backend/src/modulo/core/run_context/autonomy_telemetry.py`
+- **New module:** `backend/src/farna/core/run_context/autonomy_telemetry.py`
   – `emit_autonomy_telemetry()` (fail-open, session-factory driven).
 - **Wired at:** `core/pipeline_engine/node_runner.py:make_hitl_review_fn._hitl_review`
   – emits `skipped` / `auto_approved` (when the gate is bypassed) and `fired`

@@ -214,7 +214,7 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
 
     # Scan source files
-    node_runner = repo_root / "backend" / "src" / "modulo" / "core" / "pipeline_engine" / "node_runner.py"
+    node_runner = repo_root / "backend" / "src" / "farna" / "core" / "pipeline_engine" / "node_runner.py"
     if node_runner.exists():
         _scan_node_runner(node_runner)
 

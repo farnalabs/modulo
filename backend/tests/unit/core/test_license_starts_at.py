@@ -22,9 +22,9 @@ from typing import Any
 
 import pytest
 
-import modulo.core.license as license_module
-import modulo.core.license_signing as license_signing_module
-from modulo.core.license import (
+import farna.core.license as license_module
+import farna.core.license_signing as license_signing_module
+from farna.core.license import (
     LICENCE_GRACE_DAYS,
     REASON_MALFORMED,
     LicenseData,
@@ -36,12 +36,12 @@ from modulo.core.license import (
     set_public_key,
     store_license,
 )
-from modulo.core.license_signing import (
+from farna.core.license_signing import (
     LicenseSigningError,
     build_team_payload,
     generate_team_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from farna.core.registry.crypto import generate_keypair, sign_primitive
 
 _FROZEN_NOW = datetime(2026, 10, 25, 12, 0, 0, tzinfo=UTC)
 
@@ -433,7 +433,7 @@ class TestLadderHonoursStartsAt:
     def test_a_configured_future_key_is_not_applied_before_its_start(
         self, kp: dict[str, str], frozen_now: datetime, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from modulo.core.feature_flags import resolve_effective_license
+        from farna.core.feature_flags import resolve_effective_license
 
         start = frozen_now + timedelta(days=30)
         key = generate_team_license(
@@ -455,7 +455,7 @@ class TestLadderHonoursStartsAt:
     def test_an_active_in_memory_licence_survives_a_future_configured_key(
         self, kp: dict[str, str], frozen_now: datetime
     ) -> None:
-        from modulo.core.feature_flags import resolve_effective_license
+        from farna.core.feature_flags import resolve_effective_license
 
         active = _licence(expires_at="2999-01-01T00:00:00+00:00")
         store_license("active", active)

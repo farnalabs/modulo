@@ -15,9 +15,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.library_service import copy_to_adapt, get_primitive
-from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
-from modulo.db.rls import set_rls_org
+from farna.core.library_service import copy_to_adapt, get_primitive
+from farna.core.library_service._seed_data import _MODULO_BY_SLUG
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -87,7 +87,7 @@ async def test_db_source_copy_preserves_forked_from(
     user: uuid.UUID,
 ) -> None:
     """A source that HAS a DB row keeps its forked_from link."""
-    from modulo.db.crud.library_primitive import create_library_primitive
+    from farna.db.crud.library_primitive import create_library_primitive
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

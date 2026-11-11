@@ -2,7 +2,7 @@
 
 The backend image is not just the API: docker-compose's ``saq-system``
 service and the Helm chart's ``saqSystem`` deployment both run
-``python -m modulo.core.saq_worker`` from the SAME image built by
+``python -m farna.core.saq_worker`` from the SAME image built by
 ``backend/Dockerfile`` (Fly runs the system worker in-process from
 ``backend/Dockerfile.fly``), and - since FAR-1509 - the all-in-one image
 (``deploy/docker/Dockerfile.all-in-one``) runs it too, under supervisord
@@ -31,7 +31,7 @@ PYPROJECT = PRODUCT / "backend" / "pyproject.toml"
 # runner_workspace_reconcile cron). The all-in-one image joined this list in
 # FAR-1509: before that change its supervisord ran only uvicorn + nginx, so it
 # was correctly excluded - and correctly a non-worker image. It now runs
-# `python -m modulo.core.saq_worker` alongside the API.
+# `python -m farna.core.saq_worker` alongside the API.
 SAQ_SYSTEM_WORKER_DOCKERFILES = (
     PRODUCT / "backend" / "Dockerfile",
     PRODUCT / "backend" / "Dockerfile.fly",

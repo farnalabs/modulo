@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from modulo.auth.sso import _parse_saml_datetime
+from farna.auth.sso import _parse_saml_datetime
 
 
 class TestParseSamlDatetime:

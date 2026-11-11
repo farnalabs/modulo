@@ -1,0 +1,234 @@
+"""Admin runtime-config introspection and overrides."""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import asdict
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from farna.api.dependencies import require_feature, require_system_permission, resolve_audit_principal
+from farna.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.audit_coverage import audited
+from farna.core.runtime_config.key_bridge import APPLY_HOOKS
+from farna.core.runtime_config.store import (
+    BOOT_ONLY_REASONS,
+    KNOWN_KEYS,
+    RuntimeConfigStore,
+    get_runtime_config_store,
+)
+from farna.util import sanitise_log_value as _sanitise_log_value
+
+# WARNING: system.config.manage is currently ONLY assignable to is_system_admin
+# users. There is NO in-product path to grant is_system_admin. Self-hosted
+# single-org deployments that lock themselves out will need manual DB
+# intervention to recover. A follow-up design decision is needed for an
+# emergency-recovery path before this permission can be safely broadened.
+_CODE_RUNTIME_CONFIG_MANAGE = "system.config.manage"
+
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/admin/runtime-config", tags=["admin-runtime-config"])
+
+
+def _mask_sensitive_items(items: list[dict[str, Any]]) -> None:
+    for item in items:
+        if is_sensitive_env_key(item["key"]):
+            for field in ("current_value", "default_value", "env_value", "override_value"):
+                if isinstance(item.get(field), str):
+                    item[field] = mask_sensitive_value(item[field])
+
+
+def _calc_has_drift(items: list[dict[str, Any]]) -> bool:
+    return any(item["override_value"] is None and os.environ.get(item["key"]) != item["env_value"] for item in items)
+
+
+def _validate_known_key(key: str, context: str) -> None:
+    if key not in KNOWN_KEYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown config key in {context}: {key}",
+        )
+
+
+def _validate_override_key(key: str) -> None:
+    """Reject overrides for keys classified boot-only (FAR-1135).
+
+    An override for a boot-only key would be accepted, stored, and then
+    silently do nothing — the exact defect this classification exists to
+    prevent. ``clear`` stays allowed for every known key so stale overrides
+    can always be removed.
+    """
+    if key in BOOT_ONLY_REASONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Config key '{key}' cannot be overridden at runtime: {BOOT_ONLY_REASONS[key]}",
+        )
+
+
+def _validate_override_value(key: str, value: str) -> None:
+    """Reject values the governed consumer would silently ignore (FAR-1135)."""
+    if key == "MODULO_LOG_LEVEL" and value.upper() not in logging.getLevelNamesMapping():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid log level for 'MODULO_LOG_LEVEL': {value!r}",
+        )
+    if key == "MODULO_MAX_LOCAL_CONCURRENCY":
+        try:
+            int(value)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Override value for '{key}' must be an integer, got {value!r}",
+            ) from None
+
+
+def _build_response(store: RuntimeConfigStore) -> dict[str, Any]:
+    items = [asdict(item) for item in store.get_all()]
+    has_drift = _calc_has_drift(items)
+    _mask_sensitive_items(items)
+    return {"items": items, "has_drift": has_drift}
+
+
+@router.get("", dependencies=[require_feature("runtime_config")])
+def get_runtime_config(
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
+) -> dict[str, Any]:
+    try:
+        return _build_response(get_runtime_config_store())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to list runtime config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list runtime configuration",
+        ) from exc
+
+
+def _validated_overrides(overrides: Any) -> list[tuple[str, str]]:
+    """Validate the request's ``overrides`` mapping into (key, value) pairs."""
+    if not isinstance(overrides, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'overrides' must be a dict",
+        )
+    validated_overrides: list[tuple[str, str]] = []
+    for key, value in overrides.items():
+        _validate_known_key(key, "override")
+        if not isinstance(value, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Override value for '{key}' must be a string, got {type(value).__name__}",
+            )
+        _validate_override_key(key)
+        _validate_override_value(key, value)
+        validated_overrides.append((key, value))
+    return validated_overrides
+
+
+def _validated_clear_keys(clear_keys: Any) -> list[str]:
+    """Validate the request's ``clear`` list into known config keys."""
+    if not isinstance(clear_keys, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="'clear' must be a list",
+        )
+    validated_clear: list[str] = []
+    for key in clear_keys:
+        if not isinstance(key, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Clear key must be a string, got {type(key).__name__}",
+            )
+        _validate_known_key(key, "clear")
+        validated_clear.append(key)
+    return validated_clear
+
+
+def _apply_override_changes(
+    store: RuntimeConfigStore,
+    validated_overrides: list[tuple[str, str]],
+    validated_clear: list[str],
+) -> list[str]:
+    """Apply the validated overrides then clears; return the touched keys."""
+    touched_keys: list[str] = []
+    for key, value in validated_overrides:
+        store.set_override(key, value)
+        touched_keys.append(key)
+    for key in validated_clear:
+        store.clear_override(key)
+        touched_keys.append(key)
+    return touched_keys
+
+
+def _run_apply_hooks(touched_keys: list[str]) -> None:
+    """Re-apply each touched key's apply-on-write hook (FAR-1135)."""
+    # Apply-on-write hooks: keys whose governed state is configured once (not
+    # read per-call) re-apply here so the override takes effect without a
+    # restart (FAR-1135).
+    for key in touched_keys:
+        hook = APPLY_HOOKS.get(key)
+        if hook is not None:
+            try:
+                hook()
+            except Exception:
+                # The override itself is committed; a hook failure must not
+                # roll the response into a 500 (commit-then-error).
+                _log.exception("Runtime config apply hook failed for %s", _sanitise_log_value(key))
+
+
+@router.put(
+    "",
+    dependencies=[
+        Depends(audited("runtime_config_overrides_updated", "runtime_config", principal_dep=resolve_audit_principal)),
+        require_feature("runtime_config"),
+    ],
+)
+def set_runtime_config_overrides(
+    req: dict[str, Any],
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
+) -> dict[str, Any]:
+    try:
+        store = get_runtime_config_store()
+        validated_overrides = _validated_overrides(req.get("overrides", {}))
+        validated_clear = _validated_clear_keys(req.get("clear", []))
+        touched_keys = _apply_override_changes(store, validated_overrides, validated_clear)
+        _run_apply_hooks(touched_keys)
+        return _build_response(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to set runtime config overrides")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update runtime configuration",
+        ) from exc
+
+
+@router.post(
+    "/reload",
+    dependencies=[
+        Depends(audited("runtime_config_reloaded", "runtime_config", principal_dep=resolve_audit_principal)),
+        require_feature("runtime_config"),
+    ],
+)
+def reload_runtime_config(
+    _current_user: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_RUNTIME_CONFIG_MANAGE)],
+) -> dict[str, Any]:
+    try:
+        store = get_runtime_config_store()
+        store.reload()
+        return _build_response(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to reload runtime config")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reload runtime configuration",
+        ) from exc

@@ -3,10 +3,10 @@ id: feat-scim
 prd: 9.4
 adr: [ADR 047 (live-role re-read)]
 code:
-  - backend/src/modulo/api/routes/scim.py
-  - backend/src/modulo/auth/scim_auth.py
-  - backend/src/modulo/db/crud/scim.py
-  - backend/src/modulo/core/feature_flags.py
+  - backend/src/farna/api/routes/scim.py
+  - backend/src/farna/auth/scim_auth.py
+  - backend/src/farna/db/crud/scim.py
+  - backend/src/farna/core/feature_flags.py
 unit-tests:
   - backend/tests/unit/scim/test_scim_provisioning.py
   - backend/tests/unit/scim/test_scim_provisioning_programming_error.py
@@ -41,7 +41,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       `MODULO_SCIM_DEFAULT_ORG_ID` is 500, and the whole surface is gated behind
       the `scim` plan feature - a plan without it gets 402
       `scim is not available on your plan`
-      (`backend/src/modulo/auth/scim_auth.py`; `test_scim_auth.py`,
+      (`backend/src/farna/auth/scim_auth.py`; `test_scim_auth.py`,
       `scim_provisioning.feature`)
 - [x] `GET /scim/v2/ServiceProviderConfig` advertises the supported
       capabilities truthfully: `patch` supported, `bulk` / `sort` / `etag` /
@@ -58,7 +58,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       attached, and a tombstoned (soft-deleted) membership is REVIVED
       (tombstone cleared, account re-activated) so an IdP delete-then-recreate
       is reversible rather than a permanent 409; a duplicate ACTIVE membership
-      is 409 (`backend/src/modulo/db/crud/scim.py`; `test_scim_provisioning.py`)
+      is 409 (`backend/src/farna/db/crud/scim.py`; `test_scim_provisioning.py`)
 - [x] `GET` / `PUT` / `PATCH` / `DELETE /scim/v2/Users/{user_id}`: reads are
       404 for an unknown id; `PUT` replaces attributes; `PATCH` applies
       add/replace/remove operations; a `PATCH active=false` (or a `PUT`/`PATCH`
@@ -80,7 +80,7 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       the member operations are validated against the caller's org so a group
       update can never attach a cross-tenant user (cross-org membership hole
       closed); `DELETE` removes the team
-      (`backend/src/modulo/db/crud/scim.py`; `test_scim_route_branch.py`,
+      (`backend/src/farna/db/crud/scim.py`; `test_scim_route_branch.py`,
       `test_scim.py`)
 - [x] Every user/group mutation is audited fail-closed
       (`scim_user_created` / `scim_user_updated` / `scim_user_deleted` and the

@@ -24,12 +24,12 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from modulo.core.eval_engine.suite_run import (
+from farna.core.eval_engine.suite_run import (
     SuiteRunError,
     resolve_eval_definition_version,
 )
-from modulo.db.models import Base, Eval, EvalResult, EvalSuite
-from modulo.db.models.eval_suite_run import SuiteRun
+from farna.db.models import Base, Eval, EvalResult, EvalSuite
+from farna.db.models.eval_suite_run import SuiteRun
 
 _MIGRATION_PATH = (
     Path(__file__).parents[4]
@@ -160,11 +160,11 @@ def test_create_or_update_eval_bumps_and_snapshots_on_update() -> None:
     An update (``existing_eval_id`` given) bumps ``version`` and snapshots the
     prior config into ``pre_version_raw``.
     """
-    from modulo.core.eval_engine.eval_definition_write import (
+    from farna.core.eval_engine.eval_definition_write import (
         EvalWriteOptions,
         create_or_update_eval,
     )
-    from modulo.db.models.eval import Eval
+    from farna.db.models.eval import Eval
 
     org_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
@@ -209,7 +209,7 @@ def test_create_or_update_eval_bumps_and_snapshots_on_update() -> None:
 
 
 def test_eval_def_to_dict_surfaces_version() -> None:
-    from modulo.api.routes.evals import _eval_def_to_dict
+    from farna.api.routes.evals import _eval_def_to_dict
 
     session = _make_session()
     org_id = uuid.uuid4()
@@ -236,9 +236,9 @@ async def test_gate_eval_persist_stamps_definition_version(monkeypatch) -> None:
     Exercises ``eval_persist_order.run_evals_persist_before_decide`` with a
     capturing session factory and RLS helpers stubbed to no-ops.
     """
-    from modulo.core.eval_engine import EvalDefinition as EvalDefDTO
-    from modulo.core.eval_engine import EvalType
-    from modulo.core.pipeline_engine import eval_persist_order
+    from farna.core.eval_engine import EvalDefinition as EvalDefDTO
+    from farna.core.eval_engine import EvalType
+    from farna.core.pipeline_engine import eval_persist_order
 
     async def _noop(session, *_args, **_kwargs) -> None:
         return None

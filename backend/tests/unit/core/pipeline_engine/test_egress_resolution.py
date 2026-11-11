@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import pytest
 
-import modulo.core.pipeline_engine.egress as egress_mod
-from modulo.core.pipeline_engine.egress import (
+import farna.core.pipeline_engine.egress as egress_mod
+from farna.core.pipeline_engine.egress import (
     EgressPosture,
     EgressResolution,
     resolve_egress,
     spec_egress_for_canonical,
 )
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_EGRESS,
     derive_sandbox_capabilities,
 )

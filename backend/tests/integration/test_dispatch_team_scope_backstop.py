@@ -34,15 +34,15 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
-from modulo.core.pipeline_engine import node_runner
+from farna.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
+from farna.core.pipeline_engine import node_runner
 
 pytestmark = pytest.mark.integration
 
 
 async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.UUID, label: str) -> uuid.UUID:
     """A committed team via the ORM CRUD layer (superuser session)."""
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -61,7 +61,7 @@ async def _seed_team_private_profile(
 ) -> uuid.UUID:
     """A committed TEAM-PRIVATE environment profile (provider ``e2b`` so no
     hub/provider registration is involved in route resolution)."""
-    from modulo.db.crud.environment_profile import create_environment_profile
+    from farna.db.crud.environment_profile import create_environment_profile
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

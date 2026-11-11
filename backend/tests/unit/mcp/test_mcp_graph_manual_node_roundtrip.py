@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-from modulo.api.mcp_server import _validate_graph_update
-from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node
-from modulo.core.library_service._seed_data import _PR_TEMPLATE_NODES
-from modulo.db.crud.pipeline import ManualNodeOutputSchemaError, enforce_manual_node_output_schemas
+from farna.api.mcp_server import _validate_graph_update
+from farna.api.middleware.sensitive_mask import mask_pipeline_graph_node
+from farna.core.library_service._seed_data import _PR_TEMPLATE_NODES
+from farna.db.crud.pipeline import ManualNodeOutputSchemaError, enforce_manual_node_output_schemas
 
 
 def _stored_graph() -> list[dict[str, Any]]:

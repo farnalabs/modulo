@@ -23,8 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 
-from modulo.core.analytics import guardrails as gr
-from modulo.core.analytics.service import (
+from farna.core.analytics import guardrails as gr
+from farna.core.analytics.service import (
     AnalyticsDatabaseError,
     AnalyticsMigrationRequiredError,
     AnalyticsQueryTimeoutError,
@@ -84,7 +84,7 @@ class TestStatementBuilders:
         return datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 7, tzinfo=UTC)
 
     def test_runs_stmt_has_org_predicate_and_json_keys(self) -> None:
-        from modulo.core.pipeline_engine.error_codes import expand_code_variants
+        from farna.core.pipeline_engine.error_codes import expand_code_variants
 
         date_from, date_to = self._bounds()
         stmt = gr._build_runs_scorecard_stmt("postgresql", _ORG, date_from, date_to)
@@ -522,7 +522,7 @@ class TestRunGuardrailScorecard:
             )
 
     async def test_programming_error_maps_to_migration_required(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.DEBUG, logger="modulo.core.analytics.guardrails")
+        caplog.set_level(logging.DEBUG, logger="farna.core.analytics.guardrails")
         session = _FakeSession(exc=ProgrammingError("stmt", {}, "relation does not exist"))
         with (
             patch.object(gr, "set_rls_org", new_callable=AsyncMock),
@@ -560,7 +560,7 @@ class TestRunGuardrailScorecard:
             await self._call(session)
 
     async def test_unexpected_error_maps_to_database_error(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.DEBUG, logger="modulo.core.analytics.guardrails")
+        caplog.set_level(logging.DEBUG, logger="farna.core.analytics.guardrails")
         session = _FakeSession(exc=RuntimeError("kaboom"))
         with (
             patch.object(gr, "set_rls_org", new_callable=AsyncMock),
@@ -635,7 +635,7 @@ class TestResponseModel:
     no gate/block/decision surface exists on the actual Pydantic schema."""
 
     def test_response_models_expose_no_gating_fields(self) -> None:
-        from modulo.api.routes.analytics import (
+        from farna.api.routes.analytics import (
             GuardrailEvasionBandDrift,
             GuardrailRates,
             GuardrailScorecardResponse,

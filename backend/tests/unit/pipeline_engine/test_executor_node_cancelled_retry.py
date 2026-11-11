@@ -23,8 +23,8 @@ import pytest
 from langgraph.errors import NodeCancelledError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.pipeline_engine.executor import PipelineExecutor, _node_output_has_idempotency_gate, _should_skip_retry
+import farna.core.pipeline_execution as pe
+from farna.core.pipeline_engine.executor import PipelineExecutor, _node_output_has_idempotency_gate, _should_skip_retry
 
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_executor.py)
@@ -130,8 +130,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     readers — the mocked session cannot serve the real repo queries, so the
     stub reassembles from whatever the (per-test mocked) ``get_run`` returns,
     exactly as the real reader serves the reassembled legacy shapes."""
-    import modulo.core.pipeline_engine.executor as executor_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.core.pipeline_engine.executor as executor_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _blobs(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(executor_module.get_run, "return_value", None)
@@ -213,17 +213,17 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
@@ -267,17 +267,17 @@ async def test_execute_transient_budget_reads_the_pipeline_retry_policy():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -307,17 +307,17 @@ async def test_execute_superseded_skips_pending_reset_and_reraises():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
@@ -336,7 +336,7 @@ async def test_execute_reraises_sandbox_node_failed_error():
     """The retryable sandbox-infra failure class (SandboxNodeFailedError) goes
     through the SAME retry path as NodeCancelledError — fenced reset to pending
     + re-raise (dist/runtime-core A6)."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
@@ -348,16 +348,16 @@ async def test_execute_reraises_sandbox_node_failed_error():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -377,7 +377,7 @@ async def test_execute_provider_billing_refusal_is_not_retried():
     budget remains) and must record ``provider.billing``, not
     ``sandbox.no_output_json``.
     """
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     final_run = _make_run(
@@ -397,16 +397,16 @@ async def test_execute_provider_billing_refusal_is_not_retried():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -434,8 +434,8 @@ async def test_execute_provider_auth_refusal_dispatches_the_alert():
     throughput with nothing surfaced. A dedicated ``provider_failure`` event is
     dispatched (admin scope) with the run and pipeline identity.
     """
-    from modulo.core.notifier import EVENT_PROVIDER_FAILURE
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.notifier import EVENT_PROVIDER_FAILURE
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     final_run = _make_run(
@@ -456,17 +456,17 @@ async def test_execute_provider_auth_refusal_dispatches_the_alert():
     notifier.dispatch_event = AsyncMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock(), notifier=notifier)
         await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
@@ -493,8 +493,8 @@ async def test_execute_jsonl_402_is_terminal_and_alerts_as_insufficient_funds():
     is in ``NON_RETRYABLE_PROVIDER_CODES`` so alerting is not suppressed, while
     the generic ``run_failed`` alert stays silent to avoid paging twice.
     """
-    from modulo.core.notifier import EVENT_PROVIDER_FAILURE
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.notifier import EVENT_PROVIDER_FAILURE
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     diagnostic = (
         "Sandbox agent command produced no output within 600s. Retained stdout tail: "
@@ -522,17 +522,17 @@ async def test_execute_jsonl_402_is_terminal_and_alerts_as_insufficient_funds():
     notifier.dispatch_event = AsyncMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock(), notifier=notifier)
         result = await executor.execute(
@@ -577,17 +577,17 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -617,7 +617,7 @@ async def test_execute_terminal_fails_sandbox_queue_timeout_with_correct_code():
     """FAR-1887: a SandboxQueueTimeoutError (rate-limit retry budget exhausted)
     must terminal-fail with error_code 'sandbox.queue_timeout' (its canonical
     code via LEGACY_ALIASES), NOT the generic 'sandbox.no_output_json'."""
-    from modulo.core.pipeline_engine.node_runner import SandboxQueueTimeoutError
+    from farna.core.pipeline_engine.node_runner import SandboxQueueTimeoutError
 
     run = _make_run(claim_count=20, node_attempt_count=5, claim_token="tok-claim-abc")
     final_run = _make_run(
@@ -637,17 +637,17 @@ async def test_execute_terminal_fails_sandbox_queue_timeout_with_correct_code():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -689,17 +689,17 @@ async def test_execute_non_idempotent_graph_suppresses_transient_retry():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -731,8 +731,8 @@ async def test_execute_refuses_requeue_for_non_retryable_provider_402():
     NOT be fenced back to pending, even with the whole retry budget remaining —
     every retry re-hits the same billing wall and burns a sandbox dispatch. The
     run terminal-fails ONCE with the classified code."""
-    from modulo.core.pipeline_engine.error_codes import is_retryable
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.error_codes import is_retryable
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     diagnostic = (
         "Sandbox agent command produced no output within 600s. Retained stdout tail: "
@@ -752,17 +752,17 @@ async def test_execute_refuses_requeue_for_non_retryable_provider_402():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -798,8 +798,8 @@ async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
     the sanitizer + String(5000) column); this round-trips a realistic large-output
     SandboxNodeFailedError through the executor AND the run-detail read surface
     and asserts stderr + log-tail markers survive."""
-    from modulo.core.pipeline_engine.error_codes import present_error
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.error_codes import present_error
+    from farna.core.pipeline_engine.node_runner import (
         SandboxNodeFailedError,
         _build_no_output_message,
     )
@@ -839,17 +839,17 @@ async def test_execute_terminal_fail_roundtrips_sandbox_diagnostics():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -890,17 +890,17 @@ async def test_execute_retry_budget_ignores_non_executing_claims():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
@@ -932,17 +932,17 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -985,20 +985,20 @@ async def test_execute_generic_exception_carrying_provider_refusal_is_reclassifi
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.get_or_compile",
+            "farna.core.pipeline_engine.executor.get_or_compile",
             side_effect=RuntimeError('HTTP 401 "This API key has expired"'),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -1034,20 +1034,20 @@ async def test_execute_generic_prestream_failure_keeps_its_class_name():
     settings = MagicMock(saq_run_retries=5)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.get_or_compile",
+            "farna.core.pipeline_engine.executor.get_or_compile",
             side_effect=RuntimeError("graph compilation failed"),
         ),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -1159,7 +1159,7 @@ class TestNodeOutputHasIdempotencyGate:
     """The fire_agent_signal one-rule skip — keyed on the marker only."""
 
     def test_gated_envelope_true(self) -> None:
-        from modulo.core.pipeline_engine.node_runner import _idempotency_gate_skipped_envelope
+        from farna.core.pipeline_engine.node_runner import _idempotency_gate_skipped_envelope
 
         assert _node_output_has_idempotency_gate(_idempotency_gate_skipped_envelope("node-a")) is True
 
@@ -1180,7 +1180,7 @@ async def test_execute_gate_suppresses_retry_when_delivery_marked():
     completes COMPLETE with error_code harness.idempotency_gate, no pending-reset,
     no run_failed publish, no re-raise, run_completed published exactly once, and
     node_attempt_count stays 1 (no phantom retry)."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1195,17 +1195,17 @@ async def test_execute_gate_suppresses_retry_when_delivery_marked():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -1233,7 +1233,7 @@ async def test_execute_gate_suppresses_retry_when_retries_exhausted():
     """FAR-228 guard B retries-exhausted case: node_attempt_count (5) is AT the
     SAQ retry cap — WITHOUT the gate this terminal-fails; WITH a delivery marker
     the gate completes the run instead of failing it."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=20, node_attempt_count=5, claim_token="tok-claim-abc")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1248,17 +1248,17 @@ async def test_execute_gate_suppresses_retry_when_retries_exhausted():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(
@@ -1278,7 +1278,7 @@ async def test_execute_gate_magicmock_markers_skips_gate():
     """FAR-228 MagicMock compatibility: a MagicMock raw_output_markers (not a
     dict) is ignored by the isinstance guard — the gate never fires and the
     existing retry path (pending-reset + re-raise) is untouched."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = MagicMock()  # NOT a dict -> gate must stay silent
@@ -1292,16 +1292,16 @@ async def test_execute_gate_magicmock_markers_skips_gate():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1314,7 +1314,7 @@ async def test_execute_gate_magicmock_markers_skips_gate():
 async def test_execute_gate_kill_switch_off_disables_gate():
     """FAR-228 kill-switch: modulo_idempotency_gate_enabled=False means the gate
     never fires even with a delivery marker — the transient retry proceeds."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1328,16 +1328,16 @@ async def test_execute_gate_kill_switch_off_disables_gate():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=False)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1350,7 +1350,7 @@ async def test_execute_gate_kill_switch_off_disables_gate():
 async def test_execute_gate_node_id_none_disables_gate():
     """FAR-228: a SandboxNodeFailedError WITHOUT node_id disables guard B —
     the existing retry path is preserved for every pre-FAR-228 raise site."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1364,16 +1364,16 @@ async def test_execute_gate_node_id_none_disables_gate():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1387,7 +1387,7 @@ async def test_execute_gate_marker_absent_preserves_retry_path():
     """FAR-228 guard B gate_ok=False (marker ABSENT): a run whose markers dict
     contains NO delivery_done marker for the failing node is NOT suppressed —
     the exact pre-gate retry path (fenced pending-reset + re-raise) runs."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = {}  # dict, but no delivery_done marker for node-a
@@ -1401,16 +1401,16 @@ async def test_execute_gate_marker_absent_preserves_retry_path():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1425,7 +1425,7 @@ async def test_execute_gate_superseded_never_suppresses():
     present, a superseded executor (DB token rotated by a successor) must NOT
     suppress the retry AND must NOT reset/terminal-fail — the successor owns the
     run. The gate is explicitly disabled by the ``not superseded`` term."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-successor-xyz")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1439,16 +1439,16 @@ async def test_execute_gate_superseded_never_suppresses():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1464,7 +1464,7 @@ async def test_execute_gate_multi_node_inert():
     """FAR-228 guard B single-node scope: on a graph with TWO sandbox_agent nodes
     the gate is INERT — a transient failure of node-b (with a delivery marker)
     is NOT suppressed and retries exactly as before (pending-reset + re-raise)."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     key = f"run:{run.id}:node:node-b:1"
@@ -1487,16 +1487,16 @@ async def test_execute_gate_multi_node_inert():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1514,7 +1514,7 @@ async def test_execute_gate_prove_the_fix_suppression_requires_decision():
     harness.idempotency_gate. The green twin is
     test_execute_gate_suppresses_retry_when_delivery_marked — together they prove
     the suppression is not an artifact of the surrounding patch set."""
-    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+    from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     run.raw_output_markers = _delivery_markers(run.id)
@@ -1528,17 +1528,17 @@ async def test_execute_gate_prove_the_fix_suppression_requires_decision():
     settings = MagicMock(saq_run_retries=5, modulo_idempotency_gate_enabled=True)
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
-        patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_engine.executor._should_skip_retry", return_value=False),
+        patch("farna.settings.get_settings", return_value=settings),
+        patch("farna.core.pipeline_engine.executor._should_skip_retry", return_value=False),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(SandboxNodeFailedError):
@@ -1571,7 +1571,7 @@ async def test_alert_provider_failure_ignores_non_provider_error_codes():
     executor = _make_alert_executor(notifier)
     lookup = AsyncMock(return_value="Branch Fixer")
 
-    with patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup):
+    with patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=lookup):
         await executor._alert_provider_failure(
             run_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
@@ -1596,8 +1596,8 @@ async def test_alert_provider_failure_dispatches_when_name_lookup_fails():
     lookup = AsyncMock(side_effect=RuntimeError("db unavailable"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
-        patch("modulo.core.pipeline_engine.executor._log") as mock_log,
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
+        patch("farna.core.pipeline_engine.executor._log") as mock_log,
     ):
         await executor._alert_provider_failure(
             run_id=uuid.uuid4(),
@@ -1625,7 +1625,7 @@ async def test_alert_provider_failure_propagates_cancellation_from_name_lookup()
     lookup = AsyncMock(side_effect=asyncio.CancelledError())
 
     with (
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=lookup),
         pytest.raises(asyncio.CancelledError),
     ):
         await executor._alert_provider_failure(
@@ -1651,8 +1651,8 @@ async def test_alert_provider_failure_swallows_and_logs_dispatch_failure():
     executor = _make_alert_executor(notifier)
 
     with (
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
-        patch("modulo.core.pipeline_engine.executor._log") as mock_log,
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch("farna.core.pipeline_engine.executor._log") as mock_log,
     ):
         await executor._alert_provider_failure(
             run_id=uuid.uuid4(),
@@ -1678,7 +1678,7 @@ async def test_alert_provider_failure_propagates_cancellation_from_dispatch():
     executor = _make_alert_executor(notifier)
 
     with (
-        patch("modulo.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
+        patch("farna.core.pipeline_engine.executor._safe_pipeline_name", new=AsyncMock(return_value="Branch Fixer")),
         pytest.raises(asyncio.CancelledError),
     ):
         await executor._alert_provider_failure(

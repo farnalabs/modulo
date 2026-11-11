@@ -29,8 +29,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.run import request_cancellation
-from modulo.db.models.run import (
+from farna.db.crud.run import request_cancellation
+from farna.db.models.run import (
     CANCEL_REASON_AGENT_REQUESTED,
     CANCEL_REASON_HITL_REVIEW_EXPIRED,
     CANCEL_REASON_HITL_REVIEW_MISSING,
@@ -41,7 +41,7 @@ from modulo.db.models.run import (
 
 _MIGRATION_NAME = "0260_run_cancel_reason"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
 
@@ -127,7 +127,7 @@ class TestRequestCancellation:
         run = _fake_run()
         session = _session_returning(run)
 
-        with patch("modulo.db.crud.run._classify_terminal_run", new_callable=AsyncMock) as classify:
+        with patch("farna.db.crud.run._classify_terminal_run", new_callable=AsyncMock) as classify:
             out = await request_cancellation(session, run.id)
 
         assert out is run
@@ -144,7 +144,7 @@ class TestRequestCancellation:
         session = _session_returning(run)
         actor = str(uuid.uuid4())
 
-        with patch("modulo.db.crud.run._classify_terminal_run", new_callable=AsyncMock):
+        with patch("farna.db.crud.run._classify_terminal_run", new_callable=AsyncMock):
             await request_cancellation(
                 session,
                 run.id,

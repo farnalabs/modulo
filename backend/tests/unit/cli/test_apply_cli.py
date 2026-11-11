@@ -11,7 +11,7 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from modulo.cli.apply import register_apply
+from farna.cli.apply import register_apply
 
 CONFIG_TEXT = """
 api_version: modulo.dev/v1
@@ -51,7 +51,7 @@ class TestApplyCommandRegistration:
         assert "apply" in group.commands
 
     def test_backup_cli_exports_apply(self) -> None:
-        from modulo.cli.backup import cli
+        from farna.cli.backup import cli
 
         assert "apply" in cli.commands
 

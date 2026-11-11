@@ -8,7 +8,7 @@ raises a TypeError that fails the whole run before any node starts — observed 
 staging when an API-authored manual-node graph was triggered.
 """
 
-from modulo.core.pipeline_engine.executor import _resolved_node_timeouts
+from farna.core.pipeline_engine.executor import _resolved_node_timeouts
 
 
 def test_explicit_node_timeout_is_honoured():

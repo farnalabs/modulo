@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.runtime_provider.endpoint_tls import (
+from farna.core.runtime_provider.endpoint_tls import (
     COMPOSE_INTERNAL_HOST,
     COMPOSE_INTERNAL_PORT,
     is_insecure_endpoint_allowed,
@@ -251,38 +251,38 @@ class TestDockerProviderTlsValidation:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
         monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         with pytest.raises(ValueError, match="requires TLS"):
             DockerRuntimeProvider(docker_host="tcp://remote-host:2375")
 
     def test_constructor_accepts_unix_socket(self) -> None:
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="unix:///var/run/docker.sock")
         assert p._docker_host == "unix:///var/run/docker.sock"
 
     def test_constructor_accepts_compose_internal(self) -> None:
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host=f"tcp://{COMPOSE_INTERNAL_HOST}:2375")
         assert p._docker_host == f"tcp://{COMPOSE_INTERNAL_HOST}:2375"
 
     def test_constructor_accepts_loopback(self) -> None:
         """DOCKER_HOST=tcp://localhost:2375 is a legitimate common config."""
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://localhost:2375")
         assert p._docker_host == "tcp://localhost:2375"
 
     def test_constructor_accepts_127_0_0_1(self) -> None:
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://127.0.0.1:2375")
         assert p._docker_host == "tcp://127.0.0.1:2375"
 
     def test_constructor_accepts_ipv6_loopback(self) -> None:
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://[::1]:2375")
         assert p._docker_host == "tcp://[::1]:2375"
@@ -290,7 +290,7 @@ class TestDockerProviderTlsValidation:
     def test_constructor_accepts_remote_with_tls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://remote-host:2375")
         assert p._docker_host == "tcp://remote-host:2375"
@@ -299,13 +299,13 @@ class TestDockerProviderTlsValidation:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
         monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://remote-host:2375")
         assert p._docker_host == "tcp://remote-host:2375"
 
     def test_constructor_accepts_none_endpoint(self) -> None:
-        from modulo.core.runtime_provider.docker import DockerRuntimeProvider
+        from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host=None)
         # Falls through to env vars or local socket

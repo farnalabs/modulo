@@ -27,9 +27,9 @@ def org_has_trigger(org: str, name: str, secret: str, request) -> None:
 
 def _use_viewer_auth() -> None:
     """Set the dependency override for viewer auth (overrides client fixture)."""
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user as _get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal as _Principal
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_user as _get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal as _Principal
 
     _app.dependency_overrides[_get_current_user] = lambda: _Principal(
         username="viewer",
@@ -45,10 +45,10 @@ def _put_pause(client, request, *, paused: bool, resolve_role: str | None = "adm
     org_mock.triggers_paused = False
     org_mock.triggers_paused_at = None
     with (
-        patch("modulo.api.routes.admin_orgs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org_mock),
-        patch("modulo.api.routes.admin_orgs.append_audit_event", new_callable=AsyncMock),
-        patch("modulo.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=resolve_role),
+        patch("farna.api.routes.admin_orgs.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org_mock),
+        patch("farna.api.routes.admin_orgs.append_audit_event", new_callable=AsyncMock),
+        patch("farna.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=resolve_role),
     ):
         resp = client.put(
             f"/api/v1/admin/orgs/{ORG_ID}/triggers/pause",
@@ -68,7 +68,7 @@ def non_admin_pause_org(org: str, paused: str, client, request) -> None:
     # The mocked live-role read is a MagicMock -> assert_org_role denies (403)
     # before the handler runs; no need to resolve a role.
     with (
-        patch("modulo.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.dependencies._resolve_live_org_role", new_callable=AsyncMock, return_value=None),
     ):
         resp = client.put(
             f"/api/v1/admin/orgs/{ORG_ID}/triggers/pause",

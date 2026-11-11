@@ -88,13 +88,13 @@ class _BreakdownOnlyPlan:
 
 
 def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
-    from modulo.api.dependencies import _get_engine as _eng
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine as _eng
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
+    from farna.settings import Settings, get_settings
 
     custom_plan = ctx.get("custom_plan")
     if custom_plan is not None:
@@ -139,7 +139,7 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     )
 
     get_settings.cache_clear()
-    from modulo.core.license import clear_license
+    from farna.core.license import clear_license
 
     clear_license()
 
@@ -157,10 +157,10 @@ def valid_team_license(ctx: dict[str, Any]) -> None:
 @given(parsers.parse("I have an expired team license"))
 def expired_team_license(ctx: dict[str, Any]) -> None:
     ctx["license_key"] = ""
-    from modulo.core.license import clear_license
+    from farna.core.license import clear_license
 
     clear_license()
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
 
@@ -192,9 +192,9 @@ def get_teams(request: Any, ctx: dict[str, Any], client: Any) -> None:
 def get_admin_audit(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)
     with (
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
         patch(
-            "modulo.api.routes.audit.list_audit_events",
+            "farna.api.routes.audit.list_audit_events",
             return_value={"items": [], "total": 0, "next_cursor": None, "prev_cursor": None, "limit": 50},
         ),
     ):
@@ -206,9 +206,9 @@ def get_admin_audit(request: Any, ctx: dict[str, Any], client: Any) -> None:
 def get_admin_audit_export(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)
     with (
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
         patch(
-            "modulo.api.routes.audit.export_chain",
+            "farna.api.routes.audit.export_chain",
             return_value={"items": [], "total": 0, "next_cursor": None, "prev_cursor": None},
         ),
     ):
@@ -221,9 +221,9 @@ def get_admin_costs_limits(request: Any, ctx: dict[str, Any], client: Any) -> No
     _setup_client(ctx.get("license_key", ""), client, ctx)
     mock_page = _make_mock_page()
     with (
-        patch("modulo.api.routes.costs.set_rls_org"),
-        patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID, daily_spend_limit=None)),
-        patch("modulo.api.routes.costs.list_teams", return_value=mock_page),
+        patch("farna.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID, daily_spend_limit=None)),
+        patch("farna.api.routes.costs.list_teams", return_value=mock_page),
     ):
         resp = client.get("/api/v1/admin/costs/limits")
         _store_response(request, ctx, resp)
@@ -234,9 +234,9 @@ def get_pipelines(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)
     mock_page = _make_mock_page()
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.list_pipelines", return_value=mock_page),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.list_pipelines", return_value=mock_page),
     ):
         resp = client.get("/api/v1/pipelines")
         _store_response(request, ctx, resp)
@@ -247,8 +247,8 @@ def get_admin_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)
     rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Alpha Team", "total_spend_usd": 150.0, "total_runs": 12}]
     with (
-        patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_cost_report", return_value=rows),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs")
         _store_response(request, ctx, resp)
@@ -258,8 +258,8 @@ def get_admin_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
 def get_admin_costs_anomalies(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)
     with (
-        patch("modulo.api.routes.costs.list_anomalies", return_value=[]),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.list_anomalies", return_value=[]),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs/anomalies")
         _store_response(request, ctx, resp)

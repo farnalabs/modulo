@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from modulo.api.routes.assistant import StreamRequest, stream_chat
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.models.assistant_message import ChatMessage
+from farna.api.routes.assistant import StreamRequest, stream_chat
+from farna.auth.jwt import TenantPrincipal
+from farna.db.models.assistant_message import ChatMessage
 
 
 class _BeginContext:
@@ -147,18 +147,18 @@ async def test_stream_without_api_keys_preserves_tool_control_flow(
     settings = SimpleNamespace(modulo_public_url="http://test", fernet_key="unused")
 
     with (
-        patch("modulo.api.routes.assistant.AsyncSession", return_value=stream_session),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._resolve_api_key", new_callable=AsyncMock, return_value="provider-key"),
-        patch("modulo.api.routes.assistant._build_backend", return_value=backend),
-        patch("modulo.api.routes.assistant.SkillLoader", return_value=loader),
-        patch("modulo.api.routes.assistant._reconstruct_messages", new_callable=AsyncMock, return_value=[]),
-        patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_all_tool_definitions", return_value=[]),
-        patch("modulo.api.routes.assistant._call_mcp_tool", call_mcp_tool),
+        patch("farna.api.routes.assistant.AsyncSession", return_value=stream_session),
+        patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant._resolve_api_key", new_callable=AsyncMock, return_value="provider-key"),
+        patch("farna.api.routes.assistant._build_backend", return_value=backend),
+        patch("farna.api.routes.assistant.SkillLoader", return_value=loader),
+        patch("farna.api.routes.assistant._reconstruct_messages", new_callable=AsyncMock, return_value=[]),
+        patch("farna.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
+        patch("farna.api.routes.assistant._get_all_tool_definitions", return_value=[]),
+        patch("farna.api.routes.assistant._call_mcp_tool", call_mcp_tool),
         patch(
-            "modulo.core.manifest.get_manifest",
+            "farna.core.manifest.get_manifest",
             return_value={"routes": {}, "elements": {}, "sidebar_groups": {}},
         ),
     ):

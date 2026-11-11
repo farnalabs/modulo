@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.pipeline_engine import error_codes as error_codes_module
-from modulo.core.pipeline_engine.error_codes import should_notify_terminal_failure
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.pipeline_engine import error_codes as error_codes_module
+from farna.core.pipeline_engine.error_codes import should_notify_terminal_failure
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 
 @asynccontextmanager
@@ -263,10 +263,10 @@ async def test_pipeline_name_lookup_reads_through_the_session() -> None:
     pipeline_id = uuid.uuid4()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()) as set_org,
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()) as set_exec,
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()) as set_org,
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()) as set_exec,
         patch(
-            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            "farna.core.pipeline_engine.executor._safe_pipeline_name",
             new=AsyncMock(return_value="Pipeline X"),
         ) as read_name,
     ):
@@ -284,13 +284,13 @@ async def test_pipeline_name_lookup_failure_returns_none_and_logs() -> None:
     executor._session_factory = _make_session_factory()  # type: ignore[assignment]
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         patch(
-            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            "farna.core.pipeline_engine.executor._safe_pipeline_name",
             new=AsyncMock(side_effect=RuntimeError("lookup boom")),
         ),
-        patch("modulo.core.pipeline_engine.executor._log.warning") as warn,
+        patch("farna.core.pipeline_engine.executor._log.warning") as warn,
     ):
         name = await executor._notification_pipeline_name(
             org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4()
@@ -306,10 +306,10 @@ async def test_pipeline_name_lookup_cancellation_propagates() -> None:
     executor._session_factory = _make_session_factory()  # type: ignore[assignment]
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         patch(
-            "modulo.core.pipeline_engine.executor._safe_pipeline_name",
+            "farna.core.pipeline_engine.executor._safe_pipeline_name",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -337,7 +337,7 @@ async def test_notifier_exception_is_swallowed_and_logged() -> None:
     notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("notifier boom"))
     executor = _executor_with_notifier(notifier)
 
-    with patch("modulo.core.pipeline_engine.executor._log.exception") as mock_log:
+    with patch("farna.core.pipeline_engine.executor._log.exception") as mock_log:
         await executor._dispatch_run_failed(
             org_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
@@ -379,9 +379,9 @@ async def test_finalize_failed_terminal_fires_run_failed_notification() -> None:
         patch.object(executor, "_run_finalize_cost_transaction", new=AsyncMock()),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
         patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
     ):
         await executor._finalize_run_after_stream(**args)
 
@@ -407,9 +407,9 @@ async def test_finalize_non_failed_terminal_does_not_fire_run_failed_notificatio
         patch.object(executor, "_run_finalize_cost_transaction", new=AsyncMock()),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
         patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
     ):
         await executor._finalize_run_after_stream(**args)
 

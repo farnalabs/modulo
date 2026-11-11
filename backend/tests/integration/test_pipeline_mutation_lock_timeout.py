@@ -32,8 +32,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.auth.jwt import create_access_token
-from modulo.settings import get_settings
+from farna.auth.jwt import create_access_token
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 

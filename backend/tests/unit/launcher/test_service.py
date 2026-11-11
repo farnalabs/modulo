@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher import policy as policy_module
-from modulo.launcher.service import (
+from farna.launcher import policy as policy_module
+from farna.launcher.service import (
     LAUNCHD_LABEL,
     LAUNCHD_PLIST_FILENAME,
     ServiceError,
@@ -305,7 +305,7 @@ def test_uninstall_tolerates_a_missing_unit(linux_only: None, tmp_path: Path) ->
 
 
 def test_status_surfaces_enabled_active_linger_and_launcher_health(linux_only: None, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     collected: list[Path] = []
 
@@ -359,7 +359,7 @@ def test_install_against_a_fake_systemd_bin_dir(monkeypatch: pytest.MonkeyPatch,
 
     executable = _executable(tmp_path)
     unit_path = tmp_path / "systemd" / "user" / "modulo.service"
-    import modulo.launcher.service as service_module
+    import farna.launcher.service as service_module
 
     result = service_module.install(unit_path=unit_path, executable=executable)
     assert result.enabled is True
@@ -462,13 +462,13 @@ def test_darwin_uninstall_tolerates_missing_unit(darwin_only: None, tmp_path: Pa
 
 
 def test_darwin_status(darwin_only: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_module
+    import farna.launcher.supervisor as supervisor_module
 
     fake_plist = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
     fake_plist.parent.mkdir(parents=True)
     fake_plist.write_text("<plist></plist>", encoding="utf-8")
     monkeypatch.setattr(
-        "modulo.launcher.service.default_unit_path",
+        "farna.launcher.service.default_unit_path",
         lambda: fake_plist,
     )
 
@@ -550,7 +550,7 @@ def test_uninstall_warns_when_the_unit_cannot_be_removed(linux_only: None, tmp_p
 
 def test_status_reports_error_when_no_default_data_dir(linux_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """No usable default data dir surfaces the loud error block instead of raising."""
-    from modulo.launcher import entry as entry_module
+    from farna.launcher import entry as entry_module
 
     def refuse() -> Path:
         raise RuntimeError("no usable default data dir")

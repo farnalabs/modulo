@@ -22,10 +22,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.connector_hub.health_sweep as health_sweep
-from modulo.connectors.base import ConnectorType
-from modulo.core.connector_hub.health_sweep import run_connector_health_checks
-from modulo.core.validation_level import (
+import farna.core.connector_hub.health_sweep as health_sweep
+from farna.connectors.base import ConnectorType
+from farna.core.connector_hub.health_sweep import run_connector_health_checks
+from farna.core.validation_level import (
     _LEVEL_ORDER,
     ValidationLevel,
     _level_below,
@@ -33,8 +33,8 @@ from modulo.core.validation_level import (
     model_backend_baseline_level,
     resolve_validation_level,
 )
-from modulo.db.enums import ModelBackendProvider
-from modulo.db.models.connector_instance import ConnectorInstance
+from farna.db.enums import ModelBackendProvider
+from farna.db.models.connector_instance import ConnectorInstance
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -96,7 +96,7 @@ class TestResolveValidationLevel:
         """If the computation raises for any reason, degrade to baseline."""
         # Force an exception by passing an invalid level that breaks _LEVEL_ORDER lookup
         with patch(
-            "modulo.core.validation_level._LEVEL_ORDER",
+            "farna.core.validation_level._LEVEL_ORDER",
             side_effect=RuntimeError("boom"),
         ):
             result = resolve_validation_level(
@@ -194,7 +194,7 @@ def _instance(**overrides: Any) -> ConnectorInstance:
 async def sweep(tmp_path):
     engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'sweep.db'}", echo=False)
 
-    from modulo.db.models.base import Base
+    from farna.db.models.base import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[ConnectorInstance.__table__]))

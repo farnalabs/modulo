@@ -23,12 +23,12 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.core.pipeline_engine.event_broker import get_registry
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+import farna.core.pipeline_execution as pe
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.core.pipeline_engine.event_broker import get_registry
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 pytestmark = [
     pytest.mark.integration,
@@ -263,7 +263,7 @@ async def _interrupt_run(
     fixtures: dict[str, str],
 ) -> str:
     """Claim + execute until the gate interrupts; run must reach awaiting_human."""
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     claim_token = await pe.claim_run_async(db_engine, str(run_id), str(org_id))
     assert claim_token is not None
@@ -296,7 +296,7 @@ async def _gate_result(gate_config: dict, payload: dict[str, Any]) -> dict:
     its FULL state update — the exact dict the gate node returns, which is the
     surface a downstream consumer reads (FAR-2489: including the sibling
     provenance marker, which the artifact alone does not carry)."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+    from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     gate_fn = make_hitl_review_fn(gate_config)
     return await gate_fn({"_hitl_decision": payload, "run_context": {"input": {}}})
@@ -365,7 +365,7 @@ async def test_mcp_approve_commits_then_resumes_inline_without_reconcile(
     must observe the committed approval on its own connection and complete the
     run without a reconcile tick.
     """
-    from modulo.api import mcp_server as ms
+    from farna.api import mcp_server as ms
 
     org_id = await _seed_org(db_engine, "McpInlineApprove")
     account_id = await _seed_account(db_engine, org_id, "mcp-inline-approve@test.local")
@@ -452,7 +452,7 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
     """Approve-with-modification round-trip: the committed payload (including
     the human's modified output) is reconstructed verbatim and the resume runs
     the gate to completion as APPROVED with that output."""
-    from modulo.core.cron_helpers import _committed_decision_resume_data
+    from farna.core.cron_helpers import _committed_decision_resume_data
 
     org_id = await _seed_org(db_engine, "HitlApprove")
     account_id = await _seed_account(db_engine, org_id, "hitl-approve@test.local")
@@ -497,7 +497,7 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         reconstructed = await _committed_decision_resume_data(session, org_id, run_id)
@@ -518,11 +518,11 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
     # FAR-2489 (M2): the human-supplied replacement output is LABELLED as
     # human-authored on the state update the gate returns — the surface a
     # consumer reads — and the marker's digest describes EXACTLY that value.
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.node_runner import (
         HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX,
         hitl_output_provenance_marker,
     )
-    from modulo.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY
+    from farna.core.provenance import PROVENANCE_ATTESTED, PROVENANCE_KEY
 
     marker = gate_update[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{gate_config['review_id']}"]
     assert marker[PROVENANCE_KEY] == PROVENANCE_ATTESTED
@@ -536,7 +536,7 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     """The LIVE-BUG fix: a committed REJECTION must resume as rejected — the
     reconstructed payload is the exact ``{"action": "rejected", ...}`` decision,
     never an empty ``{}`` (which the gate would treat as an approval)."""
-    from modulo.core.cron_helpers import (
+    from farna.core.cron_helpers import (
         _awaiting_human_has_committed_decision,
         _committed_decision_resume_data,
     )
@@ -571,7 +571,7 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         assert await _awaiting_human_has_committed_decision(session, org_id, run_id) is True
@@ -614,7 +614,7 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
 
     # FAR-2489: a rejection supplies no human-authored output, so the marker key
     # carries an explicit tombstone — never a stale human attestation.
-    from modulo.core.pipeline_engine.node_runner import HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX
+    from farna.core.pipeline_engine.node_runner import HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX
 
     assert gate_update[f"{HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX}{gate_config['review_id']}"] is None
 
@@ -630,7 +630,7 @@ async def _reject_roundtrip(
     live_events: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> tuple[str, str | None]:
     """Run a gate to a committed rejection and resume it; return ``(status, error_code)``."""
-    from modulo.core.cron_helpers import _committed_decision_resume_data
+    from farna.core.cron_helpers import _committed_decision_resume_data
 
     org_id = await _seed_org(db_engine, f"HitlReject{label}")
     account_id = await _seed_account(db_engine, org_id, f"hitl-reject-{label}@test.local")
@@ -656,7 +656,7 @@ async def _reject_roundtrip(
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
-        from modulo.db.rls import set_rls_org
+        from farna.db.rls import set_rls_org
 
         await set_rls_org(session, org_id)
         reconstructed = await _committed_decision_resume_data(session, org_id, run_id)
@@ -684,7 +684,7 @@ async def test_hitl_reject_supersede_ends_rejected_with_superseded_code(
     route ends ``rejected`` / ``hitl.superseded`` - never ``hitl.rejected`` (it
     must not look like a human said no). The committed claim carries the system
     reason and NO deciding account."""
-    from modulo.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
+    from farna.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
 
     status, error_code = await _reject_roundtrip(
         db_engine,

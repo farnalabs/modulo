@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.gitlab import GitLabConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.gitlab import GitLabConnector
 
 TOKEN = "glpat_test_token"
 _API = "https://gitlab.com/api/v4"

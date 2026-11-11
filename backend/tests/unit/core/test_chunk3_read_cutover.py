@@ -26,11 +26,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from modulo.core.eval_engine import EvalBlockedError, EvalEngine
-from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError, validate_binding
-from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
-from modulo.db.models.eval import Eval
-from modulo.db.models.policy_gate import PolicyGate
+from farna.core.eval_engine import EvalBlockedError, EvalEngine
+from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError, validate_binding
+from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
+from farna.db.models.eval import Eval
+from farna.db.models.policy_gate import PolicyGate
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -83,7 +83,7 @@ class TestLoadEvalDefsReadsEvals:
         """The loading query's FROM clause is ``evals LEFT OUTER JOIN
         policy_gates`` — ``eval_definitions`` must not appear anywhere in the
         compiled statement (that table is dead data after the cutover)."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         session = AsyncMock()
         result = MagicMock()
@@ -104,7 +104,7 @@ class TestLoadEvalDefsReadsEvals:
     async def test_loader_selects_eval_and_policy_gate_entities(self) -> None:
         """The SELECT projects ``(Eval, PolicyGate)`` entity pairs — the row
         shape ``_build_eval_defs_by_node`` consumes."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         session = AsyncMock()
         result = MagicMock()
@@ -121,7 +121,7 @@ class TestLoadEvalDefsReadsEvals:
     async def test_loader_filters_node_scoped_live_evals(self) -> None:
         """The WHERE clause keeps the live node-scoped filters: node_id
         IS NOT NULL and deleted_at IS NULL (soft-deleted Evals never load)."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         session = AsyncMock()
         result = MagicMock()
@@ -140,7 +140,7 @@ class TestLoadEvalDefsReadsEvals:
     async def test_loader_returns_row_pairs_unchanged(self) -> None:
         """The loader returns the raw ``(Eval, PolicyGate | None)`` tuples —
         the gate is None when no live gate exists (outer join)."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         eval_row = _make_eval_row(node_id=uuid4())
         gate_row = _make_policy_gate_row(action="block")
@@ -164,7 +164,7 @@ class TestBuildEvalDefsByNodeFromEvalAndGate:
     def test_failure_behaviour_comes_from_policy_gate_action(self) -> None:
         """Criterion 12: ``failure_behaviour`` on the DTO is populated from
         ``PolicyGate.action`` — a ``block`` gate yields a ``block`` DTO."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_id = uuid4()
         rows = [(_make_eval_row(node_id=node_id), _make_policy_gate_row(action="block"))]
@@ -176,7 +176,7 @@ class TestBuildEvalDefsByNodeFromEvalAndGate:
     def test_eval_type_and_config_come_from_eval_row(self) -> None:
         """Criterion 12: ``eval_type`` comes from ``Eval.eval_type`` and
         ``config`` from ``Eval.config_json``."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_id = uuid4()
         eval_id = uuid4()
@@ -199,7 +199,7 @@ class TestBuildEvalDefsByNodeFromEvalAndGate:
     def test_gate_none_guardrail_eval_defaults_to_warn(self) -> None:
         """A guardrail-typed Eval has no PolicyGate by design — the DTO keeps
         warn semantics (guardrail block behaviour is guardrail-owned)."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_id = uuid4()
         rows = [(_make_eval_row(node_id=node_id, eval_type="guardrail"), None)]
@@ -211,7 +211,7 @@ class TestBuildEvalDefsByNodeFromEvalAndGate:
     def test_gate_none_non_guardrail_eval_downgrades_to_warn(self) -> None:
         """A node-scoped non-guardrail Eval without a gate (backfill binding
         rejected) degrades to warn — never crashes, never blocks."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_id = uuid4()
         rows = [(_make_eval_row(node_id=node_id, eval_type="regex"), None)]
@@ -223,7 +223,7 @@ class TestBuildEvalDefsByNodeFromEvalAndGate:
     def test_eval_scoped_to_correct_node_key(self) -> None:
         """The DTO lands under the Eval's node id key — gate nodes look evals
         up by the graph node id string."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         node_a = uuid4()
         node_b = uuid4()

@@ -1,6 +1,6 @@
 """BDD step definitions: runtime provider platform matrix (feat-core-runtime-provider-core).
 
-Wires ``provider_matrix.feature`` to the REAL ``modulo.core.runtime_provider``
+Wires ``provider_matrix.feature`` to the REAL ``farna.core.runtime_provider``
 seams network-free and DB-free — the ``build_hub`` env-gated factory
 registration matrix (local always; e2b only when ``MODULO_E2B_API_KEY`` is set;
 the docker family only when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set,
@@ -22,17 +22,17 @@ from types import SimpleNamespace
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ProviderNotConfiguredError,
     RuntimeProvider,
     UnknownProviderTypeError,
     build_hub,
 )
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
-from modulo.core.runtime_provider.hub import RuntimeProviderHub
-from modulo.core.runtime_provider.local import LocalRuntimeProvider
-from modulo.db.models.environment_profile import PROVIDER_TYPES
+from farna.core.runtime_provider.docker import DockerRuntimeProvider
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider.hub import RuntimeProviderHub
+from farna.core.runtime_provider.local import LocalRuntimeProvider
+from farna.db.models.environment_profile import PROVIDER_TYPES
 
 scenarios("provider_matrix.feature")
 

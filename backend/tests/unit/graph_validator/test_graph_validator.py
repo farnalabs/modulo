@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import (
     UUID_A as _UUID_A,
 )
@@ -1882,7 +1882,7 @@ def test_single_pr_per_run_rejected_on_non_sandbox_nodes():
     fails closed at save time: the one-PR-per-run gh guard is installed only
     inside a sandbox, so the flag there would declare a guard nothing
     installs."""
-    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+    from farna.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
 
     result = ValidationResult()
     _check_sandbox_policy_fields_only_on_sandbox_nodes(
@@ -1908,7 +1908,7 @@ def test_single_pr_per_run_accepted_on_sandbox_nodes_and_default_elsewhere():
     """The flag is legal on a sandbox_agent node (its VALUE is type-checked by
     the separate FAR-1316 check below) and the default False/absent on other
     node types raises nothing."""
-    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+    from farna.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
 
     result = ValidationResult()
     _check_sandbox_policy_fields_only_on_sandbox_nodes(
@@ -1983,7 +1983,7 @@ def test_egress_fields_rejected_on_non_sandbox_nodes():
     """A raw import that smuggles the egress pair onto a non-sandbox node fails
     closed: the egress surface is derived only for sandbox_agent nodes, so the
     declaration there would look enforced and enforce nothing."""
-    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+    from farna.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
 
     result = ValidationResult()
     _check_sandbox_policy_fields_only_on_sandbox_nodes(
@@ -2012,7 +2012,7 @@ def test_egress_fields_rejected_on_non_sandbox_nodes():
 def test_egress_empty_allowlist_rejected_on_non_sandbox_nodes():
     """``[]`` is not ``None`` and is never a valid allowlist, so it is rejected
     off-sandbox rather than treated as an absent default."""
-    from modulo.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
+    from farna.core.graph_validator import _check_sandbox_policy_fields_only_on_sandbox_nodes
 
     result = ValidationResult()
     _check_sandbox_policy_fields_only_on_sandbox_nodes(

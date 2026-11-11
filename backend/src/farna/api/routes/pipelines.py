@@ -1,0 +1,6970 @@
+"""Pipeline CRUD REST API.
+
+Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
+replace_pipeline_graph. No advisory lock is deployed for the graph row itself;
+the row lock on the pipeline row serialises concurrent graph writes within a
+serialisable transaction.
+
+FAR-1109: the graph write ALSO translates each node's declared ``policy_gate``
+block into the ``policy_gates`` row lifecycle. That translation lives in the
+shared write transaction itself
+(``modulo.db.crud.pipeline.replace_pipeline_graph`` ->
+``reconcile_graph_policy_gates``), so EVERY graph writer — these REST routes,
+the MCP ``update_pipeline_graph`` tool, node conversions, snapshot rollback,
+onboarding and the demo seed — translates. The row operations acquire the
+per-eval advisory lock shared with the FAR-1106 authoring routes so the
+declarative and in-product surfaces serialise against each other.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from typing import Annotated, Any, Literal, NoReturn, cast
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictBool,
+    ValidationError,
+    ValidationInfo,
+    WithJsonSchema,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+from sqlalchemy import Select, select
+from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
+from farna.api.db_error_handling import handle_db_errors
+from farna.api.db_error_reporting import log_service_unavailable
+from farna.api.dependencies import (
+    get_db_session,
+    require_permission,
+    require_permission_any_credential,
+    require_team_membership_or_admin,
+    require_team_membership_or_admin_any_credential,
+)
+from farna.api.middleware.sensitive_mask import (
+    mask_pipeline_graph_node,
+    merge_masked_graph_nodes,
+    resolve_and_reject_mask_sentinels,
+)
+from farna.api.models.team_visibility import TeamVisibilityMixin
+from farna.api.team_scope import (
+    TeamScopedResource,
+    resolve_pipeline_team_scope,
+    team_membership_exists,
+    validate_owner_team_for_create,
+)
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import (
+    PermissionDenied,
+    assert_org_role,
+    grants_and_role,
+    grants_permit,
+    resolve_required,
+)
+from farna.auth.team_rbac import org_role_level
+from farna.connectors.base import (
+    connector_binding_operation,
+    connector_type_supports_dispatch,
+    node_fires_dispatch_job,
+    node_routes_binding_to_connector,
+)
+from farna.core.agent_command_sync import (
+    extract_agent_command_sync_updates,
+    sync_agent_row_commands,
+)
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event, append_audit_event_isolated
+from farna.core.capability_scope import (
+    BLANK_CONNECTOR_KIND,
+    ScopeViolationError,
+    agent_granted_connector_types,
+    validate_allowed_connectors_not_blank,
+    validate_allowed_connectors_subset,
+    validate_no_self_tools,
+)
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.core.graph_validator import HITL_DESCRIPTION_MIN_LENGTH, GraphValidator
+from farna.core.pipeline_engine.git_content import GitContentRefError
+from farna.core.pipeline_engine.scatter_join import (
+    FanOutConfig,
+    JoinAggregateSpec,
+    JoinCollectSpec,
+)
+from farna.core.release_channels import VALID_RELEASE_CHANNELS
+from farna.core.reports.quality_report import (
+    deliver_quality_report,
+    generate_quality_report,
+)
+from farna.core.retry_budget import RETRY_POLICY_MAX_RETRIES
+from farna.core.run_context.autonomy import (
+    AutonomyLevel,
+    autonomy_change_payload,
+    autonomy_level_rank,
+    validate_autonomy_ceiling,
+)
+from farna.core.schema_registry.rendering import SchemaProfile
+from farna.core.stdout_retention import StdoutRetentionValidatorMixin
+from farna.core.team_visibility import (
+    ENVIRONMENT_PROFILE_TEAM_MISMATCH,
+    ConnectorBindingMissingError,
+    connector_team_mismatch_detail,
+    environment_profile_team_mismatch,
+    extract_connector_bindings,
+    find_connector_team_mismatches,
+    find_model_backend_team_mismatches,
+    model_backend_team_mismatch_detail,
+)
+from farna.db.crud import guardrail_config as _guardrail_config
+from farna.db.crud.composite_template import create_composite_template
+from farna.db.crud.hitl_review_guard import (
+    GuardrailBindingStripDenied,
+    HitlReviewWeakeningDenied,
+    denial_http_status,
+)
+from farna.db.crud.pipeline import (
+    CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
+    CIRCUIT_BREAKER_THRESHOLD_MAX,
+    CircuitBreakerThresholdChangeDenied,
+    GraphWriteActor,
+    GraphWriteRecording,
+    PipelineHasActiveRunsError,
+    archive_pipeline,
+    check_pipeline_name_available,
+    circuit_breaker_threshold_change_allowed,
+    clone_pipeline,
+    create_pipeline,
+    get_pipeline,
+    get_pipeline_graph,
+    list_pipelines,
+    normalize_circuit_breaker_threshold,
+    pause_pipeline,
+    replace_pipeline_graph,
+    restore_pipeline,
+    resume_pipeline,
+    set_earned_autonomy_level,
+    soft_delete_pipeline,
+    unarchive_pipeline,
+    update_pipeline,
+)
+from farna.db.crud.pipeline_folder import move_pipeline_to_folder
+from farna.db.crud.pipeline_owner import is_account_in_team
+from farna.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_edit
+from farna.db.crud.pipeline_snapshot_versioning import (
+    delete_snapshot,
+    diff_snapshots,
+    get_snapshot_by_version,
+    get_snapshot_detail,
+    list_snapshots,
+    rollback_to_snapshot,
+    tag_snapshot,
+)
+from farna.db.crud.row_lock import set_mutation_row_lock_timeout
+from farna.db.models.agent import Agent
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.notification_endpoint import NotificationEndpoint
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.schema import Schema
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.db.soft_delete import include_soft_deleted
+from farna.util import sanitise_log_value as _sanitise_log_value
+
+# FAR-2008: the FAR-488a Agent-row sync lives in ``modulo.core`` (bundle import
+# must reach it without importing the API layer). These module-level aliases
+# keep the historical private names importable/patchable from this module —
+# route tests (and ``mcp_server``) reference ``_sync_agent_row_commands`` here.
+_sync_agent_row_commands = sync_agent_row_commands
+_extract_agent_command_sync_updates = extract_agent_command_sync_updates
+
+_CODE_PIPELINE_LIST = "pipeline.list"
+_CODE_ROUTES_PIPELINES = "routes.pipelines"
+_CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
+_CODE_PIPELINE_UPDATE = "pipeline.update"
+
+_MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+_MSG_NODE_NOT_FOUND = "Node not found"
+
+# FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
+# requires the same org-admin permission as the circuit-breaker reset.
+_CODE_COST_MANAGE = "cost.manage"
+_MSG_SNAPSHOT_NOT_FOUND = "Snapshot not found"
+
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/pipelines", tags=["pipelines"])
+
+# Shared context dict passed to Pydantic model_validate() when re-validating
+# STORED data on graph READs.  The ``legacy_read`` flag skips per-type
+# validators that may have been tightened since the data was saved, so legacy
+# graphs stay readable even if a later model revision made the write path
+# stricter.  Imported by pipeline_apply.py for the same leniency on the
+# CLI-side current-graph normalisation.
+LEGACY_READ_CONTEXT: dict[str, bool] = {"legacy_read": True}
+
+# DoS guard: reject graphs larger than these limits before any DB work.
+_MAX_GRAPH_NODES = 500
+_MAX_GRAPH_EDGES = 1000
+
+# ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
+# required to weaken/remove an existing HITL gate via a graph write).
+_CODE_GUARDRAIL_MANAGE = "guardrail.manage"  # nosec B105 — permission key, not a credential
+_OPERATOR_LEVEL = org_role_level("operator")
+_ADMIN_LEVEL = org_role_level("admin")
+
+
+def _is_privileged(role: str | None, key_grants: frozenset[str] | None = None) -> bool:
+    """Resolve the is_privileged flag from an org role (operator+ -> True).
+
+    FAR-1477: an API key carrying a grant-set (``key_grants is not None``) is
+    privileged only if it ALSO holds ``pipeline.graph.update`` (effective =
+    grants INTERSECT live-role bundle). ``None`` = no grant-set, unchanged.
+
+    Uses the flag-independent numeric hierarchy (team_rbac), NOT the
+    kill-switched assert_org_role path, so the HITL guard stays live even
+    when authz.enforce is disabled.
+    """
+    return grants_and_role(
+        key_grants,
+        _CODE_PIPELINE_GRAPH_UPDATE,
+        lambda: role is not None and org_role_level(role) >= _OPERATOR_LEVEL,
+    )
+
+
+def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """Resolve whether the caller may strip a guardrail binding from a node.
+
+    Admin-level only (``org_role == "admin"``, the role the ``guardrail.manage``
+    permission requires) — the same privilege the admin-only guardrail
+    definition / apply / reject endpoints enforce. Uses the flag-independent
+    numeric hierarchy so enforcement stays live even when authz.enforce is
+    disabled (mirrors ``_is_privileged`` for the HITL guard).
+
+    FAR-309 PR A review: this resolves the caller-supplied admin flag; the
+    service-layer guard (``replace_pipeline_graph`` /
+    ``rollback_to_snapshot``) re-reads the live role under the row lock for
+    REST callers, so a stale role claim cannot slip a strip past the guard.
+    """
+    role = principal.org_role
+    return grants_and_role(
+        principal.key_grants,
+        _CODE_GUARDRAIL_MANAGE,
+        lambda: role is not None and org_role_level(role) >= _ADMIN_LEVEL,
+    )
+
+
+def _grants_deny_privilege(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``pipeline.graph.update``.
+
+    Passed to the service layer where it can only NARROW the live-role result.
+    """
+    return not grants_permit(principal.key_grants, _CODE_PIPELINE_GRAPH_UPDATE)
+
+
+def _grants_deny_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``guardrail.manage``."""
+    return not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE)
+
+
+def _may_manage_cost(principal: TenantPrincipal) -> bool:
+    """FAR-1184: does the caller hold ``cost.manage`` (raises/clears the breaker)?
+
+    Uses the SAME authority as ``require_permission`` — the ADR 047 registry
+    (``resolve_required``) plus the org-role hierarchy check
+    (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
+    missing/unknown role raises ``PermissionDenied`` and resolves to False.
+    """
+
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(principal.key_grants, _CODE_COST_MANAGE, _role_ok)
+
+
+async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
+    """Establish the RLS org + user context for a request transaction."""
+    await set_rls_org(session, principal.organisation_id)
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+
+def _raise_db_migration_error(exc: ProgrammingError) -> None:
+    """Raise the 501 'feature not available' response for a ProgrammingError."""
+    logger.error(_CODE_ROUTES_PIPELINES, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+    ) from None
+
+
+def _raise_snapshot_lock_busy(exc: SnapshotLockNotAvailableError, *, log_prefix: str, action: str) -> NoReturn:
+    """Translate a contended edit-snapshot lock into the retryable 503 contract.
+
+    FAR-1810: every explicit graph save now creates an edit snapshot, and that
+    snapshot's bounded graph-copy lock is shared with concurrent RUN starts — so
+    a save can legitimately lose the race. ``_acquire_snapshot_lock`` /
+    ``_acquire_snapshot_allocation_lock`` raise the typed
+    ``SnapshotLockNotAvailableError``, a plain ``Exception`` carrying no
+    SQLSTATE, so neither this module's route-local ``except SQLAlchemyError``
+    arms nor ``handle_db_errors``'s 55P03 -> 409 map can see it: it fell
+    through to the generic ``Exception -> 500 "Internal server error"`` arm and
+    reported a transient busy lock as a server bug.
+
+    This is CONTENTION, not a fault: answer the same retryable 503 every
+    run-start surface already answers (``routes.runs``, ``webhooks``, ``slack``,
+    ``triggers``), preceded by the same structured ``snapshot_lock_unavailable``
+    record so the event stays observable. The action word names the operation
+    the caller should retry.
+    """
+    logger.warning("%s.snapshot_lock_busy: %s", log_prefix, exc)
+    log_service_unavailable(
+        "snapshot_lock_unavailable",
+        exc,
+        route=log_prefix,
+        detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the {action}"),
+    ) from None
+
+
+def _require_pipeline(pipeline: Pipeline | None) -> Pipeline:
+    """Return the pipeline, or raise 404 when it does not exist."""
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return pipeline
+
+
+async def _get_pipeline_or_404(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline:
+    """Fetch a pipeline (scoped to *organisation_id* when given), raising 404 when it does not exist."""
+    return _require_pipeline(await get_pipeline(session, pipeline_id, organisation_id=organisation_id))
+
+
+@dataclass(frozen=True)
+class GraphEdgeData:
+    """Serialised edge payload shared by every graph-write call site.
+
+    ``hitl_review_config_present`` records whether the caller explicitly supplied a
+    ``hitl_review_config`` so the service layer can distinguish "gate removed" from
+    "gate not mentioned".
+    """
+
+    id: uuid.UUID
+    source_node_id: uuid.UUID
+    target_node_id: uuid.UUID
+    edge_type: str
+    condition_expression: str | None
+    hitl_review_config: dict[str, Any] | None
+    hitl_review_config_present: bool
+    source_port: str = "out"
+    target_port: str = "in"
+
+
+def _edge_to_data(edge: PipelineGraphEdge) -> GraphEdgeData:
+    """Serialize a request edge into the persisted graph-write payload shape."""
+    return GraphEdgeData(
+        id=edge.id,
+        source_node_id=edge.source_node_id,
+        target_node_id=edge.target_node_id,
+        edge_type=edge.edge_type,
+        condition_expression=edge.condition_expression,
+        hitl_review_config=(
+            edge.hitl_review_config.model_dump(mode="json") if edge.hitl_review_config is not None else None
+        ),
+        hitl_review_config_present="hitl_review_config" in edge.model_fields_set,
+        source_port=edge.source_port,
+        target_port=edge.target_port,
+    )
+
+
+def _edge_data_to_dict(edge: GraphEdgeData) -> dict[str, Any]:
+    return {
+        "id": edge.id,
+        "source_node_id": edge.source_node_id,
+        "target_node_id": edge.target_node_id,
+        "edge_type": edge.edge_type,
+        "condition_expression": edge.condition_expression,
+        "hitl_review_config": edge.hitl_review_config,
+        "hitl_review_config_present": edge.hitl_review_config_present,
+        "source_port": edge.source_port,
+        "target_port": edge.target_port,
+    }
+
+
+def _edge_data_to_validator(edge: GraphEdgeData) -> dict[str, Any]:
+    """Build the GraphValidator's reduced edge representation."""
+    return {
+        "source": str(edge.source_node_id),
+        "target": str(edge.target_node_id),
+        "type": edge.edge_type,
+        "condition_expression": edge.condition_expression,
+        "hitl_review_config": edge.hitl_review_config,
+        "source_port": edge.source_port,
+        "target_port": edge.target_port,
+    }
+
+
+def _reject_graph_validation_issues(issues: list[Any]) -> None:
+    """Raise 422 for graph-save issues that must block authoring.
+
+    ``HITL_REVIEW_DESCRIPTION_REQUIRED`` (FAR-613) is hard-blocking on this
+    path: a node's ``hitl_config`` is an unvalidated ``dict[str, Any]`` that
+    bypasses the edge-level ``HitlReviewConfig`` Pydantic contract, so the
+    validator issue is the ONLY save-time gate for node-level gate
+    descriptions. It is raised inside ``session.begin()`` so the already-run
+    graph write rolls back with the rejection — without it the node-level
+    check would be advisory-only and the save would succeed.
+
+    ``CONNECTOR_MISSING_OPERATIONS`` (FAR-1395) is hard-blocking for the same
+    reason: the issue means the bound connector's ``allowed_operations`` does
+    not permit the verb the node routes (``query`` → ``read``, ``write``/
+    ``dispatch`` → ``write``). Run time ALREADY refuses that binding, so a save
+    that accepted it would author a graph guaranteed to fail its first run —
+    and this is the check the ticket found could never gate a write path. The
+    derived requirement (``connector_binding_required_acl_operations``) means it
+    fires on real customer input rather than on a key no producer ever wrote.
+
+    Everything else stays advisory on purpose: a pre-existing inactive connector
+    or a legacy topology issue must not block an unrelated edit of a live
+    pipeline (the editor surfaces those separately).
+    """
+    for issue in issues:
+        if issue.code in (
+            "GUARDRAIL_CAP_EXCEEDED",
+            "REDACT_CORRECT_BLOCKED",
+            "HITL_REVIEW_DESCRIPTION_REQUIRED",
+            "CONNECTOR_MISSING_OPERATIONS",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=issue.message,
+            )
+
+
+def _graph_validation_issue(severity: str, code: str, message: str, node_id: str | None = None) -> GraphValidationIssue:
+    return GraphValidationIssue(
+        severity=severity,
+        code=code,
+        message=message,
+        node_id=node_id,
+    )
+
+
+def _safe_validation_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    """Return Pydantic error dicts stripped of secrets (input, ctx, url).
+
+    Pydantic v2 error dicts carry an ``input`` key holding the offending value.
+    For model-level validators the input is the ENTIRE node/edge dict — which
+    may contain ``env_vars`` (API keys), ``connector_binding``, and
+    ``workspace_inputs``.  ``include_input=False`` / ``include_url=False``
+    suppress the ``input`` and ``url`` keys at source; the comprehension then
+    drops ``ctx`` (which those flags do not cover) so no secret can leak into
+    ``validation_issues`` messages or log lines.
+    """
+    return [{k: v for k, v in err.items() if k != "ctx"} for err in exc.errors(include_url=False, include_input=False)]
+
+
+def _edge_field(edge: Any, name: str, default: Any = None) -> Any:
+    """Read one field from an edge entry that may be a dict OR an object.
+
+    ``get_pipeline_graph`` returns ORM ``PipelineEdge`` rows (attribute access)
+    while the graph-save paths return plain dicts, so a bare ``edge.get(...)``
+    raises ``AttributeError`` on the ORM rows.  Normalise both shapes here.
+    """
+    if isinstance(edge, dict):
+        return edge.get(name, default)
+    return getattr(edge, name, default)
+
+
+async def _deny_hitl_review(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    exc: HitlReviewWeakeningDenied,
+    request_id: str | None = None,
+) -> None:
+    """Append the denial audit event and translate to HTTP (hitl-gate-removal-guard-plan.md v19 §5).
+
+    The guarded write already rolled back (guard-runs-before-delete), so the
+    denial audit event is written in a fresh transaction immediately after the
+    denial — it must never be lost with the rolled-back write.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            payload = exc.payload_json or {
+                "caller_type": "rest",
+                "reason_code": exc.reason_code,
+                "denied": True,
+                "affected_edges": [
+                    {
+                        "source_node_id": k[0],
+                        "target_node_id": k[1],
+                        "edge_type": k[2],
+                    }
+                    for k in exc.correlation_keys
+                ],
+                "weakening_types": exc.weakening_types,
+            }
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="hitl_review_removal_denied",
+                actor_user_id=account_id,
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json=payload,
+                request_id=request_id,
+            )
+    except Exception:
+        logger.exception("routes.pipelines.hitl_denial_audit_failed")
+    detail = f"Gate weakening denied ({exc.reason_code})."
+    if exc.detail:
+        detail += f" Affected edges: {exc.detail}"
+    raise HTTPException(
+        status_code=denial_http_status(exc.reason_code),
+        detail=detail,
+    ) from None
+
+
+async def _deny_threshold_change(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID | None,
+    exc: CircuitBreakerThresholdChangeDenied,
+) -> NoReturn:
+    """FAR-1184: audit a refused threshold change, then raise the 403.
+
+    The denial is raised before the guarded write runs (or inside the
+    mutation transaction, which rolls back), so the
+    ``pipeline.circuit_breaker_threshold_change_denied`` event is written in
+    a FRESH transaction via ``append_audit_event_isolated`` — it must never
+    be lost with the rollback. Failure-isolated: an audit failure is logged
+    and never masks the 403. ``pipeline_id`` is None on create (no row yet).
+    """
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        event_type=CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT,
+        payload={
+            "denied": True,
+            "previous_threshold_usd": float(exc.previous) if exc.previous is not None else None,
+            "new_threshold_usd": float(exc.new) if exc.new is not None else None,
+            "changed_by": str(principal.account_id),
+        },
+        log_key="routes.pipelines.circuit_breaker_threshold_change_denial_audit_failed",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=str(exc),
+    ) from None
+
+
+async def _handle_graph_write_denials(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    exc: HitlReviewWeakeningDenied | GuardrailBindingStripDenied,
+) -> None:
+    """Translate a graph-write denial into its HTTP response.
+
+    ``HitlReviewWeakeningDenied`` is audited then re-raised as HTTP by
+    ``_deny_hitl_review``; ``GuardrailBindingStripDenied`` maps directly to its
+    denial status. Shared by the graph-replace, pipeline-update, snapshot-
+    rollback, and node-conversion save paths.
+    """
+    if isinstance(exc, HitlReviewWeakeningDenied):
+        await _deny_hitl_review(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
+        return
+    raise HTTPException(
+        status_code=denial_http_status(exc.reason_code),
+        detail=exc.detail,
+    ) from None
+
+
+_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION = (
+    "Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a "
+    "run's cost would exceed this value, the breaker trips: the run is rejected, every "
+    "trigger of the pipeline is paused, and admins are notified. An org admin resets it via "
+    "POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; "
+    "must be > 0 when set. Available on every plan (Community included)."
+)
+
+
+def _reject_boolean_threshold(value: Any) -> Any:
+    """Pydantic's lax float coerces JSON ``true`` to 1.0; a boolean is never a USD amount."""
+    if isinstance(value, bool):
+        raise ValueError("circuit_breaker_threshold must be a number (USD) or null")
+    return value
+
+
+def _validate_circuit_breaker_threshold(value: float | None) -> float | None:
+    """Shared request-model validator: same rule as the CRUD writer (FAR-1182)."""
+    normalized = normalize_circuit_breaker_threshold(value)
+    return float(normalized) if normalized is not None else None
+
+
+def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Validate a ``retry_policy`` payload, returning it canonicalised.
+
+    ``None`` is accepted (treated as "no retry policy"). Raises ValueError with
+    a clear message when the core policy shape is malformed.
+
+    FAR-525 refactor: the shape rules live in ONE place
+    (``GraphValidator.check_retry_policy`` + ``check_retry_policy_schedule``)
+    so the API layer, the graph validator, and the import sanitiser cannot
+    drift. Issues are mapped to ``ValueError`` with the SAME message strings
+    the inline implementation raised (first-issue parity — byte-identical 422
+    details).
+
+    FAR-525: the OPTIONAL ``backoff_schedule`` key (run-level re-dispatch
+    pacing) is validated at the SAME write severity (ERROR -> 422). Integral
+    floats are canonicalised to ints and int multipliers to floats so the
+    stored JSON is type-stable (the retry-aware topology hash must not flip
+    because ``300.0`` became ``300``).
+    """
+    if value is None:
+        return value
+    from farna.core.graph_validator._types import ValidationResult
+    from farna.core.pipeline_engine import retry_compensation
+
+    result = ValidationResult()
+    GraphValidator.check_retry_policy(value, result)
+    GraphValidator.check_retry_policy_schedule(value, result)
+    for issue in result.issues:
+        raise ValueError(issue.message)
+
+    # Non-blocking typo surface: an unrecognized TOP-LEVEL key (e.g. a
+    # typo'd "backof_schedule") is accepted-but-warned so the write succeeds
+    # while the mistake is visible in logs. The legacy numeric ``backoff`` key
+    # is exempt (it is a real, node-default-inherited key).
+    unknown_top = set(value) - {"on", "max_retries", "backoff", "backoff_schedule"}
+    if unknown_top:
+        logger.warning(
+            "pipeline.retry_policy_unknown_keys",
+            extra={"keys": sorted(unknown_top)},
+        )
+
+    # Canonicalize type-stable storage via the SINGLE shared helper
+    # (retry_compensation.canonicalise_backoff_schedule): integral-float
+    # delay_seconds -> int, int multiplier -> float (validator and resolver
+    # coerce IDENTICALLY — one implementation, shared with the import sanitiser).
+    canonical_schedule = retry_compensation.canonicalise_backoff_schedule(value.get("backoff_schedule"))
+    if canonical_schedule is not None:
+        value = {**value, "backoff_schedule": canonical_schedule}
+    return value
+
+
+def _normalise_autonomy_level(v: str | None, field_name: str) -> str | None:
+    """Validate + canonicalise an autonomy-level request field (FAR-1163).
+
+    Shared by the ``max_autonomy_level`` ceiling and the
+    ``default_autonomy_level`` field on both ``PipelineCreate`` and
+    ``PipelineUpdate``: the value must be a real autonomy level when
+    provided, normalised to the canonical lowercase spelling.
+    ``AutonomyLevel._missing_`` matches case-insensitively, so
+    ``"MANUAL_APPROVAL"`` would otherwise be stored raw and die against the
+    case-sensitive ``ck_pipelines_autonomy_level`` /
+    ``ck_pipelines_max_autonomy_level`` CHECK constraints with an
+    ``IntegrityError`` (HTTP 409) instead of a clean 422. An unparseable
+    value (e.g. ``"banana"``) raises ``ValueError`` with a message naming
+    *field_name*, which Pydantic surfaces as a 422.
+    """
+    if v is None:
+        return v
+    try:
+        return AutonomyLevel(v).value
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}: {v!r}") from exc
+
+
+def _validate_max_autonomy_level_field(v: str | None) -> str | None:
+    """Validate the ``max_autonomy_level`` ceiling field (FAR-1163).
+
+    Thin wrapper over :func:`_normalise_autonomy_level` keeping the exact
+    historical error message (``Invalid max_autonomy_level: ...``) for the
+    ceiling field. ONE shared implementation for ``PipelineCreate`` and
+    ``PipelineUpdate`` (the two field validators were byte-for-byte
+    identical). The ceiling >= default ordering check runs in the
+    create/update routes (it needs both fields).
+    """
+    return _normalise_autonomy_level(v, "max_autonomy_level")
+
+
+class PipelineCreate(TeamVisibilityMixin):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    owner_team_id: uuid.UUID | None = None
+    max_concurrent_runs: int = Field(default=5, ge=1)
+    lock_wait_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    node_timeout_seconds: int = Field(default=300, ge=1)
+    hitl_review_window_seconds: int | None = Field(
+        None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s = 1 min..7 days). "
+            "How long a fired review may sit unclaimed/undecided before the run is "
+            "cancelled to release its concurrency slot. Precedence: this value > the "
+            "org default (settings) > the instance/env default. null = no override "
+            "(inherit). Resolved once at gate fire time."
+        ),
+    )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout in seconds (1..604800 = 7 days). "
+            "null (default) = NEVER expire: a capacity-queued run waits "
+            "indefinitely and the queue-state alert is the escalation path. When "
+            "set, a pending run carrying a capacity marker older than this window "
+            "(anchored on created_at, the time it was queued) is ended as a "
+            "SUPERSESSION (status rejected, error_code queue.expired) - never a "
+            "failure, never paged. Applies ONLY to capacity-queued runs; "
+            "never-dispatched and enqueue-failed runs keep their own timeouts. "
+            "Cron pipelines should set this to their period (e.g. 3600 for an "
+            "hourly cron) so a stale fire self-drops; webhook/manual/MCP "
+            "pipelines should leave it null."
+        ),
+    )
+    run_context_defaults: dict[str, Any] = Field(default_factory=dict)
+    default_autonomy_level: str = "manual_approval"
+    max_autonomy_level: str | None = Field(
+        None,
+        description=(
+            "Hard ceiling on the autonomy level any HITL-gate resolution may "
+            "reach. NULL = effective ceiling is default_autonomy_level (a "
+            "context-setter recommendation can then only LOWER autonomy). "
+            "Must be >= default_autonomy_level."
+        ),
+    )
+    max_duration_seconds: int = Field(3600, ge=1)
+    stale_run_timeout_minutes: int = Field(
+        30,
+        ge=1,
+        description="Max minutes a run can stay in pending/running without progress before being killed.",
+    )
+    folder_id: uuid.UUID | None = None
+    rate_limit_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Rate limit: {max_triggers: int, window_seconds: int, key_fields: [str], match_mode: 'exact'|'presence'}"
+        ),
+    )
+    retry_policy: dict[str, Any] | None = Field(
+        None,
+        description=(
+            f"Retry policy: {{on: [stall|timeout|failure|eval_failed], "
+            f"max_retries: 0-{RETRY_POLICY_MAX_RETRIES}, "
+            "backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. "
+            "'on' absent (or null) = ALL retryable events; an explicit list = granular; "
+            "an explicit empty list = no retry. "
+            "When a run ends in a configured state and retries remain, the run is "
+            "re-dispatched automatically instead of terminal-failing. "
+            "'backoff' is the legacy NODE-level inherited retry delay (node retries inherit "
+            "this value; default 0). 'backoff_schedule' paces ONLY the run-level re-dispatch: "
+            "the in-job sleep is min(delay_seconds * multiplier^(attempt-1), 300) plus up to "
+            "+25% jitter (cap and jitter are code-held, not configurable); multiplier defaults "
+            "to 2.0 (1.0 = fixed delay). The effective re-dispatch gap is the sleep plus "
+            "settings.saq_retry_delay plus queue wait."
+        ),
+    )
+    stdout_retention_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Pipeline-level default for sandbox stdout retention. "
+            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
+            "NULL = no pipeline override (inherit from org ceiling only). "
+            "When a sandbox node does not explicitly set its own stdout_retention_mode, "
+            "the pipeline default is inherited; node-explicit settings always win."
+        ),
+    )
+    circuit_breaker_threshold: float | None = Field(
+        None,
+        gt=0,
+        le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
+        description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION,
+    )
+    # FAR-1161: accountability owners (distinct from owner_team_id). Ids only —
+    # the same response shape as created_by/owner_team_id/folder_id. The server
+    # rejects an ineligible owner (not an active org member, or not a member of
+    # owner_team_id when visibility='team') with a 422.
+    business_owner_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Accountable business owner (FAR-1161). Must be an active member of this "
+            "organisation and, when visibility is 'team', a member of owner_team_id. "
+            "null = unassigned."
+        ),
+    )
+    reliability_owner_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Accountable reliability/SRE owner (FAR-1161). Must be an active member of "
+            "this organisation and, when visibility is 'team', a member of owner_team_id. "
+            "null = unassigned."
+        ),
+    )
+
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _reject_boolean_threshold_field(cls, value: Any) -> Any:
+        return _reject_boolean_threshold(value)
+
+    @field_validator("circuit_breaker_threshold")
+    @classmethod
+    def _validate_circuit_breaker_threshold_field(cls, value: float | None) -> float | None:
+        return _validate_circuit_breaker_threshold(value)
+
+    @field_validator("retry_policy")
+    @classmethod
+    def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_retry_policy(value)
+
+    @field_validator("max_autonomy_level")
+    @classmethod
+    def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: shared helper validates + normalises to canonical; the
+        # ceiling >= default ordering check runs in the create route (it
+        # needs both fields).
+        return _validate_max_autonomy_level_field(v)
+
+    @field_validator("default_autonomy_level")
+    @classmethod
+    def _validate_default_autonomy_level(cls, v: str) -> str:
+        # FAR-1163: the default the ceiling RANKS AGAINST must get the same
+        # treatment as the ceiling — a case-variant or invalid default would
+        # otherwise pass Pydantic and die against the case-sensitive
+        # ck_pipelines_autonomy_level CHECK as an IntegrityError (409)
+        # instead of a clean 422.
+        normalised = _normalise_autonomy_level(v, "default_autonomy_level")
+        # v is non-Optional str, so the helper's None branch is unreachable;
+        # keep mypy satisfied without an assert (bandit B101).
+        return v if normalised is None else normalised
+
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        from farna.core.stdout_retention import validate_stdout_retention_config
+
+        return validate_stdout_retention_config(v)
+
+
+class PipelineUpdate(TeamVisibilityMixin):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    visibility: str | None = Field(None, pattern=r"^(org|team)$")
+    owner_team_id: uuid.UUID | None = None
+    max_concurrent_runs: int | None = Field(None, ge=1)
+    lock_wait_timeout_seconds: int | None = Field(None, ge=30, le=3600)
+    node_timeout_seconds: int | None = Field(None, ge=1)
+    hitl_review_window_seconds: int | None = Field(
+        None,
+        ge=60,
+        le=604800,
+        description=(
+            "Per-pipeline HITL review window override (60-604800s). Omit to leave "
+            "unchanged; null clears the override (inherit the org/instance default)."
+        ),
+    )
+    queue_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        le=604800,
+        description=(
+            "Per-pipeline capacity-queue timeout (1..604800s). Omit to leave "
+            "unchanged; null clears it (never expire - the default). On expiry a "
+            "capacity-queued run is ended as a supersession (queue.expired), not a "
+            "failure. Cron pipelines should set it to their period; webhook/"
+            "manual/MCP pipelines should leave it null."
+        ),
+    )
+    run_context_defaults: dict[str, Any] | None = None
+    default_autonomy_level: str | None = None
+    # FAR-1163: PATCH merges with the EXISTING row for the ceiling >= default
+    # check (either side may be set alone), validated in the update route.
+    max_autonomy_level: str | None = None
+    max_duration_seconds: int | None = Field(None, ge=1)
+    stale_run_timeout_minutes: Annotated[
+        int | None,
+        Field(
+            None,
+            ge=1,
+            description="Override the stale-run timeout for this pipeline.",
+        ),
+        WithJsonSchema({"type": "integer", "minimum": 1}),
+    ] = None
+
+    @field_validator("stale_run_timeout_minutes", mode="before")
+    @classmethod
+    def reject_null_stale_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("stale_run_timeout_minutes cannot be set to null. Use a value >= 1.")
+        return v
+
+    rate_limit_config: dict[str, Any] | None = Field(
+        None,
+        description="Rate limit config. Set to {} to clear.",
+    )
+    retry_policy: dict[str, Any] | None = Field(
+        None,
+        description=(
+            f"Retry policy: {{on: [stall|timeout|failure|eval_failed], "
+            f"max_retries: 0-{RETRY_POLICY_MAX_RETRIES}, "
+            "backoff: seconds?, backoff_schedule?: {delay_seconds: 1-300, multiplier?: 1.0-10.0}}. "
+            "'on' absent (or null) = ALL retryable events; an explicit list = granular; "
+            "an explicit empty list = no retry. "
+            "Set to {} to clear. 'backoff' = node-level inherited retry delay; "
+            "'backoff_schedule' = run-level re-dispatch pacing only "
+            "(min(delay_seconds * multiplier^(attempt-1), 300) + up to 25% jitter; "
+            "multiplier default 2.0). Effective gap = sleep + settings.saq_retry_delay + queue wait."
+        ),
+    )
+    graph_json: PipelineGraphUpdate | None = Field(
+        None,
+        description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
+    )
+    stdout_retention_config: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Pipeline-level default for sandbox stdout retention. "
+            'Shape: {"mode": "tail"|"full", "max_bytes": <positive int>}. '
+            "Set to {} to clear (no pipeline override)."
+        ),
+    )
+    benign_signatures: list[dict[str, Any]] | None = Field(
+        None,
+        description=(
+            "Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). "
+            'Shape: [{"error_code": "<exact runs.error_code>", '
+            '"error_detail_contains": "<case-insensitive substring, optional>"}]. '
+            "A terminal failure whose (error_code, error_detail) matches one is "
+            "classified `benign` — a distinct class excluded from analytics "
+            "failure rates and error-code clusters — instead of counting as a "
+            "failure. Null clears (no signatures = historical behaviour)."
+        ),
+    )
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _validate_benign_signatures(cls, v: Any) -> list[dict[str, Any]] | None:
+        """Strict on the wire, lenient on storage.
+
+        The API REJECTS a malformed entry (422) so a typo cannot silently
+        disable a signature the operator believes is active; the storage reader
+        (``classify.normalize_benign_signatures``) stays lenient so a value
+        written before this validator (or by a direct DB edit) can never break
+        terminalization.
+
+        A key outside the accepted pair (FAR-707 QA) is rejected EXPLICITLY,
+        not only via the length check: ``{"error_code": "agent.failed",
+        "detail_contains": "rebase conflict"}`` would otherwise be stored with
+        its detail constraint silently lost and classify EVERY ``agent.failed``
+        failure as benign.
+        """
+        from farna.core.pipeline_engine.classify import (
+            BENIGN_SIGNATURE_KEYS,
+            normalize_benign_signatures,
+        )
+
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("benign_signatures must be a list")
+        for entry in v:
+            if isinstance(entry, dict) and not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
+                raise ValueError(
+                    "benign_signatures entries accept ONLY the keys 'error_code' and "
+                    "'error_detail_contains' — an unknown key would silently widen the "
+                    "signature (an absent 'error_detail_contains' matches any detail)"
+                )
+        normalised = normalize_benign_signatures(v)
+        if len(normalised) != len(v):
+            raise ValueError(
+                "benign_signatures entries must be objects with a non-empty string "
+                "'error_code' and an optional string 'error_detail_contains'"
+            )
+        return normalised
+
+    circuit_breaker_threshold: float | None = Field(
+        None,
+        gt=0,
+        le=float(CIRCUIT_BREAKER_THRESHOLD_MAX),
+        description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION + " Send null to disable; omit to leave unchanged.",
+    )
+    # FAR-1161: accountability owners. Omit to leave unchanged; send null to
+    # clear. Eligibility (active org member + team membership when
+    # visibility='team') is enforced server-side against the EFFECTIVE
+    # post-update visibility/owner team.
+    business_owner_id: uuid.UUID | None = Field(
+        None,
+        description="Business accountability owner id. Omit to leave unchanged; null clears.",
+    )
+    reliability_owner_id: uuid.UUID | None = Field(
+        None,
+        description="Reliability accountability owner id. Omit to leave unchanged; null clears.",
+    )
+    # FAR-1558: per-pipeline environment-profile binding (which runtime tier
+    # sandbox_agent nodes dispatch on). Omit to leave unchanged; null clears
+    # the binding (back to the default E2B route). Validated in the update
+    # route: the profile must exist in this organisation and be visible to the
+    # pipeline's EFFECTIVE (post-update) owner team — see
+    # ``_assert_environment_profile_bindable``.
+    environment_profile_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Environment profile this pipeline's sandbox nodes dispatch on "
+            "(FAR-1558). Must exist in this organisation and be visible to the "
+            "pipeline's owner team (an org-visible profile, or a team profile "
+            "owned by the pipeline's effective owner team). Omit to leave "
+            "unchanged; null clears the binding and restores the default route."
+        ),
+    )
+
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _reject_boolean_threshold_field(cls, value: Any) -> Any:
+        return _reject_boolean_threshold(value)
+
+    @field_validator("circuit_breaker_threshold")
+    @classmethod
+    def _validate_circuit_breaker_threshold_field(cls, value: float | None) -> float | None:
+        return _validate_circuit_breaker_threshold(value)
+
+    @field_validator("retry_policy", mode="before")
+    @classmethod
+    def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        # None clears the policy (empty dict) — the column is non-nullable.
+        return _validate_retry_policy(value) or {}
+
+    @field_validator("max_duration_seconds", mode="before")
+    @classmethod
+    def reject_null_max_duration(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("max_duration_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
+    @field_validator("node_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_node_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("node_timeout_seconds cannot be set to null. Use a value >= 1.")
+        return v
+
+    @field_validator("lock_wait_timeout_seconds", mode="before")
+    @classmethod
+    def reject_null_lock_wait_timeout(cls, v: int | None) -> int | None:
+        if v is None:
+            raise ValueError("lock_wait_timeout_seconds cannot be set to null. Use a value >= 30.")
+        return v
+
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _validate_stdout_retention_config(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        from farna.core.stdout_retention import validate_stdout_retention_config
+
+        return validate_stdout_retention_config(v)
+
+    @field_validator("max_autonomy_level")
+    @classmethod
+    def _validate_max_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: shared helper validates + normalises to canonical (422 on
+        # an unparseable ceiling); the ordering check against the merged
+        # default runs in the update route.
+        return _validate_max_autonomy_level_field(v)
+
+    @field_validator("default_autonomy_level")
+    @classmethod
+    def _validate_default_autonomy_level(cls, v: str | None) -> str | None:
+        # FAR-1163: same treatment as the ceiling — validates + canonicalises
+        # (422 on an unparseable value); None means "not provided" and passes
+        # through. Without this a case-variant default would reach the
+        # case-sensitive ck_pipelines_autonomy_level CHECK as an
+        # IntegrityError (409) instead of a clean 422.
+        return _normalise_autonomy_level(v, "default_autonomy_level")
+
+
+class PipelineResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    name: str
+    description: str | None
+    visibility: str
+    max_concurrent_runs: int
+    lock_wait_timeout_seconds: int
+    node_timeout_seconds: int
+    # FAR-1257: nullable per-pipeline HITL review-window override; null = no
+    # override (inherit org default, then instance default).
+    hitl_review_window_seconds: int | None = None
+    # FAR-1883: nullable per-pipeline capacity-queue timeout; NULL = never.
+    queue_timeout_seconds: int | None = None
+    run_context_defaults: dict[str, Any]
+    default_autonomy_level: str | None = None
+    # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
+    max_autonomy_level: str | None = None
+    # FAR-1175 (ADR 062 S1): the runtime earned autonomy level (NULL until a
+    # manual promote/demote sets it) and when it last moved. Read LIVE at every
+    # HITL gate when the ``autonomy_gating`` flag is on.
+    earned_autonomy_level: str | None = None
+    earned_autonomy_updated_at: datetime | None = None
+    # Intentionally nullable: legacy rows and rollbacks of pre-migration data
+    # can still expose a NULL value until the max_duration pipeline migration
+    # has run on all production DBs.
+    max_duration_seconds: int | None = None
+    stale_run_timeout_minutes: int = 30
+    rate_limit_config: dict[str, Any] | None = None
+    retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
+    stdout_retention_config: dict[str, Any] | None = None
+    # FAR-707: the explicit business-expected-outcome signatures the run
+    # classifier consults at terminalization. Additive + nullable: null = no
+    # signatures (historical behaviour); partial ORM stand-ins serialise null.
+    benign_signatures: list[dict[str, Any]] | None = None
+    # FAR-1182: monthly spend circuit breaker. Additive, backward-compatible.
+    circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
+    circuit_breaker_tripped: bool = False
+    circuit_breaker_tripped_at: datetime | None = None
+    # FAR-1530: unified per-pipeline Paused execution state. ``run_enabled``
+    # is the state the ``create_run`` gate enforces (false = present, visible,
+    # non-executing); the reason/timestamp name the first cause ('operator' |
+    # 'circuit_breaker'). Carried on every response so the UI can badge it and
+    # ``modulo apply``'s drift hash can read the live value. Additive with
+    # safe defaults (pre-migration / partial stand-ins serialise as running).
+    run_enabled: bool = True
+    run_disabled_reason: str | None = None
+    run_disabled_at: datetime | None = None
+    snapshot_count: int = 0
+    # Additive, backward-compatible: every response builder derives node_count
+    # from the row's stored graph via _pipeline_response, so detail/create/
+    # patch/clone responses report the real node count (not just the list).
+    # The default stays 0 for stand-ins that lack graph_nodes_json.
+    node_count: int = 0
+    archived_at: datetime | None = None
+    owner_team_id: uuid.UUID | None = None
+    folder_id: uuid.UUID | None = None
+    # FAR-1161: accountability owners — ids only, matching created_by /
+    # owner_team_id / folder_id (no embedded related-entity summary pattern
+    # exists on this response). Additive, backward-compatible.
+    business_owner_id: uuid.UUID | None = None
+    reliability_owner_id: uuid.UUID | None = None
+    # FAR-1558: the per-pipeline environment-profile binding, so a PATCH that
+    # sets it round-trips. Additive, nullable: null = unbound (default route).
+    environment_profile_id: uuid.UUID | None = None
+    # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
+    # UI warns the user to re-save the graph so connectors/model backends are
+    # rebound for the new team (PRD §9.3 ownership transfer).
+    connector_rebind_required: bool = False
+    created_by: uuid.UUID = Field(validation_alias="account_id")
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("retry_policy", mode="before")
+    @classmethod
+    def _coerce_retry_policy(cls, value: Any) -> dict[str, Any]:
+        # The column is non-nullable with a {} default, but legacy rows and
+        # partial ORM objects may expose None — the no-policy default is {}.
+        return value if isinstance(value, dict) else {}
+
+    @field_validator("earned_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_level(cls, value: Any) -> str | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins may expose a
+        # non-string — coerce to None (mirrors _coerce_max_autonomy_level).
+        return value if isinstance(value, str) or value is None else None
+
+    @field_validator("earned_autonomy_updated_at", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_updated_at(cls, value: Any) -> datetime | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins (MagicMock
+        # test doubles) may expose a non-datetime — coerce to None.
+        return value if isinstance(value, datetime) or value is None else None
+
+    @field_validator("max_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_max_autonomy_level(cls, value: Any) -> str | None:
+        # Legacy rows are NULL; partial ORM stand-ins / test doubles may
+        # expose a non-string — coerce to None (mirrors the stdout_retention
+        # coercion below).
+        return value if isinstance(value, str) or value is None else None
+
+    @field_validator("stdout_retention_config", mode="before")
+    @classmethod
+    def _coerce_stdout_retention_config(cls, value: Any) -> dict[str, Any] | None:
+        return value if isinstance(value, dict) else None
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _coerce_benign_signatures(cls, value: Any) -> list[dict[str, Any]] | None:
+        # Read side stays LENIENT (unlike the PATCH validator): a stored value
+        # written before this column existed, or by a direct DB edit, must
+        # serialise as-is rather than 500 a pipeline read. The classifier
+        # applies the same tolerance at match time.
+        return value if isinstance(value, list) else None
+
+    # The breaker columns are read defensively (like the fields above): partial
+    # ORM stand-ins may expose non-column attributes, which serialise as the
+    # "disabled / not tripped" defaults. The Numeric column serialises as a
+    # JSON number (USD), matching the other money fields in the API.
+    @field_validator("circuit_breaker_threshold", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_threshold(cls, value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, Decimal | int | float):
+            return None
+        return float(value)
+
+    @field_validator("circuit_breaker_tripped", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_tripped(cls, value: Any) -> bool:
+        return value if isinstance(value, bool) else False
+
+    @field_validator("circuit_breaker_tripped_at", mode="before")
+    @classmethod
+    def _coerce_circuit_breaker_tripped_at(cls, value: Any) -> datetime | None:
+        return value if isinstance(value, datetime) else None
+
+    # FAR-1530: the run-state columns are read defensively like the breaker
+    # columns above — partial ORM stand-ins (tests, MagicMock rows) expose
+    # non-column attributes, which must serialise as "running" (enabled, no
+    # cause), never 500.
+    @field_validator("run_enabled", mode="before")
+    @classmethod
+    def _coerce_run_enabled(cls, value: Any) -> bool:
+        return value if isinstance(value, bool) else True
+
+    @field_validator("run_disabled_reason", mode="before")
+    @classmethod
+    def _coerce_run_disabled_reason(cls, value: Any) -> str | None:
+        return value if isinstance(value, str) else None
+
+    @field_validator("run_disabled_at", mode="before")
+    @classmethod
+    def _coerce_run_disabled_at(cls, value: Any) -> datetime | None:
+        return value if isinstance(value, datetime) else None
+
+    # FAR-1161: owner ids read defensively like the breaker columns above —
+    # partial ORM stand-ins (tests, MagicMock rows) expose non-column
+    # attributes that must serialise as "unassigned" (None), never 500.
+    # Real UUIDs and UUID-shaped strings pass through for pydantic to coerce.
+    @field_validator("business_owner_id", "reliability_owner_id", mode="before")
+    @classmethod
+    def _coerce_owner_id(cls, value: Any) -> Any:
+        return value if isinstance(value, uuid.UUID | str) else None
+
+    # FAR-1558: same defensive read as ``_coerce_owner_id`` (kept separate
+    # only so each validator's name still describes the fields it guards) —
+    # a partial stand-in that lacks the new column must serialise the binding
+    # as "unbound" (None), never fail validation.
+    @field_validator("environment_profile_id", mode="before")
+    @classmethod
+    def _coerce_environment_profile_id(cls, value: Any) -> Any:
+        return value if isinstance(value, uuid.UUID | str) else None
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class PipelineListResponse(BaseModel):
+    items: list[PipelineResponse]
+    total: int
+    page: int
+    page_size: int
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
+class GraphPosition(BaseModel):
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+
+
+class ConnectorBinding(BaseModel):
+    type: str = Field(min_length=1, max_length=100)
+    instance_id: uuid.UUID
+    # FAR-1141: the connector-binding operation verb. Declared here so the API
+    # stops silently DROPPING it on save (extra="ignore" would create permanent
+    # plan drift — the engine would never see the dispatch operation).
+    operation: Literal["query", "write", "dispatch"] = "query"
+    # FAR-1141: for operation="dispatch", the CI-runner method to call.
+    dispatch_action: Literal[
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    ] = "trigger_run"
+    # FAR-2089: resource/filters/data for connector query/write operations.
+    # Without these fields declared, Pydantic's extra="ignore" silently drops
+    # them on REST/MCP graph writes, making GitHub connector nodes unable to
+    # perform real queries (the binding reaches the engine empty).
+    #
+    # ``filters`` / ``data`` default to an EMPTY DICT, not ``None``: the graph
+    # write serialises with ``model_dump(mode="json")`` (no ``exclude_none``),
+    # so a ``None`` default would persist ``"filters": null`` for every binding
+    # that only supplies a ``resource`` — and the engine's ``dict(...)`` over
+    # ``null`` raises at run time. An empty dict is the same "no filters" value
+    # in a shape every reader can iterate.
+    resource: str | None = Field(default=None, max_length=200)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+# The optional binding inputs whose absence must stay ABSENT, not become an
+# explicit ``null`` (or a model-defaulted empty dict) in the persisted graph —
+# see the helper below.
+_CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS = ("resource", "filters", "data")
+
+
+def _is_unset_binding_input(value: Any) -> bool:
+    """True when a binding input carries no author-supplied value.
+
+    ``None`` is the serialised form of an unset optional field on a model that
+    declares it nullable; ``{}`` is the serialised form of the model default
+    for ``filters`` / ``data``. Both mean "not set", and both must not be
+    persisted as though the author had written them.
+    """
+    return value is None or value == {}
+
+
+def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop unset values for a binding's optional query/write inputs.
+
+    FAR-2089 review: graph writes persist ``node.model_dump(mode="json")`` —
+    REST ``_prepare_graph_write``, MCP ``update_pipeline_graph`` and the CLI
+    apply normaliser all do. A binding that never set ``resource``/``filters``/
+    ``data`` dumps them as ``None`` and/or ``{}`` (the model defaults), so a
+    graph re-save turns previously ABSENT keys into explicit values. The
+    engine's ``_connector_inputs`` then reads ``filters: None`` and raises
+    ``TypeError`` inside ``dict(...)``, while ``resource: None`` bypasses its
+    ``"command"`` default — every existing query/dispatch binding would crash
+    on its next run.
+
+    Removing only those unset keys keeps the persisted shape identical to the
+    pre-FAR-2089 graph; a binding that sets them is untouched. ``{}`` is
+    stripped for the same reason as ``None``: it is the model default, not an
+    author-supplied value, and every reader treats an absent key and an empty
+    mapping identically (``_connector_inputs`` coerces with ``or {}``).
+    """
+    binding = node.get("connector_binding")
+    if not isinstance(binding, dict):
+        return node
+    cleaned = {
+        key: value
+        for key, value in binding.items()
+        if not (key in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and _is_unset_binding_input(value))
+    }
+    if len(cleaned) == len(binding):
+        return node
+    return {**node, "connector_binding": cleaned}
+
+
+class SchemaPin(BaseModel):
+    """A pinned schema version reference for a pipeline node."""
+
+    schema_id: uuid.UUID
+    schema_version: str
+
+    @field_validator("schema_version")
+    @classmethod
+    def version_must_be_concrete(cls, v: str) -> str:
+        if v in ("latest", "*", "") or len(v) > 50:
+            raise ValueError(f"schema_version must be a concrete version, got '{v}'")
+        return v
+
+
+_RESERVED_ENV_PREFIXES = ("MODULO_", "OPENCODE_API_KEY")
+
+
+class CapabilityScope(BaseModel):
+    """Node-level least-privilege contract (FAR-402 P4 / FAR-418).
+
+    A node may NARROW (never widen) what its referenced Agent is granted:
+
+    * ``allowed_connectors``: connector instance-ids and/or connector types the
+      node may resolve from the ConnectorHub. Each connector-TYPE entry must be
+      within the Agent's ``connector_type_refs`` (compile-time check); the
+      ConnectorHub is fetched with ONLY these connectors (deny-by-default).
+    * ``allowed_tools``: MCP/runtime tools the node's agent may invoke — an
+      additional narrowing filter wired through ``check_tool_scope``.
+    * ``context_scope``: allowlist of ``run_context`` keys the node may read
+      (need-to-know boundary).
+
+    Default is UNRESTRICTED: an absent ``capability_scope`` leaves behaviour
+    unchanged (the node may use all of its Agent's grants).
+    """
+
+    allowed_connectors: list[str] | None = Field(
+        default=None,
+        description="Connector instance-ids and/or connector types the node may "
+        "resolve. Absent/empty = UNRESTRICTED (Agent grants).",
+    )
+    allowed_tools: list[str] | None = Field(
+        default=None,
+        description="MCP/runtime tools the node's agent may invoke. Absent = NOT "
+        "narrowed (additional role check still applies).",
+    )
+    context_scope: list[str] | None = Field(
+        default=None,
+        description="Allowlist of run_context keys the node may read. Absent = UNRESTRICTED (full run_context).",
+    )
+
+
+class PipelineGraphPolicyGate(BaseModel):
+    """Node-attached policy-gate configuration (FAR-1109).
+
+    Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+    config can carry the gate as part of the graph write. ``action`` is the
+    gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+    ``eval_id`` references the eval bound to this node (the CLI never
+    auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+    time).
+
+    The node model previously had no field for this block, so Pydantic's
+    default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+    before the graph write — leaving declarative gate config permanently inert
+    (the plan always reported "unchanged" and the write never carried the
+    gate). Declaring the field means the validated node dict retains the block
+    and ``replace_pipeline_graph`` persists it verbatim in
+    ``pipeline.graph_nodes_json``, and the read path round-trips it.
+    """
+
+    # NOTE (FAR-1109): retention alone does NOT enforce. This docstring is part
+    # of the generated OpenAPI schema, so the enforcement note lives here as a
+    # plain comment (and in the module docstring above) rather than in the
+    # docstring — keeping frontend/src/lib/api/schema.ts fresh. The runtime
+    # engine resolves gating only from ``policy_gates`` rows joined to evals, so
+    # the shared graph-write transaction ALSO translates each declared block into
+    # the gate-row lifecycle (create / update / soft-delete) via
+    # ``db.crud.pipeline.reconcile_graph_policy_gates`` — a stored block with no
+    # row governs nothing.
+
+    action: Literal["warn", "block"]
+    eval_id: uuid.UUID
+
+
+class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
+    id: uuid.UUID
+    node_type: Literal[
+        "agent",
+        "manual",
+        "composite",
+        "sandbox_agent",
+        "router",
+        "hitl",
+        "join",
+        "dispatch",
+        # FAR-2089: a query/write node whose whole job is its ``connector_binding``.
+        # The engine has always built ``make_connector_fn`` for this type
+        # (``pipeline_engine.graph_cache._make_node_fn``), but the public write
+        # model did not accept it, so a connector query node could not be
+        # authored through the API at all.
+        "connector",
+    ] = "agent"
+    agent_id: uuid.UUID | None = None
+    position: GraphPosition
+    connector_binding: ConnectorBinding | None = None
+    output_schema_id: uuid.UUID | None = None
+    input_schema_pin: SchemaPin | None = None
+    output_schema_pin: SchemaPin | None = None
+    # FAR-418: node-level capability_scope (least-privilege). A node narrows (never
+    # widens) its Agent's grants: allowed_connectors / allowed_tools / context_scope.
+    # Absent = UNRESTRICTED (behaviour unchanged). Validated in _resolve_graph_references.
+    capability_scope: CapabilityScope | None = None
+    label: str | None = Field(default=None, max_length=255)
+    role: str | None = None
+    autonomy_recommendation: str | None = None
+    # FAR-295: is this node logically safe to re-run? Applies to EVERY executor
+    # type (agent, manual, composite, sandbox_agent). Defaults to true. A node
+    # marked idempotent=false (e.g. one with an external side effect like
+    # creating a PR or charging a card) suppresses BOTH the run-level
+    # retry_policy re-dispatch and the node-level transient retry for any graph
+    # that contains it — re-running would double-execute the side effect.
+    idempotent: bool = Field(
+        default=True,
+        description="Whether the node is logically safe to re-run. When false, "
+        "retries of any run containing this node are suppressed.",
+    )
+    composite_ref: uuid.UUID | None = None
+    composite_parameter_values: dict[str, Any] | None = None
+    composite_input_mapping: dict[str, Any] | None = None
+    composite_output_mapping: dict[str, Any] | None = None
+    parameter_set_id: uuid.UUID | None = None
+    parameter_overrides: dict[str, Any] | None = None
+    template_id: str | None = None
+    # FAR-296: sandbox_agent mode — "llm" (default, dispatches an LLM agent with
+    # agent_commands + rendered prompt) or "script" (runs script_command verbatim
+    # with the full run input at /home/user/input.json).
+    mode: Literal["llm", "script"] = "llm"
+    # Sandbox commands list: joined at runtime by commands_concatenation_string
+    # (sandbox_mode._validate_sandbox_mode_config) and Jinja-validated as a
+    # whole by validate_sandbox_agent_command_jinja.
+    agent_commands: list[str] | None = None
+    commands_concatenation_string: str = Field(
+        default=" && ",
+        description="Joiner inserted between agent_commands entries when the pipeline runs.",
+    )
+    agent_prompt: str | None = None
+    script_command: str | None = None
+    # FAR-1743 / ADR 037 rev 2 (EXPERIMENTAL): optional registry capability
+    # class (e.g. "builder") for sandbox_agent nodes — a CLASS name resolved to
+    # a concrete model id at snapshot mint, NOT a Model Backend entity (no
+    # org-scoped credentials reach the sandbox). The node consumes the baked
+    # value through the top-level ``{{ model }}`` template variable
+    # (``--model {{ model }}``); ``{{ model }}`` without this field is rejected
+    # by GraphValidator at save/run validation so a stray reference can never
+    # render empty. Absent = no first-class reference: the node's literal
+    # ``--model`` strings keep rendering unchanged (safe mixed state during the
+    # slice-B migration). Resolution FAILS CLOSED pre-dispatch on an unknown
+    # class or an unreadable registry (ADR 037 D3). The field is experimental
+    # until slice B de-experimentalises it — it may change before then, and
+    # ``input.model`` keeps whatever meaning callers already give it (never
+    # written by the product).
+    model_class: str | None = Field(
+        default=None,
+        max_length=128,
+        description="EXPERIMENTAL (FAR-1743 / ADR 037): registry capability class name "
+        "(e.g. 'builder') resolved to a concrete model id at snapshot mint; the node "
+        "consumes it via the top-level `{{ model }}` template variable (e.g. "
+        "`--model {{ model }}`). Optional — absent means the node's literal model "
+        "strings render unchanged. sandbox_agent nodes only. Unknown classes and "
+        "unreadable registries reject the run pre-dispatch (fail closed).",
+    )
+    # FAR-296 Phase 3: egress control + resource-limit config surface.
+    # egress_policy: "default" (internet allowed, e2b default), "deny_all"
+    # (allow_internet_access=False), or "selected" (allow_internet_access=False
+    # + a host:port egress_allowlist carried as metadata — FAR-296 Phase 3b-3).
+    # resource_limits: a known-subset dict carried as sandbox metadata so a
+    # server-side template/config can enforce them.
+    egress_policy: Literal["default", "deny_all", "selected"] | None = None
+    egress_allowlist: list[dict[str, Any]] | None = None
+    resource_limits: dict[str, Any] | None = None
+    # FAR-212 PR B: sandbox write/egress mediation surface. ``read_only`` mounts
+    # / chmods the workspace read-only at runtime (so writes are impossible for
+    # the agent's non-root user — write_files derives False) and
+    # ``git_credentials`` scopes the provisioned git credential (``scoped`` =
+    # limited to the allowlisted github.com host via an enforced helper;
+    # ``unscoped`` = full access, the default; ``none`` = no git credentials are
+    # provisioned). Both are validated (``_validate_sandbox_read_only_config`` /
+    # ``_validate_sandbox_git_credentials_config``) and ENFORCED (node_runner
+    # applies the sandbox policy step), so the capability derivation can certify
+    # them mechanically. Only sandbox_agent nodes may set them.
+    read_only: bool = False
+    git_credentials: Literal["scoped", "unscoped", "none"] | None = None
+    # FAR-296 Phase 4a: wall-clock spend budget (seconds). When set, the
+    # node's sandbox is killed by the platform-side runtime killer once the
+    # wall-clock elapsed time exceeds this budget — a tighter spend bound than
+    # the node timeout. Must be a positive int (validated at save-time).
+    wallclock_budget_seconds: int | None = None
+    # FAR-228: opt-in idempotency gate for side-effecting sandbox nodes. When
+    # non-empty, a FULL-LINE occurrence of this literal in the sandbox output
+    # marks the run's delivery as done (raw-output marker ``delivery_done``),
+    # and transient retries of that node are suppressed by the idempotency gate.
+    delivery_sentinel: str | None = None
+    # FAR-1273: explicit trigger for the FAR-1264 one-PR-per-run ``gh`` guard.
+    # Default false; when true the sandbox policy step installs the run-scoped
+    # shim that allows exactly ONE ``gh pr create`` per sandbox run. Deliberately
+    # a SEPARATE flag from ``delivery_sentinel`` (which keeps only its FAR-228
+    # idempotency meaning) so a delivery marker never arms an unrelated guard.
+    # Only sandbox_agent nodes may set it.
+    # StrictBool: the runtime reads this with ``is True`` (fail-closed), so a
+    # lax-coerced non-bool at the write boundary ("true"/1/"yes" -> True) would
+    # be silently DISARMED at run time. Reject the malformed value at save time
+    # instead — same rationale as the admin kill-switch fields.
+    single_pr_per_run: StrictBool = Field(
+        default=False,
+        description="Install the run-scoped one-PR-per-run gh shim in the node's sandbox: a bounded, "
+        "best-effort, E2B-only defence-in-depth layer, NOT an absolute guarantee on its own. "
+        "For gh binaries resolved through the PATH at install time a second 'gh pr create' in the "
+        "same run is refused; 'gh api' PR creation, a gh copy outside the PATH, shell aliases or "
+        "functions, a gh installed after the fact, and non-E2B runners (docker / local) are not "
+        "covered. The one-PR-per-run guarantee is this shim together with post-run detection "
+        "(FAR-1274); neither alone prevents a second PR.",
+    )
+    env_vars: dict[str, str] | None = None
+    context_files: dict[str, str] | None = None
+    timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.",
+    )
+    output_schema_json: dict[str, Any] | None = Field(
+        default=None,
+        description="Inline JSON Schema defining the node's output shape.",
+    )
+    # FAR-900: node-level schema translation profile.  Absent/None = verbatim
+    # (identity, no translation).  "provider-strict" strips unsupported keywords
+    # for the target provider; "runtime-sdk" renders for the runtime's form.
+    # NO graph migration: the field is optional and defaults to verbatim.
+    schema_profile: SchemaProfile | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    # FAR-306: opt-in stall detectors for sandbox_agent nodes. The heartbeat
+    # (connection liveness) is enabled by default; the log-growth / stdout-delta
+    # / filesystem detectors are OFF unless configured.
+    stall_timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Stall window (seconds) before the idle watchdog treats the agent as stalled.",
+    )
+    enable_heartbeat: bool = Field(
+        default=True,
+        description="Enable the connection-liveness (heartbeat) stall channel.",
+    )
+    watch_log_path: str | None = Field(
+        default=None,
+        description="Log-growth detector: a path inside the sandbox whose growth counts as activity.",
+    )
+    stdout_percentage_delta: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="stdout-delta detector: fraction of new stdout that must differ to count as activity.",
+    )
+    watch_globs: list[str] = Field(
+        default_factory=list,
+        description="Filesystem detector: globs of sandbox paths whose change counts as activity.",
+    )
+    # FAR-402 P1 (F2-A Router / F2-D HITL): per-node configuration carried on
+    # the node and compiled by the pipeline engine.
+    router_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Router node config: {mode, rules:[{guard (JMESPath), target|target_port}|{default, target}]}. "
+        "Required for node_type='router'.",
+    )
+    hitl_config: dict[str, Any] | None = Field(
+        default=None,
+        description="HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, "
+        "claim_expiry_min, "
+        "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
+        "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
+    )
+    # FAR-1109: node-attached policy-gate configuration (declarative
+    # config-as-code surface). Declared here so the REST + MCP graph contracts
+    # do NOT silently drop the block on save — a dropped declarative field
+    # would create permanent plan drift in ``modulo apply`` and the write would
+    # never carry the gate. Absent = no gate declared on this node.
+    policy_gate: PipelineGraphPolicyGate | None = Field(
+        default=None,
+        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. "
+        "Absent means no gate is declared on this node.",
+    )
+    # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
+    # sandbox_agent / composite node (NOT a new node_type). When set, the node
+    # splits its `split` source port into N parallel branches. The compile step
+    # expands this into N distinct child node identities with unique ids.
+    fan_out: FanOutConfig | None = None
+    # FAR-402 P3 / FAR-417: join (fan-in). Only valid on a `join` node_type.
+    # `collect` lists the upstream branches to gather; `aggregate` declares how
+    # to fold them.
+    collect: list[JoinCollectSpec] | None = None
+    aggregate: JoinAggregateSpec | None = None
+    # Policy when some collected branches failed (non-empty, non-timeout).
+    # "collect_and_proceed" (default) marks failed branches in the output;
+    # "fail" raises. Deadline (seconds) for waiting on slow/partial branches.
+    join_partial_policy: Literal["collect_and_proceed", "fail"] = "collect_and_proceed"
+    # FAR-416 (FAR-402 F1): ports are ADDITIVE metadata over the flat
+    # run_context/artifact dict. A port name maps 1:1 to the flat-state key the
+    # node already uses (identity mapping). When absent, the lazy backfill
+    # synthesizes a single {port:"out"} output and {port:"in"} input. Declaring
+    # ports enables compile-time fan-in safety + typed port validation.
+    inputs: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Input ports. Each entry: {port: str, schema_ref?: str}. "
+        "None => backfilled with a single default 'in' port at compile time.",
+    )
+    outputs: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Output ports. Each entry: {port: str, schema_ref?: str}. "
+        "None => backfilled with a single default 'out' port at compile time.",
+    )
+    # FAR-792: per-node sandbox stdout/stderr retention. ``stdout_retention_mode``
+    # selects "tail" (legacy 512KB bound, the default) or "full" (retain up to
+    # ``stdout_max_bytes``). Declared here so the API does NOT silently drop the
+    # key on save — a silently-dropped declarative field would create permanent
+    # plan drift (the runtime would never see it). ``stdout_max_bytes`` is only
+    # meaningful when mode=="full"; it is validated in ``_validate_stdout_retention``.
+    stdout_retention_mode: Literal["tail", "full"] | None = Field(
+        default=None,
+        description="Per-node stdout/stderr retention mode: 'tail' (legacy 512KB bound, default) "
+        "or 'full' (retain up to stdout_max_bytes). Only valid on sandbox_agent nodes.",
+    )
+    stdout_max_bytes: int | None = Field(
+        default=None,
+        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'. "
+        "Ignored in 'tail' mode. Must be a positive integer. Only valid on sandbox_agent nodes.",
+    )
+    # FAR-802 (ADR 033): managed workspace inputs — checked-out repositories
+    # provisioned inside the sandbox workspace at run time. Declared here so the
+    # REST + MCP Pydantic contracts do NOT silently drop the key on save (a
+    # silently-dropped declarative field would create permanent plan drift — the
+    # runtime would never see the input). Only valid on sandbox_agent nodes and
+    # validated by the shared ``_validate_sandbox_managed_inputs_config`` helper
+    # in ``_validate_sandbox_agent_node`` so save-time and run-time agree.
+    workspace_inputs: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Managed workspace inputs: a list of repository input descriptors "
+        "(each with dest/ref/url) checked out into the sandbox workspace. Only valid "
+        "on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
+    )
+    # FAR-1141 slice 2: dispatch wait semantics. Declared on the node (NOT folded
+    # into connector_binding) so the API does not silently DROP them on save — a
+    # dropped field would create permanent plan drift (the engine reads both from
+    # node_def). Valid ONLY on node_type="dispatch"; enforced by
+    # _validate_dispatch_only_fields below.
+    await_completion: StrictBool = Field(
+        default=False,
+        description="dispatch nodes only, dispatch_action='trigger_run': after firing the "
+        "job ONCE, poll get_run_status until the substrate reports a terminal status. "
+        "False (default) = fire-and-forget: the node completes as soon as the job ref "
+        "returns. Only meaningful with dispatch_action='trigger_run'.",
+    )
+    wait_timeout: float | None = Field(
+        default=None,
+        gt=0,
+        le=3600,
+        description="dispatch nodes only: seconds to wait for a terminal substrate status "
+        "when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry "
+        "raises the terminal dispatch.wait_timeout error — never retried, because a "
+        "retry would fire a second job on the customer's substrate. Keep it below the "
+        "node's timeout_seconds so this error (not the node deadline) is what fires.",
+    )
+
+    @field_validator("commands_concatenation_string", mode="before")
+    @classmethod
+    def _default_commands_concatenation_string(cls, v: Any) -> Any:
+        """Normalise an absent/empty/null joiner to the runtime default.
+
+        sandbox_mode resolves the joiner with ``node_def.get("commands_concatenation_string", " && ")``
+        — the default only applies when the KEY is absent, so a persisted
+        ``null`` would crash the run-time join (``None.join(...)``) and an
+        empty string would join the commands with no separator at all.
+        Coercing both to " && " keeps "no joiner configured" and "the default
+        joiner" the same state at rest, for every writer (REST, MCP, templates).
+        """
+        return v if isinstance(v, str) and v else " && "
+
+    @field_validator("model_class", mode="after")
+    @classmethod
+    def _validate_model_class(cls, v: str | None) -> str | None:
+        """FAR-1743 (EXPERIMENTAL): shape-check the registry class name.
+
+        The field is optional (None = no first-class reference); a present
+        value must be a non-empty, trimmed class name. Whether the class is
+        KNOWN is deliberately NOT checked here — the registry is resolved at
+        snapshot mint and fails closed there (ADR 037 D3), so a typo is caught
+        at run start with a node-naming error instead of blocking a save on a
+        registry the API process may not even be configured to read.
+        """
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("model_class must be a non-empty registry class name (e.g. 'builder')")
+        return stripped
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def validate_node_type(
+        cls,
+        data: Any,
+        handler: Any,
+        info: ValidationInfo,
+    ) -> PipelineGraphNode:
+        self: PipelineGraphNode = handler(data)
+        # FAR-874: skip type-specific validation on graph READS.  Stored
+        # graphs may reference node/field combinations that a later Pydantic
+        # model revision made stricter — the write path validated at save time.
+        # The ``legacy_read`` context is set by ``_graph_response`` and mirrors
+        # the existing pattern on ``PipelineGraphEdge`` (HITL gate description
+        # minimum length).
+        if isinstance(info.context, dict) and info.context.get("legacy_read"):
+            return self
+        node_validators = {
+            "manual": self._validate_manual_node,
+            "composite": self._validate_composite_node,
+            "sandbox_agent": self._validate_sandbox_agent_node,
+            "agent": self._validate_agent_node,
+            "router": self._validate_router_node,
+            "hitl": self._validate_hitl_node,
+            "join": self._validate_join_node,
+            "dispatch": self._validate_dispatch_node,
+            "connector": self._validate_connector_node,
+        }
+        node_validators[self.node_type]()
+        # FAR-1141 FIX 2: a ``dispatch`` verb on a node the engine does NOT
+        # route to a connector is dead configuration, not a softer query.
+        # Runs for EVERY node type right after the type validator so a dispatch
+        # node's verb defaulting has already happened.
+        self._validate_dispatch_binding_routing()
+        # FAR-1141 (CRITICAL 1): runs for EVERY node type, immediately after the
+        # type validator so a dispatch node's verb defaulting has already
+        # happened. Keyed on the BINDING's operation, not on ``node_type`` —
+        # a connector / router / hitl node carrying ``operation="dispatch"`` +
+        # ``trigger_run`` fires a real external job exactly like a dispatch node
+        # and must be persisted non-idempotent too.
+        self._validate_dispatch_binding_non_idempotent()
+        self._validate_fan_out_cross_checks()
+        self._validate_sandbox_only_fields()
+        self._validate_stdout_retention()
+        self._validate_agent_only_fields()
+        self._validate_dispatch_only_fields()
+        self._validate_output_schema_pin_consistency()
+        return self
+
+    def _validate_fan_out_cross_checks(self) -> None:
+        """FAR-402 P3 / FAR-417: fan_out / collect / aggregate cross-checks."""
+        if self.fan_out is not None and self.node_type == "join":
+            raise ValueError("A join node cannot also declare fan_out")
+        if self.fan_out is not None and self.node_type not in (
+            "agent",
+            "sandbox_agent",
+        ):
+            raise ValueError("fan_out is only allowed on agent / sandbox_agent nodes")
+
+    def _validate_sandbox_only_fields(self) -> None:
+        """FAR-212 PR B: read_only / git_credentials are sandbox_agent-only fields.
+
+        A non-sandbox node that sets them is rejected — the enforcement surface
+        (read-only workspace, git-credential scope) only exists for sandbox
+        agents, and a declared-but-unenforced field on another node type would
+        be a silent no-op. agent_commands / commands_concatenation_string get
+        the same treatment: the runtime only reads them for sandbox nodes.
+        FAR-1273 adds ``single_pr_per_run`` to the same set: the one-PR-per-run
+        ``gh`` guard is installed only inside a sandbox, so the flag on any
+        other node type would declare a guard nothing installs. FAR-1743 adds
+        ``model_class``: the class is resolved at mint only for sandbox_agent
+        nodes and consumed through the sandbox ``{{ model }}`` template
+        variable, so on any other node type it would be a declared-but-unread
+        reference to a mechanism that never runs. FAR-1846 adds
+        ``egress_policy`` / ``egress_allowlist`` for the same reason: the egress
+        enforcement surface (the workspace egress policy plus the host:port
+        allowlist) is only derived for sandbox_agent nodes —
+        ``_check_sandbox_egress`` runs only in the sandbox branch of the graph
+        validator, and the node → ``WorkspaceSpec`` mapping is performed only by
+        the sandbox dispatch sites (``node_runner``, ``sandbox_mode`` and
+        ``bundled_runner/runner_dispatch``) against the resolver in
+        ``pipeline_engine/egress.py`` (itself a pure resolver, not a caller) —
+        so on any other node type the pair would be declared-but-unread
+        configuration that looks enforced and enforces nothing.
+        """
+        if self.node_type == "sandbox_agent":
+            return
+        if self.read_only:
+            raise ValueError("Only sandbox_agent nodes can set read_only=True")
+        if self.git_credentials is not None:
+            raise ValueError("Only sandbox_agent nodes can set git_credentials")
+        if self.single_pr_per_run:
+            raise ValueError("Only sandbox_agent nodes can set single_pr_per_run=True")
+        if self.agent_commands is not None:
+            raise ValueError("Only sandbox_agent nodes can set agent_commands")
+        if self.commands_concatenation_string != " && ":
+            raise ValueError("Only sandbox_agent nodes can set commands_concatenation_string")
+        if self.model_class is not None:
+            raise ValueError("Only sandbox_agent nodes can set model_class")
+        if self.egress_policy is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_policy")
+        if self.egress_allowlist is not None:
+            raise ValueError("Only sandbox_agent nodes can set egress_allowlist")
+
+    def _validate_agent_only_fields(self) -> None:
+        if self.node_type != "agent" and self.parameter_set_id is not None:
+            raise ValueError("Only agent nodes can have parameter_set_id")
+
+    def _validate_dispatch_only_fields(self) -> None:
+        """FAR-1141: ``await_completion`` / ``wait_timeout`` are dispatch-only fields.
+
+        A meaningful value on any other node type would be a declared-but-UNREAD
+        field — the engine reads both only for a dispatch node's dispatch
+        operation — so it is rejected rather than silently ignored (same posture
+        as ``_validate_sandbox_only_fields`` / ``_validate_stdout_retention``).
+
+        Checked by VALUE, not by presence: an absent field and a default-valued
+        one (``false`` / ``null``) are the same state at rest, and a payload that
+        round-trips every key (a form that echoes defaults for every node type)
+        must keep saving. ``await_completion``'s bool requirement is enforced by
+        its ``StrictBool`` field type — a lax-coerced ``"true"`` / ``1`` is
+        rejected at parse time instead of being silently armed.
+        """
+        if self.node_type == "dispatch":
+            return
+        if self.await_completion:
+            raise ValueError("Only a dispatch node can set await_completion=True")
+        if self.wait_timeout is not None:
+            raise ValueError("Only a dispatch node can set wait_timeout")
+
+    def _validate_stdout_retention(self) -> None:
+        """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
+
+        A non-sandbox node that sets either field is rejected — the runtime only
+        reads them in ``_build_sandbox_node_config`` (sandbox_agent), so a declared
+        value on another node type would be a silent no-op. ``stdout_max_bytes`` is
+        only meaningful in "full" mode; a non-positive/non-integer value is already
+        rejected by the ``_validate_stdout_max_bytes`` field validator.
+        """
+        if self.node_type == "sandbox_agent":
+            return
+        if self.stdout_retention_mode is not None:
+            raise ValueError("Only sandbox_agent nodes can set stdout_retention_mode")
+        if self.stdout_max_bytes is not None:
+            raise ValueError("Only sandbox_agent nodes can set stdout_max_bytes")
+
+    def _validate_output_schema_pin_consistency(self) -> None:
+        if (
+            self.output_schema_pin is not None
+            and self.output_schema_id is not None
+            and self.output_schema_pin.schema_id != self.output_schema_id
+        ):
+            raise ValueError(
+                f"output_schema_pin.schema_id ({self.output_schema_pin.schema_id}) "
+                f"does not match output_schema_id ({self.output_schema_id})"
+            )
+
+    def _validate_manual_node(self) -> None:
+        if self.agent_id is not None:
+            raise ValueError("Manual nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Manual nodes cannot have connector bindings")
+        # FAR-2283: the output-schema requirement is NOT checked here. This
+        # model cannot see the stored graph, and a legacy manual node stored
+        # without a schema must be writable back unchanged. The requirement is
+        # enforced under the row lock in ``replace_pipeline_graph`` via
+        # ``enforce_manual_node_output_schemas`` (stored-graph aware; every
+        # graph write funnels through it), which still rejects new manual
+        # nodes and removal of an existing schema.
+        if self.label is None:
+            raise ValueError("Manual nodes require a label")
+
+    def _validate_router_node(self) -> None:
+        # The heavy validation (default-rule enforcement) happens at compile
+        # time in the pipeline engine; here we just require a router_config.
+        if self.router_config is None:
+            raise ValueError("Router nodes require a router_config")
+        rules = (self.router_config or {}).get("rules") or []
+        if not rules:
+            raise ValueError("Router nodes require at least one rule")
+        for rule in rules:
+            if rule.get("default"):
+                continue
+            if not (rule.get("target") or rule.get("target_port")):
+                raise ValueError("Each non-default Router rule requires a target/target_port")
+
+    def _validate_hitl_node(self) -> None:
+        # HITL nodes produce output like a normal (manual/agent) node and gate
+        # their outgoing edges. Require a hitl_config describing the gate.
+        if self.hitl_config is None:
+            raise ValueError("HITL nodes require a hitl_config")
+
+    def _validate_composite_node(self) -> None:
+        if self.composite_ref is None:
+            raise ValueError("Composite nodes require a composite_ref")
+        if self.agent_id is not None:
+            raise ValueError("Composite nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Composite nodes cannot have connector bindings")
+
+    def _validate_sandbox_agent_node(self) -> None:
+        # FAR-296 mode-aware validation — ONE shared helper used by every
+        # sandbox_agent gate (Pydantic model, node runner, GraphValidator,
+        # MCP update_pipeline_graph, config linter) so save-time and run-time
+        # agreement is guaranteed. Imported from the lightweight sandbox_mode
+        # module (no LangGraph) to keep the API layer import-linter-clean.
+        from farna.core.pipeline_engine.sandbox_mode import (
+            _validate_sandbox_egress_allowlist_config,
+            _validate_sandbox_egress_config,
+            _validate_sandbox_git_credentials_config,
+            _validate_sandbox_managed_inputs_config,
+            _validate_sandbox_mode_config,
+            _validate_sandbox_read_only_config,
+            _validate_sandbox_resource_limits_config,
+            _validate_sandbox_wallclock_budget_config,
+        )
+
+        _validate_sandbox_mode_config(self.model_dump())
+        # Node-level mutual exclusion, mirroring the Agent create/update schemas
+        # agent_commands vs script_command exclusivity is already covered by
+        # _validate_sandbox_mode_config above.
+        _validate_sandbox_egress_config(self.model_dump())
+        _validate_sandbox_egress_allowlist_config(
+            self.egress_policy,
+            self.egress_allowlist,
+            str(self.id),
+        )
+        _validate_sandbox_resource_limits_config(self.model_dump())
+        # FAR-212 PR B: read_only / git_credentials are sandbox-only fields.
+        # Validated here (and by the graph validator / MCP / node runner via
+        # the shared helpers) so a non-boolean read_only or an unrecognised
+        # git_credentials scope can never reach the capability derivation
+        # (which fails CLOSED on an unvalidated key).
+        _validate_sandbox_read_only_config(self.model_dump())
+        _validate_sandbox_git_credentials_config(self.model_dump())
+        _validate_sandbox_wallclock_budget_config(
+            self.wallclock_budget_seconds,
+            self.timeout_seconds,
+            str(self.id),
+        )
+        # FAR-802 (ADR 033): managed workspace inputs save-time validation.
+        # Wired through the SHARED helper so REST + MCP + GraphValidator +
+        # node runner all agree; an invalid dest traversal / ref.kind / URL
+        # scheme is rejected at authoring time, never silently ignored.
+        _validate_sandbox_managed_inputs_config(self.model_dump())
+        if not self.template_id:
+            raise ValueError("Sandbox agent nodes require a template_id (e.g. 'opencode')")
+        self._validate_sandbox_env_vars()
+        self._validate_sandbox_context_files()
+
+    def _validate_agent_node(self) -> None:
+        if self.agent_id is None:
+            raise ValueError("Agent nodes require an agent")
+        # FAR-1141 criterion 4: an agent node runs the LLM node factory — the
+        # engine NEVER routes its binding to a connector (the binding branch in
+        # ``graph_cache._make_node_fn`` is skipped for agent + agent_id), so a
+        # dispatch binding here would be declared-but-unread: nothing fires,
+        # yet the run would be stamped ``dispatched`` and its retries disabled
+        # for a graph that dispatches nothing. Reject at the SAVE boundary so a
+        # stored graph can never disagree with the engine's routing (MCP graph
+        # writes go through this same model).
+        #
+        # A plain ``query`` binding stays valid: it is what the convert-to-agent
+        # endpoint persists (which connector the agent works through, and what
+        # the swappable-binding extraction reads), and the engine legitimately
+        # ignores it there. Only the verb that would fire an external job is
+        # refused.
+        if self.connector_binding is not None and self.connector_binding.operation == "dispatch":
+            raise ValueError(
+                "Agent nodes cannot carry connector_binding.operation='dispatch' — the engine runs an "
+                "agent node through the LLM factory and never routes its binding to a connector, so the "
+                "dispatch would never fire while the run read as dispatched; use a dispatch or connector "
+                "node for the dispatch binding",
+            )
+
+    def _validate_join_node(self) -> None:
+        # A join node is a pure convergence node — it has no agent, no connector
+        # binding, and no manual output schema of its own.
+        if self.agent_id is not None:
+            raise ValueError("Join nodes cannot reference an agent")
+        if self.connector_binding is not None:
+            raise ValueError("Join nodes cannot have connector bindings")
+        if not self.collect:
+            raise ValueError("Join nodes require a non-empty 'collect' list")
+        if self.aggregate is None:
+            raise ValueError("Join nodes require an 'aggregate'")
+        if self.aggregate.kind == "merge_by_key" and not self.aggregate.key:
+            raise ValueError("Join aggregate merge_by_key requires an explicit 'key'")
+        if self.aggregate.kind == "map" and not self.aggregate.map_expression:
+            raise ValueError("Join aggregate map requires a 'map_expression'")
+
+    def _validate_dispatch_node(self) -> None:
+        """A dispatch node routes a CI-runner dispatch operation (FAR-1141).
+
+        Requires a ``connector_binding`` (the dispatch target) and forbids an
+        ``agent_id`` (dispatch is not an agent-executed node). Sandbox-only /
+        stdout-retention / agent-only fields are rejected for EVERY non-sandbox
+        / non-agent type by the shared ``_validate_sandbox_only_fields`` /
+        ``_validate_stdout_retention`` / ``_validate_agent_only_fields``
+        checks, so a dispatch node cannot set them either; the dispatch-only
+        wait fields are rejected on every other node type by
+        ``_validate_dispatch_only_fields``.
+
+        FAR-1141 slice 2 + the pre-PR QA defects (CRITICAL 1, MAJOR 3/4/8):
+
+        * **operation (MAJOR 3).** ``ConnectorBinding.operation`` defaults to
+          ``"query"`` (the generic default every other node type needs) and the
+          write path always serialises it — so a dispatch node saved without an
+          explicit verb used to PERSIST ``"query"`` and execute
+          ``connector.query()`` at run time: silently, with no job fired. A
+          payload that simply OMITS the key now inherits the engine's own
+          fallback (``"dispatch"``), and an explicit non-dispatch verb is
+          rejected outright.
+        * **CI-runner capability (MAJOR 8).** The bound connector's declared
+          type must implement the four CI-runner operations, or the dispatch
+          fails at run time with an ``AttributeError``-shaped error. Checked
+          here on the binding's ``type`` (this model runs for REST AND MCP
+          graph writes); the GraphValidator independently checks the bound
+          INSTANCE's ``connector_type_id`` for every node type on REST saves.
+        * **wait-coherence (MAJOR 4).** ``await_completion`` is only read for
+          ``dispatch_action='trigger_run'`` and ``wait_timeout`` only when
+          ``await_completion`` is true — both combinations were validated yet
+          never read, so they are rejected rather than silently no-opping.
+        * **idempotency (CRITICAL 1).** See
+          :meth:`_validate_dispatch_binding_non_idempotent` — the flag is now
+          set for EVERY node type by OPERATION, and the engine derives
+          non-idempotency from the binding itself, so the write-path flag is
+          the convenience rather than the only guard.
+        """
+        if self.connector_binding is None:
+            raise ValueError("Dispatch nodes require a connector_binding")
+        if self.agent_id is not None:
+            raise ValueError("Dispatch nodes cannot reference an agent")
+        binding = self.connector_binding
+        if "operation" not in binding.model_fields_set:
+            # The field default ("query") exists for every OTHER node type.
+            # Inherit the engine's OWN routing verdict instead of persisting a
+            # verb that would silently turn this node into a plain query (MAJOR
+            # 3). FAR-1141 FIX 6: the default is DERIVED from
+            # ``connector_binding_operation`` (the declared single source of
+            # truth for "which verb does this node route to") rather than
+            # restating the ``node_type == "dispatch" -> "dispatch"`` rule here;
+            # the probe omits the unset ``operation`` key so the resolver sees
+            # the same absence the engine will see, not this model's "query"
+            # field default.
+            raw = binding.model_dump(mode="json")
+            raw.pop("operation", None)
+            # The cast is sound, not a bypass: ``_validate_dispatch_node`` only
+            # runs for ``node_type == "dispatch"``, which
+            # ``node_routes_binding_to_connector`` always routes once the
+            # (required, non-empty) binding is present, and the probe carried no
+            # explicit ``operation`` — so the resolver can only reach its
+            # ``node_type`` fallback and answer ``"dispatch"``, a member of this
+            # field's Literal vocabulary.
+            binding.operation = cast(
+                Literal["query", "write", "dispatch"],
+                connector_binding_operation(
+                    {
+                        "node_type": self.node_type,
+                        "agent_id": self.agent_id,
+                        "connector_binding": raw,
+                    },
+                ),
+            )
+        if binding.operation != "dispatch":
+            raise ValueError(
+                "Dispatch nodes require connector_binding.operation='dispatch' "
+                f"(got {binding.operation!r}) — a dispatch node that queries fires no job",
+            )
+        if not connector_type_supports_dispatch(binding.type):
+            raise ValueError(
+                f"connector type {binding.type!r} does not implement the CI-runner operations "
+                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch "
+                "binding requires — bind a CI connector instead",
+            )
+        if self.await_completion and binding.dispatch_action != "trigger_run":
+            raise ValueError(
+                "await_completion=True requires connector_binding.dispatch_action='trigger_run' "
+                f"(got {binding.dispatch_action!r}) — the wait only ever polls after a fired job",
+            )
+        if self.wait_timeout is not None and not self.await_completion:
+            raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_connector_node(self) -> None:
+        """A connector node routes its ``connector_binding`` to a connector (FAR-2089).
+
+        The engine has always supported this node type
+        (``pipeline_engine.graph_cache._make_node_fn`` builds
+        ``make_connector_fn`` for ``node_type="connector"``), but the public
+        write model rejected the value, so a GitHub query node could not be
+        authored through the API at all.
+
+        Two rules, each mirroring the engine's own branch order:
+
+        * **binding (required).** ``_make_node_fn`` only reaches
+          ``make_connector_fn`` when ``node_routes_binding_to_connector`` is
+          true, and a binding-less node falls through to the general LLM node
+          factory - a ``connector`` node would then run as an agent node with no
+          agent. ``dispatch`` already fails loud on this shape at graph build;
+          rejecting it at save time gives the author the error instead of a
+          run-time surprise.
+        * **agent_id (forbidden).** A ``connector`` node with an ``agent_id``
+          still routes its binding (``node_routes_binding_to_connector``
+          exempts only ``node_type == "agent"``), so the binding would fire —
+          but the node type has no LLM step, so the agent reference is dead
+          configuration that reads as if the agent were involved. Rejected so
+          the author removes it instead of believing it is used.
+        * **resource (required for query/write).** A ``query`` / ``write``
+          binding with no ``resource`` reaches the connector with an empty
+          resource and fails at run time; the binding model allows absence (a
+          ``dispatch`` binding has no resource), so the node-level rule
+          requires it for every non-dispatch operation. Safe for existing data:
+          ``connector`` was never authorable before FAR-2089, so no stored graph
+          can regress.
+
+        Output schema id / pins are deliberately NOT forbidden: a connector's
+        result is an artifact like any other node's, so pinning its shape stays
+        valid. Dispatch-only wait fields, sandbox-only fields and agent-only
+        fields are already rejected on every non-owning node type by the shared
+        checkers, so they need no restating here.
+        """
+        if self.connector_binding is None:
+            raise ValueError(
+                "Connector nodes require a connector_binding - without one the node "
+                "cannot route to a connector and would run as an agent node",
+            )
+        if self.agent_id is not None:
+            raise ValueError(
+                "Connector nodes cannot reference an agent - a connector node has no LLM step, "
+                "so the agent_id would be dead configuration (the binding still routes, the agent "
+                "never runs); remove the agent_id",
+            )
+        binding = self.connector_binding
+        if binding.operation != "dispatch" and not (binding.resource or "").strip():
+            raise ValueError(
+                f"Connector nodes require a non-empty connector_binding.resource for a "
+                f"{binding.operation!r} operation - without one the connector is called with an "
+                "empty resource at run time",
+            )
+
+    def _validate_dispatch_binding_routing(self) -> None:
+        """FAR-1141 criterion 4 / FIX 2: reject a dispatch verb the engine cannot route.
+
+        Two shapes carry a ``connector_binding`` the engine NEVER routes to a
+        connector — an ``agent`` node with an ``agent_id`` (LLM factory) and a
+        ``sandbox_agent`` (sandbox factory) — so ``operation="dispatch"`` on
+        either is declared-but-unread: nothing fires, yet the binding reads as a
+        dispatch to every other consumer of the graph. Persisting it would leave
+        a config the engine silently ignores; the resolver would even coerce the
+        verb back to ``query`` on some read paths, which is exactly the "silent
+        coercion" this rejects instead.
+
+        Checked through ``node_routes_binding_to_connector`` — the SAME gate
+        ``node_runner``/``graph_cache`` branch on — so the save rule and the
+        engine's routing can never disagree. Runs on the write path for REST and
+        MCP graph writes alike (both go through this model); graph READS skip it
+        via the ``legacy_read`` context, so a pre-existing stored graph still
+        loads. A ``query``/``write`` binding on the same shapes stays valid: it
+        is what the convert-to-agent endpoint persists and the engine
+        legitimately ignores it there.
+        """
+        binding = self.connector_binding
+        if binding is None or binding.operation != "dispatch":
+            return
+        probe = {
+            "node_type": self.node_type,
+            "agent_id": self.agent_id,
+            "connector_binding": binding.model_dump(mode="json"),
+        }
+        if node_routes_binding_to_connector(probe):
+            return
+        raise ValueError(
+            f"{self.node_type} nodes do not route their connector_binding to a connector, so "
+            "operation='dispatch' would never fire while the run read as dispatched — use a "
+            "dispatch or connector node for the dispatch binding",
+        )
+
+    def _validate_dispatch_binding_non_idempotent(self) -> None:
+        """FAR-1141 (CRITICAL 1): any node whose binding FIRES a job is
+        persisted ``idempotent=false`` — decided by OPERATION, not ``node_type``.
+
+        ``trigger_run`` creates a job on the customer's own substrate, so
+        re-running the graph would fire a SECOND job. Keying this on
+        ``node_type == "dispatch"`` (as it was) left a ``connector`` /
+        ``router`` / ``hitl`` node carrying ``operation="dispatch"`` +
+        ``trigger_run`` persisted ``idempotent=true`` — a real external job
+        that every retry path considered safe to re-run.
+
+        This write-path flag is the CONVENIENCE, not the guarantee:
+        ``executor._graph_is_idempotent`` and ``runtime_retry`` derive
+        non-idempotency from the binding itself, so REST, MCP and hand-written
+        graphs all fail closed even if the flag is missing or overridden. An
+        explicitly-passed ``idempotent=true`` is overridden (and logged); the
+        value would be unsafe to persist, and a payload that round-trips
+        defaults must still save.
+
+        The decision itself is delegated to
+        ``graph_validator.node_fires_dispatch_job`` — the SAME predicate the
+        engine and the run classifier use — so the write path cannot grow its
+        own copy of the rule and drift from the run-time one.
+        """
+        if self.connector_binding is None:
+            return
+        probe = {
+            "node_type": self.node_type,
+            # Carried because the routing gate reads it: an agent node with an
+            # agent_id never routes its binding to a connector, so a probe that
+            # omitted it would ask a different question than the engine does.
+            "agent_id": self.agent_id,
+            "connector_binding": self.connector_binding.model_dump(mode="json"),
+        }
+        if not node_fires_dispatch_job(probe):
+            return
+        if self.idempotent and "idempotent" in self.model_fields_set:
+            logger.warning(
+                "dispatch_node.idempotent_forced_false",
+                extra={"node_id": str(self.id)},
+                # Firing a job on the customer's substrate is never safe to
+                # re-run, so an explicit idempotent=true is overridden.
+            )
+        self.idempotent = False
+
+    def _validate_sandbox_env_vars(self) -> None:
+        if not self.env_vars:
+            return
+        for key in self.env_vars:
+            for prefix in _RESERVED_ENV_PREFIXES:
+                if key.startswith(prefix):
+                    raise ValueError(
+                        f"Sandbox agent env var '{key}' uses reserved prefix '{prefix}'. "
+                        "System-reserved env vars are set automatically."
+                    )
+
+    def _validate_sandbox_context_files(self) -> None:
+        if not self.context_files:
+            return
+        for source_path in self.context_files:
+            if not source_path.startswith("/"):
+                raise ValueError(
+                    f"Sandbox agent context_files source '{source_path}' must be an absolute path (starting with /)"
+                )
+
+
+class EvalCondition(BaseModel):
+    eval_name: str = Field(
+        min_length=1,
+        max_length=255,
+        description="Name of the eval definition to reference.",
+    )
+    threshold: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Score threshold for the condition.",
+    )
+    operator: str = Field(
+        pattern="^(lt|gt|lte|gte|eq|neq)$",
+        description="Comparison operator: lt (score < threshold), gt (score > threshold), "
+        "lte (score <= threshold), gte (score >= threshold), eq (score == threshold), "
+        "neq (score != threshold).",
+    )
+
+
+class HitlResponseOption(BaseModel):
+    """A single selectable option for a ``kind: choice`` HITL gate (FAR-860)."""
+
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class HitlResponseContract(BaseModel):
+    """FAR-860: typed response contract for a HITL review.
+
+    ``kind: approval`` = today's behaviour (approve/reject) — the default
+    and backward-compatible; an absent contract behaves identically.
+    ``kind: choice`` REQUIRES a non-empty ``options`` list with UNIQUE
+    non-empty ids and non-empty labels.
+    """
+
+    kind: Literal["approval", "choice"]
+    options: list[HitlResponseOption] | None = None
+
+    @model_validator(mode="after")
+    def _validate_choice_requires_options(self) -> HitlResponseContract:
+        if self.kind == "choice":
+            if not self.options:
+                raise ValueError("kind 'choice' requires a non-empty options list")
+            ids = [opt.id for opt in self.options]
+            if len(ids) != len(set(ids)):
+                raise ValueError("response_contract option ids must be unique")
+        return self
+
+
+class HitlReviewConfig(BaseModel):
+    label: str = Field(min_length=1, max_length=255)
+    description: str = Field(max_length=2000)
+    reject_target: uuid.UUID | None = None
+    correction_target: uuid.UUID | None = Field(
+        default=None,
+        description="Node ID routed to on HITL rejection for the FAR-210 single-node "
+        "correction path. Accepted and persisted through the graph contract; the "
+        "reject→correction dispatch seam is tracked as a follow-up (the graph "
+        "compiler currently kicks a rejection back to reject_target). FAR-1487: a "
+        "correction_target WINS over terminating - a gate with one never ends the run "
+        "on reject.",
+    )
+    on_reject: Literal["terminate", "proceed"] | None = Field(
+        default=None,
+        description="FAR-1487: what a rejection does when the gate has NO reject "
+        "destination (no reject_target / reject edge). Absent or 'terminate' (the "
+        "DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' "
+        "explicitly continues down the approve path (the pre-FAR-1487 behaviour) - "
+        "continuing is never the silent fallback. A reject destination always wins "
+        "('route'), as does a correction_target.",
+    )
+    claim_expiry_minutes: int = Field(gt=0, le=1440)
+    # FAR-609: every HITL gate defaults to human_only — a graph save that
+    # omits the field gets the fail-safe security posture; opting out requires
+    # an explicit ``human_only: false``.
+    human_only: bool = True
+    required_team_id: uuid.UUID | None = None
+    condition: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression evaluated against the upstream node output. "
+        "If it returns true, gate activates. If false/empty/null, gate is skipped.",
+    )
+    eval_condition: EvalCondition | None = Field(
+        default=None,
+        description="Eval-reference condition: references an eval definition by name "
+        "with threshold and operator. Evaluated after eval-before-interrupt runs. "
+        "If the condition evaluates to true (e.g., score < threshold with operator lt), "
+        "the gate fires. If false, execution continues without interrupting.",
+    )
+    subject_path: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression naming the field under review in the run "
+        "state.  Resolved against the same root the gate condition evaluates "
+        "against (the merged state dict).  The resolved value is bounded and "
+        "redacted identically to artifacts before persistence.",
+    )
+    response_contract: HitlResponseContract | None = Field(
+        default=None,
+        description="FAR-860: typed response contract. Absent/None = today's "
+        "approve/reject behaviour (backward-compatible). kind='choice' declares "
+        "agent-defined options; the human's answer is injected into run state "
+        "as hitl_answer_<review_id> for downstream conditional edges. "
+        "FAR-2489: independently of the response contract, every gate also writes "
+        "a provenance marker to run state as hitl_review_output_provenance_<review_id> "
+        "whenever the human's decision supplies the output itself (deliver_manual, "
+        "or approve-with-modification). Its value is an object "
+        "{provenance: 'attested', review_id: <this gate's review id>, output_sha256: "
+        "<sha256 hex>}, where output_sha256 digests the canonical JSON serialisation "
+        "(keys sorted, no separators/whitespace, UTF-8) of the value the gate wrote to "
+        "output; a plain approve or a rejection writes null. Read it from the state "
+        "update the gate node returns, NOT from state.output later: output is a single "
+        "shared current-node-output slot that the next node overwrites, so the marker "
+        "describes only the value the gate wrote at decision time. A marker is valid "
+        "for a value only when its output_sha256 matches that value's digest, and null "
+        "or an absent key means no human-authored output.",
+    )
+
+    @field_validator("description")
+    @classmethod
+    def _description_must_explain_why(cls, v: str, info: ValidationInfo) -> str:
+        """FAR-613: a HITL review must explain WHY a human must decide on it.
+
+        The description is the reviewer's decision briefing (surfaces in the
+        approve/reject UI and MCP gate resources). A description that is empty
+        or a few characters carries no decision context, so the trimmed length
+        must meet the shared minimum the save-time GraphValidator enforces for
+        node-level ``hitl_config`` gates too (whose config dict bypasses this
+        Pydantic model).
+
+        The minimum is a WRITE-path requirement. ``_graph_response``
+        re-validates STORED edges on every graph READ (GET /graph echoes
+        persisted data), so validating strictly there would 422 every legacy
+        pipeline whose gate description predates this rule — the editor could
+        never open the pipeline to fix it. Reads validate with
+        ``context={"legacy_read": True}``; the next save still enforces the
+        minimum (this validator on the request body + the GraphValidator).
+        """
+        if isinstance(info.context, dict) and info.context.get("legacy_read"):
+            return v
+        if len(v.strip()) < HITL_DESCRIPTION_MIN_LENGTH:
+            raise ValueError(
+                f"HITL gate requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) "
+                "explaining why this gate exists"
+            )
+        return v
+
+
+class PipelineGraphEdge(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    source_node_id: uuid.UUID
+    target_node_id: uuid.UUID
+    edge_type: str = Field(pattern="^(normal|reject|conditional|loop)$")
+    hitl_review_config: HitlReviewConfig | None = None
+    condition_expression: str | None = Field(
+        default=None,
+        max_length=500,
+        description="JMESPath expression for conditional edge routing. "
+        "Evaluated against pipeline state; if truthy, routes to target.",
+    )
+    # FAR-416 (FAR-402 F1): port addressing. Defaults mirror the flat-state keys
+    # used before ports existed, so legacy edges route identically.
+    source_port: str = Field(
+        default="out",
+        description="Output port on the source node this edge originates from.",
+    )
+    target_port: str = Field(
+        default="in",
+        description="Input port on the target node this edge delivers into.",
+    )
+
+    model_config = {"from_attributes": True}
+
+
+class GraphValidationIssue(BaseModel):
+    severity: Literal["error", "warning", "info"]
+    code: str
+    message: str
+    node_id: str | None = None
+
+
+class PipelineGraphUpdate(BaseModel):
+    nodes: list[PipelineGraphNode]
+    edges: list[PipelineGraphEdge]
+
+    @model_validator(mode="after")
+    def reject_database_conflicts(self) -> PipelineGraphUpdate:
+        if len(self.nodes) > _MAX_GRAPH_NODES:
+            raise ValueError(f"Graph exceeds maximum of {_MAX_GRAPH_NODES} nodes")
+        if len(self.edges) > _MAX_GRAPH_EDGES:
+            raise ValueError(f"Graph exceeds maximum of {_MAX_GRAPH_EDGES} edges")
+        node_ids = [node.id for node in self.nodes]
+        if len(node_ids) != len(set(node_ids)):
+            raise ValueError("Graph node IDs must be unique")
+        edge_ids = [edge.id for edge in self.edges]
+        if len(edge_ids) != len(set(edge_ids)):
+            raise ValueError("Graph edge IDs must be unique")
+        paths = [(edge.source_node_id, edge.target_node_id, edge.edge_type) for edge in self.edges]
+        if len(paths) != len(set(paths)):
+            raise ValueError("Graph edge paths must be unique")
+        return self
+
+
+class PipelineGraphResponse(PipelineGraphUpdate):
+    validation_issues: list[GraphValidationIssue] = Field(default_factory=list)
+    # FAR-900: per-node schema translation warnings emitted at design time.
+    # Each entry: {node_id, keyword, path, message} — only populated for nodes
+    # with a schema_profile that would strip keywords.
+    schema_translation_report: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_serializer("nodes")
+    def _serialise_nodes(self, nodes):  # type: (list[PipelineGraphNode]) -> list[dict[str, Any]]
+        """Serialise response nodes with the binding shape the WRITE path persisted (FAR-2089 review).
+
+        The graph write persists a binding with its unset optional inputs ABSENT
+        (``_prepare_graph_write`` → ``strip_unset_connector_binding_inputs``). A
+        read re-validates the stored node into ``PipelineGraphNode``, which
+        re-materialises the model defaults, so serialising the model verbatim would
+        emit ``resource: null`` / ``filters: {}`` / ``data: {}`` for keys the
+        persisted graph does not carry. The read contract must match the write
+        contract: the frontend flow is GET → edit → PUT, and ``modulo apply`` hashes
+        fetched graphs against declared state, so an asymmetric wire shape is drift
+        on both.
+
+        Stripping goes through the SAME helper as the write so the two can never
+        diverge; only ``connector_binding`` on top-level nodes is touched, and a
+        genuinely-supplied value is never removed.
+
+        The return type is a PEP 484 type COMMENT rather than an annotation,
+        because Pydantic uses a field serializer's return annotation as the
+        field's serialisation schema: annotating the dicts would publish
+        ``nodes`` as ``{[key: string]: unknown}[]`` instead of
+        ``PipelineGraphNode[]`` even though the wire contract is unchanged.
+        """
+        return [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in nodes]
+
+
+async def _resolve_node_providers(
+    session: AsyncSession,
+    nodes: list[dict[str, Any]],
+    *,
+    organisation_id: uuid.UUID,
+) -> dict[str, str]:
+    """Map graph node id → its agent's model-backend provider (FAR-900).
+
+    The design-time ``schema_translation_report`` needs the target provider to
+    compute the provider-specific strip set.  The provider lives on the node's
+    Agent → ModelBackend, so resolve it here (only when the opt-in
+    ``include_schema_warnings`` flag is set).  Nodes with no agent/backend are
+    simply absent from the mapping and fall back to advisory-only warnings.
+    """
+    agent_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        raw_agent = node.get("agent_id")
+        if raw_agent is None:
+            continue
+        try:
+            agent_ids.add(uuid.UUID(str(raw_agent)))
+        except (ValueError, TypeError):
+            continue
+    if not agent_ids:
+        return {}
+
+    agents = (
+        (
+            await session.execute(
+                select(Agent).where(
+                    Agent.id.in_(agent_ids),
+                    Agent.organisation_id == organisation_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    backend_ids = {a.model_backend_id for a in agents if a.model_backend_id is not None}
+    backend_provider: dict[uuid.UUID, str] = {}
+    if backend_ids:
+        backends = (
+            (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.id.in_(backend_ids),
+                        ModelBackend.organisation_id == organisation_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        backend_provider = {b.id: b.provider for b in backends}
+
+    agent_provider = {a.id: backend_provider.get(a.model_backend_id) for a in agents if a.model_backend_id is not None}
+    providers: dict[str, str] = {}
+    for node in nodes:
+        raw_node_id = node.get("id")
+        raw_agent = node.get("agent_id")
+        if raw_node_id is None or raw_agent is None:
+            continue
+        try:
+            agent_uuid = uuid.UUID(str(raw_agent))
+        except (ValueError, TypeError):
+            continue
+        provider = agent_provider.get(agent_uuid)
+        if provider:
+            providers[str(raw_node_id)] = provider
+    return providers
+
+
+def _build_schema_translation_report(
+    nodes: list[PipelineGraphNode],
+    provider_by_node: Mapping[str, str | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Compute per-node schema translation warnings for the graph response.
+
+    Only processes nodes with a non-verbatim ``schema_profile`` and an
+    ``output_schema_json``.  ``provider_by_node`` supplies each node's target
+    provider (resolved from its agent's model backend) so provider-specific
+    strips appear in the report alongside the always-advisory ones; a missing
+    entry degrades to advisory-only warnings.  Returns a list of warning dicts
+    suitable for inclusion in the ``PipelineGraphResponse``.
+    """
+    from farna.core.schema_registry.rendering import preview_strip_warnings
+
+    providers = provider_by_node or {}
+    report: list[dict[str, Any]] = []
+    for node in nodes:
+        profile = getattr(node, "schema_profile", None)
+        if not profile or profile == "verbatim":
+            continue
+        schema = getattr(node, "output_schema_json", None)
+        if not isinstance(schema, dict):
+            continue
+        warnings = preview_strip_warnings(schema, profile, providers.get(str(node.id)))
+        report.extend(
+            {
+                "node_id": str(node.id),
+                "keyword": w.keyword,
+                "path": w.path,
+                "message": w.message,
+            }
+            for w in warnings
+        )
+    return report
+
+
+def _validated_graph_node(
+    raw_entry: Any,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Validate one stored node entry, never raising (FAR-874).
+
+    Returns ``None`` only when the entry is not a dict or even the lenient /
+    ``model_construct`` fallback failed; every failure is recorded in *issues*
+    so the read stays total without silently dropping evidence.
+    """
+    if not isinstance(raw_entry, dict):
+        logger.warning("Graph read: skipping non-dict node entry: %r", type(raw_entry).__name__)
+        return None
+    # FAR-1181: the graph read masks credential-bearing node fields
+    # (env_vars / context_files / composite_parameter_values /
+    # parameter_overrides) before serialization, reusing the shipped maskers.
+    # Masking is applied to a copy — the stored data is untouched.
+    node_dict = mask_pipeline_graph_node(raw_entry)
+    raw_node_id = node_dict.get("id")
+    node_id = str(raw_node_id) if raw_node_id is not None else "unknown"
+    try:
+        # First attempt: strict validation (write-path quality).
+        node = PipelineGraphNode.model_validate(node_dict)
+    except ValidationError:
+        return _read_legacy_graph_node(node_dict, node_id, issues)
+    # FAR-2283: the output-schema requirement moved out of the model into the
+    # stored-graph-aware write guard, so surface a legacy schema-less manual
+    # node as the same ``node_legacy_data`` warning the read path always gave.
+    if node_dict.get("node_type") == "manual" and not (
+        node.output_schema_id is not None or node.output_schema_pin is not None or node.output_schema_json is not None
+    ):
+        issues.append(
+            GraphValidationIssue(
+                severity="warning",
+                code="node_legacy_data",
+                message=f"Node {node_id} is a manual node with no output schema (legacy data).",
+                node_id=node_id,
+            )
+        )
+    return node
+
+
+def _read_legacy_graph_node(
+    node_dict: dict[str, Any],
+    node_id: str,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Second attempt: lenient validation (FAR-874).
+
+    Skips type-specific validators that may have been tightened since the data
+    was saved; a value that passes here but fails strict is included with a
+    ``node_legacy_data`` warning.
+    """
+    try:
+        node = PipelineGraphNode.model_validate(node_dict, context=LEGACY_READ_CONTEXT)
+    except ValidationError as exc:
+        return _recover_graph_node(node_dict, node_id, _safe_validation_errors(exc), issues)
+    logger.info(
+        "Graph read: node %s has legacy data that passes lenient validation but fails strict; including with warning.",
+        node_id,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="node_legacy_data",
+            message=(
+                f"Node {node_id} has legacy data that passes lenient read validation but would fail write validation."
+            ),
+            node_id=node_id,
+        )
+    )
+    return node
+
+
+def _recover_graph_node(
+    node_dict: dict[str, Any],
+    node_id: str,
+    safe_errors: list[dict[str, Any]],
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphNode | None:
+    """Third tier: ``model_construct`` passthrough so the read never 422s."""
+    logger.warning(
+        "Graph read: node %s failed all validation (%s); including raw data with warning.",
+        node_id,
+        safe_errors,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="node_validation_failed",
+            message=(f"Node {node_id} failed validation: {safe_errors}"),
+            node_id=node_id,
+        )
+    )
+    try:
+        # Preserve all stored fields so the read never silently truncates node
+        # data (CRITICAL data-loss fix); only id and position are coerced.
+        return _construct_graph_node(node_dict)
+    except Exception:
+        logger.warning(
+            "Graph read: could not construct fallback for node %s",
+            node_id,
+        )
+        return None
+
+
+def _construct_graph_node(node_dict: dict[str, Any]) -> PipelineGraphNode:
+    """Build a node from raw stored fields, coercing only id and position.
+
+    Every key the model declares is kept as-is from the raw dict; unknown keys
+    (future schema additions) are dropped.
+    """
+    fallback_fields = {k: v for k, v in node_dict.items() if k in PipelineGraphNode.model_fields}
+    fallback_fields["id"] = uuid.UUID(str(node_dict["id"])) if node_dict.get("id") else uuid.uuid4()
+    pos_raw = node_dict.get("position") or {}
+    fallback_fields["position"] = GraphPosition(x=pos_raw.get("x", 0), y=pos_raw.get("y", 0))
+    return PipelineGraphNode.model_construct(**fallback_fields)
+
+
+def _validated_graph_edge(
+    edge_dict: Any,
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphEdge | None:
+    """Validate one stored edge entry, never raising (FAR-874).
+
+    Stored edges arrive as either plain dicts (write path / JSON) or
+    ``PipelineEdge`` ORM rows. A malformed scalar entry (str/int/None from
+    corrupt data) has neither a mapping interface nor edge attributes and is
+    skipped with an ``edge_invalid_entry`` warning rather than raising.
+    """
+    if not isinstance(edge_dict, dict) and not hasattr(edge_dict, "source_node_id"):
+        logger.warning("Graph read: skipping malformed edge entry: %r", type(edge_dict).__name__)
+        issues.append(
+            GraphValidationIssue(
+                severity="warning",
+                code="edge_invalid_entry",
+                message=(f"Skipped malformed edge entry of type {type(edge_dict).__name__}."),
+            )
+        )
+        return None
+    raw_edge_id = edge_dict.get("id") if isinstance(edge_dict, dict) else getattr(edge_dict, "id", None)
+    edge_id = str(raw_edge_id) if raw_edge_id is not None else "unknown"
+    try:
+        return PipelineGraphEdge.model_validate(edge_dict, context=LEGACY_READ_CONTEXT)
+    except ValidationError as exc:
+        return _recover_graph_edge(edge_dict, edge_id, _safe_validation_errors(exc), issues)
+
+
+def _recover_graph_edge(
+    edge_dict: Any,
+    edge_id: str,
+    safe_errors: list[dict[str, Any]],
+    issues: list[GraphValidationIssue],
+) -> PipelineGraphEdge | None:
+    """Fallback passthrough so an edge the current schema rejects is preserved."""
+    logger.warning(
+        "Graph read: edge %s failed Pydantic validation (%s); including raw data with warning.",
+        edge_id,
+        safe_errors,
+    )
+    issues.append(
+        GraphValidationIssue(
+            severity="warning",
+            code="edge_validation_failed",
+            message=(f"Edge {edge_id} failed validation: {safe_errors}"),
+        )
+    )
+    try:
+        return _construct_graph_edge(edge_dict)
+    except Exception:
+        logger.warning(
+            "Graph read: could not construct fallback for edge %s",
+            edge_id,
+        )
+        return None
+
+
+def _construct_graph_edge(edge_dict: Any) -> PipelineGraphEdge:
+    """Build an edge from raw stored fields, preserving declared fields.
+
+    Same approach as the node fallback: filter to model-declared fields, coerce
+    only the IDs, and ``model_construct`` the rest. Must work for dicts AND
+    attribute objects (ORM rows) — a legacy edge whose ``hitl_review_config``
+    fails the current schema is still evidence worth preserving.
+    """
+    if isinstance(edge_dict, dict):
+        fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
+    else:
+        fallback_fields = {
+            name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)
+        }
+    raw_id = _edge_field(edge_dict, "id")
+    fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
+    fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))
+    fallback_fields["target_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "target_node_id")))
+    return PipelineGraphEdge.model_construct(**fallback_fields)
+
+
+def _graph_schema_translation_report(
+    valid_nodes: list[PipelineGraphNode],
+    provider_by_node: Mapping[str, str | None] | None,
+    schema_translation_report: list[dict[str, Any]] | None,
+    include_schema_warnings: bool,
+) -> list[dict[str, Any]]:
+    """Select the schema-translation report: explicit, opt-in computed, or empty.
+
+    FAR-900: compute the report only when the opt-in flag is set or an explicit
+    report was provided (e.g. from a write path).
+    """
+    if schema_translation_report is not None:
+        return schema_translation_report
+    if include_schema_warnings:
+        return _build_schema_translation_report(valid_nodes, provider_by_node)
+    return []
+
+
+def _graph_response(
+    nodes: list[dict[str, Any]],
+    edges: list[Any],
+    *,
+    validation_issues: list[GraphValidationIssue] | None = None,
+    schema_translation_report: list[dict[str, Any]] | None = None,
+    include_schema_warnings: bool = False,
+    provider_by_node: Mapping[str, str | None] | None = None,
+) -> PipelineGraphResponse:
+    """Serialise stored graph data into a validated response.
+
+    A graph READ must be **total**: every stored node and edge is returned even
+    if it fails the current Pydantic schema — the data was valid at save time,
+    and a later model revision may have made validators stricter.  Per-node /
+    per-edge validation failures are collected into ``validation_issues`` so the
+    consumer (frontend, MCP, agents) can surface them without the HTTP response
+    failing with an opaque 422.  (FAR-874)
+
+    FAR-2089 review: the response's ``nodes`` serializer strips the connector
+    binding inputs the write path persists as ABSENT, so a read reports the
+    same shape a write stored (see ``PipelineGraphResponse``), rather than the
+    model defaults re-materialised by per-node validation.
+    """
+    issues: list[GraphValidationIssue] = list(validation_issues or [])
+
+    # --- nodes: validate per-node; never fail the read ---
+    valid_nodes: list[PipelineGraphNode] = []
+    for raw_entry in nodes:
+        node = _validated_graph_node(raw_entry, issues)
+        if node is not None:
+            valid_nodes.append(node)
+
+    # --- edges: validate per-edge; never fail the read ---
+    # Gate-description enforcement must stay write-scoped (FAR-613) — legacy
+    # pipelines whose gate descriptions predate the minimum stay readable.
+    # Edges only need 2 tiers (strict + lenient) because PipelineGraphEdge has
+    # no per-type validators — unlike nodes, where each node_type runs a
+    # dedicated validator that may have been tightened since the data was saved.
+    valid_edges: list[PipelineGraphEdge] = []
+    for edge_entry in edges:
+        edge = _validated_graph_edge(edge_entry, issues)
+        if edge is not None:
+            valid_edges.append(edge)
+
+    # Use model_construct to bypass the PipelineGraphUpdate
+    # ``reject_database_conflicts`` validator — on reads we only need the
+    # per-node/per-edge validation already performed above, and fallback
+    # nodes constructed via ``model_construct`` (no Pydantic field validation)
+    # would fail re-validation here.
+    return PipelineGraphResponse.model_construct(
+        nodes=valid_nodes,
+        edges=valid_edges,
+        validation_issues=issues,
+        schema_translation_report=_graph_schema_translation_report(
+            valid_nodes,
+            provider_by_node,
+            schema_translation_report,
+            include_schema_warnings,
+        ),
+    )
+
+
+async def _enforce_connector_team_bindings(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    connector_bindings: list[dict[str, Any]],
+) -> None:
+    """Block graph saves whose connector binding crosses a team boundary.
+
+    PRD §9.3 + FAR-1515, model restated by FAR-1618: only the team-PRIVATE
+    direction is refused — a ``visibility: team`` connector may only bind to a
+    pipeline owned by the same team, so another team's pipeline (or an org
+    pipeline with no owner team) is a mismatch. An org-visibility connector is
+    shared across the organisation and binds to ANY pipeline, team-owned or
+    not; FAR-1618 removed the reverse direction FAR-1515 had added and the
+    FAR-516 run-gate it mirrored. Violations raise 409
+    ``connector_team_mismatch`` at the pipeline-save command layer. A binding
+    the team-blind org-scoped read cannot resolve
+    (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is the same named
+    409: a binding the gate cannot validate never saves.
+    """
+    try:
+        mismatches = await find_connector_team_mismatches(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline_owner_team_id,
+            connector_bindings=connector_bindings,
+        )
+    except ConnectorBindingMissingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(mismatches),
+        )
+
+
+async def _enforce_model_backend_team_bindings(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    model_backend_pins: list[dict[str, Any]],
+) -> None:
+    """Block graph saves that pin a team-private model backend from another team.
+
+    PRD §9.3: a model backend with ``visibility: team`` is only usable within
+    pipelines owned by the same team, mirroring the connector rule. Violations
+    raise 409 ``model_backend_team_mismatch`` at the pipeline-save command layer.
+    """
+    mismatches = await find_model_backend_team_mismatches(
+        session,
+        org_id=org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        model_backend_pins=model_backend_pins,
+    )
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=model_backend_team_mismatch_detail(mismatches),
+        )
+
+
+async def _load_agents_by_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    agent_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, Agent]:
+    """Load tenant-owned agents by ID, raising 422 for unknown IDs."""
+    agents = (
+        list(
+            (
+                await session.execute(
+                    select(Agent).where(
+                        Agent.organisation_id == org_id,
+                        Agent.id.in_(agent_ids),
+                    )
+                )
+            ).scalars()
+        )
+        if agent_ids
+        else []
+    )
+    agents_by_id = {agent.id: agent for agent in agents}
+    missing_agent_ids = sorted(agent_ids - agents_by_id.keys(), key=str)
+    if missing_agent_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown agent IDs for this organisation: {missing_agent_ids}",
+        )
+    return agents_by_id
+
+
+def _collect_schema_ids(nodes: list[PipelineGraphNode]) -> set[uuid.UUID]:
+    """Collect the schema IDs referenced by a graph's nodes."""
+    schema_ids_to_check: set[uuid.UUID] = set()
+    for node in nodes:
+        if node.node_type == "manual":
+            if node.output_schema_id is not None:
+                schema_ids_to_check.add(node.output_schema_id)
+            if node.output_schema_pin is not None:
+                schema_ids_to_check.add(node.output_schema_pin.schema_id)
+        if node.input_schema_pin is not None:
+            schema_ids_to_check.add(node.input_schema_pin.schema_id)
+        if node.output_schema_pin is not None:
+            schema_ids_to_check.add(node.output_schema_pin.schema_id)
+    return schema_ids_to_check
+
+
+async def _load_existing_schema_ids(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    schema_ids_to_check: set[uuid.UUID],
+) -> set[uuid.UUID]:
+    """Load the tenant-owned schema IDs, raising 422 for unknown IDs."""
+    existing_schema_ids = (
+        set(
+            (
+                await session.execute(
+                    select(Schema.id).where(
+                        Schema.organisation_id == org_id,
+                        Schema.id.in_(schema_ids_to_check),
+                    )
+                )
+            ).scalars()
+        )
+        if schema_ids_to_check
+        else set()
+    )
+    missing_schema_ids = sorted(schema_ids_to_check - existing_schema_ids, key=str)
+    if missing_schema_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown schema IDs for this organisation: {missing_schema_ids}",
+        )
+    return existing_schema_ids
+
+
+def _build_schema_and_backend_pins(
+    nodes: list[PipelineGraphNode],
+    agents_by_id: dict[uuid.UUID, Agent],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build schema + model-backend pins for a graph's nodes."""
+    schema_pins: list[dict[str, Any]] = []
+    model_backend_pins: list[dict[str, Any]] = []
+    for node in nodes:
+        if node.agent_id is not None:
+            agent = agents_by_id[node.agent_id]
+            schema_pins.extend(
+                [
+                    {
+                        "node_id": str(node.id),
+                        "direction": "input",
+                        "schema_id": str(agent.input_schema_id),
+                    },
+                    {
+                        "node_id": str(node.id),
+                        "direction": "output",
+                        "schema_id": str(agent.output_schema_id),
+                    },
+                ]
+            )
+            model_backend_pins.append(
+                {
+                    "node_id": str(node.id),
+                    "model_backend_id": str(agent.model_backend_id),
+                }
+            )
+        else:
+            if node.input_schema_pin is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "input",
+                        "schema_id": str(node.input_schema_pin.schema_id),
+                        "schema_version": node.input_schema_pin.schema_version,
+                    }
+                )
+            if node.output_schema_pin is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "output",
+                        "schema_id": str(node.output_schema_pin.schema_id),
+                        "schema_version": node.output_schema_pin.schema_version,
+                    }
+                )
+            elif node.output_schema_id is not None:
+                schema_pins.append(
+                    {
+                        "node_id": str(node.id),
+                        "direction": "output",
+                        "schema_id": str(node.output_schema_id),
+                    }
+                )
+    return schema_pins, model_backend_pins
+
+
+def _validate_capability_scopes(
+    nodes: list[PipelineGraphNode],
+    agents_by_id: dict[uuid.UUID, Agent],
+) -> None:
+    """Compile-time narrow-not-widen check for node capability_scope (FAR-418).
+
+    A node may NARROW its referenced Agent's connector grants, never WIDEN them.
+    For every node that declares ``capability_scope.allowed_connectors``, each
+    connector-TYPE entry must be within the Agent's ``connector_type_refs``; a
+    widen attempt raises a typed ``ScopeViolationError`` (422 at the route). A
+    node with no scope (UNRESTRICTED default) or no Agent reference is skipped.
+    Connector instance-id entries are opaque here and enforced at run time by the
+    ConnectorHub deny-by-default fetch scope.
+
+    FAR-620: every node that declares ``capability_scope.allowed_tools`` is also
+    checked against the caller-scoped (``.self``) tool set — those tools are
+    FORBIDDEN from node allowed_tools regardless of connector narrowing (a
+    pipeline node is never the "caller" a ``.self`` tool operates on).
+
+    A blank / whitespace-only ``allowed_connectors`` entry is REFUSED for EVERY
+    scoped node (checked here, before the Agent reference is consulted): it
+    names no connector, and a blanks-only list is truthy — it stored a node
+    "narrowed" to nothing, so the run computed an empty fetch scope and decrypted
+    every active org connector while the node matched none of them at the hub.
+
+    Coverage is the REST graph-write paths only — this is the sole production
+    call site of the two capability-scope guards. Writers that persist raw graph
+    dicts (MCP ``update_pipeline_graph``, bundle import, library/template
+    install, clone, snapshot rollback) never reach it, so the runtime
+    normalisation remains the backstop for the graphs they store.
+    """
+    for node in nodes:
+        scope = node.capability_scope
+        if scope is None:
+            continue
+        # FAR-620: caller-scoped (``.self``) tools may not appear in a node's
+        # allowed_tools — checked for EVERY scoped node (independent of
+        # connector narrowing, and of any Agent reference).
+        validate_no_self_tools(node_id=str(node.id), allowed_tools=scope.allowed_tools)
+        # Blankness is a property of the list, not of the Agent's grants — so it
+        # is refused for every scoped node, including the connector/dispatch
+        # nodes the widen check skips below.
+        validate_allowed_connectors_not_blank(
+            node_id=str(node.id),
+            allowed_connectors=scope.allowed_connectors,
+        )
+        if not scope.allowed_connectors:
+            continue
+        if node.agent_id is None:
+            # A connector node may not reference an Agent; its allowed_connectors
+            # are instance/type constrained only, so nothing is checked here.
+            continue
+        agent = agents_by_id.get(node.agent_id)
+        if agent is None:
+            continue
+        granted = agent_granted_connector_types(agent.connector_type_refs)
+        validate_allowed_connectors_subset(
+            node_id=str(node.id),
+            allowed_connectors=scope.allowed_connectors,
+            granted_types=granted,
+        )
+
+
+async def _resolve_graph_references(
+    session: AsyncSession,
+    nodes: list[PipelineGraphNode],
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Validate tenant-owned graph references and derive validator pins.
+
+    Whenever the graph resolves model-backend pins, they are checked against
+    the pipeline's team: a team-private model backend pinned by a pipeline owned
+    by a different team (or by no team at all) raises 409
+    ``model_backend_team_mismatch`` (PRD §9.3), alongside the connector rule
+    enforced just before this. Since FAR-1618 the two predicates say the SAME
+    thing: an org-visibility row — connector or model backend — never
+    mismatches because org-wide resources stay shared across the organisation,
+    and a team-private row mismatches every pipeline outside its owner team
+    (the parity note on ``model_backend_team_mismatch`` records why the two
+    used to differ). The mismatch rule itself decides whether an org-owned
+    pipeline (``owner_team_id=None``) may pin a team-private backend.
+    """
+    agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
+    agents_by_id = await _load_agents_by_ids(session, org_id, agent_ids)
+    try:
+        _validate_capability_scopes(nodes, agents_by_id)
+    except ScopeViolationError as exc:
+        # FAR-418: a node that widens (never narrows) its Agent's connector grants
+        # is rejected — the save is refused, not silently accepted.
+        detail = str(exc)
+        if exc.kind == BLANK_CONNECTOR_KIND:
+            # The bare ``scope.violation node=... blank_connector=''`` names
+            # neither the field nor the fix; this is the one rejection whose
+            # remedy is a literal edit the author can make, so spell it out.
+            detail += (
+                "; Allowed Connectors contains a blank entry — remove it, or leave the list empty for unrestricted"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=detail,
+        ) from exc
+    await _load_existing_schema_ids(session, org_id, _collect_schema_ids(nodes))
+    schema_pins, model_backend_pins = _build_schema_and_backend_pins(nodes, agents_by_id)
+    if model_backend_pins:
+        await _enforce_model_backend_team_bindings(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline_owner_team_id,
+            model_backend_pins=model_backend_pins,
+        )
+    return schema_pins, model_backend_pins
+
+
+def _pipeline_response(pipeline: Pipeline) -> PipelineResponse:
+    """Build a PipelineResponse, deriving node_count from the stored graph.
+
+    Shared by every endpoint that returns a single PipelineResponse (detail,
+    create, patch, archive/restore/unarchive, clone, folder move) so the
+    serialized node_count always matches the real graph, not the additive
+    default. ``graph_nodes_json`` is a plain JSON column loaded with the row
+    (``expire_on_commit=False`` keeps it readable after the endpoint's
+    transaction closes), so ``len(...)`` is cheap — no extra query, no lazy
+    load in async context. Defensive against partial ORM stand-ins that lack
+    the attribute (tests, internal callers).
+    """
+    response = PipelineResponse.model_validate(pipeline)
+    nodes = getattr(pipeline, "graph_nodes_json", None)
+    response.node_count = len(nodes) if isinstance(nodes, list) else 0
+    return response
+
+
+def _pipeline_list_item(pipeline: Pipeline) -> PipelineResponse:
+    """Build a list-item response (derives node_count via _pipeline_response)."""
+    return _pipeline_response(pipeline)
+
+
+@router.get("", responses={401: {"description": "Unauthorized"}})
+@handle_db_errors("pipelines.list")
+async def list_pipelines_endpoint(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: Annotated[str | None, Query()] = None,
+    include_archived: Annotated[bool, Query()] = False,
+    folder_id: Annotated[uuid.UUID | None, Query()] = None,
+    # any_credential: declarative apply (FAR-681) lists pipelines with mk_ org
+    # API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_LIST),
+) -> PipelineListResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            result = await list_pipelines(
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                include_archived=include_archived,
+                folder_id=folder_id,
+                organisation_id=principal.organisation_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    return PipelineListResponse(
+        items=[_pipeline_list_item(p) for p in result.items],
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        next_cursor=result.next_cursor,
+        has_more=result.has_more,
+    )
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_created", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.create")
+async def create_pipeline_endpoint(
+    req: PipelineCreate,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # any_credential: declarative apply (FAR-681) creates pipelines with mk_
+    # org API keys; roles are clamped to the key's live membership.
+    principal: TenantPrincipal = require_permission_any_credential("pipeline.create"),
+) -> PipelineResponse:
+    try:
+        # FAR-1163: ceiling >= default must hold for the CREATE-time values.
+        # Pydantic already rejected an unparseable ceiling (422), so only the
+        # ordering can fail here.
+        validate_autonomy_ceiling(req.default_autonomy_level, req.max_autonomy_level)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    try:
+        # FAR-1184: every surface that can set the threshold runs the ONE
+        # shared check. Create always starts from previous=None ("set where
+        # none exists" — allowed with pipeline.create), so this gate consults
+        # cost.manage but can only refuse if the rule ever tightens; the
+        # refusal path still audits + returns 403 like PATCH.
+        new_threshold = normalize_circuit_breaker_threshold(req.circuit_breaker_threshold)
+        if not circuit_breaker_threshold_change_allowed(
+            None,
+            new_threshold,
+            may_manage_cost=_may_manage_cost(principal),
+        ):
+            raise CircuitBreakerThresholdChangeDenied(previous=None, new=new_threshold)
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            pipeline = await create_pipeline(
+                session,
+                org_id=principal.organisation_id,
+                name=req.name,
+                account_id=principal.account_id,
+                description=req.description,
+                visibility=req.visibility,
+                owner_team_id=req.owner_team_id,
+                max_concurrent_runs=req.max_concurrent_runs,
+                lock_wait_timeout_seconds=req.lock_wait_timeout_seconds,
+                node_timeout_seconds=req.node_timeout_seconds,
+                hitl_review_window_seconds=req.hitl_review_window_seconds,
+                queue_timeout_seconds=req.queue_timeout_seconds,
+                run_context_defaults=req.run_context_defaults,
+                default_autonomy_level=req.default_autonomy_level,
+                max_autonomy_level=req.max_autonomy_level,
+                max_duration_seconds=req.max_duration_seconds,
+                stale_run_timeout_minutes=req.stale_run_timeout_minutes,
+                folder_id=req.folder_id,
+                circuit_breaker_threshold=req.circuit_breaker_threshold,
+                business_owner_id=req.business_owner_id,
+                reliability_owner_id=req.reliability_owner_id,
+                request_id=getattr(principal, "request_id", None),
+            )
+            if req.retry_policy is not None:
+                # The model default ({}) applies when omitted; an explicit value
+                # is persisted on the returned ORM row within this transaction.
+                pipeline.retry_policy = req.retry_policy
+    except CircuitBreakerThresholdChangeDenied as exc:
+        await _deny_threshold_change(session, principal=principal, pipeline_id=None, exc=exc)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    return _pipeline_response(pipeline)
+
+
+@router.get("/{pipeline_id}")
+@handle_db_errors("pipelines.get")
+async def get_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+@router.get("/{pipeline_id}/graph")
+@handle_db_errors("pipelines.get_graph")
+async def get_pipeline_graph_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # any_credential: declarative apply (FAR-681) fetches current graphs to
+    # hash against declared state with mk_ org API keys.
+    principal: TenantPrincipal = require_permission_any_credential("pipeline.graph.read"),
+    # FAR-1311: the sibling GET /{pipeline_id} carries this gate; the graph
+    # read did not, so on the layers where RLS does not apply (non-Postgres
+    # backends, break-glass/execution_context sessions, RLS misconfiguration)
+    # any org member with pipeline.graph.read could read a TEAM-PRIVATE
+    # pipeline's full graph - prompts, connector_bindings_json, model pins.
+    # Parity + defence-in-depth, not a live Postgres hole: migration 0124
+    # leaves rls_team_isolation as the sole policy, so a non-member's row read
+    # already 404s (the integration tests observe exactly that). The
+    # any-credential variant pairs with the any_credential permission above -
+    # the credential flavours must match, or declarative apply's mk_ graph
+    # fetch would 401 (see the shared pairing comment above
+    # convert_node_to_agent_endpoint). Read-only: no in-txn re-check needed.
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+    # FAR-900: opt-in schema_translation_report computation (expensive for
+    # large graphs).  Defaults to false; set to true to receive per-node
+    # schema translation warnings in the response.
+    include_schema_warnings: Annotated[bool, Query()] = False,
+) -> PipelineGraphResponse:
+    node_providers: dict[str, str] = {}
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            graph = await get_pipeline_graph(session, pipeline_id, organisation_id=principal.organisation_id)
+            if graph is not None and include_schema_warnings:
+                # FAR-900: resolve each node's provider so the design-time
+                # report includes provider-specific strips (not just advisory).
+                node_providers = await _resolve_node_providers(
+                    session,
+                    graph[0],
+                    organisation_id=principal.organisation_id,
+                )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    nodes, edges = graph
+    return _graph_response(
+        nodes,
+        edges,
+        include_schema_warnings=include_schema_warnings,
+        provider_by_node=node_providers,
+    )
+
+
+def _prepare_graph_write(
+    req: PipelineGraphUpdate,
+) -> tuple[list[dict[str, Any]], list[GraphEdgeData], dict[str, Any], list[dict[str, Any]]]:
+    """Serialise a graph update into its write + validator representations."""
+    node_data = [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in req.nodes]
+    edge_data = [_edge_to_data(edge) for edge in req.edges]
+    validator_graph = {
+        "nodes": node_data,
+        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+    }
+    connector_bindings = extract_connector_bindings(node_data)
+    return node_data, edge_data, validator_graph, connector_bindings
+
+
+async def _validate_graph_save(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    validator_graph: dict[str, Any],
+    connector_bindings: list[dict[str, Any]],
+    model_backend_pins: list[dict[str, Any]],
+    environment_profile_id: uuid.UUID | None,
+) -> list[GraphValidationIssue]:
+    """Run save-time graph validation, returning the advisory issue list.
+
+    Loads the pipeline's guardrail eval rows so the graph-save validation can
+    reject a per-node guardrail-cap violation (FAR-223 item 7) — the
+    authoring-time rejection that the create_run fail-closed backstop also
+    enforces at run start.
+    """
+    guardrail_rows = await _guardrail_config.load_pipeline_guardrail_rows(
+        session,
+        pipeline_id=pipeline_id,
+        organisation_id=org_id,
+    )
+    validation = await GraphValidator().validate_definition(
+        validator_graph,
+        session,
+        connector_bindings=connector_bindings,
+        model_backend_pins=model_backend_pins,
+        guardrail_definitions=list(guardrail_rows),
+        environment_profile_id=environment_profile_id,
+    )
+    _reject_graph_validation_issues(validation.issues)
+    return [
+        _graph_validation_issue(
+            severity=issue.severity,
+            code=issue.code,
+            message=issue.message,
+            node_id=issue.node_id,
+        )
+        for issue in validation.issues
+    ]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1829: node-targeted patch — ``PATCH /{pipeline_id}/graph/nodes/{node_id}``
+# ---------------------------------------------------------------------------
+#
+# Editing ONE field of ONE node used to require a whole-graph rewrite: the
+# caller re-read the graph and faithfully re-emitted every node, including
+# multi-KB ``agent_commands`` and masked credentials, so a one-integer change
+# risked silently dropping a field. This route is a THIN ADAPTER over the
+# EXISTING full-graph write transaction, not a second writer: it loads the
+# stored node, shallow-merges the allowlisted fields the caller supplied, and
+# hands the resulting MERGED full graph to ``_apply_graph_update`` — so the row
+# lock, the gate-weakening diff, the guardrail-strip guard, the
+# ``agent_commands``→Agent-row sync, the save-time graph validation and the
+# ``pipeline.graph_updated`` audit all fire exactly as they do for a full
+# replace. The merge-then-hand-off order is load-bearing: a body-only
+# validation could never check ``stall_timeout_seconds`` against the STORED
+# ``timeout_seconds`` it was not given.
+#
+# There is deliberately NO precondition / ``predicted_updated_at`` token and no
+# 409: the patch is atomic under the existing row lock and needs no read before
+# the write — that read-free property is the point of the feature. There is no
+# op-list either (no ``set``/``patch``/``unset`` verbs); the collection-level
+# ``PATCH /graph`` is left vacant on purpose so a multi-node op-list could land
+# there later if a real need appears.
+
+
+class PipelineGraphNodePatch(BaseModel):
+    """Partial node body for the node-targeted graph patch (FAR-1829).
+
+    A CLOSED allowlist — anything the model does not declare is rejected by
+    ``extra="forbid"`` with a typed 422 field path naming the offending key
+    (``body.env_vars: Extra inputs are not permitted``), so a partial body can
+    never be an arbitrary-key passthrough.
+
+    The INCLUSION rule is absolute-value assignment only — no per-item
+    operations: a declared field is wholly replaced by the supplied value,
+    never incremented, appended to or edited per entry. That is why the
+    list-typed ``agent_commands`` and ``egress_allowlist`` fields ARE declared
+    (the whole list replaces the stored one) while op-list verbs (``set`` /
+    ``patch`` / ``unset``) do not exist on this route at all.
+
+    Classes of field deliberately NOT declared (these are examples — the
+    exhaustive rule is simply "any key this model does not declare is a 422"):
+
+    * the credential-bearing dicts (``env_vars``, ``context_files``,
+      ``composite_parameter_values``, ``parameter_overrides``) — a partial body
+      must never be able to drop or half-write a secret, so those fields are
+      unpatchable rather than validated;
+    * the structural / topology fields (``id``, ``node_type``, ``agent_id``,
+      ``position``, and every edge) — the path's ``node_id`` addresses the node
+      and is never a body field, and a node patch changes no topology;
+    * ``agent_prompt`` — on an ``agent`` node the runtime reads the bound
+      Agent row's prompt instead, so a node-level patch would read back right
+      while the run used the old prompt, and unlike ``agent_commands`` there
+      is no Agent-row sync that could keep the two in step.
+
+    Field annotations and constraints MIRROR the same fields on
+    :class:`PipelineGraphNode` — the annotation plus every ``ge`` / ``le`` /
+    ``max_length`` / ``Literal`` member is pinned field-by-field by
+    ``tests/unit/api/test_pipeline_graph_node_patch.py`` — so a value the body
+    accepts within a declared bound is a value the merged node's own field
+    validator accepts. The single deliberate divergence is ``None``-widening:
+    the four non-nullable booleans below are widened here for a uniform body
+    shape — ``enable_heartbeat`` and ``idempotent`` to ``bool | None``, and the
+    strict ``single_pr_per_run`` and ``await_completion`` to
+    ``StrictBool | None`` — and an explicit ``null`` on them is rejected by the
+    MERGED node's ``bool`` field (422), never stored.
+
+    ``None`` semantics therefore depend on the field:
+
+    * NULLABLE on the node (``label``, ``description``,
+      ``stall_timeout_seconds``, ...): an explicitly supplied ``null`` (present
+      in ``model_fields_set``) CLEARS the stored value;
+    * the four non-nullable booleans (``enable_heartbeat``, ``idempotent``,
+      ``single_pr_per_run``, ``await_completion``): ``null`` is a 422 from the
+      merged node's own validation (see above);
+    * an ABSENT key always leaves the stored value untouched.
+    """
+
+    # Rejected fields are reported by the standard request-validation path, so
+    # extra keys carry no default handler of their own — forbid, do not ignore.
+    model_config = {"extra": "forbid"}
+
+    label: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Per-node timeout override (60-604800s). Overrides pipeline node_timeout_seconds.",
+    )
+    stall_timeout_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=604800,
+        description="Stall window (seconds) before the idle watchdog treats the agent as stalled. "
+        "Validated against the MERGED node's timeout_seconds at save time.",
+    )
+    enable_heartbeat: bool | None = Field(
+        default=None,
+        description="Enable the connection-liveness (heartbeat) stall channel.",
+    )
+    idempotent: bool | None = Field(
+        default=None,
+        description="Whether the node is logically safe to re-run.",
+    )
+    single_pr_per_run: StrictBool | None = Field(
+        default=None,
+        description="Install the run-scoped one-PR-per-run gh shim in the node's sandbox (sandbox_agent only).",
+    )
+    await_completion: StrictBool | None = Field(
+        default=None,
+        description="dispatch nodes only: poll get_run_status to a terminal status after firing once.",
+    )
+    egress_policy: Literal["default", "deny_all", "selected"] | None = Field(
+        default=None,
+        description="Sandbox egress control (sandbox_agent only).",
+    )
+    # Absolute assignment (the whole list replaces the stored one) — the
+    # required companion of ``egress_policy`` above: the node's own
+    # ``_validate_sandbox_egress_allowlist_config`` fail-closes the pair
+    # ("selected" REQUIRES a non-empty allowlist, any other policy must NOT
+    # carry one), so patching either half alone could only ever 422 — the
+    # coupled pair must be patchable together.
+    egress_allowlist: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Host:port egress allowlist (sandbox_agent, egress_policy='selected' only); "
+        "the whole list replaces the stored one.",
+    )
+    wallclock_budget_seconds: int | None = Field(
+        default=None,
+        description="Wall-clock spend budget in seconds for the node's sandbox.",
+    )
+    stdout_max_bytes: int | None = Field(
+        default=None,
+        description="Max retained stdout/stderr bytes when stdout_retention_mode=='full'.",
+    )
+    stdout_retention_mode: Literal["tail", "full"] | None = Field(
+        default=None,
+        description="Per-node stdout/stderr retention mode (sandbox_agent only).",
+    )
+    stdout_percentage_delta: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="stdout-delta stall detector: fraction of new stdout that must differ to count as activity.",
+    )
+    # Absolute assignment (the whole list replaces the stored one) — not a
+    # per-item op. Included because the adapter reuses ``_apply_graph_update``,
+    # which runs the SAME ``_sync_agent_row_commands`` Agent-row sync inside the
+    # same transaction as a full replace, so "what you PATCH is what runs"
+    # (FAR-488) holds for this route too.
+    agent_commands: list[str] | None = Field(
+        default=None,
+        description="sandbox_agent node command list; the whole list replaces the stored one and is "
+        "synced to the bound Agent row in the same transaction.",
+    )
+    # script mode runs ``script_command`` VERBATIM straight off the node at run
+    # time (``sandbox_mode``); no Agent row holds a copy of it, so there is
+    # nothing to sync and the node value is authoritative by construction.
+    script_command: str | None = Field(
+        default=None,
+        description="sandbox_agent script-mode command, run verbatim (mutually exclusive with agent_commands).",
+    )
+
+
+def _joined_validation_detail(exc: ValidationError) -> str:
+    """Render a Pydantic ``ValidationError`` as ``<dotted.path>: <message>`` lines.
+
+    A MODEL-level error (a ``model_validator`` rejecting a cross-field
+    combination, e.g. ``await_completion`` on a non-dispatch node) carries an
+    EMPTY ``loc`` — it is not attributable to one field, so it renders as the
+    bare message (whose Pydantic text already names the offending field)
+    rather than a ``": "`` prefix pointing at nothing.
+
+    Uses :func:`_safe_validation_errors` so no ``input`` value (which for a
+    model-level error is the ENTIRE node dict, credentials included) can reach
+    the response — the same redaction every other write path applies.
+    """
+    parts: list[str] = []
+    for err in _safe_validation_errors(exc):
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts)
+
+
+def _patched_node_models(
+    stored_nodes: list[dict[str, Any]],
+    *,
+    target_id: uuid.UUID,
+    patch: PipelineGraphNodePatch,
+) -> list[PipelineGraphNode]:
+    """Merge ``patch`` into its target node and (re)validate every node.
+
+    The MERGED target node is held to the STRICT write bar (the same bar a
+    request-payload node must clear on a full replace) with no legacy
+    fallback: it is being written, and its type-specific rules are exactly the
+    cross-field invariants a partial-body validation could never check (e.g.
+    ``single_pr_per_run`` is sandbox_agent-only, ``agent_commands`` and
+    ``script_command`` are mutually exclusive). Tolerating a violation there
+    would persist a declared-but-unread field — a silent no-op at run time.
+
+    The UNCHANGED nodes keep the stored-data tolerance
+    (:func:`_stored_node_model`, the ONE strict-then-``legacy_read``
+    implementation, shared with :func:`_graph_nodes_as_models`): they were
+    valid at their own save time and a rule tightened since must not block an
+    unrelated one-field edit any more than it blocks a node conversion.
+    """
+    key = str(target_id)
+    target_raw: dict[str, Any] | None = None
+    for raw in stored_nodes:
+        if isinstance(raw, dict) and str(raw.get("id")) == key:
+            target_raw = raw
+            break
+    if target_raw is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
+
+    merged = dict(target_raw)
+    for field_name in patch.model_fields_set:
+        merged[field_name] = getattr(patch, field_name)
+
+    try:
+        target_model = PipelineGraphNode.model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {key} is not a valid graph node after merging the patch: {_joined_validation_detail(exc)}",
+        ) from None
+
+    # Preserve the stored node ORDER — only the target's model changes.
+    models: list[PipelineGraphNode] = []
+    for raw in stored_nodes:
+        if not isinstance(raw, dict):
+            continue
+        models.append(target_model if str(raw.get("id")) == key else _stored_node_model(raw))
+    return models
+
+
+def _stored_node_model(raw: dict[str, Any]) -> PipelineGraphNode:
+    """Stored node dict → model, using the stored-data tolerance (strict, then legacy)."""
+    try:
+        return PipelineGraphNode.model_validate(raw)
+    except ValidationError:
+        try:
+            return PipelineGraphNode.model_validate(raw, context=LEGACY_READ_CONTEXT)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Stored graph node {raw.get('id', 'unknown')} no longer validates "
+                f"against the current node schema: {_joined_validation_detail(exc)}",
+            ) from exc
+
+
+def _stored_edge_model(row: Any) -> PipelineGraphEdge:
+    """Persisted ``PipelineEdge`` row → model, unchanged by the node patch.
+
+    Same strict-then-``legacy_read`` tolerance as the stored nodes: a node
+    patch never touches an edge, so an edge rule tightened since its own save
+    time must not block the patch.
+    """
+    raw = _edge_to_dict(row)
+    try:
+        return PipelineGraphEdge.model_validate(raw)
+    except ValidationError:
+        try:
+            return PipelineGraphEdge.model_validate(raw, context=LEGACY_READ_CONTEXT)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Stored pipeline edge {raw.get('id', 'unknown')} no longer validates "
+                f"against the current edge schema: {_joined_validation_detail(exc)}",
+            ) from exc
+
+
+def _build_node_patch_graph(
+    stored_nodes: list[dict[str, Any]],
+    edge_rows: list[Any],
+    *,
+    node_id: uuid.UUID,
+    patch: PipelineGraphNodePatch,
+) -> PipelineGraphUpdate:
+    """Load + merge + revalidate the FULL graph for the node-targeted patch.
+
+    Returns the whole graph as the ``PipelineGraphUpdate`` payload the
+    full-graph write consumes, so the caller can hand it straight to
+    ``_apply_graph_update``. Read + merge only — nothing here writes.
+    """
+    nodes = _patched_node_models(stored_nodes, target_id=node_id, patch=patch)
+    try:
+        return PipelineGraphUpdate(nodes=nodes, edges=[_stored_edge_model(row) for row in edge_rows])
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Merged graph rejected: {_joined_validation_detail(exc)}",
+        ) from None
+
+
+@router.put(
+    "/{pipeline_id}/graph",
+    dependencies=[Depends(audited("pipeline_graph_replaced", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.replace_graph")
+async def replace_pipeline_graph_endpoint(
+    pipeline_id: uuid.UUID,
+    req: PipelineGraphUpdate,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineGraphResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here: operators are
+    # "privileged" for weakening by design, and equivalent weakening remains
+    # reachable via update_pipeline / convert_to_agent / revert_to_manual, so an
+    # admin-only gate would only block the operator's primary graph-edit path.
+    node_data, edge_data, validator_graph, connector_bindings = _prepare_graph_write(req)
+    issues: list[GraphValidationIssue] = []
+
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            pipeline = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
+            # FAR-1181: the graph READ masks envVars/contextFiles/parameter
+            # values; a full-replace write round-tripping that masked read must
+            # not persist the mask literals over the stored secrets. Echoes are
+            # resolved against the stored graph before the write commits.
+            node_data = merge_masked_graph_nodes(node_data, list(pipeline.graph_nodes_json or []))
+            validator_graph = {
+                "nodes": node_data,
+                "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+            }
+            connector_bindings = extract_connector_bindings(node_data)
+            await _enforce_connector_team_bindings(
+                session,
+                principal.organisation_id,
+                pipeline.owner_team_id,
+                connector_bindings,
+            )
+            # FAR-309 PR A review: the guardrail-binding strip guard now lives
+            # in the SERVICE LAYER (replace_pipeline_graph, under the row lock)
+            # so every graph-mutation caller inherits it — including the
+            # PATCH /{id} graph_json path and snapshot rollback. The admin flag
+            # is resolved here and the service layer re-reads the live role
+            # under the lock for REST callers.
+            _schema_pins, model_backend_pins = await _resolve_graph_references(
+                session,
+                req.nodes,
+                principal.organisation_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+            )
+            # FAR-488a + FAR-1810: keep the bound Agent rows in step with
+            # node-level agent_commands PATCHes BEFORE the write, because the
+            # write mints the FAR-1810 edit snapshot — and the snapshot copy's
+            # ``_materialize_agent_fields`` OVERWRITES each bound node's
+            # ``agent_commands`` with the Agent-row value. Syncing first makes
+            # the snapshot (and any rollback replaying it) pin the command the
+            # operator just saved; pre-change the sync ran AFTER the write, so
+            # the snapshot carried the stale command.
+            await _sync_agent_row_commands(
+                session,
+                org_id=principal.organisation_id,
+                nodes=node_data,
+                pipeline_id=pipeline_id,
+            )
+            graph = await replace_pipeline_graph(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                nodes=node_data,
+                edges=[_edge_data_to_dict(edge) for edge in edge_data],
+                actor=GraphWriteActor(
+                    is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+                    caller_type="rest",
+                    account_id=principal.account_id,
+                    is_guardrail_admin=_is_guardrail_admin(principal),
+                    grants_deny_privilege=_grants_deny_privilege(principal),
+                    grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                ),
+                recording=GraphWriteRecording(record_snapshot=True),
+            )
+            if graph is not None:
+                issues = await _validate_graph_save(
+                    session,
+                    org_id=principal.organisation_id,
+                    pipeline_id=pipeline_id,
+                    validator_graph=validator_graph,
+                    connector_bindings=connector_bindings,
+                    model_backend_pins=model_backend_pins,
+                    environment_profile_id=pipeline.environment_profile_id,
+                )
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            exc=exc,
+        )
+    except GitContentRefError as exc:
+        # FAR-220: the Agent-row command sync validated an unpinned git
+        # content ref and failed closed INSIDE the transaction — the graph
+        # write is rolled back with it. Surface 422 instead of the decorator's
+        # 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the edit snapshot's bounded lock lost its race against a
+        # concurrent run start — retryable contention, never the decorator's
+        # generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.replace_graph", action="save")
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    nodes, edges = graph
+    return _graph_response(nodes, edges, validation_issues=issues)
+
+
+@router.patch(
+    "/{pipeline_id}/graph/nodes/{node_id}",
+    dependencies=[Depends(audited("pipeline_graph_node_patched", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.patch_graph_node")
+async def patch_pipeline_graph_node_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    req: PipelineGraphNodePatch,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineGraphResponse:
+    """FAR-1829: patch ONE node's allowlisted scalar fields, atomically.
+
+    Same permission (``pipeline.graph.update``) and team-scope gate as the
+    sibling graph writes, plus the same in-transaction team re-check. The
+    handler itself is deliberately tiny: the read/merge/validation adapter
+    (:func:`_build_node_patch_graph`) runs under the locked pipeline row, and
+    the write is delegated to :func:`_apply_graph_update` — the SAME function
+    the ``PATCH /{pipeline_id}`` payload's ``graph_json`` path uses — so every
+    guard, the row lock, the save-time graph validation and the
+    ``pipeline.graph_updated`` audit fire through one shared write path rather
+    than a second, parallel one. The Agent-row ``agent_commands`` sync runs in
+    that shared path too: ``_apply_graph_update`` calls it AFTER the
+    masked-echo merge and BEFORE ``replace_pipeline_graph`` writes, so the
+    FAR-1810 edit snapshot the write mints pins the command this patch just
+    saved rather than the stale pre-patch one.
+
+    Unknown ``node_id`` → 404 (a missing pipeline already 404s in the team
+    gate). A body key outside :class:`PipelineGraphNodePatch`'s allowlist → 422
+    with a typed ``body.<field>`` path. No precondition token, no 409: the
+    merge happens under the row lock, so there is nothing to race.
+    """
+    issues: list[GraphValidationIssue] = []
+
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # Locks the pipeline row FOR UPDATE and re-verifies the team gate
+            # inside THIS transaction — the lock the merge and the delegated
+            # write both run under, so a concurrent graph write cannot slip
+            # between the read of the stored node and the write of the merge.
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            stored_nodes, edge_rows = await _load_locked_pipeline_graph(
+                session,
+                pipeline_id,
+                pipeline_row=locked,
+            )
+            graph_json = _build_node_patch_graph(
+                stored_nodes,
+                edge_rows,
+                node_id=node_id,
+                patch=req,
+            )
+            # ``updates={}``: a node patch never changes pipeline-level fields,
+            # so the effective owner team is the row's current one (which is
+            # what ``_apply_graph_update`` falls back to).
+            # FAR-1829: the node-targeted patch DECLARES the field names it
+            # supplied; it is also an explicit save, so it requests the
+            # FAR-1810 edit snapshot like every other graph-write surface.
+            saved_nodes, saved_edges, issues = await _apply_graph_update(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                graph_json=graph_json,
+                updates={},
+                recording=GraphWriteRecording(
+                    record_snapshot=True,
+                    patched_fields=sorted(req.model_fields_set),
+                ),
+            )
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            exc=exc,
+        )
+    except GitContentRefError as exc:
+        # Parity with the full-replace route: the Agent-row command sync
+        # failed closed INSIDE the transaction, so the graph write rolled back
+        # with it. Surface 422 instead of the decorator's 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    # No ``saved_* is None`` arm: a vanished pipeline 404s inside
+    # ``_apply_graph_update`` (and earlier still, in the team gate), so the
+    # only way to reach here is a committed write.
+    return _graph_response(saved_nodes, saved_edges, validation_issues=issues)
+
+
+def _is_admin(principal: TenantPrincipal) -> bool:
+    return principal.org_role == "admin"
+
+
+def _is_team_private(visibility: str | None, owner_team_id: uuid.UUID | None) -> bool:
+    """True when a pipeline is currently team-private (has a team owner)."""
+    return visibility not in ("org", None) and owner_team_id is not None
+
+
+def _is_owner_reassignment(new_owner_team_id: uuid.UUID | None, current_owner_team_id: uuid.UUID | None) -> bool:
+    """True when the update hands the pipeline to a different team."""
+    return new_owner_team_id is not None and new_owner_team_id != current_owner_team_id
+
+
+async def _require_team_membership(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    team_id: uuid.UUID,
+    denial_detail: str,
+) -> None:
+    """Raise 403 unless the caller is a member of the given team."""
+    is_member = await team_membership_exists(session, account_id=account_id, team_id=team_id)
+    if not is_member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
+
+
+#: The bounded row-lock wait for mutation transactions is single-sourced in
+#: ``modulo.db.crud.row_lock.set_mutation_row_lock_timeout`` (FAR-1313 /
+#: FAR-1279 rationale lives on that function). It moved out of this route
+#: module so ``routes.triggers`` can import it without a cross-route (cyclic)
+#: import edge; the Settings field semantics are unchanged.
+
+
+async def _reapply_team_gate_inside_mutation_txn(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    include_deleted: bool = False,
+) -> Pipeline:
+    """Lock + re-verify the team gate INSIDE the mutation transaction (#1801).
+
+    ``require_team_membership_or_admin`` runs its own transaction that COMMITs
+    before the endpoint's mutation transaction opens, so ownership/visibility
+    can change between the two (TOCTOU). Re-selects the row ``FOR UPDATE`` by
+    id + organisation and re-runs the membership-or-admin matrix against the
+    locked row's CURRENT visibility/``owner_team_id`` - the same matrix the
+    dependency enforces, evaluated atomically with the mutation.
+
+    The wait for that lock is BOUNDED (``Settings.mutation_row_lock_timeout_ms``,
+    read at the call site and set via ``SET LOCAL`` semantics immediately before
+    the select): a contended mutation surfaces SQLSTATE 55P03, which
+    ``handle_db_errors`` maps to a clear 409 rather than an unbounded
+    pooled-connection wait.
+
+    Fail closed: 404 when the row is gone (the caller's crud call would 404
+    anyway), 403 when the locked row is team-private and the caller is neither
+    a member of its owner team nor an org admin.
+    """
+    # Must run BEFORE the FOR UPDATE below to bound that wait - see
+    # ``set_mutation_row_lock_timeout`` (db.crud.row_lock) for the dialect-gate rationale.
+    await set_mutation_row_lock_timeout(session)
+    scope = select(Pipeline).where(
+        Pipeline.id == pipeline_id,
+        Pipeline.organisation_id == principal.organisation_id,
+    )
+    # FAR-1362: restore is the one caller of this gate whose target row is
+    # soft-deleted, and the ``include_deleted`` flag alone has been INERT since
+    # FAR-1025 (PR #806) introduced the global ``do_orm_execute`` filter that
+    # injects ``deleted_at IS NULL`` into every ORM SELECT on a SoftDeleteMixin
+    # model - so the deleted-inclusive read below returned no row and the gate
+    # 404'd restore before the handler (for admins too: the admin bypass runs
+    # AFTER the row read). ``include_soft_deleted`` marks the statement so that
+    # listener skips its injection - exactly what
+    # ``crud.pipeline.get_pipeline(include_deleted=True)`` does. The other
+    # branch keeps the explicit predicate as defence-in-depth on top of the
+    # listener, as before.
+    stmt = include_soft_deleted(scope) if include_deleted else scope.where(Pipeline.deleted_at.is_(None))
+    current = (
+        await session.execute(
+            stmt.with_for_update()
+            # populate_existing: SQLAlchemy's identity map returns the SAME
+            # instance for a re-selected row, with its ORIGINAL (pre-lock)
+            # attribute values, unless told to refresh. Callers that pre-fetch
+            # the row (e.g. update_pipeline_endpoint's unlocked
+            # _get_pipeline_or_404) would otherwise get their stale instance
+            # back and the FOR UPDATE re-read would be a no-op — the ceiling
+            # validation and team/ownership reads would run against pre-lock
+            # data, reopening the very TOCTOU this lock exists to close.
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    if _is_admin(principal):
+        return current
+    if current.visibility not in ("org", None) and current.owner_team_id is not None:
+        await _require_team_membership(
+            session,
+            account_id=principal.account_id,
+            team_id=current.owner_team_id,
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
+        )
+    return current
+
+
+async def _assert_environment_profile_bindable(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+) -> None:
+    """FAR-1558: an environment-profile binding must be same-org and team-visible.
+
+    Eligibility — the same rule ``core.team_visibility`` applies to a
+    team-private connector or model backend bound into a pipeline:
+
+    * ``visibility == "org"`` — usable by ANY pipeline in the organisation;
+    * ``visibility == "team"`` — usable ONLY by a pipeline whose effective
+      owner team equals the profile's ``owner_team_id``. A team-private
+      profile with no owner team is usable by nothing, and a pipeline with no
+      owner team (org-wide) can only ever hold an org-visible profile.
+
+    Missing, soft-deleted (the global ``do_orm_execute`` filter plus the
+    explicit predicate below) and cross-organisation ids ALL resolve to the
+    same 422, so a foreign id is never confirmed to exist. The DB-level tenant
+    trigger ``trg_pipelines_environment_profile_id_tenant`` (migration 0289) is
+    the fail-closed backstop: a binding that somehow bypasses this check raises
+    SQLSTATE 23503 rather than being stored.
+
+    Raises HTTP 422 (no new exception types) — never a 404, because an
+    invalid *field value* is a validation failure, not a missing resource.
+    """
+    profile = (
+        await session.execute(
+            select(EnvironmentProfile).where(
+                EnvironmentProfile.id == profile_id,
+                EnvironmentProfile.organisation_id == org_id,
+                EnvironmentProfile.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "environment_profile_id does not resolve to an environment profile in this "
+                "organisation (it may not exist, may have been deleted, or may belong to "
+                "another organisation)"
+            ),
+        )
+    # SHARED predicate (core.team_visibility) — the same rule the profile-side
+    # scope-change guard applies, so the writers cannot drift. Org-visible
+    # profiles never mismatch; team-private ones must be owned by this
+    # pipeline's team (a team-private profile with no owner team owns nothing).
+    if not environment_profile_team_mismatch(profile.visibility, profile.owner_team_id, pipeline_owner_team_id):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        # FAR-1558 F3: generic ON PURPOSE. A pipeline-PATCH caller holds
+        # ``pipeline.update`` and need NOT be a member of the profile's
+        # owner team, so the detail must not leak the profile's name, id or
+        # owner team. Clients branch on the typed code (shared constant, not a
+        # per-route literal); profile-side detail stays on the
+        # environment-profile surface (which enforces the mirror-image guard
+        # when a profile's scope changes).
+        detail=(
+            f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the selected environment profile is "
+            "team-private and is not owned by this pipeline's owner team"
+        ),
+    )
+
+
+async def _assert_team_transition_allowed(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    current: Pipeline,
+    update_payload: dict[str, Any],
+) -> None:
+    """Re-validate the team gate against the NEW visibility/owner_team_id values.
+
+    The endpoint's ``require_team_membership_or_admin`` dependency checks the
+    CURRENT ``owner_team_id`` at request time, but the update can change
+    ``visibility`` or reassign/clear ``owner_team_id`` without re-checking the
+    team gate against the NEW values — a member could downgrade a team-private
+    pipeline to org-visible or hand it to a team they don't belong to
+    (task-authz-b-visibility-guard). Re-runs the RLS-parity membership-or-admin
+    gate inside the same transaction (RLS context is transaction-scoped).
+    """
+    # Org-admin bypass applies throughout (RLS parity).
+    if _is_admin(principal):
+        return
+
+    changes_visibility = "visibility" in update_payload
+    changes_owner_team = "owner_team_id" in update_payload
+    if not changes_visibility and not changes_owner_team:
+        return  # No-op: the team boundary is unchanged.
+
+    new_visibility = update_payload.get("visibility", current.visibility)
+    new_owner_team_id = update_payload.get("owner_team_id", current.owner_team_id)
+
+    # A team-visible pipeline must keep an owner team.
+    if new_visibility == "team" and new_owner_team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="owner_team_id is required when visibility is 'team'",
+        )
+
+    # Current team gate (if the pipeline is currently team-private): the caller
+    # must be a member of the CURRENT team (or admin). ``_is_team_private`` is
+    # only True when an owner team is set, so this never skips a real gate.
+    current_team_id = current.owner_team_id
+    if current_team_id is not None and _is_team_private(current.visibility, current_team_id):
+        await _require_team_membership(
+            session,
+            account_id=principal.account_id,
+            team_id=current_team_id,
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
+        )
+
+    # New team gate: reassigning to a team requires membership of the NEW team.
+    if new_owner_team_id is not None and _is_owner_reassignment(new_owner_team_id, current.owner_team_id):
+        await _require_team_membership(
+            session,
+            account_id=principal.account_id,
+            team_id=new_owner_team_id,
+            denial_detail="Cannot reassign a pipeline to a team you are not a member of",
+        )
+
+
+_AUTONOMY_LEVEL_FIELDS = ("default_autonomy_level", "max_autonomy_level")
+
+
+async def _maybe_audit_autonomy_change(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    updates: dict[str, Any],
+) -> None:
+    """Append autonomy level/ceiling change audit events when a value changed.
+
+    ``default_autonomy_level`` changes emit the existing
+    ``pipeline.autonomy_level_changed`` event (payload shape unchanged).
+    ``max_autonomy_level`` (FAR-1163) changes emit the sibling
+    ``pipeline.max_autonomy_level_changed`` event with the same
+    ``autonomy_change_payload`` shape plus a ``field`` discriminator.
+    """
+    fields = [f for f in _AUTONOMY_LEVEL_FIELDS if f in updates]
+    if not fields:
+        return
+    previous = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+    for field in fields:
+        # getattr with a default: stand-in rows may lack the newer column.
+        prev_value = getattr(previous, field, None) if previous is not None else None
+        if prev_value == updates[field]:
+            continue
+        payload = autonomy_change_payload(previous=prev_value, current=updates[field])
+        if field == "max_autonomy_level":
+            payload = {**payload, "field": field}
+            event_type = "pipeline.max_autonomy_level_changed"
+        else:
+            event_type = "pipeline.autonomy_level_changed"
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json=payload,
+            request_id=getattr(principal, "request_id", None),
+        )
+
+
+async def _apply_graph_update(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+    graph_json: PipelineGraphUpdate,
+    updates: dict[str, Any],
+    recording: GraphWriteRecording | None = None,
+) -> tuple[list[dict[str, Any]], list[PipelineEdge], list[GraphValidationIssue]]:
+    """Apply a graph replacement shipped inside a PATCH update payload.
+
+    ``recording`` (FAR-1810 + FAR-1829) is the caller's declaration of how the
+    write is recorded. It is forwarded VERBATIM to the shared
+    :func:`replace_pipeline_graph` write, so the caller owns both halves: the
+    node-targeted patch route passes
+    ``GraphWriteRecording(record_snapshot=True, patched_fields=<declared
+    field names>)`` and the ``graph_json``-inside-``PATCH`` caller passes
+    ``GraphWriteRecording(record_snapshot=True)`` — this path is an explicit
+    save, so BOTH callers request the FAR-1810 edit snapshot exactly as the
+    hard-coded flag did before the two recording knobs were folded into one
+    value object. ``patched_fields`` reaches the ``pipeline.graph_updated``
+    audit payload only when the caller declared some, so every non-patch
+    caller's payload shape is unchanged. The three-value return (saved nodes,
+    saved edges, advisory validation issues) is consumed by the node-targeted
+    patch route; the pre-existing ``graph_json``-inside-``PATCH`` caller
+    ignores it, so its behaviour is unchanged.
+    """
+    node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
+    existing = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
+    # FAR-1181: resolve mask echoes against the stored graph (parity with the
+    # PUT /graph endpoint) — a full-replace write round-tripping the masked
+    # read must not persist the mask literals over the stored secrets.
+    node_data = merge_masked_graph_nodes(node_data, list(existing.graph_nodes_json or []))
+    validator_graph = {
+        "nodes": node_data,
+        "edges": [_edge_data_to_validator(edge) for edge in edge_data],
+    }
+    graph_bindings = extract_connector_bindings(node_data)
+    await _enforce_connector_team_bindings(
+        session,
+        org_id,
+        effective_owner_team_id,
+        graph_bindings,
+    )
+    _schema_pins, model_backend_pins = await _resolve_graph_references(
+        session,
+        graph_json.nodes,
+        org_id,
+        pipeline_owner_team_id=effective_owner_team_id,
+    )
+    # FAR-488a + FAR-1810: same Agent-row sync as the PUT /graph endpoint,
+    # and it must run BEFORE the write mints the edit snapshot — the snapshot
+    # materializes bound nodes from the Agent row, so syncing first pins the
+    # command the operator just saved.
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data, pipeline_id=pipeline_id)
+    graph = await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        nodes=node_data,
+        edges=[_edge_data_to_dict(edge) for edge in edge_data],
+        actor=GraphWriteActor(
+            is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+            caller_type="rest",
+            account_id=principal.account_id,
+            is_guardrail_admin=_is_guardrail_admin(principal),
+            grants_deny_privilege=_grants_deny_privilege(principal),
+            grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        ),
+        recording=recording,
+    )
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    # FAR-681 QA gate parity: the dedicated graph endpoint runs
+    # _validate_graph_save after the write, rejecting GUARDRAIL_CAP_EXCEEDED,
+    # REDACT_CORRECT_BLOCKED and HITL_REVIEW_DESCRIPTION_REQUIRED with 422 (the
+    # rejection rolls the write back). The apply path (graph_json inside a
+    # PATCH update payload) must enforce the IDENTICAL gates — without this
+    # call a declarative apply could save a graph the authoring UI rejects.
+    issues = await _validate_graph_save(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        validator_graph=validator_graph,
+        connector_bindings=graph_bindings,
+        model_backend_pins=model_backend_pins,
+        environment_profile_id=updates.get("environment_profile_id", getattr(existing, "environment_profile_id", None)),
+    )
+    saved_nodes, saved_edges = graph
+    return saved_nodes, saved_edges, issues
+
+
+def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
+    """Raise the 409 for an ownership transfer blocked by active runs (PRD §9.3)."""
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"pipeline_has_active_runs: {exc.active_run_count} run(s) still in progress; "
+        "cannot change ownership while any run is active",
+    ) from None
+
+
+def _assert_threshold_change_allowed(
+    current: Pipeline,
+    principal: TenantPrincipal,
+    *,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> None:
+    """FAR-1184: raising or clearing the spend limit requires ``cost.manage``.
+
+    Lowering or setting where none exists keeps ``pipeline.update``. Raised
+    BEFORE any mutation; the denial audits + 403s via the route's
+    ``CircuitBreakerThresholdChangeDenied`` except clause.
+    """
+    if threshold_change and not circuit_breaker_threshold_change_allowed(
+        current.circuit_breaker_threshold,
+        new_threshold,
+        may_manage_cost=_may_manage_cost(principal),
+    ):
+        raise CircuitBreakerThresholdChangeDenied(
+            previous=current.circuit_breaker_threshold,
+            new=new_threshold,
+        )
+
+
+async def _assert_environment_profile_binding_valid(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    locked: Pipeline,
+    updates: dict[str, Any],
+) -> None:
+    """FAR-1558: validate the candidate environment-profile binding fail-closed.
+
+    The candidate is the payload's value, or the STORED one when a scope
+    change could strand it — the same fail-closed re-validation the
+    accountability-owner block in ``crud.pipeline.update_pipeline`` applies.
+    Both run against the EFFECTIVE post-update owner team, computed the same
+    way the ceiling/default merge computes its effective values.
+    """
+    binding_in_payload = "environment_profile_id" in updates
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    # Read the STORED binding defensively: a partial stand-in row (test
+    # doubles, MagicMock rows) exposes a non-column attribute child, so
+    # anything that is not a UUID is treated as "unbound" rather than
+    # fed into the profile query — the same treatment
+    # crud.pipeline.update_pipeline gives stored accountability owners.
+    stored = getattr(locked, "environment_profile_id", None)
+    stored_binding = stored if isinstance(stored, uuid.UUID) else None
+    if binding_in_payload:
+        candidate_binding = updates["environment_profile_id"]
+    elif scope_changed:
+        candidate_binding = stored_binding
+    else:
+        candidate_binding = None
+    if candidate_binding is not None:
+        await _assert_environment_profile_bindable(
+            session,
+            org_id=principal.organisation_id,
+            profile_id=candidate_binding,
+            # .get is correct: an explicit owner_team_id=None (clear) is in
+            # the dict, so .get returns it rather than the row's stale team.
+            pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
+        )
+
+
+def _assert_autonomy_ceiling_valid(locked: Pipeline, updates: dict[str, Any]) -> None:
+    """FAR-1163: a PATCH may set only one of default/max — validate the MERGED effective values.
+
+    Ceiling NULL = effective ceiling is the default, so it never violates on
+    its own. ``locked`` is the FOR UPDATE row from the in-transaction team
+    gate.
+    """
+    if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
+        merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
+        # ``dict.get`` returns the stored value whenever the key is
+        # present (even an explicit null), which is exactly
+        # "updates[k] if k in updates else the row's value".
+        # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
+        # has existed since migration 0256, so read it directly —
+        # its NULL arm (no ceiling configured) is the only fallback.
+        merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
+        try:
+            # Lenient: a stored non-string/unparseable ceiling does not
+            # constrain resolution either (it falls back to default).
+            validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
+
+
+async def _enforce_stored_bindings_on_team_change(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    current: Pipeline,
+    updates: dict[str, Any],
+    *,
+    ownership_changed: bool,
+    graph_replaced: bool,
+) -> None:
+    """FAR-1515 MAJOR 2: gate the STORED connector bindings on a team-boundary change.
+
+    An ownership/visibility-only PATCH used to re-validate MEMBERSHIP only,
+    while the advisory ``connector_rebind_required`` flag (set on the
+    response) was consumed by nothing — so moving a pipeline to a new team
+    re-created the forbidden state (its STORED graph still pinning a
+    connector the new owner team may not use) without ever running the
+    connector-team gate. When the team boundary changes and the payload does
+    NOT also replace the graph (that case is gated by ``_apply_graph_update``
+    against the EFFECTIVE owner), the pipeline's stored bindings are gated
+    here, in the same transaction, against the effective NEW owner team.
+    """
+    visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
+    if (ownership_changed or visibility_changed) and not graph_replaced:
+        stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
+        if stored_bindings:
+            await _enforce_connector_team_bindings(
+                session,
+                principal.organisation_id,
+                updates.get("owner_team_id", current.owner_team_id),
+                stored_bindings,
+            )
+
+
+async def _apply_pipeline_update_payload(
+    *,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    req: PipelineUpdate,
+    updates: dict[str, Any],
+    has_graph: bool,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> tuple[Pipeline | None, bool]:
+    """Apply a PATCH update payload inside one mutation transaction.
+
+    Pre-validators, then the persist ladder: RLS context, unlocked 404 read,
+    threshold permission gate, the FOR UPDATE team gate, transition /
+    environment-profile / autonomy-ceiling validation, the stored-connector
+    binding gate on a team change, optional graph replacement, the crud
+    update, and the in-transaction refresh.
+
+    Returns ``(pipeline, ownership_changed)`` — ``pipeline`` is None when the
+    row is gone mid-flight (the route 404s). Every typed exception raised
+    here propagates AFTER the transaction rolls back; the
+    exception-to-status ladder stays in ``update_pipeline_endpoint``.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
+        _assert_threshold_change_allowed(
+            current,
+            principal,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
+        # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
+        # THIS transaction — that locked row, not the earlier unlocked read
+        # above, is what the ceiling/default merge below must validate
+        # against. Two concurrent PATCHes each validating against their own
+        # stale unlocked read can otherwise both commit and store
+        # ceiling < default. The helper keeps the 404 (gone row) and 403
+        # (team-private row, non-member) semantics of the unlocked read.
+        # NOTE: the unlocked read above and this locked re-select resolve to
+        # the SAME identity-mapped instance; the helper's
+        # populate_existing=True refreshes its attributes from the locked
+        # row, so both names below read post-lock values.
+        locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+        await _assert_team_transition_allowed(session, principal, current, updates)
+        await _assert_environment_profile_binding_valid(session, principal, locked, updates)
+        _assert_autonomy_ceiling_valid(locked, updates)
+        ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
+        graph_replaced = has_graph and req.graph_json is not None
+        await _enforce_stored_bindings_on_team_change(
+            session,
+            principal,
+            current,
+            updates,
+            ownership_changed=ownership_changed,
+            graph_replaced=graph_replaced,
+        )
+        await _maybe_audit_autonomy_change(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            updates=updates,
+        )
+        if has_graph and req.graph_json is not None:
+            # A ``graph_json``-inside-``PATCH`` save is an explicit save: it
+            # records the FAR-1810 edit snapshot (it always has — the flag used
+            # to be hard-coded inside ``_apply_graph_update``). It declares no
+            # node fields, so the audit payload carries no ``patched_fields``.
+            await _apply_graph_update(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                graph_json=req.graph_json,
+                updates=updates,
+                recording=GraphWriteRecording(record_snapshot=True),
+            )
+        pipeline = await update_pipeline(
+            session,
+            pipeline_id,
+            updates,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            request_id=getattr(principal, "request_id", None),
+        )
+        # Refresh the ORM row inside the transaction so the DB-computed
+        # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+        # the transaction is active. Accessing it after commit with
+        # autobegin=False raises InvalidRequestError -> 422 silent-success.
+        if pipeline is not None:
+            await session.refresh(pipeline)
+    return pipeline, ownership_changed
+
+
+@router.patch(
+    "/{pipeline_id}",
+    dependencies=[Depends(audited("pipeline_updated", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.update")
+async def update_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    req: PipelineUpdate,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # any_credential pair: declarative apply (FAR-681) updates pipelines (incl.
+    # the graph_json replace) with mk_ org API keys — the permission gate and
+    # the team gate both accept any credential, with the same role clamping
+    # and visibility/membership matrix.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    updates = req.model_dump(exclude_unset=True)
+    has_graph = "graph_json" in updates
+    updates.pop("graph_json", None)
+    # FAR-1184: normalise FIRST (Pydantic already validated the value; this
+    # canonicalises to the column's Decimal scale) so the permission
+    # comparison never sees an unexpected value type — a bad value raises
+    # here, BEFORE any denial/permission logic, and never reaches
+    # `new <= previous`.
+    threshold_change = "circuit_breaker_threshold" in updates
+    new_threshold: Decimal | None = (
+        normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
+    )
+    try:
+        pipeline, ownership_changed = await _apply_pipeline_update_payload(
+            session=session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            req=req,
+            updates=updates,
+            has_graph=has_graph,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            exc=exc,
+        )
+    except CircuitBreakerThresholdChangeDenied as exc:
+        # FAR-1184: the mutation transaction has rolled back (the denial was
+        # raised inside it) — audit the refusal fresh, then 403.
+        await _deny_threshold_change(session, principal=principal, pipeline_id=pipeline_id, exc=exc)
+    except PipelineHasActiveRunsError as exc:
+        _raise_active_runs_conflict(exc)
+    except GitContentRefError as exc:
+        # FAR-220: the graph_json path's Agent-row command sync validated an
+        # unpinned git content ref and failed closed INSIDE the transaction —
+        # the write rolls back with it. Surface 422 instead of the decorator's
+        # 500.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: a graph_json PATCH's edit snapshot lost its bounded lock
+        # race — retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.update", action="save")
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    response = _pipeline_response(pipeline)
+    response.connector_rebind_required = ownership_changed
+    return response
+
+
+# ── FAR-1175 (ADR 062 S1): manual autonomy demote / promote ──────────────────
+AUTONOMY_DEMOTED_EVENT = "pipeline.autonomy_demoted"
+AUTONOMY_PROMOTION_DECIDED_EVENT = "pipeline.autonomy_promotion_decided"
+
+
+class AutonomyChangeRequest(BaseModel):
+    """Body for a manual autonomy demote/promote."""
+
+    level: str = Field(..., description="Target autonomy level (canonical value).")
+    reason: str | None = Field(
+        None,
+        max_length=2000,
+        description="Why the level is being changed — recorded on the audit event.",
+    )
+
+
+class AutonomyChangeResponse(BaseModel):
+    """Result of a manual autonomy demote/promote."""
+
+    pipeline_id: uuid.UUID
+    previous_level: str
+    earned_autonomy_level: str
+    max_autonomy_level: str | None = None
+    event_type: str
+    updated_at: datetime | None = None
+
+
+def _effective_ceiling(pipeline: Pipeline) -> AutonomyLevel:
+    """Resolve the pipeline's effective autonomy ceiling (NULL = default)."""
+    default = pipeline.default_autonomy_level or AutonomyLevel.default().value
+    ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
+    if isinstance(ceiling_raw, str) and ceiling_raw:
+        try:
+            return AutonomyLevel(ceiling_raw)
+        except ValueError:
+            pass
+    return AutonomyLevel(default)
+
+
+def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
+    """The level a demote/promote moves FROM: the earned level, else the default."""
+    earned = getattr(pipeline, "earned_autonomy_level", None)
+    if isinstance(earned, str) and earned:
+        try:
+            return AutonomyLevel(earned)
+        except ValueError:
+            pass
+    return AutonomyLevel(pipeline.default_autonomy_level or AutonomyLevel.default().value)
+
+
+async def _assert_autonomy_admin_or_owner(
+    session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
+) -> None:
+    """Admin/owner gate for a manual autonomy change (ADR 062 §1).
+
+    Promotion/demotion is a governance decision: org admins, and members of the
+    pipeline's owner team (the owner), may make it. Everyone else is refused
+    with a 403. Uses the flag-independent numeric hierarchy so enforcement is
+    live even when ``authz.enforce`` is disabled.
+    """
+    if org_role_level(principal.org_role) >= _ADMIN_LEVEL:
+        return
+    owner_team_id = getattr(pipeline, "owner_team_id", None)
+    if owner_team_id is not None and await is_account_in_team(
+        session, account_id=principal.account_id, team_id=owner_team_id
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only an organisation admin or the pipeline's owner team may change its autonomy level",
+    )
+
+
+async def _apply_manual_autonomy_change(
+    *,
+    pipeline_id: uuid.UUID,
+    principal: TenantPrincipal,
+    session: AsyncSession,
+    req: AutonomyChangeRequest,
+    promote: bool,
+) -> AutonomyChangeResponse:
+    """Shared body of the manual demote/promote endpoints.
+
+    Validates the target against the direction (demote must strictly lower,
+    promote must strictly raise and never exceed the ceiling), writes
+    ``earned_autonomy_level``, and appends the direction's audit event
+    (``pipeline.autonomy_demoted`` / ``pipeline.autonomy_promotion_decided``)
+    in the SAME transaction — a level change without its evidence event is not
+    possible.
+    """
+    try:
+        target = AutonomyLevel(req.level).value
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid autonomy level: {req.level!r}",
+        ) from None
+    target_level = AutonomyLevel(target)
+
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        await _assert_autonomy_admin_or_owner(session, principal, pipeline)
+
+        current_level = _current_effective_level(pipeline)
+        ceiling = _effective_ceiling(pipeline)
+        if promote:
+            if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion must raise autonomy above the current level "
+                        f"({current_level.value}): {target_level.value}"
+                    ),
+                )
+            if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion to {target_level.value} exceeds the pipeline's "
+                        f"max_autonomy_level ceiling ({ceiling.value})"
+                    ),
+                )
+        elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Demotion must lower autonomy below the current level "
+                    f"({current_level.value}): {target_level.value}"
+                ),
+            )
+
+        updated = await set_earned_autonomy_level(
+            session,
+            org_id=principal.organisation_id,
+            pipeline_id=pipeline_id,
+            level=target,
+        )
+        if updated is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        event_type = AUTONOMY_PROMOTION_DECIDED_EVENT if promote else AUTONOMY_DEMOTED_EVENT
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json={
+                "pipeline_id": str(pipeline_id),
+                "previous_level": current_level.value,
+                "new_level": target,
+                "reason": req.reason,
+                "actor": str(principal.account_id),
+                "ceiling": ceiling.value,
+                "direction": "promote" if promote else "demote",
+            },
+            request_id=getattr(principal, "request_id", None),
+        )
+        return AutonomyChangeResponse(
+            pipeline_id=pipeline_id,
+            previous_level=current_level.value,
+            earned_autonomy_level=target,
+            max_autonomy_level=getattr(updated, "max_autonomy_level", None),
+            event_type=event_type,
+            updated_at=getattr(updated, "earned_autonomy_updated_at", None),
+        )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/demote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.demote")
+async def demote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
+
+    Demotion adds human review, so it is always safe: an admin or the pipeline's
+    owner may lower the earned level at any time. Takes effect at the run's next
+    HITL gate (in-flight runs included) when ``autonomy_gating`` is on. Records
+    a ``pipeline.autonomy_demoted`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=False,
+    )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/promote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.promote")
+async def promote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 062 §1).
+
+    Promotion is never automatic: an admin or the pipeline's owner approves it,
+    capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
+    runs created after the approval — in-flight runs keep the lower level (ADR
+    043 §3). Records a ``pipeline.autonomy_promotion_decided`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=True,
+    )
+
+
+@router.delete(
+    "/{pipeline_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(audited("pipeline_deleted", "pipeline", principal_dep=get_current_tenant_user, fail_closed=True))
+    ],
+)
+@handle_db_errors("pipelines.delete")
+async def delete_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission("pipeline.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> None:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            deleted = await soft_delete_pipeline(
+                session, pipeline_id, deleted_by=principal.account_id, organisation_id=principal.organisation_id
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+
+
+async def _resolve_pipeline_team_scope_including_deleted(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """``resolve_pipeline_team_scope`` for a SOFT-DELETED target row.
+
+    FAR-1362: ``POST /{pipeline_id}/restore`` is the one pipeline mutation whose
+    target row is soft-deleted - that is the whole point of the endpoint. The
+    shared ``team_scope_resolver`` cannot see such a row, so reusing it here
+    would resolve ``None`` for a non-admin caller and the dependency would
+    answer 404 "Resource not found" BEFORE the handler: adding the standard
+    dependency would break restore for every non-admin.
+
+    Two things exclude a deleted row, and BOTH are handled here:
+
+    * ``team_scope_resolver`` adds an explicit ``deleted_at IS NULL``
+      predicate, and
+    * a global ``do_orm_execute`` listener (``db.soft_delete``) injects the
+      same predicate into EVERY ORM SELECT on a ``SoftDeleteMixin`` model -
+      which is why the explicit one is redundant everywhere else. The
+      statement is marked with ``include_soft_deleted`` to opt out of it.
+
+    Same path-param read, same ``TeamScopedResource`` shape, so the
+    dependency's membership-or-admin matrix is unchanged; only the visibility
+    predicate matches what the endpoint acts on. Under RLS the row is still
+    subject to ``rls_team_isolation`` (which does NOT filter on deletion), so
+    a non-member's deleted row stays invisible and the dependency still 404s.
+    """
+    raw = request.path_params.get("pipeline_id")
+    if raw is None:
+        return None
+    try:
+        obj_id = uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid pipeline_id path parameter",
+        ) from None
+    # ``Select[Any]`` cast: ``include_soft_deleted``'s ``T: Select[Any]`` bound
+    # rejects the concrete ``Select[UUID | None, str]`` a two-column select
+    # infers (SQLAlchemy's type parameters are invariant).
+    scope_stmt = select(Pipeline.owner_team_id, Pipeline.visibility).where(Pipeline.id == obj_id)
+    result = await session.execute(include_soft_deleted(cast(Select[Any], scope_stmt)))
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
+@router.post(
+    "/{pipeline_id}/restore",
+    dependencies=[Depends(audited("pipeline_restored", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.restore")
+async def restore_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: the request-time layer its siblings (delete / archive /
+    # unarchive / update) already pair with the in-txn re-check below. The
+    # deleted-inclusive resolver is REQUIRED here - see its docstring; the
+    # stock resolver would 404 every non-admin restore.
+    _: TenantPrincipal = require_team_membership_or_admin(_resolve_pipeline_team_scope_including_deleted),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id, include_deleted=True)
+            existing = await get_pipeline(
+                session, pipeline_id, include_deleted=True, organisation_id=principal.organisation_id
+            )
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            # No in-txn session.refresh here (unlike archive/unarchive):
+            # restore_pipeline loads the row via ``UPDATE ... RETURNING(Pipeline)``,
+            # so the DB-computed ``updated_at`` is eager-loaded from the returned
+            # row and is not expired after commit -> no Pydantic lazy-load, no 422.
+            pipeline = await restore_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+async def _toggle_pipeline_archive_state(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    toggle: Callable[..., Awaitable[Pipeline | None]],
+) -> PipelineResponse:
+    """Archive or unarchive a pipeline inside the shared team-gated transaction.
+
+    ``archive_pipeline_endpoint`` and ``unarchive_pipeline_endpoint`` differ only
+    in the CRUD function they apply, so the in-txn team re-check, the
+    404-on-missing guard and the post-flush ``session.refresh`` live here once
+    instead of being copy-pasted into both endpoints. The CRUD toggle is passed
+    the same organisation scope as the existence read above, so its re-fetch
+    cannot resolve a row the scoped read rejected.
+    """
+    pipeline: Pipeline | None = None
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
+            # Refresh the ORM row inside the transaction so the DB-computed
+            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+            # the transaction is active. The UPDATE flush expires it, and after
+            # commit Pydantic's attribute extraction raises trying to lazy-load
+            # it outside the async greenlet -> 422 silent-success.
+            if pipeline is not None:
+                await session.refresh(pipeline)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+@router.post(
+    "/{pipeline_id}/archive",
+    dependencies=[Depends(audited("pipeline_archived", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.archive")
+async def archive_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: request-time membership-or-admin layer, paired with the in-txn
+    # re-check above (parity + defence-in-depth), as delete / update do.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=archive_pipeline)
+
+
+@router.post(
+    "/{pipeline_id}/unarchive",
+    dependencies=[Depends(audited("pipeline_unarchived", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.unarchive")
+async def unarchive_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1362: same request-time + in-txn pairing as archive. An ARCHIVED row is
+    # not a deleted row, so the stock resolver (not restore's deleted-inclusive
+    # one) is correct here.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=unarchive_pipeline)
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume (FAR-1530: the per-pipeline Paused execution state)
+# ---------------------------------------------------------------------------
+
+
+async def _set_pipeline_run_state(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    resume: bool,
+) -> PipelineResponse:
+    """Pause or resume a pipeline inside the shared team-gated transaction.
+
+    Mirrors ``_toggle_pipeline_archive_state`` (in-txn team re-check, 404 on
+    missing row, post-flush ``session.refresh``) with FAR-1530's two
+    state-machine traps:
+
+    * RESUME is REFUSED 409 while the spend circuit breaker's witness holds —
+      an operator must reset the breaker first, so a resume can never revive a
+      tripped pipeline. The check reads the row with an organisation-scoped,
+      unlocked SELECT and then the write re-fetches it in the same
+      transaction; a concurrent trip that commits between the two is the same
+      accepted bounded race the pause gate documents (``crud/run.py``
+      deliberately holds no row locks), so a resume can at worst clear a
+      programmatic pause while a trip lands, never revive a row that was
+      already tripped at read time.
+    * Both directions are idempotent no-ops when the pipeline is already in
+      the requested state — FIRST CAUSE OWNS THE REASON: pausing an
+      already-disabled pipeline never overwrites the original
+      ``run_disabled_reason`` (that is enforced in the CRUD functions).
+
+    The refusal is deliberately PER-PIPELINE (``PipelineNotRunnableError``'s
+    sibling semantics): it must never be confused with the org-level
+    ``triggers_paused`` kill-switch or its ``TriggersPausedError`` envelope.
+    """
+    pipeline: Pipeline | None = None
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            if resume and existing.circuit_breaker_tripped:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; "
+                        "reset the pipeline's spend circuit breaker first, then resume"
+                    ),
+                )
+            toggle = resume_pipeline if resume else pause_pipeline
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
+            # Refresh inside the transaction (same rationale as the archive
+            # toggle): the UPDATE flush expires the DB-computed `updated_at`,
+            # and reading it after commit raises outside the async greenlet ->
+            # 422 silent-success.
+            if pipeline is not None:
+                await session.refresh(pipeline)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+@router.post(
+    "/{pipeline_id}/pause",
+    dependencies=[Depends(audited("pipeline_paused", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.pause")
+async def pause_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # FAR-1530: any-credential pair (parity with PATCH /pipelines/{id}) so
+    # declarative apply's mk_ API key can pause the pipeline a config declares
+    # as ``run_enabled: false``; UI operators pass the same permission gate.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Pause a pipeline: present and visible, but no runs from any origin.
+
+    Sets ``run_enabled=false, run_disabled_reason='operator',
+    run_disabled_at=now`` — or is an idempotent no-op when the pipeline is
+    already disabled (first cause owns the reason, so a circuit-breaker pause
+    keeps its ``'circuit_breaker'`` reason). In-flight runs finish (disabling
+    is prospective, mirroring the org pause); every NEW run — trigger, manual,
+    REST, MCP — is refused at the ``create_run`` state gate. Audited as
+    ``pipeline_paused``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=False)
+
+
+@router.post(
+    "/{pipeline_id}/resume",
+    dependencies=[Depends(audited("pipeline_resumed", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.resume")
+async def resume_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Resume a paused pipeline: clear the unified Paused state.
+
+    REFUSED with 409 Conflict while ``circuit_breaker_tripped`` holds (reset
+    the breaker first — an operator resume must never revive a tripped
+    pipeline). Idempotent when already running. Audited as
+    ``pipeline_resumed``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=True)
+
+
+# ---------------------------------------------------------------------------
+# Clone
+# ---------------------------------------------------------------------------
+
+
+class PipelineCloneRequest(BaseModel):
+    name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="Overrides the default 'Copy of {original_name}' name",
+    )
+
+
+def _is_pipeline_name_conflict(exc: IntegrityError) -> bool:
+    """True when ``exc`` is the (organisation_id, name) unique violation on pipelines."""
+    text_ = str(exc.orig if exc.orig is not None else exc).lower()
+    return "uq_pipelines_org_name" in text_ or "pipelines.name" in text_
+
+
+async def _clone_pipeline_into_org(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    org_role: str | None,
+    requested_name: str | None,
+    principal: TenantPrincipal,
+) -> tuple[Any, str]:
+    """Clone a pipeline within an org, validating the source and target name.
+
+    Returns ``(cloned_row, target_name)``. Raises ``HTTPException`` for a missing
+    source or an already-used name.
+
+    Team gate (FAR-1276): the endpoint pairs the request-time
+    ``require_team_membership_or_admin`` dependency with an in-txn re-check of
+    its own, like every sibling mutation. The re-check is NOT taken up front -
+    it is passed as ``clone_pipeline``'s ``_on_step_a_committed`` hook, so it
+    runs INSIDE this mutation transaction but only AFTER step (a) has committed
+    its ``FOR SHARE`` read of the source row.
+
+    Ordering matters: step (a) runs on a SEPARATE connection (the clone's
+    torn-read fix) and takes ``FOR SHARE`` on the source pipeline row. A share
+    lock conflicts with this gate's ``FOR UPDATE``, so taking the gate up front
+    would have this transaction hold the row while waiting for step (a)'s
+    share lock on that same row - the two would wait on each other and neither
+    could proceed. After step (a) commits the share lock is released, so the
+    gate's ``FOR UPDATE`` is uncontended - and it still sits IMMEDIATELY before
+    the copy write (``_clone_pipeline_config`` + edges + snapshots), which is
+    the window the in-txn re-check exists to close.
+    """
+    source = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+    if source is None:
+        logger.warning("Copy aborted: source pipeline %s not found", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"pipeline_copy_failed: Source pipeline not found [pipeline_id: {pipeline_id}]",
+        )
+
+    target_name = requested_name or f"Copy of {source.name}"
+    if not await check_pipeline_name_available(session, org_id, target_name):
+        logger.warning(
+            "Copy aborted: name '%s' already exists in org %s",
+            _sanitise_log_value(target_name),
+            org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"),
+        )
+
+    async def _in_txn_team_gate() -> None:
+        # Bound to this transaction + principal; awaited by clone_pipeline right
+        # after step (a) commits (see the docstring's ordering note).
+        await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
+    try:
+        cloned = await clone_pipeline(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            org_role=org_role,
+            new_name=requested_name,
+            _on_step_a_committed=_in_txn_team_gate,
+        )
+    except IntegrityError as exc:
+        # #1178: the availability check above cannot lock a not-yet-existing
+        # row, so two concurrent same-name clones can both pass it. The
+        # (organisation_id, name) unique constraint is the real guard; map its
+        # violation to a clean 409 instead of a 500. Other integrity errors
+        # propagate to ``handle_db_errors`` unchanged.
+        if not _is_pipeline_name_conflict(exc):
+            raise
+        logger.warning(
+            "Copy aborted: name '%s' taken concurrently in org %s",
+            _sanitise_log_value(target_name),
+            org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"),
+        ) from None
+    if cloned is None:
+        logger.warning("Copy aborted: source pipeline %s disappeared during copy", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(f"pipeline_copy_failed: Source pipeline disappeared during copy [pipeline_id: {pipeline_id}]"),
+        )
+
+    # FAR-1276: the clone inherits the SOURCE's ``visibility``/
+    # ``owner_team_id``, so the source gate above normally covers the target
+    # too - this re-check makes that inheritance explicit and keeps the target
+    # gated if the clone ever grows a client-supplied team. Same matrix as the
+    # rest of the module: org admins bypass, a team-private target requires
+    # membership of ITS owner team.
+    clone_team_id = cloned.owner_team_id
+    if clone_team_id is not None and org_role != "admin" and _is_team_private(cloned.visibility, clone_team_id):
+        await _require_team_membership(
+            session,
+            account_id=account_id,
+            team_id=clone_team_id,
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
+        )
+
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type="pipeline.cloned",
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "cloned_pipeline_id": str(cloned.id),
+            "target_name": target_name,
+        },
+    )
+    return cloned, target_name
+
+
+@router.post(
+    "/{pipeline_id}/clone",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_cloned", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.clone")
+async def clone_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    req: PipelineCloneRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission("pipeline.create"),
+    # FAR-1276: parity + defence-in-depth with the sibling mutations (update /
+    # replace-graph / convert-to-agent / revert-to-manual) - the request-time
+    # membership-or-admin gate, then the in-txn re-check inside
+    # ``_clone_pipeline_into_org`` (via clone_pipeline's step-(a) commit hook).
+    # Plain (JWT) flavour, matching this endpoint's own ``require_permission``.
+    # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the sole
+    # policy on ``pipelines``) already hides a non-member's source row, so
+    # under Postgres the resolver 404s before the handler - this is the only
+    # team layer where RLS does NOT apply (non-Postgres backends, break-glass /
+    # execution_context sessions, missing or misconfigured policies).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    logger.info(
+        "Copy request: pipeline=%s org=%s user=%s",
+        pipeline_id,
+        principal.organisation_id,
+        principal.account_id,
+    )
+
+    if principal.org_role == "viewer":
+        logger.warning(
+            "Copy denied: user %s has role '%s' (requires admin)",
+            principal.account_id,
+            principal.org_role,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only organisation members and admins can clone pipelines",
+        )
+
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # FAR-1313: bound the transaction's row-lock waits BEFORE the first
+            # lock. ``_clone_pipeline_into_org`` -> ``check_pipeline_name_available``
+            # issues ``SELECT ... FOR UPDATE`` on the target-name row, and that
+            # check runs BEFORE the clone's in-txn team gate (FAR-1276), which
+            # only fires inside ``clone_pipeline``'s step-(a) commit hook - so
+            # without this line a concurrent holder of a row with that exact
+            # target name could park the request unbounded. SET LOCAL only: it
+            # takes no lock, so it cannot disturb the step-(a) FOR SHARE /
+            # gate FOR UPDATE ordering the clone docstring spells out. (The
+            # separate read-session ``FOR SHARE`` of the SOURCE row is bounded
+            # by its own copy of this statement in ``_read_clone_source_snapshot``.)
+            await set_mutation_row_lock_timeout(session)
+            cloned, target_name = await _clone_pipeline_into_org(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                org_role=principal.org_role,
+                requested_name=req.name,
+                principal=principal,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    logger.info("Copy complete: %s -> %s (%s)", pipeline_id, cloned.id, _sanitise_log_value(target_name))
+    return _pipeline_response(cloned)
+
+
+# ---------------------------------------------------------------------------
+# Save as composite
+# ---------------------------------------------------------------------------
+
+
+class SaveAsCompositeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    selected_node_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+_PARAM_PATTERN = re.compile(r"\{\{parameter\.(\w+)\}\}")
+
+
+async def _detect_parameter_ports(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    agent_ids: set[Any],
+) -> list[dict[str, Any]]:
+    """Auto-detect ``{{parameter.<name>}}`` placeholders in the selected agents' prompts.
+
+    Returns one parameter port dict per unique placeholder name, ordered by the
+    first agent that references it.
+    """
+    detected_ports: list[dict[str, Any]] = []
+    if not agent_ids:
+        return detected_ports
+    agents_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids), Agent.organisation_id == org_id))
+    for agent in agents_result.scalars().all():
+        matches = _PARAM_PATTERN.findall(agent.prompt_template or "")
+        for param_name in matches:
+            if any(p.get("name") == param_name for p in detected_ports):
+                continue
+            detected_ports.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": param_name,
+                    "label": param_name.replace("_", " ").title(),
+                    "description": None,
+                    "type": "string",
+                    "required": False,
+                    "default_value": None,
+                    "options": None,
+                    "target_injection": {
+                        "mode": "prompt_replace",
+                        "node_id": str(agent.id),
+                        "injection_point": "prompt_template",
+                    },
+                }
+            )
+    return detected_ports
+
+
+@router.post(
+    "/{pipeline_id}/save-as-composite",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("pipelines.save_as_composite")
+async def save_as_composite_endpoint(
+    pipeline_id: uuid.UUID,
+    req: SaveAsCompositeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, require_permission("pipeline.create")],
+    _: Annotated[
+        TenantPrincipal,
+        require_team_membership_or_admin(resolve_pipeline_team_scope),
+    ],
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline.id)
+
+            all_nodes = pipeline.graph_nodes_json
+            selected_ids_str = {str(nid) for nid in req.selected_node_ids}
+            sub_nodes = [n for n in all_nodes if str(n.get("id")) in selected_ids_str]
+            if not sub_nodes:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="No valid nodes selected",
+                )
+
+            sub_node_ids_str = {str(n.get("id")) for n in sub_nodes}
+
+            # Auto-detect parameter placeholders: scan all agent prompts referenced by selected nodes
+            agent_ids = {n.get("agent_id") for n in sub_nodes if n.get("agent_id") is not None}
+            detected_ports = await _detect_parameter_ports(
+                session,
+                org_id=principal.organisation_id,
+                agent_ids=agent_ids,
+            )
+
+            # Extract edges that connect selected nodes
+            all_edges_raw = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
+            sub_edges = [
+                {
+                    "id": str(edge.id),
+                    "source_node_id": str(edge.source_node_id),
+                    "target_node_id": str(edge.target_node_id),
+                    "edge_type": edge.edge_type,
+                    "condition_expression": edge.condition_expression,
+                    "hitl_review_config": edge.hitl_review_config,
+                }
+                for edge in all_edges_raw.scalars().all()
+                if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str
+            ]
+
+            # Create the composite template.
+            # FAR-1374: persist the pipeline's declared credential env values
+            # AS-IS (no write-side masking) — parity with top-level pipeline
+            # graphs, which have never masked on write and mask on every read
+            # surface instead; the template read surfaces mask via
+            # _mask_template_response. A mask sentinel in the selected nodes is
+            # refused 422 (resolve-then-reject: a clean graph passes through
+            # unchanged, a fresh sentinel never lands in storage).
+            sub_graph_nodes = resolve_and_reject_mask_sentinels([dict(n) for n in sub_nodes], [])
+            template = await create_composite_template(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                name=req.name,
+                description=req.description,
+                sub_pipeline_graph_json={
+                    "nodes": sub_graph_nodes,
+                    "edges": sub_edges,
+                },
+                parameter_ports_json=detected_ports,
+                version="0.1.0",
+            )
+
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    return {
+        "id": str(template.id),
+        "name": template.name,
+        "version": template.version,
+        "parameter_ports": detected_ports,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quality Report
+# ---------------------------------------------------------------------------
+
+
+class QualityReportResponse(BaseModel):
+    period: dict[str, str]
+    summary: dict[str, Any]
+    week_over_week: dict[str, Any]
+    trend: list[dict[str, Any]]
+    eval_breakdown: dict[str, Any]
+    deliveries: list[dict[str, Any]]
+
+
+def _endpoint_events(raw_events: object) -> list[Any]:
+    """Normalise an endpoint's ``events`` column (JSON list or raw list)."""
+    if isinstance(raw_events, list):
+        return raw_events
+    if isinstance(raw_events, str):
+        try:
+            parsed = json.loads(raw_events)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
+async def _quality_report_recipient_urls(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> list[str]:
+    """Collect webhook URLs subscribed to the ``quality_report`` event.
+
+    ``events`` may be stored as a JSON list or a raw list; both shapes are
+    normalised before the membership check.
+    """
+    endpoints = (
+        await session.execute(
+            select(NotificationEndpoint).where(
+                NotificationEndpoint.organisation_id == org_id,
+            )
+        )
+    ).scalars()
+
+    return [ep.url for ep in endpoints if "quality_report" in _endpoint_events(ep.events)]
+
+
+@router.post(
+    "/{pipeline_id}/quality-report",
+    dependencies=[
+        Depends(audited("pipeline_quality_report_triggered", "pipeline", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("pipelines.trigger_quality_report")
+async def trigger_quality_report(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> QualityReportResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+
+            report = await generate_quality_report(session, principal.organisation_id)
+
+            recipient_urls = await _quality_report_recipient_urls(session, principal.organisation_id)
+
+            deliveries: list[dict[str, Any]] = []
+            if recipient_urls:
+                deliveries = await deliver_quality_report(report, {"webhook_urls": recipient_urls})
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    return QualityReportResponse(
+        period=report["period"],
+        summary=report["summary"],
+        week_over_week=report["week_over_week"],
+        trend=report["trend"],
+        eval_breakdown=report["eval_breakdown"],
+        deliveries=deliveries,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Snapshot Versioning
+# ---------------------------------------------------------------------------
+
+
+# ``created_kind`` is a CLOSED server vocabulary (the DB CHECK constraint
+# ``ck_pipeline_snapshots_created_kind``). Spelling it here makes an unknown
+# filter value a loud 422 instead of a silently-ignored predicate — a typo'd
+# exclusion would otherwise return an unfiltered page, which is exactly the
+# starvation this filter exists to remove (FAR-1895). A new kind added to the
+# constraint must be added here at the same time.
+SnapshotCreatedKind = Literal["initial", "edit", "rollback", "run"]
+
+
+class SnapshotResponse(BaseModel):
+    id: uuid.UUID
+    pipeline_id: uuid.UUID
+    snapshot_version: int
+    tag: str | None
+    notes: str | None
+    created_at: datetime | None
+    created_by: uuid.UUID | None = Field(default=None, validation_alias="account_id")
+    # FAR-402 P6: live-edit history + release-channel discriminator. Additive
+    # fields default to the legacy run-kind/none-channel snapshot so older
+    # clients that ignore them keep working.
+    version_kind: str = "run"
+    created_kind: str = "run"
+    draft: bool = False
+    channel: str = "none"
+    # FAR-1599: the environment-profile binding frozen onto this snapshot
+    # (copied from the pipeline at snapshot creation, FAR-1558) — the value
+    # dispatch reads. Additive, nullable: null = unbound (default route).
+    # Legacy snapshots predate the column and serialise as null.
+    environment_profile_id: uuid.UUID | None = None
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+    @field_validator("environment_profile_id", mode="before")
+    @classmethod
+    def _coerce_snapshot_environment_profile_id(cls, value: Any) -> Any:
+        # Read defensively (same treatment as PipelineResponse's binding
+        # validator): a partial stand-in that lacks the column serialises as
+        # "unbound" (None), never a validation failure.
+        if isinstance(value, uuid.UUID | str):
+            return value
+        if value is not None:
+            # Observability only — the returned value is unchanged. A non-None
+            # value of any other type would otherwise vanish into "unbound"
+            # with no trace (the None case is the documented unbound /
+            # missing-column read, not a coercion, so it stays quiet).
+            logger.debug(
+                "Snapshot read: unexpected environment_profile_id type %s; coercing to None",
+                type(value).__name__,
+            )
+        return None
+
+
+class SnapshotDetailResponse(SnapshotResponse):
+    graph_json: dict[str, Any] | None = None
+    connector_bindings_json: list[dict[str, Any]] | None = None
+    schema_pins_json: list[dict[str, Any]] | None = None
+    prompt_pins_json: list[dict[str, Any]] | None = None
+    model_backend_pins_json: list[dict[str, Any]] | None = None
+    default_autonomy_level: str | None = None
+    max_autonomy_level: str | None = None
+    run_context_defaults: dict[str, Any] | None = None
+
+    @field_validator("max_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_max_autonomy_level(cls, value: Any) -> str | None:
+        # Legacy snapshots are NULL; partial test stand-ins may expose a
+        # non-string — coerce to None (same pattern as PipelineResponse).
+        return value if isinstance(value, str) or value is None else None
+
+
+class SnapshotTagUpdate(BaseModel):
+    tag: str | None = None
+    notes: str | None = None
+
+
+class SnapshotListResponse(BaseModel):
+    items: list[SnapshotResponse]
+    total: int
+
+
+class SnapshotCreateEdit(BaseModel):
+    """Body for a live-edit save (FAR-402 P6).
+
+    ``draft`` marks an in-progress editor auto-save (``False`` = a committed
+    edit). ``channel`` optionally tags the edit's release channel (default
+    ``none`` — the live-edit chain is not channel-routed unless set).
+    """
+
+    draft: bool = False
+    channel: str | None = None
+
+
+class SnapshotDiffQuery(BaseModel):
+    snapshot_a_id: uuid.UUID
+    snapshot_b_id: uuid.UUID
+
+
+class SnapshotDiffResponse(BaseModel):
+    snapshot_a: dict[str, Any]
+    snapshot_b: dict[str, Any]
+    nodes_added: list[dict[str, Any]]
+    nodes_removed: list[dict[str, Any]]
+    nodes_modified: list[dict[str, Any]]
+    edges_added: list[dict[str, Any]]
+    edges_removed: list[dict[str, Any]]
+    edges_modified: list[dict[str, Any]]
+    # FAR-402 P6: semantic-diff + impact layer (port-signature deltas,
+    # downstream-impact oracle, save-time breaking-change warnings).
+    semantic: dict[str, Any] = Field(default_factory=dict)
+
+
+def _snapshot_to_response(s: Any) -> SnapshotResponse:
+    return SnapshotResponse(
+        id=s.id,
+        pipeline_id=s.pipeline_id,
+        snapshot_version=s.snapshot_version,
+        tag=s.tag,
+        notes=s.notes,
+        created_at=s.created_at,
+        created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
+        # FAR-1599: getattr — stand-ins predating the column lack the
+        # attribute entirely; the response validator then serialises the
+        # absent value as null (unbound).
+        environment_profile_id=getattr(s, "environment_profile_id", None),
+    )
+
+
+def _masked_snapshot_graph(graph_json: Any) -> Any:
+    """Return ``graph_json`` with per-node credentials masked (FAR-1181).
+
+    Snapshots store the graph with real values; any response that surfaces
+    ``graph_json`` gets the same node masking as the graph read. Non-dict
+    payloads are returned unchanged.
+    """
+    if not isinstance(graph_json, dict):
+        return graph_json
+    masked = dict(graph_json)
+    nodes = graph_json.get("nodes")
+    if isinstance(nodes, list):
+        masked["nodes"] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in nodes]
+    return masked
+
+
+def _sanitized_snapshot_graph(graph_json: Any) -> Any:
+    """Return ``graph_json`` with per-node credential fields STRIPPED entirely (FAR-2456).
+
+    For the historic (read-only) snapshot view, sensitive fields must not be
+    present at all — not even masked. This strips ``env_vars``,
+    ``context_files``, ``composite_parameter_values``, and ``parameter_overrides``
+    from every node. Non-dict payloads are returned unchanged.
+    """
+    if not isinstance(graph_json, dict):
+        return graph_json
+    sanitized = dict(graph_json)
+    nodes = graph_json.get("nodes")
+    if isinstance(nodes, list):
+        sanitized["nodes"] = [_strip_node_secrets(node) if isinstance(node, dict) else node for node in nodes]
+    return sanitized
+
+
+def _strip_node_secrets(node: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *node* with all credential-bearing fields removed."""
+    stripped = dict(node)
+    for field in ("env_vars", "context_files", "composite_parameter_values", "parameter_overrides"):
+        stripped.pop(field, None)
+    return stripped
+
+
+def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
+    return SnapshotDetailResponse(
+        id=s.id,
+        pipeline_id=s.pipeline_id,
+        snapshot_version=s.snapshot_version,
+        tag=s.tag,
+        notes=s.notes,
+        created_at=s.created_at,
+        created_by=s.account_id,
+        version_kind=s.version_kind,
+        created_kind=s.created_kind,
+        draft=s.draft,
+        channel=s.channel,
+        graph_json=_sanitized_snapshot_graph(s.graph_json),
+        connector_bindings_json=s.connector_bindings_json,
+        schema_pins_json=s.schema_pins_json,
+        prompt_pins_json=s.prompt_pins_json,
+        model_backend_pins_json=s.model_backend_pins_json,
+        default_autonomy_level=s.default_autonomy_level,
+        max_autonomy_level=getattr(s, "max_autonomy_level", None),
+        run_context_defaults=s.run_context_defaults,
+        # FAR-1599: same getattr treatment as the list builder — a stand-in
+        # predating the column reads as null (unbound).
+        environment_profile_id=getattr(s, "environment_profile_id", None),
+    )
+
+
+@router.get("/{pipeline_id}/snapshots")
+@handle_db_errors("pipelines.list_snapshots")
+async def list_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    exclude_created_kind: Annotated[list[SnapshotCreatedKind] | None, Query()] = None,
+    exclude_drafts: Annotated[bool, Query()] = False,
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotListResponse:
+    """List a pipeline's snapshots, newest version first.
+
+    ``exclude_created_kind`` optionally drops rows of the given ``created_kind``
+    values from both the page and ``total``. It lets a consumer resolve e.g.
+    the newest substantive version with ``page_size=1`` and
+    ``exclude_created_kind=run`` — a query that cannot be starved by an
+    arbitrarily long streak of run-start snapshots, unlike reading the head of
+    an unfiltered page. ``exclude_drafts=true`` drops in-progress editor
+    auto-saves too: a draft is ``created_kind='edit'`` with a real
+    ``snapshot_version``, so it would otherwise outrank the last COMMITTED
+    version. Both are optional, so the unfiltered history every existing
+    caller reads is unchanged.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+            snapshots, total = await list_snapshots(
+                session,
+                pipeline_id,
+                page=page,
+                page_size=page_size,
+                organisation_id=principal.organisation_id,
+                exclude_created_kinds=exclude_created_kind,
+                exclude_drafts=exclude_drafts,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    return SnapshotListResponse(
+        items=[_snapshot_to_response(s) for s in snapshots],
+        total=total,
+    )
+
+
+@router.post(
+    "/{pipeline_id}/snapshots",
+    dependencies=[
+        Depends(audited("pipeline_snapshot_saved", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
+)
+@handle_db_errors("pipelines.save_edit_snapshot")
+async def save_edit_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    req: SnapshotCreateEdit,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotResponse:
+    """Save a LIVE-EDIT snapshot of the current graph (FAR-402 P6).
+
+    Creates a new snapshot row tagged ``version_kind='edit'`` so the editor's
+    save history is distinct from run-frozen snapshots; the prior snapshot row
+    stays immutable, so rollback remains a pointer swap to a prior version. A
+    ``draft`` save marks an in-progress editor auto-save; ``channel`` optionally
+    tags the edit's release channel.
+    """
+    channel = str(req.channel or "none").strip().lower()
+    if channel not in VALID_RELEASE_CHANNELS:
+        valid = ", ".join(sorted(VALID_RELEASE_CHANNELS))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid release channel: {req.channel!r}. Must be one of {valid}.",
+        )
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # FAR-1312: in-txn team-gate re-check, matching the sibling
+            # mutations (update / replace-graph / convert / revert / rollback /
+            # delete-snapshot). The request-time dependency's transaction
+            # COMMITs before this one opens, so ownership/visibility can change
+            # between the two (TOCTOU); this locks + re-verifies atomically with
+            # the write, and is the FIRST lock of the transaction (so the
+            # bounded ``lock_timeout`` it sets covers every later one).
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if pipeline is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            snapshot = await create_snapshot_edit(
+                session,
+                pipeline_id=pipeline_id,
+                account_id=principal.account_id,
+                draft=req.draft,
+                channel=channel,
+            )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810 sweep: this endpoint creates the same edit snapshot the
+        # graph-save paths do, so it carries the same contended-lock failure —
+        # translated here too rather than left as the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.save_edit_snapshot", action="save")
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save edit snapshot")
+    return _snapshot_to_response(snapshot)
+
+
+@router.get("/{pipeline_id}/snapshots/by-version/{snapshot_version}")
+@handle_db_errors("pipelines.get_snapshot_by_version")
+async def get_snapshot_by_version_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotDetailResponse:
+    """Read one snapshot by its per-pipeline version number (FAR-1811).
+
+    Backs the ``?version=<n>`` deep-link: same response model and the SAME
+    team/pipeline scoping as the by-UUID read below (FAR-1360), so a version
+    belonging to another pipeline resolves to ``None`` -> 404 and never leaks.
+    A non-integer version path segment is a 422; an absent version is a 404.
+    """
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            snapshot = await get_snapshot_by_version(
+                session,
+                pipeline_id,
+                snapshot_version,
+                organisation_id=principal.organisation_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+    return _snapshot_to_detail_response(snapshot)
+
+
+@router.get("/{pipeline_id}/snapshots/{snapshot_id}")
+@handle_db_errors("pipelines.get_snapshot_detail")
+async def get_snapshot_detail_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotDetailResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+    return _snapshot_to_detail_response(snapshot)
+
+
+@router.patch(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    dependencies=[
+        Depends(audited("pipeline_snapshot_tagged", "pipeline_snapshot", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("pipelines.tag_snapshot")
+async def tag_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    req: SnapshotTagUpdate,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # FAR-1312: in-txn team-gate re-check, matching the sibling
+            # mutations. This endpoint never reads the pipeline row itself
+            # (the snapshot CRUD is keyed by snapshot_id), so the gate is also
+            # what makes the {pipeline_id} path parameter MEAN something: a
+            # tag against a pipeline the caller cannot see now 404s here
+            # instead of silently updating a snapshot row.
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            # FAR-1360: the gate above makes the path MEAN something for
+            # pipeline VISIBILITY; this scopes the snapshot READ to it too. The
+            # snapshot lookup was keyed by snapshot_id alone, so on a layer
+            # where RLS does not apply a snapshot of ANOTHER pipeline could be
+            # tagged through this path. Both scopes are passed to the CRUD (the
+            # same defence-in-depth contract as get_snapshot_detail); a
+            # mismatch returns None -> 404 below, BEFORE any attribute is
+            # written.
+            snapshot = await tag_snapshot(
+                session,
+                snapshot_id,
+                tag=req.tag,
+                notes=req.notes,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+    return _snapshot_to_response(snapshot)
+
+
+@router.post(
+    "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
+    dependencies=[
+        Depends(audited("pipeline_snapshot_rolled_back", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
+)
+@handle_db_errors("pipelines.rollback_snapshot")
+async def rollback_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotResponse:
+    # Route layer carries the operator baseline ("pipeline.graph.update") for
+    # defense-in-depth breadth; actual gate-weakening enforcement is the
+    # service-layer backstop (operator+ privileged under the row lock, non-
+    # privileged callers denied — hitl-gate-removal-guard-plan.md v19 §3 item
+    # 5). There is deliberately no admin-only route gate here, matching the
+    # graph-replace endpoint: operators are "privileged" for weakening by
+    # design (equivalent weakening stays reachable via update_pipeline).
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
+            # FAR-1515 MAJOR 3: a rollback replays the target snapshot's graph
+            # verbatim, so it must run the same connector-team gate every other
+            # graph write path runs — otherwise rolling back to a snapshot that
+            # pins ANOTHER TEAM's team-private connector re-creates state the
+            # save paths refuse (an org-visibility connector is shared across
+            # the organisation and never mismatches, so since FAR-1618 it
+            # never trips this gate). The gate runs INSIDE
+            # ``rollback_to_snapshot`` as a post-lock callback (the pipeline row
+            # lock is already held there), against the pipeline's CURRENT owner
+            # team — the team boundary may have moved since the snapshot was
+            # taken — and raises the same named 409 ``connector_team_mismatch``
+            # as ``PUT /graph``. The model-backend gate is deliberately NOT
+            # mirrored here: it remains a save-time-only rule (ModelBackendHub
+            # has no invocation-time visibility gate), so rollbacks are judged
+            # on connector bindings only.
+            #
+            # FAR-1845: the contract for the pipeline graph-write surfaces is
+            # "sync the bound Agent rows inside the SAME transaction, BEFORE the
+            # graph write" (FAR-488a: what you save/restore is what runs). The
+            # REST full-graph/PATCH writes, the MCP full-graph write, this
+            # snapshot rollback and (since FAR-2008) bundle import all honour
+            # it through the shared ``core.agent_command_sync`` helper.
+            # ``rollback_to_snapshot``
+            # rewrites ``pipeline.graph_nodes_json``
+            # from the target snapshot verbatim, so without this sync the live
+            # graph would claim the restored command while
+            # ``_materialize_agent_fields`` let the stale Agent row win at
+            # run-snapshot time — the rollback would appear to change the
+            # command and the run would execute the old one. The caller owns
+            # the sync because ``rollback_to_snapshot`` (db layer) cannot import
+            # api (import-linter db-does-not-import-api), exactly as
+            # the REST graph-write endpoints own theirs.
+            async def _rollback_post_lock_gate(target: PipelineSnapshot, pipeline: Pipeline) -> None:
+                snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+                # Sync the bound Agent rows FIRST — never behind an early
+                # return. The connector-team gate below short-circuits a graph
+                # with no connector bindings, but the Agent-row sync must run
+                # for every restored snapshot regardless of connector content.
+                synced = await _sync_agent_row_commands(
+                    session,
+                    org_id=pipeline.organisation_id,
+                    nodes=snapshot_nodes,
+                    pipeline_id=pipeline_id,
+                )
+                # FAR-2008: a rollback can rewrite a SHARED Agent row's commands
+                # (one Agent may be bound by several pipelines). The structured
+                # log line attributes the agent, but only an audit event makes
+                # the mutation durable and queryable, so emit one in the SAME
+                # transaction whenever the sync actually changed a row — naming
+                # every changed Agent id, not just a count, so the audit chain
+                # identifies the mutated rows. A no-op rollback writes nothing
+                # and therefore records nothing.
+                if synced:
+                    await append_audit_event(
+                        session,
+                        org_id=pipeline.organisation_id,
+                        event_type="pipeline.agent_commands_synced",
+                        actor_user_id=principal.account_id,
+                        resource_type="pipeline",
+                        resource_id=pipeline_id,
+                        payload_json={
+                            "agent_count": len(synced),
+                            "agent_ids": [str(agent_id) for agent_id in synced],
+                        },
+                    )
+                stored_bindings = extract_connector_bindings(snapshot_nodes)
+                if not stored_bindings:
+                    return
+                await _enforce_connector_team_bindings(
+                    session,
+                    pipeline.organisation_id,
+                    pipeline.owner_team_id,
+                    stored_bindings,
+                )
+
+            new_snapshot = await rollback_to_snapshot(
+                session,
+                pipeline_id,
+                snapshot_id,
+                account_id=principal.account_id,
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+                caller_type="rest",
+                is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                post_lock_gate=_rollback_post_lock_gate,
+            )
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
+        await _handle_graph_write_denials(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            exc=exc,
+        )
+    except GitContentRefError as exc:
+        # FAR-1845/FAR-220: the rollback's Agent-row command sync validated an
+        # unpinned git content ref in the restored snapshot and failed closed
+        # INSIDE the transaction — the rollback is rolled back with it. Surface
+        # 422 instead of the decorator's 500, the same mapping every graph-write
+        # endpoint uses; a poisoned ref must never be restored silently.
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if new_snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Snapshot or pipeline not found",
+        )
+    return _snapshot_to_response(new_snapshot)
+
+
+@router.delete(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "pipeline_snapshot_deleted",
+                "pipeline_snapshot",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
+@handle_db_errors("pipelines.delete_snapshot")
+async def delete_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission("pipeline.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> None:
+    if principal.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete snapshots",
+        )
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+            if snapshot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+            deleted = await delete_snapshot(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete the latest snapshot",
+        )
+
+
+@router.post(
+    "/{pipeline_id}/snapshots/diff",
+)
+@handle_db_errors("pipelines.diff_snapshots")
+async def diff_snapshot_endpoint(
+    pipeline_id: uuid.UUID,
+    req: SnapshotDiffQuery,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> SnapshotDiffResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            # FAR-1362: the request-time dependency above was this endpoint's
+            # ONLY team layer while every sibling carried both. Read-only, so
+            # this is parity rather than a TOCTOU close for a write - but the
+            # in-txn re-check is also what makes the {pipeline_id} path
+            # authoritative against a row whose visibility/ownership changed
+            # after the dependency's own transaction COMMITed. It takes the
+            # transaction's first lock, so the bounded ``lock_timeout`` it sets
+            # covers the whole (short) diff transaction.
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            # FAR-1360: scope BOTH snapshot ids to the path pipeline - the
+            # lookup used to resolve each by primary key alone, making the
+            # {pipeline_id} path segment decorative.
+            result = await diff_snapshots(
+                session,
+                req.snapshot_a_id,
+                req.snapshot_b_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or both snapshots not found",
+        )
+    # FAR-1181: diff payloads carry raw node dicts copied from the stored
+    # snapshots — mask them exactly like the snapshot-detail graph read.
+    result = dict(result)
+    for key in ("snapshot_a", "snapshot_b"):
+        snapshot_payload = result.get(key)
+        if isinstance(snapshot_payload, dict):
+            result[key] = {
+                **snapshot_payload,
+                "graph": _masked_snapshot_graph(snapshot_payload.get("graph")),
+            }
+    for key in ("nodes_added", "nodes_removed"):
+        entries = result.get(key)
+        if isinstance(entries, list):
+            result[key] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in entries]
+    return SnapshotDiffResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Folder assignment
+# ---------------------------------------------------------------------------
+
+
+class PipelineFolderMoveRequest(BaseModel):
+    folder_id: uuid.UUID | None = None
+
+
+@router.patch(
+    "/{pipeline_id}/folder",
+    dependencies=[Depends(audited("pipeline_moved_to_folder", "pipeline", principal_dep=get_current_tenant_user))],
+)
+@handle_db_errors("pipelines.move_to_folder")
+async def move_pipeline_to_folder_endpoint(
+    pipeline_id: uuid.UUID,
+    req: PipelineFolderMoveRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+    # FAR-1276: parity + defence-in-depth with the sibling mutations - the
+    # request-time membership-or-admin gate plus the in-txn re-check below,
+    # exactly as update / delete / replace-graph / convert-to-agent /
+    # revert-to-manual pair them. (``archive`` / ``unarchive`` / ``restore``
+    # gained the SAME request-time pairing in FAR-1362 - ``restore`` via the
+    # deleted-inclusive ``_resolve_pipeline_team_scope_including_deleted``, so
+    # they are deliberately not in this list.) Plain
+    # (JWT) flavour, matching this endpoint's own ``require_permission``.
+    # Not a live Postgres hole: ``rls_team_isolation`` (migration 0124, the
+    # sole policy on ``pipelines``) already hides a non-member's row, so under
+    # Postgres the resolver 404s before the handler.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            pipeline = await move_pipeline_to_folder(session, pipeline_id, req.folder_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+# ---------------------------------------------------------------------------
+# Node conversion: manual <-> agent
+# ---------------------------------------------------------------------------
+
+
+class ConvertToAgentRequest(BaseModel):
+    agent_id: uuid.UUID
+    connector_binding: ConnectorBinding
+    model_backend_id: uuid.UUID
+
+
+async def _load_locked_pipeline_graph(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    *,
+    pipeline_row: Pipeline,
+) -> tuple[list[dict[str, Any]], list[Any]]:
+    """Return the graph nodes + edge rows for an ALREADY locked pipeline.
+
+    ``pipeline_row`` is the ``FOR UPDATE`` row the caller locked with
+    ``_reapply_team_gate_inside_mutation_txn`` (which 404s a missing row AND
+    re-verifies the team gate inside this transaction). This helper takes no
+    lock of its own: the graph read and the team-gate lock must be the same
+    transaction over the same row, so the lock can never be dropped from one
+    of the two node-conversion endpoints that call it.
+    """
+    nodes = list(pipeline_row.graph_nodes_json) if pipeline_row.graph_nodes_json else []
+    edges = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))).scalars())
+    return nodes, edges
+
+
+def _graph_nodes_as_models(nodes: list[dict[str, Any]]) -> list[PipelineGraphNode]:
+    """Stored graph node dicts -> models, for the save-time reference checks.
+
+    The sibling graph-write endpoints receive these models already validated
+    by the request body (REST, MCP and ``modulo apply`` all round-trip through
+    ``PipelineGraphUpdate``); the two node-conversion endpoints read them back
+    out of ``graph_nodes_json``, so they are (re)validated here. Strict first -
+    the same bar a request-payload node must clear - then the ``legacy_read``
+    context the graph READ path uses (FAR-874), so a stored node whose
+    TYPE-SPECIFIC rules have tightened since it was written does not fail a
+    conversion that ``replace_pipeline_graph`` would happily persist anyway.
+
+    The tolerance policy itself has ONE implementation —
+    :func:`_stored_node_model` (which this delegates to per stored dict), the
+    same helper the node-patch read path uses — so the two can never drift
+    apart in which stored nodes are tolerated or in how a node that clears
+    neither tier is reported: a 422 naming that node, rendered by
+    :func:`_joined_validation_detail` (so no ``env_vars``/credential value can
+    leak into the detail) rather than an opaque generic one. The graph cannot
+    be reference-checked, and this is a write path, so it fails closed.
+    """
+    return [_stored_node_model(raw) for raw in nodes if isinstance(raw, dict)]
+
+
+def _edge_row_to_validator(edge: Any) -> dict[str, Any]:
+    """Persisted ``PipelineEdge`` row -> the GraphValidator's reduced edge shape.
+
+    The sibling endpoints build this from the request's ``GraphEdgeData`` via
+    ``_edge_data_to_validator``; the node-conversion endpoints hold the
+    PERSISTED row instead, so the same seven keys (``source``/``target``/
+    ``type``/``condition_expression``/``hitl_review_config``/ports) are derived
+    from it here. The key set is deliberately identical to that helper's - the
+    validator reads ``source``/``target`` without falling back to
+    ``source_node_id`` on every path - but the row is read directly rather than
+    round-tripped through ``PipelineGraphEdge`` so a stale stored edge can
+    never turn this advisory gate into a new 422 the siblings do not raise.
+    """
+    row = _edge_to_dict(edge)
+    return {
+        "source": str(row["source_node_id"]),
+        "target": str(row["target_node_id"]),
+        "type": row["edge_type"],
+        "condition_expression": row.get("condition_expression"),
+        "hitl_review_config": row.get("hitl_review_config"),
+        "source_port": row.get("source_port") or "out",
+        "target_port": row.get("target_port") or "in",
+    }
+
+
+async def _save_locked_graph(
+    session: AsyncSession,
+    *,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    principal: TenantPrincipal,
+    pipeline_owner_team_id: uuid.UUID | None,
+    environment_profile_id: uuid.UUID | None = None,
+    nodes: list[dict[str, Any]],
+    edges: list[Any],
+) -> tuple[list[dict[str, Any]], list[Any], list[GraphValidationIssue]] | None:
+    """Persist a locked node-conversion graph via the shared save path.
+
+    Returns ``(saved_nodes, saved_edges, validation_issues)`` - the same
+    advisory issue list the sibling graph-write endpoints return in their
+    response's ``validation_issues`` (FAR-1277) - or ``None`` when the pipeline
+    row is gone (the caller maps that to 404).
+
+    This is the single chokepoint both node-conversion endpoints write
+    through, and it runs the SAME save-time enforcement the sibling
+    graph-write endpoints run (``replace_pipeline_graph_endpoint``,
+    ``_apply_graph_update``), in the same order, around the same write:
+
+    1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
+       for a team-private connector bound from outside its owner team (an
+       org-visibility connector is shared across the organisation and is never
+       refused — FAR-1618),
+    2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
+       guard (422), unknown agent/schema ids (422) and the model-backend team
+       check (409),
+    3. the write itself (``replace_pipeline_graph`` + the Agent-row command
+       sync, via ``_save_graph``),
+    4. ``_validate_graph_save`` - save-time graph validation; its blocking
+       codes raise 422 and roll the write back, and whatever non-blocking
+       (advisory) issues survive that gate are returned to the caller.
+
+    Steps 1-2 run BEFORE the write and 4 after it, exactly as the siblings
+    order them. Without them a convert-to-agent request could persist a
+    cross-team connector binding or a scope-widening node that PUT /graph
+    rejects.
+
+    Advisory issues are both LOGGED and RETURNED: the log keeps the existing
+    server-side trace, and the return lets the conversion endpoints surface
+    them exactly like ``PUT /graph`` / ``PATCH /{id}`` do. The blocking codes
+    are the enforcement and still raise identically, so widening the return
+    changes no rejection path.
+    """
+    connector_bindings = extract_connector_bindings(nodes)
+    await _enforce_connector_team_bindings(session, org_id, pipeline_owner_team_id, connector_bindings)
+    _schema_pins, model_backend_pins = await _resolve_graph_references(
+        session,
+        _graph_nodes_as_models(nodes),
+        org_id,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+    )
+    graph = await _save_graph(
+        session,
+        pipeline_id,
+        org_id,
+        nodes,
+        edges,
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
+        caller_type="rest",
+        account_id=principal.account_id,
+        is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+        recording=GraphWriteRecording(record_snapshot=True),
+    )
+    if graph is None:
+        return None
+    saved_nodes, saved_edges = graph
+    issues = await _validate_graph_save(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        validator_graph={"nodes": saved_nodes, "edges": [_edge_row_to_validator(e) for e in saved_edges]},
+        connector_bindings=connector_bindings,
+        model_backend_pins=model_backend_pins,
+        environment_profile_id=environment_profile_id,
+    )
+    for issue in issues:
+        logger.info(
+            "graph save advisory issue (%s) on pipeline %s: %s",
+            issue.code,
+            pipeline_id,
+            issue.message,
+        )
+    return saved_nodes, saved_edges, issues
+
+
+async def _finalize_locked_graph_save(
+    exc: Exception,
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+) -> None:
+    """Translate a locked-graph save error into the correct HTTP response.
+
+    ``HitlReviewWeakeningDenied`` is recorded and then translated here:
+    ``_deny_hitl_review`` appends the denial audit event in a fresh transaction
+    and raises the mapped ``HTTPException`` UNCONDITIONALLY, so control does
+    NOT return to the caller on that arm - the caller's ``saved is None`` ->
+    404 branch below the ``except`` is reached only when ``_save_locked_graph``
+    found the pipeline row gone, never from this exception path. That arm
+    therefore carries NO ``return``: ``_deny_hitl_review`` is annotated
+    ``-> None`` rather than ``NoReturn``, so a type checker cannot prove the
+    raise and nothing below is reachable only by trusting this docstring. The
+    other errors are translated directly into an ``HTTPException``. Shared by
+    the convert-to-agent and revert-to-manual endpoints, which only differ in
+    how they prepare ``nodes``/``edges``.
+    """
+    if isinstance(exc, HitlReviewWeakeningDenied):
+        await _deny_hitl_review(
+            session,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            pipeline_id=pipeline_id,
+            exc=exc,
+            request_id=getattr(principal, "request_id", None),
+        )
+    if isinstance(exc, GuardrailBindingStripDenied):
+        raise HTTPException(
+            status_code=denial_http_status(exc.reason_code),
+            detail=exc.detail,
+        ) from exc
+    if isinstance(exc, GitContentRefError):
+        # FAR-220: the node-conversion save's Agent-row command sync validated
+        # an unpinned git content ref and failed closed INSIDE the transaction
+        # — the write rolls back with it. Surface 422 instead of the
+        # decorator's 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    if isinstance(exc, ProgrammingError):
+        logger.error(_CODE_ROUTES_PIPELINES, exc_info=exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
+        ) from exc
+    raise
+
+
+# Team gate (shared by BOTH node-conversion endpoints) - PARITY +
+# defence-in-depth, matching replace_pipeline_graph / update_pipeline. Both
+# layers were previously absent here while the sibling graph writes had both:
+#
+# * the request-time membership-or-admin dependency gives the early 403 with
+#   the right status, and is the ONLY team layer where RLS does NOT apply - it
+#   runs on non-Postgres backends, on break-glass / execution_context sessions,
+#   and when the RLS policies are missing or misconfigured;
+# * the in-txn re-check (_reapply_team_gate_inside_mutation_txn) closes the
+#   request-time -> mutation TOCTOU atomically with the write, because the
+#   dependency's own transaction COMMITs before this one opens.
+#
+# This is NOT a fix for a live Postgres hole: migration 0124 drops the
+# OR-combined rls_org_isolation policy on `pipelines` and leaves
+# rls_team_isolation as the sole policy, so under Postgres a non-member's read
+# already returns no row and the resolver 404s before the handler runs - which
+# is exactly what the integration tests in
+# tests/integration/test_pipeline_node_conversion_team_gate.py observe.
+#
+# The plain (JWT) variant pairs with each endpoint's own ``require_permission``
+# - ``_any_credential`` is paired only with
+# ``require_permission_any_credential`` (the credential flavours must match;
+# the gate body itself is single-sourced).
+@router.post(
+    "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
+    dependencies=[
+        Depends(audited("pipeline_node_converted_to_agent", "pipeline", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("pipelines.convert_node_to_agent")
+async def convert_node_to_agent_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    req: ConvertToAgentRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineGraphResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
+
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
+            if target.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Only manual nodes can be converted to agent",
+                )
+
+            agent = (
+                await session.execute(
+                    select(Agent).where(
+                        Agent.id == req.agent_id,
+                        Agent.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if agent is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+            connector = (
+                await session.execute(
+                    select(ConnectorInstance).where(
+                        ConnectorInstance.id == req.connector_binding.instance_id,
+                        ConnectorInstance.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if connector is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found")
+            if connector.connector_type_id != req.connector_binding.type:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Connector type mismatch",
+                )
+
+            model_backend = (
+                await session.execute(
+                    select(ModelBackend).where(
+                        ModelBackend.id == req.model_backend_id,
+                        ModelBackend.organisation_id == principal.organisation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if model_backend is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+
+            target["node_type"] = "agent"
+            target["agent_id"] = str(req.agent_id)
+            target["connector_binding"] = {
+                "type": req.connector_binding.type,
+                "instance_id": str(req.connector_binding.instance_id),
+            }
+            target.pop("output_schema_id", None)
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
+                event_type="pipeline.node.convert_to_agent",
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={
+                    "node_id": str(node_id),
+                    "agent_id": str(req.agent_id),
+                },
+            )
+
+            saved = await _save_locked_graph(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                pipeline_owner_team_id=locked.owner_team_id,
+                environment_profile_id=getattr(locked, "environment_profile_id", None),
+                nodes=nodes,
+                edges=edges,
+            )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the conversion's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.convert_node_to_agent", action="save")
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
+
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    saved_nodes, saved_edges, validation_issues = saved
+    return _graph_response(saved_nodes, saved_edges, validation_issues=validation_issues)
+
+
+# Team gate: same parity + defence-in-depth rationale as the shared comment
+# above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
+@router.post(
+    "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
+    dependencies=[
+        Depends(audited("pipeline_node_reverted_to_manual", "pipeline", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("pipelines.revert_node_to_manual")
+async def revert_node_to_manual_endpoint(
+    pipeline_id: uuid.UUID,
+    node_id: uuid.UUID,
+    snapshot_id: Annotated[uuid.UUID, Query()],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_GRAPH_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
+) -> PipelineGraphResponse:
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
+            nodes, edges = await _load_locked_pipeline_graph(session, pipeline_id, pipeline_row=locked)
+
+            target = _find_node_in_list(nodes, node_id)
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_NODE_NOT_FOUND)
+            if target.get("node_type") != "agent":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Only agent nodes can be reverted to manual",
+                )
+
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+            if snapshot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SNAPSHOT_NOT_FOUND)
+
+            snapshot_nodes = snapshot.graph_json.get("nodes", [])
+            snapshot_node = _find_node_in_list(snapshot_nodes, node_id)
+            if snapshot_node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Snapshot does not contain this node",
+                )
+            if snapshot_node.get("node_type") != "manual":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Snapshot node was not a manual node",
+                )
+
+            output_schema_id = snapshot_node.get("output_schema_id")
+            if output_schema_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Snapshot node has no output schema",
+                )
+
+            target["node_type"] = "manual"
+            sid = str(output_schema_id) if not isinstance(output_schema_id, str) else output_schema_id
+            target["output_schema_id"] = sid
+            target.pop("agent_id", None)
+            target.pop("connector_binding", None)
+            if not target.get("label"):
+                target["label"] = snapshot_node.get("label") or f"Manual {node_id}"
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                actor_user_id=principal.account_id,
+                event_type="pipeline.node.revert_to_manual",
+                resource_type="pipeline",
+                resource_id=pipeline_id,
+                payload_json={
+                    "node_id": str(node_id),
+                    "snapshot_id": str(snapshot_id),
+                },
+            )
+
+            saved = await _save_locked_graph(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                pipeline_owner_team_id=locked.owner_team_id,
+                environment_profile_id=getattr(locked, "environment_profile_id", None),
+                nodes=nodes,
+                edges=edges,
+            )
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1810: the revert's edit snapshot lost its bounded lock race —
+        # retryable contention, never the decorator's generic 500.
+        _raise_snapshot_lock_busy(exc, log_prefix="pipelines.revert_node_to_manual", action="save")
+    except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied, GitContentRefError, ProgrammingError) as exc:
+        await _finalize_locked_graph_save(exc, session, principal=principal, pipeline_id=pipeline_id)
+
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    saved_nodes, saved_edges, validation_issues = saved
+    return _graph_response(saved_nodes, saved_edges, validation_issues=validation_issues)
+
+
+def _find_node_in_list(nodes: list[dict[str, Any]], node_id: uuid.UUID) -> dict[str, Any] | None:
+    """Find a node dict by ID within a list of node dicts."""
+    node_id_str = str(node_id)
+    for n in nodes:
+        raw_id = n.get("id")
+        if raw_id is None:
+            continue
+        if (isinstance(raw_id, uuid.UUID) and raw_id == node_id) or str(raw_id) == node_id_str:
+            return n
+    return None
+
+
+def _edge_to_dict(e: Any) -> dict[str, Any]:
+    return {
+        "id": str(e.id),
+        "source_node_id": str(e.source_node_id),
+        "target_node_id": str(e.target_node_id),
+        "edge_type": e.edge_type,
+        "condition_expression": getattr(e, "condition_expression", None),
+        "hitl_review_config": (
+            dict(e.hitl_review_config) if isinstance(e.hitl_review_config, dict) else e.hitl_review_config
+        ),
+        "hitl_review_config_present": True,
+        "source_port": getattr(e, "source_port", "out"),
+        "target_port": getattr(e, "target_port", "in"),
+    }
+
+
+async def _save_graph(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    org_id: uuid.UUID,
+    nodes: list[dict[str, Any]],
+    edges: list[Any],
+    is_privileged: bool,
+    caller_type: Literal["rest", "mcp"],
+    account_id: uuid.UUID | None = None,
+    is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
+    recording: GraphWriteRecording | None = None,
+) -> tuple[list[dict[str, Any]], list[Any]] | None:
+    """Persist updated nodes + edges via replace_pipeline_graph.
+
+    Accepts edges as either ORM model instances (PipelineEdge) or plain dicts.
+    Forwards is_privileged + caller_type + account_id + is_guardrail_admin to
+    the underlying graph write (ADR 047 backstop /
+    hitl-gate-removal-guard-plan.md v19 / FAR-309 PR A review). Node-conversion
+    saves pass ``recording=GraphWriteRecording(record_snapshot=True)``
+    (FAR-1810) so a conversion — a deliberate graph edit — records an edit
+    snapshot like the sibling graph-write endpoints.
+    """
+    edge_dicts = [_edge_to_dict(e) if hasattr(e, "source_node_id") else dict(e) for e in edges]
+    # FAR-488a + FAR-1810: node-conversion saves go through here too — sync the
+    # bound Agent rows BEFORE the write mints the edit snapshot, so the snapshot
+    # materializes the command the operator just saved rather than the pre-sync
+    # Agent-row value (a no-op when the node commands already mirror the row).
+    await _sync_agent_row_commands(session, org_id=org_id, nodes=nodes, pipeline_id=pipeline_id)
+    return await replace_pipeline_graph(
+        session,
+        pipeline_id=pipeline_id,
+        org_id=org_id,
+        nodes=nodes,
+        edges=edge_dicts,
+        actor=GraphWriteActor(
+            is_privileged=is_privileged,
+            caller_type=caller_type,
+            account_id=account_id,
+            is_guardrail_admin=is_guardrail_admin,
+            grants_deny_privilege=grants_deny_privilege,
+            grants_deny_guardrail_admin=grants_deny_guardrail_admin,
+        ),
+        recording=recording,
+    )

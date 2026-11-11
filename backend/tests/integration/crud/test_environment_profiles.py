@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.environment_profile import EnvironmentProfile
 
 pytestmark = pytest.mark.integration
 
@@ -148,7 +148,7 @@ async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) ->
     """EnvironmentProfiles from org A are invisible from org B."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.rls import set_rls_org
+    from farna.db.rls import set_rls_org
 
     org_a = uuid.uuid4()
     org_b = uuid.uuid4()

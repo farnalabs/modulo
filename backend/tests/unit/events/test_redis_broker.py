@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.events.redis_broker import CHANNEL_PREFIX, RedisEventBroker
+from farna.core.events.redis_broker import CHANNEL_PREFIX, RedisEventBroker
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_redact_url(raw: str, expected: str) -> None:
 
 
 async def test_connect_creates_two_connections() -> None:
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_client = MagicMock(spec=["publish", "close"])
         mock_client.publish = AsyncMock()
         mock_client.close = AsyncMock()
@@ -89,7 +89,7 @@ async def test_connect_creates_two_connections() -> None:
 
 
 async def test_connect_is_idempotent_when_already_connected(broker: RedisEventBroker, mock_redis: MagicMock) -> None:
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         await broker.connect()
 
     mock_from_url.assert_not_called()
@@ -121,7 +121,7 @@ async def test_publish_does_not_reconnect_when_already_connected() -> None:
 
 
 async def test_publish_auto_connects_when_not_connected() -> None:
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_client = MagicMock()
         mock_client.publish = AsyncMock()
         mock_from_url.return_value = mock_client
@@ -154,7 +154,7 @@ async def test_subscribe_subscribes_to_correct_channel(broker: RedisEventBroker,
 
 
 async def test_subscribe_auto_connects_when_not_connected() -> None:
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_client = MagicMock()
         mock_client.pubsub.return_value = MagicMock(subscribe=AsyncMock())
         mock_from_url.return_value = mock_client
@@ -273,7 +273,7 @@ async def test_connect_closes_partial_connection_and_reraises() -> None:
     first = MagicMock(spec=["publish", "close"])
     first.close = AsyncMock()
 
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_from_url.side_effect = [first, ConnectionError("Redis unreachable")]
         broker = RedisEventBroker("redis://test:6379/0")
         with pytest.raises(ConnectionError):
@@ -286,7 +286,7 @@ async def test_connect_closes_partial_connection_and_reraises() -> None:
 
 async def test_connect_reraises_cancellation() -> None:
     """connect() must not swallow asyncio.CancelledError."""
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_from_url.side_effect = asyncio.CancelledError()
         broker = RedisEventBroker("redis://test:6379/0")
         with pytest.raises(asyncio.CancelledError):
@@ -312,7 +312,7 @@ async def test_connect_race_closes_duplicate_clients() -> None:
         broker._sub = winner
         return dups.pop(0)
 
-    with patch("modulo.core.events.redis_broker.aioredis.from_url", side_effect=_side_effect):
+    with patch("farna.core.events.redis_broker.aioredis.from_url", side_effect=_side_effect):
         await broker.connect()
 
     dup1.close.assert_awaited_once()
@@ -520,14 +520,14 @@ async def test_close_reraises_cancellation_during_sub_close() -> None:
 
 
 def test_module_getattr_exposes_redis_broker() -> None:
-    from modulo.core import events
-    from modulo.core.events.redis_broker import RedisEventBroker as BrokerClass
+    from farna.core import events
+    from farna.core.events.redis_broker import RedisEventBroker as BrokerClass
 
     assert events.RedisEventBroker is BrokerClass
 
 
 def test_module_getattr_unknown_attribute_raises() -> None:
-    from modulo.core import events
+    from farna.core import events
 
     with pytest.raises(AttributeError, match="has no attribute"):
         events.__getattr__("DoesNotExist")
@@ -553,7 +553,7 @@ async def test_subscribe_pattern_psubscribes_to_prefixed_pattern(
 
 
 async def test_subscribe_pattern_auto_connects_when_not_connected() -> None:
-    with patch("modulo.core.events.redis_broker.aioredis.from_url") as mock_from_url:
+    with patch("farna.core.events.redis_broker.aioredis.from_url") as mock_from_url:
         mock_client = MagicMock()
         mock_client.pubsub.return_value = MagicMock(psubscribe=AsyncMock())
         mock_from_url.return_value = mock_client

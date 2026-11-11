@@ -1,4 +1,4 @@
-"""Focused coverage for the S3776 decomposition helpers in ``modulo.cli.backup``.
+"""Focused coverage for the S3776 decomposition helpers in ``farna.cli.backup``.
 
 These exercise the branches that only became separate functions during the
 complexity decomposition: an absent TLS dir, an unreadable launcher state file,
@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import pytest
 
-from modulo.cli.backup import (
+from farna.cli.backup import (
     _launcher_snapshot_files,
     _read_and_validate_manifest,
 )

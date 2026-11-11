@@ -8,14 +8,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.system_map_persistence import (
+from farna.core.system_map_persistence import (
     _DISCOVERY_NAMESPACE,
     SystemMapDiscoveryRepository,
     SystemMapNameConflictError,
 )
-from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
-from modulo.db.models.system_map import SystemMap, SystemMapNode, SystemMapRelationship, SystemMapRevision
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.core.system_maps_discovery import DiscoverySource, discover_draft
+from farna.db.models.system_map import SystemMap, SystemMapNode, SystemMapRelationship, SystemMapRevision
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 

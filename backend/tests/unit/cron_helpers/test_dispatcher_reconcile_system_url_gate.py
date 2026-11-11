@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 
 def _settings() -> MagicMock:

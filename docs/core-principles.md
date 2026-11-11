@@ -7,7 +7,7 @@
 ## 1. Schema seams
 Boundaries in a pipeline **can** carry typed schema contracts, but the contract is opt-in per agent and per edge – not every boundary has one. An agent declares `input_schema_id` / `output_schema_id` only when it wants one (both are nullable); validation runs where a contract actually exists. At an edge, compatibility is checked only when **both** sides declare a schema (the source's output pin and the target's input pin) – if either side is untyped the boundary passes through unchecked. A Runner node's output is validated against its `output_schema_json` only when that schema is present. Where schemas do exist they are JSON Schema Draft 2020-12, org-scoped, versioned (semver), reusable, and composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
 **Why:** an agent that declares a contract cannot pass garbage downstream without a record of it. Typed seams make automation auditable and failures loud; leaving the contract opt-in keeps untyped pipelines runnable instead of forcing a schema on every node.
-**Where:** Schema Registry (`modulo/core/schema_registry/`), graph validation (`core/graph_validator/`), run lifecycle validation steps.
+**Where:** Schema Registry (`farna/core/schema_registry/`), graph validation (`core/graph_validator/`), run lifecycle validation steps.
 **Benefit:** what you see is what runs; a declared mismatch fails loudly at the seam, and an undeclared boundary is visibly untyped rather than silently assumed checked.
 
 ## 2. Immutability of runs
@@ -19,31 +19,31 @@ A run executes against a frozen `PipelineSnapshot`: agent versions, schema pins,
 ## 3. Audit as a first-class output
 Every state-changing action produces an immutable, org-scoped AuditEvent (actor, action, resource, timestamp). Append-only at DB level (0005 triggers), SHA-256-linked chain for verifiability. SOC 2 evidence export builds on it.
 **Why:** governance requires a record you can trust after the fact; the trail is a product output, not an afterthought.
-**Where:** `modulo/core/audit_logger/`, ADR 004 (user-deactivation-replaces-deletion).
+**Where:** `farna/core/audit_logger/`, ADR 004 (user-deactivation-replaces-deletion).
 **Benefit:** the history you inspect is exactly what happened; auditors and operators read the same truth.
 
 ## 4. Deterministic gates
 Automated quality checks (regex, JSON Schema, custom function, scored eval) run before HITL gates on the same edge, with pass thresholds and warn/block behavior. A gate either passes or it doesn't; the run history shows which gate caught what. The `model_judge` eval is a soft signal only, not a correctness guarantee: it may share a model backend with the node under evaluation, so correctness-critical gates should use a `human_set` eval. The same deterministic-gate principle extends to the input side: guardrails check what enters a run at the ingestion edge, before the first node executes: guarding what enters the run rather than only what leaves it (see §4a below).
 **Why:** automation must be checked by rules, not vibes; evals make quality measurable per run.
-**Where:** `modulo/core/eval_engine/`, `docs/architecture.md` eval engine section.
+**Where:** `farna/core/eval_engine/`, `docs/architecture.md` eval engine section.
 **Benefit:** failures surface at the gate with evidence, not after merge.
 
 ### 4a. Guardrails at the ingestion edge (input-side)
-Deterministic data-safety checks also run on the **input** side: before a run's `input_payload` is persisted. A guardrail is an eval definition with `eval_type="guardrail"`; detection is deterministic pure evals only (regex | json_schema), and actions are `observe | warn | block | redact`. A `block` is terminal (`eval_failed`) with no HITL gate; remediation is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`), which re-runs the guardrail pass on the supplied input (re-block safe). The generic `recover_node` path REFUSES guardrail-blocked runs (never `deliver_manual`, which requires a HITL gate). Redaction is masks-only, static field-path based with exact/anchor matching (substring matching forbidden), and persisted state is always post-redaction. For webhooks the boundary is enforced TWICE over: webhook intake additionally runs the pass at the trigger boundary in `TriggerEngine.handle_webhook` (FAR-214), BEFORE the dedup insert: a `block` rejects-and-retries at the boundary (400, `guardrail_blocked` TriggerEvent + raw payload stored for replay, no run, no dedup slot consumed), `redact` applies masks pre-dedup, and the dedup key is a canonical POST-guardrail payload hash (so logically identical payloads dedup across encodings). Guardrail configuration is itself governance-controlled: orgs manage safety controls as versioned, hashed, PR-gated YAML (propose, diff, apply, `modulo/core/guardrails/config.py`) with snapshot pinning (`organisations.guardrail_pins_json`) and drift detection, so changes to safety controls are reviewed and audited before they take effect. A guardrail may additionally declare a conformance claim (`required_capabilities`); that claim is re-validated at **node start** against the live capability surface (bound connector scopes, EnvironmentProfile capabilities, agent required capabilities); a `block`-action guardrail whose capability is absent/unknown mid-run blocks the node and routes it to HITL (`awaiting_human`), never a silent abort or a fail-open continuation, while warn/observe claims stay advisory.
+Deterministic data-safety checks also run on the **input** side: before a run's `input_payload` is persisted. A guardrail is an eval definition with `eval_type="guardrail"`; detection is deterministic pure evals only (regex | json_schema), and actions are `observe | warn | block | redact`. A `block` is terminal (`eval_failed`) with no HITL gate; remediation is the dedicated guardrail-override endpoint (`POST /runs/{run_id}/guardrail-override`), which re-runs the guardrail pass on the supplied input (re-block safe). The generic `recover_node` path REFUSES guardrail-blocked runs (never `deliver_manual`, which requires a HITL gate). Redaction is masks-only, static field-path based with exact/anchor matching (substring matching forbidden), and persisted state is always post-redaction. For webhooks the boundary is enforced TWICE over: webhook intake additionally runs the pass at the trigger boundary in `TriggerEngine.handle_webhook` (FAR-214), BEFORE the dedup insert: a `block` rejects-and-retries at the boundary (400, `guardrail_blocked` TriggerEvent + raw payload stored for replay, no run, no dedup slot consumed), `redact` applies masks pre-dedup, and the dedup key is a canonical POST-guardrail payload hash (so logically identical payloads dedup across encodings). Guardrail configuration is itself governance-controlled: orgs manage safety controls as versioned, hashed, PR-gated YAML (propose, diff, apply, `farna/core/guardrails/config.py`) with snapshot pinning (`organisations.guardrail_pins_json`) and drift detection, so changes to safety controls are reviewed and audited before they take effect. A guardrail may additionally declare a conformance claim (`required_capabilities`); that claim is re-validated at **node start** against the live capability surface (bound connector scopes, EnvironmentProfile capabilities, agent required capabilities); a `block`-action guardrail whose capability is absent/unknown mid-run blocks the node and routes it to HITL (`awaiting_human`), never a silent abort or a fail-open continuation, while warn/observe claims stay advisory.
 **Why:** boundaries must be checked before data crosses them, not after damage is done; redaction that destroys is a loss, masking preserves; and a capability promise made at run-creation must be re-confirmed before a node acts on it.
-**Where:** `modulo/core/guardrails/`, `modulo/core/guardrails/config.py`, `modulo/core/guardrails/conformance.py`, ingestion seam in `modulo.db.crud.run.create_run`.
+**Where:** `farna/core/guardrails/`, `farna/core/guardrails/config.py`, `farna/core/guardrails/conformance.py`, ingestion seam in `farna.db.crud.run.create_run`.
 **Benefit:** structured credentials never persist unmasked, the run history shows which guardrail caught what at the edge, and a mid-run capability change can never silently outrun the boundary it was promised.
 
 ## 5. Humans in the loop where it matters
 HITL gates are atomic (claim, decide, record); `human_only` gates cannot be approved by the agent under review; team-scoped claims. Autonomy is earned, not assumed.
 **Why:** governance is permissions plus gates plus audit; automation never gets a blank check.
-**Where:** `modulo/core/hitl_manager/`, BDD `backend/tests/bdd/features/hitl/{claim,approve,reject}.feature`.
+**Where:** `farna/core/hitl_manager/`, BDD `backend/tests/bdd/features/hitl/{claim,approve,reject}.feature`.
 **Benefit:** you can scale agents without surrendering control.
 
 ## 6. Secret hygiene
 Credentials decrypt once at run-start into a run-scoped context; they never enter LangGraph state, checkpoint blobs, OTel spans, or logs. Semgrep-enforced.
 **Why:** secrets in agent-visible state are a liability; one-decrypt-per-run bounds exposure.
-**Where:** `modulo/connectors/`, semgrep rule `credential_in_state`, `docs/security/secret-management.md`.
+**Where:** `farna/connectors/`, semgrep rule `credential_in_state`, `docs/security/secret-management.md`.
 **Benefit:** a run cannot leak credentials in traces, logs, or prompts.
 
 ## 7. We dispatch, we don't run agents
@@ -55,7 +55,7 @@ Farna Control orchestrates agent work: Inline Prompt nodes call models in-proces
 ## 8. Correction never rewrites history
 A failed output produces a new run with feedback attached; the original stays as it was. FeedbackRecords are immutable after creation.
 **Why:** an editable trail is not a trail; the correction loop is a first-class pipeline, not an in-place edit.
-**Where:** `modulo/core/feedback_manager/`.
+**Where:** `farna/core/feedback_manager/`.
 **Benefit:** you can trust the history while still improving the system.
 
 ## 9. Self-hosted, no telemetry by default
@@ -84,8 +84,8 @@ an error path makes success look like failure and turns a known, expected state 
 an incident. Below the limit the product is robust, reliable, predictable, secure,
 observable and controllable; at the limit it must be the same product.
 
-**Where:** `modulo/core/run_admission.py`, `modulo/core/pipeline_engine/executor.py`,
-`modulo/core/dispatch.py`, `modulo/core/hitl_manager/`, `modulo/core/notifier/`, ADR 057.
+**Where:** `farna/core/run_admission.py`, `farna/core/pipeline_engine/executor.py`,
+`farna/core/dispatch.py`, `farna/core/hitl_manager/`, `farna/core/notifier/`, ADR 057.
 
 **Benefit:** "we are at capacity" is an operational fact an operator reads and acts
 on – not a 429 nobody can explain and a slot nobody can see.

@@ -36,12 +36,12 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 COLUMNS = ("outputs_json", "node_telemetry_json", "raw_output_markers")
 
 # Whole-file allowlist — every reference in these files is sanctioned:
-# (path-relative-to-src/modulo, reason).
+# (path-relative-to-src/farna, reason).
 _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
     "db/crud/run_node_outputs.py": (
         "the repo module — the single blob chokepoint: the new-table columns "
@@ -245,7 +245,7 @@ def test_no_legacy_blob_reads_outside_the_repo():
         )
     assert not problems, (
         "FAR-583 read-switch violated. Every run-blob read must go through\n"
-        "modulo.db.crud.run_node_outputs (the legacy columns dual-write until\n"
+        "farna.db.crud.run_node_outputs (the legacy columns dual-write until\n"
         "B1 and drop at B2b); extend the allowlist ONLY for a sanctioned\n"
         "surface with a documented reason.\n\n" + "\n\n".join(problems)
     )

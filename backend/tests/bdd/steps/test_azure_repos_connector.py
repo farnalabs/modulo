@@ -36,7 +36,7 @@ def ctx() -> dict:
 
 @given(parsers.parse('an Azure Repos connector configured with project "{project}"'))
 def azrepos_connector_project(project: str, ctx: dict) -> None:
-    from modulo.connectors.azure_repos import AzureReposConnector
+    from farna.connectors.azure_repos import AzureReposConnector
 
     ctx["connector"] = AzureReposConnector(token="azure_test_token", organization=_ORG)
     ctx["project"] = project
@@ -44,7 +44,7 @@ def azrepos_connector_project(project: str, ctx: dict) -> None:
 
 @given(parsers.parse('an Azure Repos connector configured with project "{project}" and repo "{repo}"'))
 def azrepos_connector_project_repo(project: str, repo: str, ctx: dict) -> None:
-    from modulo.connectors.azure_repos import AzureReposConnector
+    from farna.connectors.azure_repos import AzureReposConnector
 
     ctx["connector"] = AzureReposConnector(token="azure_test_token", organization=_ORG)
     ctx["project"] = project
@@ -53,7 +53,7 @@ def azrepos_connector_project_repo(project: str, repo: str, ctx: dict) -> None:
 
 @given("an Azure Repos connector configured with invalid credentials")
 def azrepos_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.azure_repos import AzureReposConnector
+    from farna.connectors.azure_repos import AzureReposConnector
 
     ctx["connector"] = AzureReposConnector(token="bad_token", organization=_ORG)
     ctx["valid"] = False
@@ -61,7 +61,7 @@ def azrepos_connector_invalid(ctx: dict) -> None:
 
 @when("the connector lists repositories")
 def azrepos_query_repos(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     repos = [
         {"id": "repo-1", "name": "frontend"},
@@ -78,7 +78,7 @@ def azrepos_query_repos(ctx: dict) -> None:
 
 @when(parsers.parse('the connector reads "{path}" from branch "{branch}"'))
 def azrepos_query_file(path: str, branch: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     content = "# Hello Azure Repos"
     with respx.mock:
@@ -98,7 +98,7 @@ def azrepos_query_file(path: str, branch: str, ctx: dict) -> None:
 
 @when("the connector lists pull requests")
 def azrepos_query_pulls(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     prs = [{"pullRequestId": 42, "title": "Fix bug", "status": "active"}]
     with respx.mock:
@@ -113,7 +113,7 @@ def azrepos_query_pulls(ctx: dict) -> None:
 
 @when(parsers.parse('the connector lists commits on branch "{branch}"'))
 def azrepos_query_commits(branch: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     commits = [{"commitId": "abc123", "comment": "Initial commit"}]
     with respx.mock:
@@ -133,7 +133,7 @@ def azrepos_query_commits(branch: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector writes "{path}" with content "{content}"'))
 def azrepos_write_file(path: str, content: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.get(
@@ -162,7 +162,7 @@ def azrepos_write_file(path: str, content: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector creates a pull request from "{source}" to "{target}" with title "{title}"'))
 def azrepos_write_pull(source: str, target: str, title: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     pr_response = {"pullRequestId": 99, "title": title, "status": "active"}
     with respx.mock:

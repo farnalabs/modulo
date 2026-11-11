@@ -18,14 +18,14 @@ from uuid import uuid4
 
 import pytest
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
     EvalEngine,
     EvalResult,
     EvalType,
 )
-from modulo.core.pipeline_engine.eval_persist_order import (
+from farna.core.pipeline_engine.eval_persist_order import (
     run_evals_persist_before_decide,
 )
 
@@ -204,7 +204,7 @@ def _fail_open_factory(exc: Exception | None = None) -> Any:
     return _factory
 
 
-def _patch_rls(module: str = "modulo.core.pipeline_engine.eval_persist_order") -> tuple[AsyncMock, AsyncMock]:
+def _patch_rls(module: str = "farna.core.pipeline_engine.eval_persist_order") -> tuple[AsyncMock, AsyncMock]:
     """Start patching set_rls_org and set_rls_execution_context.
 
     Returns (rls_org_mock, rls_ctx_mock). Caller MUST call patch.stopall().
@@ -737,7 +737,7 @@ class TestC16HitlReviewEvalPersistsBeforeRaise:
 
     async def test_c16_via_run_gate_evals(self) -> None:
         """Exercise _run_gate_evals (node_runner) — the HITL path."""
-        from modulo.core.pipeline_engine.node_runner import _run_gate_evals
+        from farna.core.pipeline_engine.node_runner import _run_gate_evals
 
         eval_def = _eval_def(
             name="gate-block",
@@ -779,7 +779,7 @@ class TestC16HitlReviewEvalPersistsBeforeRaise:
 
     async def test_c16_via_make_hitl_review_fn(self) -> None:
         """Exercise make_hitl_review_fn with eval_definitions — the full HITL path."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         eval_def = _eval_def(
             name="gate-block-fn",
@@ -801,7 +801,7 @@ class TestC16HitlReviewEvalPersistsBeforeRaise:
         try:
             with (
                 patch(
-                    "modulo.core.pipeline_engine.node_runner.interrupt",
+                    "farna.core.pipeline_engine.node_runner.interrupt",
                     side_effect=AssertionError("interrupt should NOT be reached - block fires first"),
                 ),
                 pytest.raises(EvalBlockedError) as exc_info,
@@ -826,7 +826,7 @@ class TestC17HitlResumeNoDuplicateRows:
     async def test_c17_resume_skips_eval_loop(self) -> None:
         """A resumed gate (state has _hitl_decision) returns immediately
         without calling _run_gate_evals, so no rows are created."""
-        from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+        from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
         eval_def = _eval_def(
             name="should-not-run",
@@ -881,7 +881,7 @@ class TestC18PersistenceFailureHaltIdentity:
         try:
             with (
                 patch(
-                    "modulo.core.pipeline_engine.eval_persist_order._eval_result_persist_failures_total",
+                    "farna.core.pipeline_engine.eval_persist_order._eval_result_persist_failures_total",
                     mock_counter,
                 ),
                 pytest.raises(EvalBlockedError) as exc_info,
@@ -1036,19 +1036,19 @@ class TestOtelMetricsHelpers:
     """Cover the defensive paths of the persistence/suite metric helpers."""
 
     def test_get_otel_meter_returns_none_when_provider_is_none(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         with patch("opentelemetry.metrics.get_meter_provider", return_value=None):
             assert ep._get_otel_meter() is None
 
     def test_get_otel_meter_swallows_exception(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         with patch("opentelemetry.metrics.get_meter_provider", side_effect=RuntimeError("boom")):
             assert ep._get_otel_meter() is None
 
     def test_ensure_metrics_returns_when_meter_unavailable(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         with (
             patch.object(ep, "_get_otel_meter", return_value=None),
@@ -1059,7 +1059,7 @@ class TestOtelMetricsHelpers:
             assert ep._eval_result_persist_failures_total is None
 
     def test_ensure_metrics_creates_counter_when_absent(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         meter = MagicMock()
         with (
@@ -1072,7 +1072,7 @@ class TestOtelMetricsHelpers:
         meter.create_counter.assert_called_once()
 
     def test_ensure_metrics_skips_when_already_initialised(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         meter = MagicMock()
         with (
@@ -1085,7 +1085,7 @@ class TestOtelMetricsHelpers:
         meter.create_counter.assert_not_called()
 
     def test_record_persist_failure_increments_counter(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         counter = MagicMock()
         with (
@@ -1097,7 +1097,7 @@ class TestOtelMetricsHelpers:
         counter.add.assert_called_once_with(1, {"failure_behaviour": "warn"})
 
     def test_record_persist_failure_skips_when_counter_absent(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         logger = MagicMock()
         with (
@@ -1110,7 +1110,7 @@ class TestOtelMetricsHelpers:
         logger.warning.assert_not_called()
 
     def test_record_persist_failure_swallows_metrics_error(self) -> None:
-        from modulo.core.pipeline_engine import eval_persist_order as ep
+        from farna.core.pipeline_engine import eval_persist_order as ep
 
         logger = MagicMock()
         with (

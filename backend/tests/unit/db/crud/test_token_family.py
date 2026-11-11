@@ -14,16 +14,16 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.db.crud.token_family as token_family_module
-from modulo.db.crud.token_family import (
+import farna.db.crud.token_family as token_family_module
+from farna.db.crud.token_family import (
     advance_sequence,
     blacklist_family,
     create_family,
     list_families_for_account,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import SYSTEM_ORG_ID
-from modulo.db.models.token_family import TokenFamily
+from farna.db.models.base import Base
+from farna.db.models.organisation import SYSTEM_ORG_ID
+from farna.db.models.token_family import TokenFamily
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ACCOUNT_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")

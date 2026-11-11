@@ -1,0 +1,238 @@
+"""Launcher Settings source: env > state.json(+secrets) > defaults (FAR-671).
+
+Two delivery mechanisms share ONE composition core:
+
+* :func:`write_pinned_env_file` writes the composed config as a 0600 dotenv
+  file inside the data dir; the entry pins it via ``modulo.settings
+  .pin_env_file`` so every ``get_settings()`` call (the API, the SAQ
+  children's settings, the CLI) sees the bundled endpoints through the
+  standard dotenv source — real environment variables outrank it and field
+  defaults sit below it, which is exactly the env > state.json > defaults
+  priority.
+* :class:`LauncherConfigSource` is the pydantic-settings source-protocol
+  implementation for DIRECT ``Settings(**source())`` construction: it
+  returns only the composed keys whose environment variable is NOT already
+  set, so the init-kwargs layer (which outranks the env source) can never
+  shadow an explicit operator environment variable.
+
+IMPORT HYGIENE (locked by tests): this module must NOT import
+``modulo.settings`` at module import time — the source is installed ONLY by
+the native launcher, after the environment scrub and the config pin.
+
+The composed values contain credentials (the generated passwords embedded
+in the URLs); the file lands in the data dir at 0600 via the promoted
+exclusive-create writer (``modulo.db.bootstrap._write_env_file``), which
+also refuses a symlink squatting on the contract path.
+"""
+
+import base64
+import hashlib
+import hmac
+import logging
+import os
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote_plus
+
+from farna.db.url_utils import derive_system_database_url
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import STATE_FILENAME, LauncherState, load_state
+
+_log = logging.getLogger(__name__)
+
+CONFIG_ENV_FILENAME = "config.env"
+POSTGRES_HOST = "127.0.0.1"
+APP_DB_NAME = "modulo"
+_REDIS_DB = "0"
+
+# Composed env-name -> Settings field name (only real Settings fields).
+_COMPOSED_FIELDS: dict[str, str] = {
+    "DATABASE_URL": "database_url",
+    "REDIS_URL": "redis_url",
+    "MODULO_SYSTEM_DATABASE_URL": "modulo_system_database_url",
+}
+
+# The launcher-owned public surface (consumed by the entry; vulture's
+# dead-code gate special-cases __all__).
+__all__ = [
+    "CONFIG_ENV_FILENAME",
+    "LauncherConfigError",
+    "LauncherConfigSource",
+    "compose_config",
+    "load_launcher_config_inputs",
+    "render_env_file",
+    "write_pinned_env_file",
+]
+
+
+class LauncherConfigError(RuntimeError):
+    """Raised when the launcher config source cannot read its inputs."""
+
+
+def _native_settings_keys(secrets: LauncherSecrets) -> tuple[str, str]:
+    """Derive stable native Settings keys without adding another secret file.
+
+    The state HMAC key is already owner-only and stable for the data directory.
+    Domain-separated HMAC derivations keep these values out of plists/logs while
+    making existing installs upgrade in place without rotating database keys.
+    """
+    secret_key = hmac.new(secrets.state_hmac_key, b"modulo/native/secret-key", hashlib.sha256).digest()
+    fernet_raw = hmac.new(secrets.state_hmac_key, b"modulo/native/fernet-key", hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(secret_key).decode("ascii"), base64.urlsafe_b64encode(fernet_raw).decode("ascii")
+
+
+def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, str]:
+    """Derive the bundled-service config values (credentials INCLUDED).
+
+    Pure mapping from the credential-free state.json (ports) + the 0600
+    secrets file (generated passwords) to the Settings env names. The
+    ``postgresql+asyncpg://`` scheme is pinned explicitly (the async driver
+    the engine requires); every asyncpg-level consumer downgrades it the way
+    the container path does.
+    """
+    # quote_plus hardening (FAR-680): a MANUAL secrets rotation can put
+    # URL-special characters in the password; unquoted, they malformed the
+    # URL (an '@' or '/' inside the password changed the host/userinfo split
+    # and could leak the password into the path). Generated token_urlsafe
+    # secrets are unaffected.
+    database_url = (
+        f"postgresql+asyncpg://modulo:{quote_plus(secrets.postgres_password)}"
+        f"@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
+    )
+    system_url = derive_system_database_url(database_url)
+    secret_key, fernet_key = _native_settings_keys(secrets)
+    return {
+        "DATABASE_URL": database_url,
+        "DATABASE_ADMIN_URL": database_url,
+        "REDIS_URL": f"redis://:{secrets.redis_password}@{POSTGRES_HOST}:{state.redis_port}/{_REDIS_DB}",
+        "MODULO_SYSTEM_DATABASE_URL": system_url or "",
+        "SECRET_KEY": secret_key,
+        "FERNET_KEY": fernet_key,
+    }
+
+
+def load_launcher_config_inputs(data_dir: Path) -> tuple[LauncherState, LauncherSecrets]:
+    """Load (state.json, secrets.json) for the composed config — fail fast."""
+    from farna.launcher.secrets_file import load_or_create
+
+    secrets = load_or_create(data_dir / "secrets.json")
+    state_path = data_dir / STATE_FILENAME
+    if not state_path.exists():
+        raise LauncherConfigError(f"no state.json at {state_path} — the data dir is not bootstrapped")
+    return load_state(state_path, secrets.state_hmac_key), secrets
+
+
+def render_env_file(composed: dict[str, str]) -> str:
+    """Render the composed values as dotenv lines (sorted, stable)."""
+    return "".join(f"{key}={composed[key]}\n" for key in sorted(composed))
+
+
+def write_pinned_env_file(
+    data_dir: Path,
+    state: LauncherState,
+    secrets: LauncherSecrets,
+    *,
+    path: Path | None = None,
+) -> Path:
+    """Write ``<datadir>/config.env`` (0600) and return its path.
+
+    The writer is the promoted exclusive-create implementation (random temp
+    sibling + fsync + atomic rename + symlink rejection), so a concurrent
+    boot or a symlink squatting on the contract path can never leak or
+    hijack the credential-bearing config. When an EXISTING file's content
+    differs from the freshly composed one, a warning is logged first — a
+    silent clobber would hide a port/credential rotation or a manual edit.
+    """
+    from farna.db.bootstrap import _write_env_file
+
+    composed = compose_config(state, secrets)
+    rendered = render_env_file(composed)
+    path = path if path is not None else data_dir / CONFIG_ENV_FILENAME
+    try:
+        if path.exists() and path.read_text(encoding="utf-8") != rendered:
+            _log.warning(
+                "launcher.config_env_overwritten path=%s (existing content differs — "
+                "likely a port/credential rotation or a manual edit)",
+                path,
+            )
+    except OSError:
+        pass  # unreadable existing file: the overwrite proceeds and is logged by the writer
+    _write_env_file(str(path), rendered)
+    return path
+
+
+class LauncherConfigSource:
+    """pydantic-settings source: env > state.json(+secrets) > defaults.
+
+    ``__call__`` returns ONLY the composed keys whose environment variable
+    is not already set (the env wins; the init-kwargs layer this dict feeds
+    outranks the env source, so the filtering is what preserves the
+    priority). The app/system URL pair is treated as a SET: when the
+    operator overrides ``DATABASE_URL``, the system URL is derived FROM THE
+    OPERATOR'S URL instead of injecting the bundled one — deriving or
+    overriding both together is the only way the pair can never split
+    across two different Postgres instances (app on the operator's DB,
+    system still pointing at bundled Postgres).
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+
+    def __call__(self) -> dict[str, Any]:
+        state, secrets = load_launcher_config_inputs(self.data_dir)
+        composed = compose_config(state, secrets)
+        operator_database_url = os.environ.get("DATABASE_URL")
+        operator_system_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL")
+        derived_system = _derive_operator_system_url(operator_database_url, operator_system_url)
+        resolved: dict[str, Any] = {}
+        for env_name, field_name in _COMPOSED_FIELDS.items():
+            value = _resolve_composed_field(
+                env_name,
+                composed,
+                operator_database_url=operator_database_url,
+                derived_system=derived_system,
+            )
+            if value:  # falsy-omission: a blank derived/composed value is never injected
+                resolved[field_name] = value
+        return resolved
+
+
+def _derive_operator_system_url(
+    operator_database_url: str | None,
+    operator_system_url: str | None,
+) -> str | None:
+    """Derive the system URL from the operator's app URL when only that is set."""
+    if operator_database_url is not None and not operator_system_url:
+        # derive_system_database_url returns '' for a password-free URL —
+        # that must be OMITTED (the caller falls back to modulo_app), never
+        # written through as a blank system URL.
+        return derive_system_database_url(operator_database_url) or None
+    return None
+
+
+def _resolve_composed_field(
+    env_name: str,
+    composed: dict[str, str],
+    *,
+    operator_database_url: str | None,
+    derived_system: str | None,
+) -> str | None:
+    """Return the composed value for one field, or None when it must not be set.
+
+    Handles the operator-override cases: the operator's app URL wins, and the
+    system URL is derived from the operator's URL so the pair stays on one
+    Postgres instance.
+    """
+    if env_name == "DATABASE_URL" and operator_database_url:
+        # The operator's URL wins for the app; the system URL is handled by
+        # the branch below (derived from the operator's URL so the pair stays
+        # on one Postgres instance).
+        return None
+    if env_name == "MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
+        return derived_system
+    value = composed.get(env_name, "")
+    if not value:
+        return None
+    if os.environ.get(env_name):
+        return None  # the operator's environment variable wins
+    return value

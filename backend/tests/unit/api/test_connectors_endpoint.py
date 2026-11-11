@@ -24,21 +24,21 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-import modulo.api.routes.connectors as connectors_module
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.connectors.base import ConnectorACL, HealthResult
-from modulo.connectors.ci_runner import GitHubActionsCIRunner
-from modulo.connectors.github import GitHubNetworkError
-from modulo.db.crud.connector_instance import get_connector_instance as _real_get_connector_instance
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.organisation import Organisation
-from modulo.settings import Settings, get_settings
+import farna.api.routes.connectors as connectors_module
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.connectors.base import ConnectorACL, HealthResult
+from farna.connectors.ci_runner import GitHubActionsCIRunner
+from farna.connectors.github import GitHubNetworkError
+from farna.db.crud.connector_instance import get_connector_instance as _real_get_connector_instance
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.organisation import Organisation
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -48,7 +48,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _CONNECTOR_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
-_CRUD_PATCH_PREFIX = "modulo.api.routes.connectors."
+_CRUD_PATCH_PREFIX = "farna.api.routes.connectors."
 
 
 def _make_settings() -> Settings:
@@ -68,7 +68,7 @@ def _stub_get_connector_instance() -> Generator[None, None, None]:
     same-org connector so the ownership check passes for the legitimate
     (same-org) principal these tests use."""
     with patch(
-        "modulo.api.routes.connectors.get_connector_instance",
+        "farna.api.routes.connectors.get_connector_instance",
         return_value=_make_connector(),
     ):
         yield
@@ -277,9 +277,9 @@ def test_crud(client: TestClient, case: dict[str, object]) -> None:
 def test_create_connector_does_not_expose_credentials(client: TestClient) -> None:
     connector = _make_connector(credentials_ciphertext=b"encrypted_bytes")
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
 
@@ -304,10 +304,10 @@ def test_create_github_fine_grained_token_accepted(client: TestClient) -> None:
     token = "github_pat_11ABC"
     connector = _make_connector(credentials_ciphertext=b"encrypted_bytes")
     with (
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body(token))
 
@@ -319,12 +319,12 @@ def test_create_github_fine_grained_missing_permission_reports_fine_grained_deta
     token = "github_pat_11ABC"
     with (
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(return_value={"contents:write", "pull_requests:write"}),
         ),
-        patch("modulo.api.routes.connectors.create_connector_instance"),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body(token))
 
@@ -341,12 +341,12 @@ def test_create_github_classic_missing_scope_reports_classic_detail(client: Test
     token = "ghp_classic123"
     with (
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(return_value={"repo"}),
         ),
-        patch("modulo.api.routes.connectors.create_connector_instance"),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body(token))
 
@@ -364,9 +364,9 @@ def test_create_connector_encrypts_credentials(client: TestClient) -> None:
         return _make_connector(credentials_ciphertext=kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
 
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", new=fake_create),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", new=fake_create),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         client.post("/api/v1/connectors", json=_CREATE_BODY)
 
@@ -380,9 +380,9 @@ def test_create_connector_encrypts_credentials(client: TestClient) -> None:
 def test_connector_no_credentials_shows_false(client: TestClient) -> None:
     connector = _make_connector(credentials_ciphertext=b"")
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.json()["has_credentials"] is False
@@ -397,9 +397,9 @@ def test_list_connectors_default_excludes_in_dev(client: TestClient) -> None:
     """The list endpoint defaults to the CRUD in_dev exclusion (excluded_tiers=None)."""
     page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 200
@@ -412,9 +412,9 @@ def test_list_connectors_include_in_dev_passes_empty_exclusions(client: TestClie
     in_dev = _make_connector(tier="in_dev")
     page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20, next_cursor=None)
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors", params={"include_in_dev": "true"})
     assert resp.status_code == 200
@@ -436,9 +436,9 @@ def test_list_connectors_include_in_dev_operator_reveals_in_dev(client: TestClie
     in_dev = _make_connector(tier="in_dev")
     page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20, next_cursor=None)
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors", params={"include_in_dev": "true"})
     assert resp.status_code == 200
@@ -449,9 +449,9 @@ def test_list_connectors_include_in_dev_false_keeps_exclusion(client: TestClient
     """?include_in_dev=false behaves exactly like omitting the parameter."""
     page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors", params={"include_in_dev": "false"})
     assert resp.status_code == 200
@@ -471,7 +471,7 @@ def test_update_connector_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: a foreign-org principal must not update a connector it
     does not own. The ownership check must raise 404 before any write."""
     with patch(
-        "modulo.api.routes.connectors.get_connector_instance",
+        "farna.api.routes.connectors.get_connector_instance",
         return_value=_foreign_org_connector(),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={})
@@ -482,7 +482,7 @@ def test_delete_connector_foreign_org_returns_404(client: TestClient) -> None:
     """IDOR regression: a foreign-org principal must not delete a connector it
     does not own."""
     with patch(
-        "modulo.api.routes.connectors.get_connector_instance",
+        "farna.api.routes.connectors.get_connector_instance",
         return_value=_foreign_org_connector(),
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
@@ -551,10 +551,10 @@ def test_connector_health_check_passes_db_session_and_reports_real_status(client
         return _RecordingSecretsBackend(fernet_key=fernet_key, session=session)
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
-        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch("farna.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -592,10 +592,10 @@ def test_connector_health_check_unhealthy_reports_ok_false_in_band(client: TestC
             return self._connector
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -652,10 +652,10 @@ def test_connector_health_check_empty_allowlist_permits_probe(client: TestClient
     connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=[]))
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -670,10 +670,10 @@ def test_connector_health_check_acl_denial_is_403_not_502(client: TestClient) ->
     connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=["write"]))
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -694,11 +694,11 @@ def test_connector_health_check_acl_denial_logs_traceback_and_connector_id(
     connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=["write"]))
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.connectors"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.connectors"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -836,8 +836,8 @@ def test_connector_health_check_keeps_org_scope_active_at_decrypt_time(client: T
         return _OrgAwareSecretsBackend(session=session)
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
-        patch("modulo.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("farna.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch("farna.api.routes.connectors.ConnectorHub", _FakeHub),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
 
@@ -866,9 +866,9 @@ def test_get_connector_masks_nested_config_json(client: TestClient) -> None:
     connector = _make_connector()
     connector.config_json = _nested_secret_config()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 200
@@ -885,9 +885,9 @@ def test_list_connectors_masks_nested_config_json(client: TestClient) -> None:
     connector.config_json = _nested_secret_config()
     page_result = MagicMock(items=[connector], total=1, page=1, page_size=20, next_cursor=None)
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 200
@@ -917,10 +917,10 @@ def test_patch_masked_nested_value_does_not_overwrite_secret(client: TestClient)
         }
     }
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json=masked_payload)
 
@@ -949,10 +949,10 @@ def test_patch_config_json_merges_top_level(client: TestClient) -> None:
         return connector
 
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"config_json": {"tokens": ["a", "b"]}})
 
@@ -991,10 +991,10 @@ def test_patch_identity_only_edit_preserves_secret_and_updates_identity(client: 
     mock_update.side_effect = fake_update
     incoming = {"auth_mode": "api_key", "api_key": "", "in": "header", "header_name": "X-Key-V2"}
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1023,10 +1023,10 @@ def test_patch_with_real_secret_replaces_it(client: TestClient) -> None:
     mock_update.side_effect = fake_update
     incoming = {"auth_mode": "api_key", "api_key": "new-secret", "in": "header", "header_name": "X-Key"}
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
     assert resp.status_code == 200
@@ -1037,7 +1037,7 @@ def test_patch_with_real_secret_replaces_it(client: TestClient) -> None:
 def test_patch_identity_only_edit_round_trip_reads_new_identity(client: TestClient) -> None:
     """After an identity-only PATCH, the persisted credential, when decrypted and
     passed to the REST connector's ``_normalise_auth``, yields the NEW identity."""
-    from modulo.connectors.rest import RestConnector
+    from farna.connectors.rest import RestConnector
 
     stored = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
     existing = _make_rest_connector(_encrypt_creds(stored))
@@ -1053,10 +1053,10 @@ def test_patch_identity_only_edit_round_trip_reads_new_identity(client: TestClie
     mock_update.side_effect = fake_update
     incoming = {"auth_mode": "api_key", "api_key": "", "in": "header", "header_name": "X-Key-V2"}
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
     assert resp.status_code == 200
@@ -1087,10 +1087,10 @@ def test_patch_non_rest_full_replace_not_overlaid(client: TestClient) -> None:
     mock_update.side_effect = fake_update
     incoming = {"other": "y"}  # partial — omits bot_token
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
     assert resp.status_code == 200
@@ -1107,10 +1107,10 @@ def test_patch_undecryptable_ciphertext_does_not_wipe_secret(client: TestClient)
     existing = _make_rest_connector(b"not-a-valid-fern-ciphertext")
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1141,10 +1141,10 @@ def test_patch_rest_complete_replacement_recovers_undecryptable_ciphertext(clien
     mock_update.side_effect = fake_update
     incoming = {"auth_mode": "api_key", "api_key": "new-secret", "in": "header", "header_name": "X-Key"}
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
     assert resp.status_code == 200
@@ -1169,10 +1169,10 @@ def test_patch_rest_complete_bearer_replacement_recovers_undecryptable_ciphertex
 
     mock_update.side_effect = fake_update
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1192,10 +1192,10 @@ def test_patch_rest_masked_secret_on_undecryptable_ciphertext_still_500(client: 
     existing = _make_rest_connector(b"not-a-valid-fern-ciphertext")
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1216,11 +1216,11 @@ def test_patch_undecryptable_ciphertext_logs_server_side(client: TestClient, cap
     existing = _make_rest_connector(b"not-a-valid-fern-ciphertext")
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        caplog.at_level(logging.ERROR, logger="modulo.api.routes.connectors"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.ERROR, logger="farna.api.routes.connectors"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1244,10 +1244,10 @@ def test_patch_non_rest_name_only_null_credentials_no_500(client: TestClient) ->
 
     mock_update.side_effect = fake_update
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1267,10 +1267,10 @@ def test_patch_rest_overlay_bearer_without_token_rejected(client: TestClient) ->
     existing = _make_rest_connector(_encrypt_creds(stored))
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1297,10 +1297,10 @@ def test_patch_rest_overlay_bearer_with_token_succeeds(client: TestClient) -> No
 
     mock_update.side_effect = fake_update
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1336,11 +1336,11 @@ def test_patch_github_raw_token_not_validated(client: TestClient) -> None:
     mock_update.side_effect = fake_update
     token = "ghp_rawtokenvalue"
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1360,10 +1360,10 @@ def test_patch_rest_bare_string_credential_rejected(client: TestClient) -> None:
     existing = _make_rest_connector(_encrypt_creds({"auth_mode": "api_key", "api_key": "secret123"}))
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1386,9 +1386,9 @@ def test_create_rest_bearer_without_token_rejected(client: TestClient) -> None:
         "config_json": {},
     }
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance") as mock_create,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance") as mock_create,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 422
@@ -1406,9 +1406,9 @@ def test_create_rest_bearer_with_token_succeeds(client: TestClient) -> None:
     }
     connector = _make_rest_connector(b"encrypted_bytes")
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 201
@@ -1431,10 +1431,10 @@ def test_update_connector_null_credentials_skips_write(client: TestClient) -> No
 
     mock_update.side_effect = fake_update
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": None})
     assert resp.status_code == 200
@@ -1452,7 +1452,7 @@ def test_connector_response_surfaces_degraded_markers(client: TestClient) -> Non
     degraded.last_skip_error = "ValueError: Missing credential key 'token'"
 
     with patch(
-        "modulo.api.routes.connectors.get_connector_instance",
+        "farna.api.routes.connectors.get_connector_instance",
         return_value=degraded,
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
@@ -1475,9 +1475,9 @@ def test_create_rest_invalid_on_unknown_config_rejected(client: TestClient) -> N
         "config_json": {"base_url": "https://api.example.com", "on_unknown": "bogus"},
     }
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance") as mock_create,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance") as mock_create,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 422
@@ -1491,10 +1491,10 @@ def test_patch_rest_invalid_on_unknown_config_rejected(client: TestClient) -> No
     existing = _make_rest_connector(_encrypt_creds({"auth_mode": "bearer", "token": "t"}))
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1517,10 +1517,10 @@ def test_patch_rest_on_unknown_case_insensitive_accepted(client: TestClient) -> 
         return existing
 
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1547,10 +1547,10 @@ def test_patch_masked_secret_key_preserves_stored_value(client: TestClient) -> N
 
     incoming = {"auth_mode": "api_key", "api_key": "", "secret": SENSITIVE_VALUE_MASK}
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1576,14 +1576,14 @@ def test_connectors_route_module_has_no_assert_statements() -> None:
 
 def _overlay(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """Local import shim for the route's ``_credential_overlay``."""
-    from modulo.api.routes.connectors import _credential_overlay
+    from farna.api.routes.connectors import _credential_overlay
 
     return _credential_overlay(previous, incoming)
 
 
 def test_overlay_masked_or_empty_secret_preserved() -> None:
     """FAR-504 (a): an empty OR masked secret value is preserved (not overwritten)."""
-    from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+    from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
     previous = {"auth_mode": "api_key", "api_key": "secret123", "in": "header", "header_name": "X-Key"}
     for blank in ("", SENSITIVE_VALUE_MASK):
@@ -1635,7 +1635,7 @@ def test_rest_validate_credentials_parity_with_connector() -> None:
     exactly the required-secret contract the API boundary relies on, and it agrees
     with ``_normalise_auth`` (both accept or both reject a given credential dict).
     bearer->token; basic->username+password; api_key->api_key + in header/query."""
-    from modulo.connectors.rest import RestConnector
+    from farna.connectors.rest import RestConnector
 
     valid = [
         {"auth_mode": "bearer", "token": "t"},
@@ -1671,10 +1671,10 @@ def test_patch_rest_overlay_rejects_missing_basic_secret(client: TestClient) -> 
     existing = _make_rest_connector(_encrypt_creds(stored))
     mock_update = AsyncMock()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", new=mock_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", new=mock_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -1721,8 +1721,8 @@ def test_list_connector_types_offers_only_hub_buildable_ids(client: TestClient) 
     trusted to the registry's own build contract. An offered id with no
     fixture fails loudly — the fixture table must grow with the catalogue.
     """
-    from modulo.core.connector_hub import _build_connector
-    from modulo.core.plugin_registry import get_plugin_registry
+    from farna.core.connector_hub import _build_connector
+    from farna.core.plugin_registry import get_plugin_registry
     from tests.unit.connector_hub._fixtures import BUILD_CASES
 
     resp = client.get("/api/v1/connectors/types")
@@ -1756,9 +1756,9 @@ async def test_mcp_list_connector_types_matches_rest_surface() -> None:
     ``custom`` and omitted the hub-native CI ids ``github_actions_ci`` /
     ``gitlab_ci``, disagreeing with the REST surface.
     """
-    from modulo.api.mcp_server import _ctx_role
-    from modulo.api.mcp_server import list_connector_types as mcp_list_connector_types
-    from modulo.api.routes.connectors import list_connector_types as rest_list_connector_types
+    from farna.api.mcp_server import _ctx_role
+    from farna.api.mcp_server import list_connector_types as mcp_list_connector_types
+    from farna.api.routes.connectors import list_connector_types as rest_list_connector_types
 
     rest = await rest_list_connector_types()
     rest_ids = [item.id for item in rest.items]
@@ -1768,7 +1768,7 @@ async def test_mcp_list_connector_types_matches_rest_surface() -> None:
     # in a unit test, and authz denial is covered by the MCP tool's own tests.
     role_token = _ctx_role.set("operator")
     try:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             mcp_result = await mcp_list_connector_types()
     finally:
         _ctx_role.reset(role_token)
@@ -1813,12 +1813,12 @@ def test_create_and_health_check_github_actions_ci_connector(client: TestClient)
 
     health_probe = AsyncMock(return_value=HealthResult(ok=True, detail="connected"))
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=ci_row),
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=ci_row),
-        patch("modulo.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=ci_row),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=ci_row),
+        patch("farna.api.routes.connectors.create_secrets_backend", fake_create_secrets_backend),
         patch.object(GitHubActionsCIRunner, "health_check", health_probe),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         create_resp = client.post(
             "/api/v1/connectors",
@@ -1838,7 +1838,7 @@ def test_create_and_health_check_github_actions_ci_connector(client: TestClient)
 
 def test_decrypt_credentials_returns_empty_for_none() -> None:
     """_decrypt_credentials returns {} when ciphertext is None/empty."""
-    from modulo.api.routes.connectors import _decrypt_credentials
+    from farna.api.routes.connectors import _decrypt_credentials
 
     assert not _decrypt_credentials(None, _FERNET_KEY)
     assert not _decrypt_credentials(b"", _FERNET_KEY)
@@ -1846,7 +1846,7 @@ def test_decrypt_credentials_returns_empty_for_none() -> None:
 
 def test_decrypt_credentials_raises_on_non_dict_json() -> None:
     """When the decrypted JSON is not a dict, StoredCredentialDecryptError is raised."""
-    from modulo.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
+    from farna.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
 
     ciphertext = Fernet(_FERNET_KEY.encode()).encrypt(json.dumps(["not", "a", "dict"]).encode())
     with pytest.raises(StoredCredentialDecryptError):
@@ -1855,7 +1855,7 @@ def test_decrypt_credentials_raises_on_non_dict_json() -> None:
 
 def test_decrypt_credentials_raises_on_invalid_json() -> None:
     """When the decrypted bytes are not valid JSON, StoredCredentialDecryptError is raised."""
-    from modulo.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
+    from farna.api.routes.connectors import StoredCredentialDecryptError, _decrypt_credentials
 
     ciphertext = Fernet(_FERNET_KEY.encode()).encrypt(b"not-json")
     with pytest.raises(StoredCredentialDecryptError):
@@ -1865,11 +1865,9 @@ def test_decrypt_credentials_raises_on_invalid_json() -> None:
 def test_create_connector_integrity_error_returns_409(client: TestClient) -> None:
     """DB IntegrityError on create maps to 409."""
     with (
-        patch(
-            "modulo.api.routes.connectors.create_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
-        ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
     assert resp.status_code == 409
@@ -1878,11 +1876,11 @@ def test_create_connector_integrity_error_returns_409(client: TestClient) -> Non
 def test_create_connector_programming_error_returns_501(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.create_connector_instance",
+            "farna.api.routes.connectors.create_connector_instance",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
     assert resp.status_code == 501
@@ -1891,11 +1889,11 @@ def test_create_connector_programming_error_returns_501(client: TestClient) -> N
 def test_create_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.create_connector_instance",
+            "farna.api.routes.connectors.create_connector_instance",
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
     assert resp.status_code == 503
@@ -1903,9 +1901,9 @@ def test_create_connector_sqlalchemy_error_returns_503(client: TestClient) -> No
 
 def test_create_connector_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", side_effect=RuntimeError("boom")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
     assert resp.status_code == 500
@@ -1913,9 +1911,9 @@ def test_create_connector_unexpected_error_returns_500(client: TestClient) -> No
 
 def test_list_connectors_integrity_error_returns_409(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", side_effect=IntegrityError("dup", "dup", "dup")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 409
@@ -1924,11 +1922,11 @@ def test_list_connectors_integrity_error_returns_409(client: TestClient) -> None
 def test_list_connectors_programming_error_returns_501(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.list_connector_instances",
+            "farna.api.routes.connectors.list_connector_instances",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 501
@@ -1937,10 +1935,10 @@ def test_list_connectors_programming_error_returns_501(client: TestClient) -> No
 def test_list_connectors_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.list_connector_instances", side_effect=SQLAlchemyError("mock", "mock", "mock")
+            "farna.api.routes.connectors.list_connector_instances", side_effect=SQLAlchemyError("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 503
@@ -1948,9 +1946,9 @@ def test_list_connectors_sqlalchemy_error_returns_503(client: TestClient) -> Non
 
 def test_list_connectors_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.list_connector_instances", side_effect=RuntimeError("boom")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.list_connector_instances", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/connectors")
     assert resp.status_code == 500
@@ -1958,9 +1956,9 @@ def test_list_connectors_unexpected_error_returns_500(client: TestClient) -> Non
 
 def test_get_connector_integrity_error_returns_409(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 409
@@ -1969,10 +1967,10 @@ def test_get_connector_integrity_error_returns_409(client: TestClient) -> None:
 def test_get_connector_programming_error_returns_501(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.get_connector_instance", side_effect=ProgrammingError("mock", "mock", "mock")
+            "farna.api.routes.connectors.get_connector_instance", side_effect=ProgrammingError("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 501
@@ -1981,10 +1979,10 @@ def test_get_connector_programming_error_returns_501(client: TestClient) -> None
 def test_get_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.connectors.get_connector_instance", side_effect=SQLAlchemyError("mock", "mock", "mock")
+            "farna.api.routes.connectors.get_connector_instance", side_effect=SQLAlchemyError("mock", "mock", "mock")
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 503
@@ -1992,9 +1990,9 @@ def test_get_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_get_connector_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", side_effect=RuntimeError("boom")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 500
@@ -2002,12 +2000,10 @@ def test_get_connector_unexpected_error_returns_500(client: TestClient) -> None:
 
 def test_update_connector_integrity_error_returns_409(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
-        patch(
-            "modulo.api.routes.connectors.update_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
-        ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.update_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
     assert resp.status_code == 409
@@ -2015,13 +2011,13 @@ def test_update_connector_integrity_error_returns_409(client: TestClient) -> Non
 
 def test_update_connector_programming_error_returns_501(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
         patch(
-            "modulo.api.routes.connectors.update_connector_instance",
+            "farna.api.routes.connectors.update_connector_instance",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
     assert resp.status_code == 501
@@ -2029,13 +2025,13 @@ def test_update_connector_programming_error_returns_501(client: TestClient) -> N
 
 def test_update_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
         patch(
-            "modulo.api.routes.connectors.update_connector_instance",
+            "farna.api.routes.connectors.update_connector_instance",
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
     assert resp.status_code == 503
@@ -2043,10 +2039,10 @@ def test_update_connector_sqlalchemy_error_returns_503(client: TestClient) -> No
 
 def test_update_connector_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.update_connector_instance", side_effect=RuntimeError("boom")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.update_connector_instance", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "x"})
     assert resp.status_code == 500
@@ -2054,12 +2050,10 @@ def test_update_connector_unexpected_error_returns_500(client: TestClient) -> No
 
 def test_delete_connector_integrity_error_returns_409(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
-        patch(
-            "modulo.api.routes.connectors.delete_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")
-        ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.delete_connector_instance", side_effect=IntegrityError("dup", "dup", "dup")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 409
@@ -2067,13 +2061,13 @@ def test_delete_connector_integrity_error_returns_409(client: TestClient) -> Non
 
 def test_delete_connector_programming_error_returns_501(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
         patch(
-            "modulo.api.routes.connectors.delete_connector_instance",
+            "farna.api.routes.connectors.delete_connector_instance",
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 501
@@ -2081,13 +2075,13 @@ def test_delete_connector_programming_error_returns_501(client: TestClient) -> N
 
 def test_delete_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
         patch(
-            "modulo.api.routes.connectors.delete_connector_instance",
+            "farna.api.routes.connectors.delete_connector_instance",
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 503
@@ -2095,10 +2089,10 @@ def test_delete_connector_sqlalchemy_error_returns_503(client: TestClient) -> No
 
 def test_delete_connector_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.delete_connector_instance", side_effect=RuntimeError("boom")),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.delete_connector_instance", side_effect=RuntimeError("boom")),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.delete(f"/api/v1/connectors/{_CONNECTOR_ID}")
     assert resp.status_code == 500
@@ -2106,13 +2100,13 @@ def test_delete_connector_unexpected_error_returns_500(client: TestClient) -> No
 
 def test_health_check_connector_decrypt_error_returns_502(client: TestClient) -> None:
     """ConnectorDecryptError maps to 502."""
-    from modulo.core.connector_hub import ConnectorDecryptError
+    from farna.core.connector_hub import ConnectorDecryptError
 
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub") as mock_hub_cls,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub") as mock_hub_cls,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(side_effect=ConnectorDecryptError("bad"))
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
@@ -2122,10 +2116,10 @@ def test_health_check_connector_decrypt_error_returns_502(client: TestClient) ->
 def test_health_check_connector_generic_error_returns_502(client: TestClient) -> None:
     """Unexpected exceptions from health check map to 502."""
     with (
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
-        patch("modulo.api.routes.connectors.ConnectorHub") as mock_hub_cls,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub") as mock_hub_cls,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         mock_hub_cls.return_value.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
         resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
@@ -2135,9 +2129,9 @@ def test_health_check_connector_generic_error_returns_502(client: TestClient) ->
 def test_health_check_missing_connector_returns_404(client: TestClient) -> None:
     """Health check on a non-existent connector returns 404."""
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=None),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=None),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{uuid.uuid4()}/health")
     assert resp.status_code == 404
@@ -2147,12 +2141,12 @@ def test_github_scope_verification_error_on_create(client: TestClient) -> None:
     """GitHub token scope verification failure returns 422."""
     with (
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(side_effect=ValueError("API down")),
         ),
-        patch("modulo.api.routes.connectors.create_connector_instance"),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
     assert resp.status_code == 422
@@ -2163,14 +2157,14 @@ def test_patch_github_scope_verification_error_on_update(client: TestClient) -> 
     """GitHub token scope verification failure on PATCH returns 422."""
     existing = _make_github_patch_connector()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance"),
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(side_effect=ValueError("API down")),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
     assert resp.status_code == 422
@@ -2181,11 +2175,11 @@ def test_patch_github_missing_scopes_returns_422(client: TestClient) -> None:
     """GitHub token missing scopes on PATCH returns 422."""
     existing = _make_github_patch_connector()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance"),
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value={"repo"})),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance"),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value={"repo"})),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
     assert resp.status_code == 422
@@ -2207,10 +2201,10 @@ def test_create_github_verifies_against_configured_ghes_base(client: TestClient)
         return set()
 
     with (
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post(
             "/api/v1/connectors",
@@ -2229,10 +2223,10 @@ def test_create_github_without_base_url_verifies_against_default(client: TestCli
         return set()
 
     with (
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
     assert resp.status_code == 201, resp.text
@@ -2250,13 +2244,13 @@ def test_create_github_unreachable_instance_is_non_fatal_with_warning_header(
     ``test_github_scope_verification_error_on_create``)."""
     with (
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(side_effect=GitHubNetworkError("connection refused")),
         ),
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.connectors"),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.connectors"),
     ):
         resp = client.post(
             "/api/v1/connectors",
@@ -2274,14 +2268,14 @@ def test_patch_github_unreachable_instance_is_non_fatal_with_warning_header(clie
     """The PATCH rotation path degrades the same way as create (FAR-1762)."""
     existing = _make_github_patch_connector()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", return_value=existing),
         patch(
-            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            "farna.api.routes.connectors.GitHubConnector.verify_scopes",
             new=AsyncMock(side_effect=GitHubNetworkError("connection refused")),
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": "ghp_newtoken"})
     assert resp.status_code == 200, resp.text
@@ -2301,11 +2295,11 @@ def test_patch_github_verifies_against_merged_config_base_url(client: TestClient
         return set()
 
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.update_connector_instance", return_value=existing),
-        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.update_connector_instance", return_value=existing),
+        patch("farna.api.routes.connectors.GitHubConnector.verify_scopes", new=fake_verify_scopes),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -2324,12 +2318,12 @@ def test_create_github_non_string_verification_result_does_not_break_create(clie
     """
     with (
         patch(
-            "modulo.api.routes.connectors._verify_github_credentials",
+            "farna.api.routes.connectors._verify_github_credentials",
             new=AsyncMock(return_value=True),
         ),
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=_make_github_body("ghp_test123"))
     assert resp.status_code == 201, resp.text
@@ -2361,9 +2355,9 @@ def test_create_rest_non_json_credentials_rejected(client: TestClient) -> None:
         "config_json": {},
     }
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance"),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 422
@@ -2379,9 +2373,9 @@ def test_rest_invalid_config_json_on_unknown_rejects(client: TestClient) -> None
         "config_json": {"on_unknown": "bogus_mode"},
     }
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance"),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_connector_instance"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 422
@@ -2416,10 +2410,10 @@ def test_create_connector_resolves_secretref_credential(client: TestClient) -> N
         return _make_connector(credentials_ciphertext=kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
 
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", new=fake_create),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.connectors.create_connector_instance", new=fake_create),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/connectors",
@@ -2438,10 +2432,10 @@ def test_create_connector_missing_vault_key_fails_closed(client: TestClient) -> 
     """A missing vault key is a typed 422 naming the key — the connector is not created."""
     stub = _StubVaultBackend({})
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance") as create_mock,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.connectors.create_connector_instance") as create_mock,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=stub),
     ):
         resp = client.post(
             "/api/v1/connectors",
@@ -2461,10 +2455,10 @@ def test_create_connector_missing_vault_key_fails_closed(client: TestClient) -> 
 def test_create_connector_literal_credential_skips_the_vault(client: TestClient) -> None:
     """A literal credential never constructs a secrets backend (no vault dependency)."""
     with (
-        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend") as backend_mock,
+        patch("farna.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend") as backend_mock,
     ):
         resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -2481,10 +2475,10 @@ def test_update_connector_resolves_secretref_credential(client: TestClient) -> N
         return _make_connector()
 
     with (
-        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -2502,10 +2496,10 @@ def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> 
     """FAR-1640: PATCH with an unresolvable secretref:// is a typed 422, never a write."""
     stub = _StubVaultBackend({})
     with (
-        patch("modulo.api.routes.connectors.update_connector_instance") as update_mock,
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+        patch("farna.api.routes.connectors.update_connector_instance") as update_mock,
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=stub),
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
@@ -2573,7 +2567,7 @@ async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(
 
         # The module-level autouse fixture stubs this CRUD read with a
         # MagicMock; the real-DB route under test needs the real function.
-        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+        with patch("farna.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
             resp = client.patch(f"/api/v1/connectors/{connector_id}", json={"name": "Renamed"})
 
         assert resp.status_code == 200, resp.text
@@ -2585,7 +2579,7 @@ async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(
             ).scalar_one()
         assert stored.name == "Renamed"
 
-        with patch("modulo.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
+        with patch("farna.api.routes.connectors.get_connector_instance", _real_get_connector_instance):
             got = client.get(f"/api/v1/connectors/{connector_id}")
         assert got.status_code == 200, got.text
         assert got.json()["name"] == "Renamed"
@@ -2608,10 +2602,10 @@ def test_patch_connector_row_gone_at_write_time_returns_404(client: TestClient) 
     """
     connector = _make_connector()
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", return_value=connector),
-        patch("modulo.api.routes.connectors.update_connector_instance", return_value=None),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.get_connector_instance", return_value=connector),
+        patch("farna.api.routes.connectors.update_connector_instance", return_value=None),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"name": "Renamed"})
 

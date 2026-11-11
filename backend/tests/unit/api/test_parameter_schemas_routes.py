@@ -15,12 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -130,9 +130,9 @@ def _make_set(schema_id: uuid.UUID, organisation_id: uuid.UUID = _ORG_ID, **over
 def test_list_schemas_returns_paged_items(client: TestClient) -> None:
     page = PageResult(items=[_make_schema()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.parameter_schemas.list_schemas", new_callable=AsyncMock, return_value=page),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.list_schemas", new_callable=AsyncMock, return_value=page),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/parameter-schemas")
     assert resp.status_code == 200, resp.text
@@ -144,14 +144,14 @@ def test_list_schemas_returns_paged_items(client: TestClient) -> None:
 
 def test_list_schemas_missing_table_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-    with patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
+    with patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
         resp = client.get("/api/v1/parameter-schemas")
     assert resp.status_code == 501
 
 
 def test_list_schemas_db_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.set_rls_org",
+        "farna.api.routes.parameter_schemas.set_rls_org",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -160,7 +160,7 @@ def test_list_schemas_db_error_returns_503(client: TestClient) -> None:
 
 
 def test_list_schemas_unexpected_error_returns_500(client: TestClient) -> None:
-    with patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError):
+    with patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError):
         resp = client.get("/api/v1/parameter-schemas")
     assert resp.status_code == 500
 
@@ -168,9 +168,9 @@ def test_list_schemas_unexpected_error_returns_500(client: TestClient) -> None:
 def test_create_schema_returns_201(client: TestClient) -> None:
     schema = _make_schema(name="Created")
     with (
-        patch("modulo.api.routes.parameter_schemas.create_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.create_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/parameter-schemas",
@@ -183,9 +183,9 @@ def test_create_schema_returns_201(client: TestClient) -> None:
 def test_create_schema_duplicate_name_returns_409(client: TestClient) -> None:
     err = IntegrityError("INSERT", {}, Exception("unique"))
     with (
-        patch("modulo.api.routes.parameter_schemas.create_schema", new_callable=AsyncMock, side_effect=err),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.create_schema", new_callable=AsyncMock, side_effect=err),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/parameter-schemas", json={"name": "Dup"})
     assert resp.status_code == 409
@@ -212,9 +212,9 @@ def test_create_schema_blank_name_rejected(client: TestClient) -> None:
 def test_get_schema_owned_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}")
     assert resp.status_code == 200, resp.text
@@ -223,9 +223,9 @@ def test_get_schema_owned_returns_200(client: TestClient) -> None:
 
 def test_get_schema_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -234,10 +234,10 @@ def test_get_schema_missing_returns_404(client: TestClient) -> None:
 def test_delete_schema_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.soft_delete_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.soft_delete_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}")
     assert resp.status_code == 200, resp.text
@@ -246,10 +246,10 @@ def test_delete_schema_returns_200(client: TestClient) -> None:
 def test_delete_schema_missing_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.soft_delete_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.soft_delete_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}")
     assert resp.status_code == 404
@@ -258,10 +258,10 @@ def test_delete_schema_missing_returns_404(client: TestClient) -> None:
 def test_restore_schema_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.restore_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.restore_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/restore")
     assert resp.status_code == 200, resp.text
@@ -270,10 +270,10 @@ def test_restore_schema_returns_200(client: TestClient) -> None:
 def test_restore_schema_not_deleted_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.restore_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.restore_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/restore")
     assert resp.status_code == 404
@@ -282,10 +282,10 @@ def test_restore_schema_not_deleted_returns_404(client: TestClient) -> None:
 def test_update_schema_stale_version_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.update_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.update_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.put(f"/api/v1/parameter-schemas/{schema.id}", json={"version": 1, "name": "Renamed"})
     assert resp.status_code == 409
@@ -294,7 +294,7 @@ def test_update_schema_stale_version_returns_409(client: TestClient) -> None:
 
 def test_update_schema_missing_table_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-    with patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
+    with patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
         resp = client.put(f"/api/v1/parameter-schemas/{uuid.uuid4()}", json={"version": 1})
     assert resp.status_code == 501
 
@@ -307,9 +307,9 @@ def test_update_schema_missing_table_returns_501(client: TestClient) -> None:
 def test_diff_same_version_returns_empty_changes(client: TestClient) -> None:
     schema = _make_schema(version=3)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{schema.id}/diff",
@@ -323,9 +323,9 @@ def test_diff_same_version_returns_empty_changes(client: TestClient) -> None:
 def test_diff_historical_versions_returns_warning(client: TestClient) -> None:
     schema = _make_schema(version=2)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{schema.id}/diff",
@@ -338,9 +338,9 @@ def test_diff_historical_versions_returns_warning(client: TestClient) -> None:
 def test_diff_current_version_lists_parameters(client: TestClient) -> None:
     schema = _make_schema(version=2)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{schema.id}/diff",
@@ -355,9 +355,9 @@ def test_diff_current_version_lists_parameters(client: TestClient) -> None:
 def test_diff_invalid_versions_rejected(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{schema.id}/diff",
@@ -371,14 +371,14 @@ def test_schema_references_returns_ids(client: TestClient) -> None:
     agent_id = uuid.uuid4()
     set_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
         patch(
-            "modulo.api.routes.parameter_schemas.get_schema_references",
+            "farna.api.routes.parameter_schemas.get_schema_references",
             new_callable=AsyncMock,
             return_value={"agents": [agent_id], "sets": [set_id]},
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/references")
     assert resp.status_code == 200, resp.text
@@ -389,9 +389,9 @@ def test_schema_references_returns_ids(client: TestClient) -> None:
 
 def test_schema_references_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/references")
     assert resp.status_code == 404
@@ -407,9 +407,9 @@ def test_validate_values_all_valid(client: TestClient) -> None:
         ]
     )
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/parameter-schemas/{schema.id}/validate",
@@ -432,9 +432,9 @@ def test_validate_values_collects_all_error_kinds(client: TestClient) -> None:
         ]
     )
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/parameter-schemas/{schema.id}/validate",
@@ -464,9 +464,9 @@ def test_validate_values_number_below_minimum_and_optional_absent(client: TestCl
         ]
     )
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/parameter-schemas/{schema.id}/validate",
@@ -484,9 +484,9 @@ def test_validate_values_number_below_minimum_and_optional_absent(client: TestCl
 
 def test_validate_missing_schema_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/parameter-schemas/{uuid.uuid4()}/validate",
@@ -504,10 +504,10 @@ def test_list_sets_returns_items(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.list_sets", new_callable=AsyncMock, return_value=[ps]),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.list_sets", new_callable=AsyncMock, return_value=[ps]),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets")
     assert resp.status_code == 200, resp.text
@@ -518,9 +518,9 @@ def test_list_sets_returns_items(client: TestClient) -> None:
 
 def test_list_sets_missing_schema_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets")
     assert resp.status_code == 404
@@ -530,10 +530,10 @@ def test_create_set_returns_201(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.create_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.create_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/parameter-schemas/{schema.id}/sets",
@@ -546,10 +546,10 @@ def test_create_set_duplicate_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     err = IntegrityError("INSERT", {}, Exception("unique"))
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.create_set", new_callable=AsyncMock, side_effect=err),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.create_set", new_callable=AsyncMock, side_effect=err),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/sets", json={"name": "Dup"})
     assert resp.status_code == 409
@@ -559,9 +559,9 @@ def test_get_set_owned_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 200, resp.text
@@ -572,9 +572,9 @@ def test_get_set_wrong_schema_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(uuid.UUID("00000000-0000-0000-0000-000000000009"))
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 404
@@ -584,11 +584,11 @@ def test_update_set_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.update_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.update_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.put(
             f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}",
@@ -601,11 +601,11 @@ def test_update_set_stale_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.update_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.update_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.put(
             f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}",
@@ -619,11 +619,11 @@ def test_delete_set_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 200, resp.text
@@ -632,10 +632,10 @@ def test_delete_set_returns_200(client: TestClient) -> None:
 def test_delete_set_missing_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -645,11 +645,11 @@ def test_restore_set_returns_200(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}/restore")
     assert resp.status_code == 200, resp.text
@@ -659,11 +659,11 @@ def test_restore_set_wrong_schema_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(uuid.UUID("00000000-0000-0000-0000-000000000009"))
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}/restore")
     assert resp.status_code == 404
@@ -678,10 +678,10 @@ def test_parameter_set_references_returns_raw_refs(client: TestClient) -> None:
     ps = _make_set(uuid.uuid4())
     refs = {"pipelines": [uuid.uuid4()]}
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.get_set_references", new_callable=AsyncMock, return_value=refs),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.get_set_references", new_callable=AsyncMock, return_value=refs),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-sets/{ps.id}/references")
     assert resp.status_code == 200, resp.text
@@ -690,9 +690,9 @@ def test_parameter_set_references_returns_raw_refs(client: TestClient) -> None:
 
 def test_parameter_set_references_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
     assert resp.status_code == 404
@@ -700,7 +700,7 @@ def test_parameter_set_references_missing_returns_404(client: TestClient) -> Non
 
 def test_parameter_set_references_missing_table_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-    with patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
+    with patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock, side_effect=err):
         resp = client.get(f"/api/v1/parameter-sets/{uuid.uuid4()}/references")
     assert resp.status_code == 501
 
@@ -712,7 +712,7 @@ def test_parameter_set_references_missing_table_returns_501(client: TestClient) 
 
 def test_list_schemas_integrity_error_returns_409(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.set_rls_org",
+        "farna.api.routes.parameter_schemas.set_rls_org",
         new_callable=AsyncMock,
         side_effect=IntegrityError("INSERT", {}, Exception("unique")),
     ):
@@ -723,7 +723,7 @@ def test_list_schemas_integrity_error_returns_409(client: TestClient) -> None:
 def test_create_schema_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.create_schema",
+        "farna.api.routes.parameter_schemas.create_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -733,7 +733,7 @@ def test_create_schema_programming_error_returns_501(client: TestClient) -> None
 
 def test_create_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.create_schema",
+        "farna.api.routes.parameter_schemas.create_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -743,7 +743,7 @@ def test_create_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_create_schema_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.create_schema",
+        "farna.api.routes.parameter_schemas.create_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -754,7 +754,7 @@ def test_create_schema_unexpected_error_returns_500(client: TestClient) -> None:
 def test_get_schema_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -764,7 +764,7 @@ def test_get_schema_programming_error_returns_501(client: TestClient) -> None:
 
 def test_get_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -774,7 +774,7 @@ def test_get_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_get_schema_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -786,9 +786,9 @@ def test_get_schema_wrong_org_returns_404(client: TestClient) -> None:
     other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
     schema = _make_schema(organisation_id=other_org)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}")
     assert resp.status_code == 404
@@ -797,7 +797,7 @@ def test_get_schema_wrong_org_returns_404(client: TestClient) -> None:
 def test_update_schema_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -807,7 +807,7 @@ def test_update_schema_programming_error_returns_501(client: TestClient) -> None
 
 def test_update_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -817,7 +817,7 @@ def test_update_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_update_schema_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -828,14 +828,14 @@ def test_update_schema_unexpected_error_returns_500(client: TestClient) -> None:
 def test_update_schema_integrity_error_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
         patch(
-            "modulo.api.routes.parameter_schemas.update_schema",
+            "farna.api.routes.parameter_schemas.update_schema",
             new_callable=AsyncMock,
             side_effect=IntegrityError("INSERT", {}, Exception("unique")),
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.put(f"/api/v1/parameter-schemas/{schema.id}", json={"version": 2, "name": "Dup"})
     assert resp.status_code == 409
@@ -844,7 +844,7 @@ def test_update_schema_integrity_error_returns_409(client: TestClient) -> None:
 def test_delete_schema_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -854,7 +854,7 @@ def test_delete_schema_programming_error_returns_501(client: TestClient) -> None
 
 def test_delete_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -864,7 +864,7 @@ def test_delete_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_delete_schema_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -875,14 +875,14 @@ def test_delete_schema_unexpected_error_returns_500(client: TestClient) -> None:
 def test_delete_schema_integrity_error_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
         patch(
-            "modulo.api.routes.parameter_schemas.soft_delete_schema",
+            "farna.api.routes.parameter_schemas.soft_delete_schema",
             new_callable=AsyncMock,
             side_effect=IntegrityError("INSERT", {}, Exception("unique")),
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}")
     assert resp.status_code == 409
@@ -891,7 +891,7 @@ def test_delete_schema_integrity_error_returns_409(client: TestClient) -> None:
 def test_restore_schema_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -901,7 +901,7 @@ def test_restore_schema_programming_error_returns_501(client: TestClient) -> Non
 
 def test_restore_schema_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -911,7 +911,7 @@ def test_restore_schema_sqlalchemy_error_returns_503(client: TestClient) -> None
 
 def test_restore_schema_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -921,9 +921,9 @@ def test_restore_schema_unexpected_error_returns_500(client: TestClient) -> None
 
 def test_diff_schema_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{uuid.uuid4()}/diff",
@@ -936,9 +936,9 @@ def test_diff_wrong_org_returns_404(client: TestClient) -> None:
     other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
     schema = _make_schema(organisation_id=other_org)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(
             f"/api/v1/parameter-schemas/{schema.id}/diff",
@@ -949,7 +949,7 @@ def test_diff_wrong_org_returns_404(client: TestClient) -> None:
 
 def test_diff_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -962,7 +962,7 @@ def test_diff_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_diff_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -976,7 +976,7 @@ def test_diff_unexpected_error_returns_500(client: TestClient) -> None:
 def test_references_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -986,7 +986,7 @@ def test_references_programming_error_returns_501(client: TestClient) -> None:
 
 def test_references_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -996,7 +996,7 @@ def test_references_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_references_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1007,7 +1007,7 @@ def test_references_unexpected_error_returns_500(client: TestClient) -> None:
 def test_validate_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1020,7 +1020,7 @@ def test_validate_programming_error_returns_501(client: TestClient) -> None:
 
 def test_validate_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1033,7 +1033,7 @@ def test_validate_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_validate_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1052,7 +1052,7 @@ def test_validate_unexpected_error_returns_500(client: TestClient) -> None:
 def test_list_sets_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1062,7 +1062,7 @@ def test_list_sets_programming_error_returns_501(client: TestClient) -> None:
 
 def test_list_sets_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1072,7 +1072,7 @@ def test_list_sets_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_list_sets_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1083,14 +1083,14 @@ def test_list_sets_unexpected_error_returns_500(client: TestClient) -> None:
 def test_list_sets_integrity_error_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
         patch(
-            "modulo.api.routes.parameter_schemas.list_sets",
+            "farna.api.routes.parameter_schemas.list_sets",
             new_callable=AsyncMock,
             side_effect=IntegrityError("SELECT", {}, Exception("unique")),
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets")
     assert resp.status_code == 409
@@ -1099,7 +1099,7 @@ def test_list_sets_integrity_error_returns_409(client: TestClient) -> None:
 def test_create_set_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1109,7 +1109,7 @@ def test_create_set_programming_error_returns_501(client: TestClient) -> None:
 
 def test_create_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1119,7 +1119,7 @@ def test_create_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_create_set_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1130,7 +1130,7 @@ def test_create_set_unexpected_error_returns_500(client: TestClient) -> None:
 def test_get_set_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1140,7 +1140,7 @@ def test_get_set_programming_error_returns_501(client: TestClient) -> None:
 
 def test_get_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1150,7 +1150,7 @@ def test_get_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_get_set_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1160,9 +1160,9 @@ def test_get_set_unexpected_error_returns_500(client: TestClient) -> None:
 
 def test_get_set_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{uuid.uuid4()}/sets/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -1173,9 +1173,9 @@ def test_get_set_wrong_org_returns_404(client: TestClient) -> None:
     other_org = uuid.UUID("00000000-0000-0000-0000-000000000099")
     ps = _make_set(schema.id, organisation_id=other_org)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 404
@@ -1184,7 +1184,7 @@ def test_get_set_wrong_org_returns_404(client: TestClient) -> None:
 def test_update_set_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1197,7 +1197,7 @@ def test_update_set_programming_error_returns_501(client: TestClient) -> None:
 
 def test_update_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1210,7 +1210,7 @@ def test_update_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_update_set_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1225,15 +1225,15 @@ def test_update_set_integrity_error_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
         patch(
-            "modulo.api.routes.parameter_schemas.update_set",
+            "farna.api.routes.parameter_schemas.update_set",
             new_callable=AsyncMock,
             side_effect=IntegrityError("INSERT", {}, Exception("unique")),
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.put(
             f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}",
@@ -1245,7 +1245,7 @@ def test_update_set_integrity_error_returns_409(client: TestClient) -> None:
 def test_delete_set_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1255,7 +1255,7 @@ def test_delete_set_programming_error_returns_501(client: TestClient) -> None:
 
 def test_delete_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1265,7 +1265,7 @@ def test_delete_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_delete_set_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1277,15 +1277,15 @@ def test_delete_set_integrity_error_returns_409(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
         patch(
-            "modulo.api.routes.parameter_schemas.soft_delete_set",
+            "farna.api.routes.parameter_schemas.soft_delete_set",
             new_callable=AsyncMock,
             side_effect=IntegrityError("INSERT", {}, Exception("unique")),
         ),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 409
@@ -1296,11 +1296,11 @@ def test_delete_set_wrong_schema_returns_404(client: TestClient) -> None:
     other_schema = uuid.uuid4()
     ps = _make_set(other_schema)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 404
@@ -1310,11 +1310,11 @@ def test_delete_set_missing_after_delete_returns_404(client: TestClient) -> None
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.soft_delete_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}")
     assert resp.status_code == 404
@@ -1323,7 +1323,7 @@ def test_delete_set_missing_after_delete_returns_404(client: TestClient) -> None
 def test_restore_set_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1333,7 +1333,7 @@ def test_restore_set_programming_error_returns_501(client: TestClient) -> None:
 
 def test_restore_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1343,7 +1343,7 @@ def test_restore_set_sqlalchemy_error_returns_503(client: TestClient) -> None:
 
 def test_restore_set_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_schema",
+        "farna.api.routes.parameter_schemas.get_schema",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):
@@ -1355,11 +1355,11 @@ def test_restore_set_missing_returns_404(client: TestClient) -> None:
     schema = _make_schema()
     ps = _make_set(schema.id)
     with (
-        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
-        patch("modulo.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
-        patch("modulo.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("farna.api.routes.parameter_schemas.get_set", new_callable=AsyncMock, return_value=ps),
+        patch("farna.api.routes.parameter_schemas.restore_set", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/parameter-schemas/{schema.id}/sets/{ps.id}/restore")
     assert resp.status_code == 404
@@ -1373,7 +1373,7 @@ def test_restore_set_missing_returns_404(client: TestClient) -> None:
 def test_parameter_set_references_programming_error_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=err,
     ):
@@ -1383,7 +1383,7 @@ def test_parameter_set_references_programming_error_returns_501(client: TestClie
 
 def test_parameter_set_references_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -1393,7 +1393,7 @@ def test_parameter_set_references_sqlalchemy_error_returns_503(client: TestClien
 
 def test_parameter_set_references_unexpected_error_returns_500(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.parameter_schemas.get_set",
+        "farna.api.routes.parameter_schemas.get_set",
         new_callable=AsyncMock,
         side_effect=RuntimeError("kaboom"),
     ):

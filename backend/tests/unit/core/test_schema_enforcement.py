@@ -11,14 +11,14 @@ import json
 
 import pytest
 
-from modulo.core.pipeline_engine.schema_enforcement import (
+from farna.core.pipeline_engine.schema_enforcement import (
     MAX_ENFORCEMENT_PAYLOAD_BYTES,
     RunEnforcementAggregates,
     SchemaEnforcementRecord,
     aggregate_run_enforcement,
     build_enforcement_record,
 )
-from modulo.core.pipeline_engine.schema_repair import SchemaValidationOutcome
+from farna.core.pipeline_engine.schema_repair import SchemaValidationOutcome
 
 
 class TestBuildEnforcementRecord:
@@ -231,7 +231,7 @@ class TestEnforcementPayloadPopulated:
 
         FAILS WITHOUT FIX: resolved_profile defaults to None when omitted.
         """
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "n1",
@@ -246,7 +246,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_finalize_node_result_threads_verbatim_profile(self) -> None:
         """When no profile override is set, the record carries 'verbatim'."""
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "n1",
@@ -266,7 +266,7 @@ class TestEnforcementPayloadPopulated:
 
         FAILS WITHOUT FIX: native_output defaults to False when omitted.
         """
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "n1",
@@ -281,7 +281,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_finalize_node_result_threads_native_output_false(self) -> None:
         """When the provider does NOT use native output, the record is False."""
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "n1",
@@ -303,7 +303,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         # A repair invoke function that returns a valid output.
         mock_repair_fn = MagicMock(return_value=json.dumps({"name": "Fixed"}))
@@ -329,7 +329,7 @@ class TestEnforcementPayloadPopulated:
         In strict mode this raises OutputSchemaValidationError; the repair_info
         is still populated before the raise.
         """
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             OutputSchemaValidationError,
             _finalize_node_result,
         )
@@ -354,7 +354,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.node_runner import _validate_against_schema
+        from farna.core.pipeline_engine.node_runner import _validate_against_schema
 
         bad_data = {"name": 123}  # wrong type
         repair_info: dict = {}
@@ -373,7 +373,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_validate_against_schema_no_repair_info_when_omitted(self) -> None:
         """When _repair_info is not passed, no error — backwards compatible."""
-        from modulo.core.pipeline_engine.node_runner import _validate_against_schema
+        from farna.core.pipeline_engine.node_runner import _validate_against_schema
 
         _outcome, _errors, _data = _validate_against_schema(
             {"name": "OK"},
@@ -392,7 +392,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         bad_data = {"name": 123}
         repair_info: dict = {}
@@ -421,7 +421,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         bad_data = {"name": 123}
         repair_info: dict = {}
@@ -447,7 +447,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         bad_data = {"name": 123}
         repair_info: dict = {}
@@ -469,7 +469,7 @@ class TestEnforcementPayloadPopulated:
 
         Covers the ``_repair_info is None`` false arm of the no-budget branch.
         """
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         outcome, _errors, data = run_repair_loop(
             {"name": "OK"},
@@ -485,7 +485,7 @@ class TestEnforcementPayloadPopulated:
 
         Covers the ``budget <= 0 or repair_invoke_fn is None`` + valid branch.
         """
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         repair_info: dict = {}
         outcome, _errors, data = run_repair_loop(
@@ -501,7 +501,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_run_repair_loop_repair_info_on_spend_limit(self) -> None:
         """The daily-spend-limit short-circuit populates _repair_info."""
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         repair_info: dict = {}
         outcome, _errors, _data = run_repair_loop(
@@ -522,7 +522,7 @@ class TestEnforcementPayloadPopulated:
         Covers the ``_repair_info is None`` false arm of the initial-valid
         branch (budget/invoke present, data valid).
         """
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         outcome, _errors, data = run_repair_loop(
             {"name": "OK"},
@@ -535,7 +535,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_run_repair_loop_repair_info_on_initial_valid(self) -> None:
         """Data that is already valid with a budget/invoke fn zeroes _repair_info."""
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         repair_info: dict = {}
         outcome, _errors, data = run_repair_loop(
@@ -558,7 +558,7 @@ class TestEnforcementPayloadPopulated:
         """
         from unittest.mock import MagicMock
 
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         repair_info: dict = {}
         mock_invoke = MagicMock(return_value=json.dumps({"name": 123}))
@@ -576,7 +576,7 @@ class TestEnforcementPayloadPopulated:
 
     def test_run_repair_loop_repair_info_on_bad_json(self) -> None:
         """A non-JSON repair response populates _repair_info on the terminal arm."""
-        from modulo.core.pipeline_engine.schema_repair import run_repair_loop
+        from farna.core.pipeline_engine.schema_repair import run_repair_loop
 
         repair_info: dict = {}
         outcome, _errors, _data = run_repair_loop(
@@ -599,12 +599,12 @@ class TestDeriveModeFromRecords:
     """D2: derive_mode_from_records — pure function for mode derivation."""
 
     def test_empty_records_returns_lenient(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_mode_from_records
 
         assert derive_mode_from_records([]) == "lenient"
 
     def test_lenient_bypass_returns_lenient(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_mode_from_records
 
         records = [
             {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
@@ -612,7 +612,7 @@ class TestDeriveModeFromRecords:
         assert derive_mode_from_records(records) == "lenient"
 
     def test_strict_outcomes_returns_strict(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_mode_from_records
 
         records = [
             {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
@@ -621,7 +621,7 @@ class TestDeriveModeFromRecords:
         assert derive_mode_from_records(records) == "strict"
 
     def test_mixed_outcomes_with_lenient_returns_lenient(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_mode_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_mode_from_records
 
         records = [
             {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
@@ -634,18 +634,18 @@ class TestDeriveOutcomeFromRecords:
     """D2: derive_outcome_from_records — pure function for outcome derivation."""
 
     def test_empty_records_returns_no_schema(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
 
         assert derive_outcome_from_records([]) == "no_schema"
 
     def test_single_record_returns_its_outcome(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
 
         records = [{"outcome": "verbatim_passed"}]
         assert derive_outcome_from_records(records) == "verbatim_passed"
 
     def test_most_severe_outcome_wins(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
 
         records = [
             {"outcome": "native_decoded_and_validated"},
@@ -655,7 +655,7 @@ class TestDeriveOutcomeFromRecords:
         assert derive_outcome_from_records(records) == "repair_exhausted"
 
     def test_posthoc_wins_over_lenient(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
+        from farna.core.pipeline_engine.schema_enforcement import derive_outcome_from_records
 
         records = [
             {"outcome": "lenient_validation_bypassed"},
@@ -668,7 +668,7 @@ class TestComputeFlipGuardVerdict:
     """D2: compute_flip_guard_verdict — pure function for flip safety."""
 
     def test_safe_when_no_records(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+        from farna.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
 
         verdict = compute_flip_guard_verdict([])
         assert verdict.safe_to_flip is True
@@ -678,7 +678,7 @@ class TestComputeFlipGuardVerdict:
         assert "Safe to flip" in verdict.advisory
 
     def test_safe_when_no_warnings(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+        from farna.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
 
         records = [
             {"outcome": "native_decoded_and_validated", "repair_attempts": 0, "wasted_attempts": 0},
@@ -691,7 +691,7 @@ class TestComputeFlipGuardVerdict:
         assert "Safe to flip" in verdict.advisory
 
     def test_unsafe_when_warnings_exist(self) -> None:
-        from modulo.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
+        from farna.core.pipeline_engine.schema_enforcement import compute_flip_guard_verdict
 
         records = [
             {"outcome": "lenient_validation_bypassed", "repair_attempts": 0, "wasted_attempts": 0},
@@ -711,7 +711,7 @@ class TestComputeFlipGuardVerdict:
         verifies the resolved mode (via derive_mode_from_records) is
         unchanged after the call.
         """
-        from modulo.core.pipeline_engine.schema_enforcement import (
+        from farna.core.pipeline_engine.schema_enforcement import (
             compute_flip_guard_verdict,
             derive_mode_from_records,
         )

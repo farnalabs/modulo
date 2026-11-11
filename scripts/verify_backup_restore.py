@@ -312,7 +312,7 @@ def _current_revision(database_url: str) -> str:
 
 
 def _create_checkpoint_tables(database_url: str) -> None:
-    from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+    from farna.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
     with psycopg.connect(database_url, autocommit=True) as conn:
         for statement in ModuloPostgresSaver.MIGRATIONS:
@@ -443,12 +443,12 @@ def _seed_data(database_url: str) -> dict[str, uuid.UUID]:
     Goes through the ORM models so the seed tracks the schema instead of
     re-typing a column list that a later migration would silently invalidate.
     """
-    from modulo.db.models.account import Account
-    from modulo.db.models.org_membership import OrgMembership
-    from modulo.db.models.organisation import Organisation
-    from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-    from modulo.db.models.run import Run
+    from farna.db.models.account import Account
+    from farna.db.models.org_membership import OrgMembership
+    from farna.db.models.organisation import Organisation
+    from farna.db.models.pipeline import Pipeline
+    from farna.db.models.pipeline_snapshot import PipelineSnapshot
+    from farna.db.models.run import Run
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
@@ -597,7 +597,7 @@ def _ensure_settings_env() -> None:
 
 def _invoke_cli(argv: list[str]) -> None:
     from click.testing import CliRunner
-    from modulo.cli.backup import cli
+    from farna.cli.backup import cli
 
     result = CliRunner().invoke(cli, argv, catch_exceptions=False)
     if result.exit_code != 0:
@@ -662,7 +662,7 @@ def _apply_runtime_role_posture(database_url: str) -> None:
     """
     import asyncio
 
-    from modulo.db.bootstrap_role import bootstrap_roles
+    from farna.db.bootstrap_role import bootstrap_roles
 
     app_url = _url_with_user(database_url, _APP_ROLE, _APP_ROLE_PASSWORD)
     asyncio.run(bootstrap_roles(database_url, app_url))
@@ -679,7 +679,7 @@ def _assert_restore_posture(database_url: str) -> None:
     ``--clean --no-owner --no-acl`` dump strips every table ACL, so the grants
     below are re-created by the posture path and are the real signal.
     """
-    from modulo.db.bootstrap_role import ACCOUNTS_WRITABLE_COLUMNS
+    from farna.db.bootstrap_role import ACCOUNTS_WRITABLE_COLUMNS
 
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = %s", (_APP_ROLE,))

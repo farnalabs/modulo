@@ -121,7 +121,7 @@ Fresh entries for these features are added to the graph below as behavior tracke
 - **feat-teams** - Users, teams, and role-based access - routes: `/settings/teams`, `/admin/users`
 - **feat-org** - Organization settings (Feature Flags deferred from the MVP nav – hidden via private_preview; see FAR-548) - routes: `/admin/org`
 - **feat-sso** - Single sign-on (SSO) - routes: `/settings/sso`
-- **feat-plugins** - Plugin registry (deferred from the MVP nav – hidden via private_preview; see FAR-544). Supports connector, model-backend, eval, and schema-type entry point groups via `modulo.connectors`, `modulo.model_backends`, `modulo.evals`, and `modulo.schema_types` - routes: `/admin/plugins`
+- **feat-plugins** - Plugin registry (deferred from the MVP nav – hidden via private_preview; see FAR-544). Supports connector, model-backend, eval, and schema-type entry point groups via `farna.connectors`, `farna.model_backends`, `modulo.evals`, and `modulo.schema_types` - routes: `/admin/plugins`
 - **feat-audit** - Audit trail and audit log - routes: `/admin/audit`
 - **feat-feedback** - Feedback inbox - routes: `/feedback/inbox`
 
@@ -313,7 +313,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-18):** closed `feat-core-ssrf`'s "No BDD
 > feature files" gap (`core/ssrf.md`). Registered `security/ssrf_guard.feature`
 > into the executing BDD suite from the new `steps/test_ssrf_guard.py`,
-> driving the real `modulo.core.ssrf` seams network-free – literal-IP
+> driving the real `farna.core.ssrf` seams network-free – literal-IP
 > fail-closed blocking (loopback / private / link-local metadata / CGNAT /
 > Aliyun metadata / current-network), pre-DNS syntax rejection (scheme,
 > userinfo, hostname, port, non-canonical IP literals), sync + async
@@ -326,7 +326,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-18):** closed `feat-auth-jwt-auth`'s "No standalone
 > BDD feature file" gap (`auth/jwt-auth.md`). Registered
 > `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
-> `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
+> `steps/test_jwt_auth_crypto.py`, driving the real `farna.auth.jwt` seams
 > network-free and DB-free – access-token mint/decode round-trip (identity, role,
 > tenant org, `client_kind`), wrong-secret / tampered-signature / expired /
 > `alg=none` / missing-subject rejections, the purpose-isolation matrix (access /
@@ -341,7 +341,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > step file for the inbox/proposals endpoints" gap (`improve/feedback.md`).
 > Registered `eval/feedback_inbox.feature` into the executing BDD suite from the
 > new `steps/test_feedback_inbox.py`, driving the real
-> `modulo/api/routes/feedback.py` seams with only the FeedbackManager CRUD,
+> `farna/api/routes/feedback.py` seams with only the FeedbackManager CRUD,
 > RLS (row-level security) and audit seams patched – inbox list with pipeline-name enrichment + the
 > type/status filter passthrough, inbox-item detail, the `/inbox/{id}/review`
 > workflow (`mark_reviewed` → resolved, `dismiss` → dismissed,
@@ -355,7 +355,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > "No BDD feature files" gap (`core/secrets-backend.md`). Registered
 > `infra/secrets_backend.feature` into the executing BDD suite from the new
 > `steps/test_secrets_backend.py`, driving the REAL
-> `modulo.core.secrets_backend` seams network-free and DB-free – the
+> `farna.core.secrets_backend` seams network-free and DB-free – the
 > `FernetSecretsBackend` persists/reads real rows in an in-memory aiosqlite
 > engine (round-trip, in-place upsert, delete, whitespace-normalized keys),
 > organization scoping via the real `WHERE organisation_id = :oid` SQL the
@@ -369,7 +369,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-19):** closed `feat-apply`'s "No BDD feature file"
 > gap (`configure/apply.md`). Registered `cli/apply.feature` into the executing
 > BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
-> `modulo.cli.apply` seams network-free and DB-free – the loader / `ApplyConfig`
+> `farna.cli.apply` seams network-free and DB-free – the loader / `ApplyConfig`
 > validators (single + multi-document YAML merge, duplicate names within and
 > across documents, empty file, trigger forward-references), refs-only secrets
 > (`resolve_secret_refs`), the plan engine (created / unchanged / updated /
@@ -384,7 +384,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > BDD feature files for `/analytics`" gap (`analytics/analytics.md`).
 > Registered `analytics/query.feature` into the executing BDD suite from the
 > colocated `features/analytics/test_analytics_query_steps.py`, driving the
-> REAL `modulo/api/routes/analytics.py` routes with only the four advisory
+> REAL `farna/api/routes/analytics.py` routes with only the four advisory
 > service functions (`run_analytics_query`, `run_concurrency_query`,
 > `export_facts`, `run_guardrail_scorecard`) patched – the `/query` envelope +
 > freshness indicators, the repeated `pipeline_id` A/B composition (both ids
@@ -442,7 +442,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > equivalent multi-org real-DB (RLS) integration regression not yet written"
 > deferral (`auth/sso-provider-ui.md`). Registered the new
 > `backend/tests/integration/auth/test_oidc_rls_resolution.py` (mirroring
-> `test_saml_rls_resolution.py`), driving the REAL `modulo.auth.sso`
+> `test_saml_rls_resolution.py`), driving the REAL `farna.auth.sso`
 > `_resolve_oidc_provider` seam and the REAL `GET /oidc/{provider}/login` route
 > through the real `modulo_system` (BYPASSRLS) / `modulo_app` (NOBYPASSRLS)
 > roles – the system leg resolves an OIDC provider owned by a NON-first org,
@@ -958,7 +958,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_personas.py`: a real in-memory aiosqlite DB seeded with actual
 > `Account` / `Organisation` / `OrgMembership` / `TokenFamily` rows, REAL
 > minted access + refresh tokens (`create_access_token` /
-> `create_refresh_token` in `modulo/auth/jwt.py`), and the real ADR 047
+> `create_refresh_token` in `farna/auth/jwt.py`), and the real ADR 047
 > live-role re-reads. With an active `operator` membership the token resolves
 > (`get_current_tenant_user` returns the live role – the pre-removal
 > baseline); soft-deactivating the membership row (`deactivated_at` set) makes

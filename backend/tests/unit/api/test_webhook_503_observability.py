@@ -21,17 +21,17 @@ from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.db_error_reporting import log_service_unavailable
-from modulo.api.dependencies import (
+from farna.api.db_error_reporting import log_service_unavailable
+from farna.api.dependencies import (
     _get_engine,
     get_db_session,
     get_plan_context,
     get_system_db_session,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
@@ -39,7 +39,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TRIGGER_ID = uuid.uuid4()
 _EVENT_ID = uuid.uuid4()
-_ERROR_REPORTING_LOGGER = "modulo.api.db_error_reporting"
+_ERROR_REPORTING_LOGGER = "farna.api.db_error_reporting"
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +57,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:
@@ -270,7 +270,7 @@ def test_receive_webhook_bootstrap_guard_logs_structured_reason(
     which ErrorTrackingLogHandler would NOT persist — an unprovisioned
     system DB is a full outage signal, not a routine guard."""
     with (
-        patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True),
+        patch("farna.api.routes.webhooks.system_engine_is_fallback", return_value=True),
         caplog.at_level(logging.WARNING),
     ):
         resp = failing_session_client.post(
@@ -336,22 +336,22 @@ def test_receive_webhook_snapshot_lock_unavailable_logs_structured_reason(
 ) -> None:
     """The engine's snapshot advisory-lock exhaustion (FAR-527) fail-closes
     503 with a persisted snapshot_lock_unavailable reason record."""
-    from modulo.core.exceptions import SnapshotLockNotAvailableError
+    from farna.core.exceptions import SnapshotLockNotAvailableError
 
     with (
         patch(
-            "modulo.api.routes.webhooks._trigger_engine.handle_webhook",
+            "farna.api.routes.webhooks._trigger_engine.handle_webhook",
             new_callable=AsyncMock,
             side_effect=SnapshotLockNotAvailableError(),
         ),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=MagicMock(id=uuid.uuid4()),
         ),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.set_rls_execution_context"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.set_rls_execution_context"),
         caplog.at_level(logging.WARNING),
     ):
         resp = working_session_client.post(
@@ -377,7 +377,7 @@ async def test_cleanup_expired_db_transient_logs_structured_reason(
     with the same structured reason record. Called directly (its
     ``require_permission`` dependency is outside the webhook TestClient
     fixtures) — the real handler body runs."""
-    from modulo.api.routes.webhooks import cleanup_expired
+    from farna.api.routes.webhooks import cleanup_expired
 
     principal = TenantPrincipal(username="runner", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner")
     with caplog.at_level(logging.WARNING):
@@ -400,7 +400,7 @@ async def test_readiness_unavailable_logs_structured_reason(
     """The /healthz/ready aggregation flips the response to 503 when a check
     reports unavailable, and must persist WHICH checks failed in the
     structured reason record."""
-    from modulo.api.routes import health as health_routes
+    from farna.api.routes import health as health_routes
 
     ok = health_routes.CheckResult(status="ok")
     db_down = health_routes.CheckResult(status="unavailable", detail="database unreachable")

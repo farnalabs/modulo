@@ -14,4 +14,4 @@ rules:
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/modulo/connectors/**"]
+      include: ["**/backend/src/farna/connectors/**"]

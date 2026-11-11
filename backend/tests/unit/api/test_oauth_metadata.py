@@ -11,7 +11,7 @@ with ``content-type: text/html``. These tests pin:
   ``application/json`` and the exact documented key set and values;
 * ``registration_endpoint`` is ABSENT — there is deliberately no RFC 7591
   dynamic client registration, clients pass an explicit ``--client-id``;
-* ``scopes_supported`` is sourced from ``modulo.auth.oauth.VALID_SCOPES``
+* ``scopes_supported`` is sourced from ``farna.auth.oauth.VALID_SCOPES``
   (never a second hand-written list) and is sorted for determinism;
 * the endpoints are reachable with NO ``Authorization`` header (a harness
   reads them *before* it holds a credential);
@@ -31,11 +31,11 @@ import pytest
 from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 
-from modulo.api.main import _init_once_mount_spa, app
-from modulo.api.routes.oauth_metadata import router as oauth_metadata_router
-from modulo.auth.oauth import VALID_SCOPES
-from modulo.core.runtime_config.store import get_runtime_config_store
-from modulo.settings import Settings, get_settings
+from farna.api.main import _init_once_mount_spa, app
+from farna.api.routes.oauth_metadata import router as oauth_metadata_router
+from farna.auth.oauth import VALID_SCOPES
+from farna.core.runtime_config.store import get_runtime_config_store
+from farna.settings import Settings, get_settings
 
 _PUBLIC = "https://modulo.example.com"
 
@@ -245,9 +245,9 @@ def test_challenge_falls_back_to_request_origin_when_public_url_unset(client: Te
     taken only so the process-global ``MODULO_PUBLIC_URL`` override is cleared
     for the duration (see its fixture docstring).
     """
-    from modulo.api.mcp_server import _resource_metadata_challenge
+    from farna.api.mcp_server import _resource_metadata_challenge
 
-    with patch("modulo.api.routes.oauth_metadata.get_settings", _make_settings_without_public_url):
+    with patch("farna.api.routes.oauth_metadata.get_settings", _make_settings_without_public_url):
         request = MagicMock()
         request.base_url = "http://dev.example.com/"
         headers = _resource_metadata_challenge(request)
@@ -307,10 +307,10 @@ def test_mcp_401_carries_resource_metadata_challenge() -> None:
     ``_extract_bearer_token`` builds this response; a stock harness reads the
     challenge instead of having to be told the well-known URL by hand.
     """
-    from modulo.api.mcp_server import build_mcp_asgi_app
+    from farna.api.mcp_server import build_mcp_asgi_app
 
     with (
-        patch("modulo.api.routes.oauth_metadata.get_settings", _make_settings),
+        patch("farna.api.routes.oauth_metadata.get_settings", _make_settings),
         TestClient(build_mcp_asgi_app()) as mcp_client,
     ):
         resp = mcp_client.get("/mcp")
@@ -325,7 +325,7 @@ def test_mcp_401_carries_resource_metadata_challenge() -> None:
 
 def test_mcp_401_challenge_absent_on_policy_denials() -> None:
     """A ``403`` is an authenticated principal being denied — never a challenge."""
-    from modulo.api.mcp_server import _with_resource_metadata
+    from farna.api.mcp_server import _with_resource_metadata
 
     forbidden = Response(
         '{"error":"forbidden","detail":"No org role claim on token"}',
@@ -339,14 +339,14 @@ def test_mcp_401_challenge_absent_on_policy_denials() -> None:
 
 def test_mcp_401_challenge_added_by_the_boundary_helper() -> None:
     """The request-less token-family helper's 401 gets the header at the middleware boundary."""
-    from modulo.api.mcp_server import _with_resource_metadata
+    from farna.api.mcp_server import _with_resource_metadata
 
     unauthorized = Response(
         '{"error":"unauthorized","detail":"Token family revoked"}',
         status_code=401,
         media_type="application/json",
     )
-    with patch("modulo.api.routes.oauth_metadata.get_settings", _make_settings):
+    with patch("farna.api.routes.oauth_metadata.get_settings", _make_settings):
         out = _with_resource_metadata(unauthorized, MagicMock())
     assert out.status_code == 401
     assert out.headers["WWW-Authenticate"] == (
@@ -356,7 +356,7 @@ def test_mcp_401_challenge_added_by_the_boundary_helper() -> None:
 
 def test_mcp_401_challenge_leaves_5xx_alone() -> None:
     """A 503 outage reply is not an auth challenge — it must stay untouched."""
-    from modulo.api.mcp_server import _with_resource_metadata
+    from farna.api.mcp_server import _with_resource_metadata
 
     unavailable = Response(
         '{"error":"service_unavailable","detail":"Database temporarily unavailable."}',
@@ -370,11 +370,11 @@ def test_mcp_401_challenge_leaves_5xx_alone() -> None:
 
 def test_missing_bearer_response_built_by_extract_bearer_token_has_the_header() -> None:
     """The response object itself (not just what the middleware returns) carries the challenge."""
-    from modulo.api.mcp_server import _extract_bearer_token
+    from farna.api.mcp_server import _extract_bearer_token
 
     request = MagicMock()
     request.headers = {"Authorization": "Basic abc"}
-    with patch("modulo.api.routes.oauth_metadata.get_settings", _make_settings):
+    with patch("farna.api.routes.oauth_metadata.get_settings", _make_settings):
         token, err = _extract_bearer_token(request)
 
     assert token is None

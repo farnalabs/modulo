@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.typed_judge import (
+import farna.core.pipeline_engine.llm_judge as llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.typed_judge import (
     JudgeConfidenceKind,
     JudgeErrorCode,
     JudgeExecutionError,
@@ -28,8 +28,8 @@ from modulo.core.eval_engine.typed_judge import (
     JudgeOutcome,
     transport,
 )
-from modulo.core.eval_engine.typed_judge import bridge as judge_bridge
-from modulo.core.eval_engine.typed_judge.transport import (
+from farna.core.eval_engine.typed_judge import bridge as judge_bridge
+from farna.core.eval_engine.typed_judge.transport import (
     MAX_CORRECTIVE_RETRIES,
     JudgeBackendHandle,
     judge_questions,

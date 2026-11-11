@@ -16,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.guardrails.config import GuardrailPin
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.guardrails.config import GuardrailPin
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -159,15 +159,15 @@ def _clean_overrides():
 def _patch_route_deps(pin: GuardrailPin | None = None) -> Generator[None, None, None]:
     """Patch the guardrail_config route's pin/definition reads and RLS setup."""
     with ExitStack() as stack:
-        stack.enter_context(patch("modulo.api.routes.guardrail_config.set_rls_org"))
+        stack.enter_context(patch("farna.api.routes.guardrail_config.set_rls_org"))
         stack.enter_context(
             patch(
-                "modulo.api.routes.guardrail_config._load_pin",
+                "farna.api.routes.guardrail_config._load_pin",
                 return_value=pin if pin is not None else _pin(),
             )
         )
-        stack.enter_context(patch("modulo.api.routes.guardrail_config._load_guardrail_definitions", return_value=[]))
-        stack.enter_context(patch("modulo.api.routes.guardrail_config.check_guardrail_drift", return_value=False))
+        stack.enter_context(patch("farna.api.routes.guardrail_config._load_guardrail_definitions", return_value=[]))
+        stack.enter_context(patch("farna.api.routes.guardrail_config.check_guardrail_drift", return_value=False))
         yield
 
 

@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.pipeline_execution`` (PR #97).
+``farna.core.pipeline_execution`` (PR #97).
 """
 
 from __future__ import annotations
@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import pipeline_execution as pe
+from farna.core import pipeline_execution as pe
 
 
 async def test_maybe_alert_retry_storm_connect_failure() -> None:

@@ -62,16 +62,16 @@ _REPO_ROOT = script_path.parent.parent
 
 #: The two real skip signatures, verbatim from the pinned semgrep's output.
 _TIMEOUT_WARNING = (
-    "Warning: 1 timeout error(s) in backend/src/modulo/api/mcp_server.py when running the following rules: "
+    "Warning: 1 timeout error(s) in backend/src/farna/api/mcp_server.py when running the following rules: "
     "[semgrep.split-on-db-url]\n"
 )
 _TIMEOUT_STOPPED = (
-    "Semgrep stopped running rules on backend/src/modulo/api/mcp_server.py after 1 timeout error(s). "
+    "Semgrep stopped running rules on backend/src/farna/api/mcp_server.py after 1 timeout error(s). "
     "See `--timeout-threshold` for more info.\n"
 )
 #: A FINDING excerpt that quotes the phrase: must NOT be read as a skip.
 _FINDING_QUOTING_PHRASE = (
-    "backend/src/modulo/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
+    "backend/src/farna/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
 )
 #: The ONE non-fatal parse skip that reproduces per-file on the invocation CI
 #: uses (`uv run --project backend --no-sync semgrep`): the PEP 695 generic
@@ -83,16 +83,16 @@ _FINDING_QUOTING_PHRASE = (
 #: parse-skip attribution for that file is reproducible here. A line like this
 #: must never be read as a per-rule timeout skip.
 _PARTIAL_PARSING = (
-    "[WARN] Syntax error at line backend/src/modulo/api/mcp_server.py:2111:\n"
+    "[WARN] Syntax error at line backend/src/farna/api/mcp_server.py:2111:\n"
     " `[**TOOL_SHELL_P]` was unexpected\n"
     "\n"
     "  Partially analyzed due to parsing or internal Semgrep errors\n"
     "\n"
-    "   • backend/src/modulo/api/mcp_server.py (1 lines skipped)\n"
+    "   • backend/src/farna/api/mcp_server.py (1 lines skipped)\n"
 )
 
 #: Real ``errors[]`` entries captured from the pinned semgrep's ``--json-output``
-#: (2026-10-18, against ``backend/src/modulo/api/mcp_server.py``). They are
+#: (2026-10-18, against ``backend/src/farna/api/mcp_server.py``). They are
 #: verbatim because the two tags have DIFFERENT wire types: a ``Timeout`` tag is
 #: a plain string, but a ``PartialParsing`` tag is a **list** whose first element
 #: is the type name. Testing that list against a ``frozenset`` raised
@@ -101,20 +101,20 @@ _PARTIAL_PARSING = (
 _TIMEOUT_ERROR_ENTRY: dict[str, object] = {
     "code": 2,
     "level": "warn",
-    "message": "Timeout when running semgrep.split-on-db-url on backend/src/modulo/api/mcp_server.py:\n ",
-    "path": "backend/src/modulo/api/mcp_server.py",
+    "message": "Timeout when running semgrep.split-on-db-url on backend/src/farna/api/mcp_server.py:\n ",
+    "path": "backend/src/farna/api/mcp_server.py",
     "rule_id": "semgrep.split-on-db-url",
     "type": "Timeout",
 }
 _PARTIAL_PARSING_ERROR_ENTRY: dict[str, object] = {
     "code": 3,
     "level": "warn",
-    "message": ("Syntax error at line backend/src/modulo/api/mcp_server.py:2111:\n `[**TOOL_SHELL_P]` was unexpected"),
-    "path": "backend/src/modulo/api/mcp_server.py",
+    "message": ("Syntax error at line backend/src/farna/api/mcp_server.py:2111:\n `[**TOOL_SHELL_P]` was unexpected"),
+    "path": "backend/src/farna/api/mcp_server.py",
     "spans": [
         {
             "end": {"col": 40, "line": 2111, "offset": 16},
-            "file": "backend/src/modulo/api/mcp_server.py",
+            "file": "backend/src/farna/api/mcp_server.py",
             "start": {"col": 24, "line": 2111, "offset": 0},
         }
     ],
@@ -227,14 +227,14 @@ def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> N
                         "PartialParsing",
                         [
                             {
-                                "path": "backend/src/modulo/api/mcp_server.py",
+                                "path": "backend/src/farna/api/mcp_server.py",
                                 "start": {"line": 2111, "col": 24, "offset": 0},
                                 "end": {"line": 2111, "col": 40, "offset": 16},
                             }
                         ],
                     ],
                     "message": (
-                        "Syntax error at line backend/src/modulo/api/mcp_server.py:2111: "
+                        "Syntax error at line backend/src/farna/api/mcp_server.py:2111: "
                         "`[**TOOL_SHELL_P]` was unexpected"
                     ),
                 }
@@ -334,7 +334,7 @@ def test_anchoring_prevents_the_legacy_mislabel() -> None:
 # change-detection call and the semgrep ``subprocess.run`` so the branch under
 # test runs without invoking a real scan.
 
-_CHANGED = ["backend/src/modulo/api/mcp_server.py"]
+_CHANGED = ["backend/src/farna/api/mcp_server.py"]
 
 
 def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:

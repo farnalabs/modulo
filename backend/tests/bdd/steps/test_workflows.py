@@ -186,8 +186,8 @@ def _request_export(client, pipeline_id: str, ctx: dict[str, Any]) -> None:
     ctx["exported_zip"] = zip_bytes
 
     with (
-        patch("modulo.api.routes.library.get_pipeline") as mock_get_pipeline,
-        patch("modulo.api.routes.library.export_pipeline_bundle") as mock_export,
+        patch("farna.api.routes.library.get_pipeline") as mock_get_pipeline,
+        patch("farna.api.routes.library.export_pipeline_bundle") as mock_export,
     ):
         mock_get_pipeline.return_value = ctx.get("pipeline_mock") or MagicMock()
         mock_export.return_value = zip_bytes
@@ -381,9 +381,9 @@ def _request_export_signed(client, ctx: dict[str, Any]) -> None:
 @when(parsers.parse('the user requests export of pipeline "{pipeline_id}"'))
 def _request_export_missing(client, ctx: dict[str, Any], pipeline_id: str) -> None:
     with (
-        patch("modulo.api.routes.library.get_pipeline", return_value=None),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_pipeline", return_value=None),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         ctx["response"] = client.post(f"/api/v1/libraries/export/{pipeline_id}?format=v2")
 
@@ -391,10 +391,10 @@ def _request_export_missing(client, ctx: dict[str, Any], pipeline_id: str) -> No
 def _do_request_export(client, ctx: dict[str, Any], signed: bool) -> None:
     yaml_str = _make_v2_yaml(signed=signed)
     with (
-        patch("modulo.api.routes.library.get_pipeline", return_value=ctx.get("pipeline_mock") or MagicMock()),
-        patch("modulo.api.routes.library.export_pipeline_bundle_v2", return_value=yaml_str),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_pipeline", return_value=ctx.get("pipeline_mock") or MagicMock()),
+        patch("farna.api.routes.library.export_pipeline_bundle_v2", return_value=yaml_str),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         ctx["response"] = client.post(f"/api/v1/libraries/export/{PIPELINE_ID}?format=v2")
     ctx["exported_yaml"] = yaml_str
@@ -545,7 +545,7 @@ def _org_has_model_backend(name: str) -> None:
 def _upload_valid_zip(client, ctx: dict[str, Any]) -> None:
     zip_bytes = _make_zip_bytes()
     with (
-        patch("modulo.api.routes.library.extract_bundle_json_from_zip") as mock_extract,
+        patch("farna.api.routes.library.extract_bundle_json_from_zip") as mock_extract,
     ):
         sample = _make_sample_bundle()
         mock_extract.return_value = sample
@@ -610,8 +610,8 @@ def _pipeline_named_already_exists(name: str) -> None:
 def _import_my_pipeline(client, ctx: dict[str, Any]) -> None:
     sample = _make_sample_bundle()
     with (
-        patch("modulo.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
-        patch("modulo.api.routes.library.suggest_import_name") as mock_suggest,
+        patch("farna.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
+        patch("farna.api.routes.library.suggest_import_name") as mock_suggest,
     ):
         mock_get_pipelines.return_value = {"My Pipeline"}
         mock_suggest.return_value = "My Pipeline (imported)"
@@ -645,7 +645,7 @@ def _suggested_name_is(ctx: dict[str, Any], suggestion: str) -> None:
 def _confirm_import(client, ctx: dict[str, Any]) -> None:
     sample = _make_sample_bundle()
     with (
-        patch("modulo.api.routes.library.materialize_import") as mock_materialize,
+        patch("farna.api.routes.library.materialize_import") as mock_materialize,
     ):
         mock_materialize.return_value = {
             "pipeline_id": str(PIPELINE_ID),
@@ -690,11 +690,11 @@ def _bundle_refs_prd_schema(ctx: dict[str, Any]) -> None:
 @when("the import analysis runs")
 def _import_analysis_runs(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.resolve_schema") as mock_resolve_schema,
-        patch("modulo.api.routes.library.resolve_connector_type") as mock_resolve_connector,
-        patch("modulo.api.routes.library.resolve_model_backend") as mock_resolve_mb,
-        patch("modulo.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
-        patch("modulo.api.routes.library.get_existing_agent_names") as mock_get_agents,
+        patch("farna.api.routes.library.resolve_schema") as mock_resolve_schema,
+        patch("farna.api.routes.library.resolve_connector_type") as mock_resolve_connector,
+        patch("farna.api.routes.library.resolve_model_backend") as mock_resolve_mb,
+        patch("farna.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
+        patch("farna.api.routes.library.get_existing_agent_names") as mock_get_agents,
     ):
         mock_resolve_schema.return_value = {
             "schema_id": str(SCHEMA_A_ID),
@@ -753,7 +753,7 @@ def _bundle_refs_unknown_schema(ctx: dict[str, Any]) -> None:
 @when("the import is confirmed")
 def _import_confirmed(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.materialize_import") as mock_materialize,
+        patch("farna.api.routes.library.materialize_import") as mock_materialize,
     ):
         mock_materialize.return_value = {
             "pipeline_id": str(uuid.uuid4()),
@@ -788,7 +788,7 @@ def _bundle_refs_unknown_schema_abstract() -> None:
 @when(parsers.parse("the user imports a bundle with owner_team_id set"))
 def _import_with_team(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.materialize_import") as mock_materialize,
+        patch("farna.api.routes.library.materialize_import") as mock_materialize,
     ):
         mock_materialize.return_value = {
             "pipeline_id": str(PIPELINE_ID),
@@ -891,7 +891,7 @@ def _mb_resolved_to_local(ctx: dict[str, Any]) -> None:
 def _confirm_analysed_bundle(client, ctx: dict[str, Any]) -> None:
     bundle_json = ctx.get("bundle_json")
     assert bundle_json, "No analysed bundle_json in context"
-    with patch("modulo.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
+    with patch("farna.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
         mock_materialize.return_value = {
             "pipeline_id": str(PIPELINE_ID),
             "pipeline_name": "My Pipeline",
@@ -924,7 +924,7 @@ def _tampered_bundle(ctx: dict[str, Any]) -> None:
 
 @when("the user attempts the import of the tampered bundle")
 def _confirm_tampered_bundle(client, ctx: dict[str, Any]) -> None:
-    with patch("modulo.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
+    with patch("farna.api.routes.library.materialize_import", new=AsyncMock()) as mock_materialize:
         ctx["materialize_mock"] = mock_materialize
         ctx["response"] = client.post(
             "/api/v1/libraries/import/confirm",
@@ -977,11 +977,11 @@ def _analyse_bundle_named(client, ctx: dict[str, Any], name: str) -> None:
 
 
 _ANALYSE_SEAM_TARGETS = (
-    "modulo.api.routes.library.resolve_schema",
-    "modulo.api.routes.library.resolve_connector_type",
-    "modulo.api.routes.library.resolve_model_backend",
-    "modulo.api.routes.library.get_existing_pipeline_names",
-    "modulo.api.routes.library.get_existing_agent_names",
+    "farna.api.routes.library.resolve_schema",
+    "farna.api.routes.library.resolve_connector_type",
+    "farna.api.routes.library.resolve_model_backend",
+    "farna.api.routes.library.get_existing_pipeline_names",
+    "farna.api.routes.library.get_existing_agent_names",
 )
 
 
@@ -1061,11 +1061,11 @@ def _no_slack_connector() -> None:
 @when("the import analysis resolves connectors")
 def _analysis_resolves_connectors(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.resolve_schema") as mock_resolve_schema,
-        patch("modulo.api.routes.library.resolve_connector_type") as mock_resolve_connector,
-        patch("modulo.api.routes.library.resolve_model_backend") as mock_resolve_mb,
-        patch("modulo.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
-        patch("modulo.api.routes.library.get_existing_agent_names") as mock_get_agents,
+        patch("farna.api.routes.library.resolve_schema") as mock_resolve_schema,
+        patch("farna.api.routes.library.resolve_connector_type") as mock_resolve_connector,
+        patch("farna.api.routes.library.resolve_model_backend") as mock_resolve_mb,
+        patch("farna.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
+        patch("farna.api.routes.library.get_existing_agent_names") as mock_get_agents,
     ):
         mock_resolve_schema.return_value = {
             "schema_id": str(SCHEMA_A_ID),
@@ -1147,11 +1147,11 @@ def _bundle_refs_schema_by_structure() -> None:
 @when("the import analysis resolves schemas")
 def _analysis_resolves_schemas(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.resolve_schema") as mock_resolve_schema,
-        patch("modulo.api.routes.library.resolve_connector_type") as mock_resolve_connector,
-        patch("modulo.api.routes.library.resolve_model_backend") as mock_resolve_mb,
-        patch("modulo.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
-        patch("modulo.api.routes.library.get_existing_agent_names") as mock_get_agents,
+        patch("farna.api.routes.library.resolve_schema") as mock_resolve_schema,
+        patch("farna.api.routes.library.resolve_connector_type") as mock_resolve_connector,
+        patch("farna.api.routes.library.resolve_model_backend") as mock_resolve_mb,
+        patch("farna.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
+        patch("farna.api.routes.library.get_existing_agent_names") as mock_get_agents,
     ):
         mock_resolve_schema.return_value = {
             "schema_id": str(SCHEMA_A_ID),
@@ -1207,11 +1207,11 @@ def _bundle_includes_mb() -> None:
 @when("the import analysis resolves model backends")
 def _analysis_resolves_mbs(client, ctx: dict[str, Any]) -> None:
     with (
-        patch("modulo.api.routes.library.resolve_schema") as mock_resolve_schema,
-        patch("modulo.api.routes.library.resolve_connector_type") as mock_resolve_connector,
-        patch("modulo.api.routes.library.resolve_model_backend") as mock_resolve_mb,
-        patch("modulo.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
-        patch("modulo.api.routes.library.get_existing_agent_names") as mock_get_agents,
+        patch("farna.api.routes.library.resolve_schema") as mock_resolve_schema,
+        patch("farna.api.routes.library.resolve_connector_type") as mock_resolve_connector,
+        patch("farna.api.routes.library.resolve_model_backend") as mock_resolve_mb,
+        patch("farna.api.routes.library.get_existing_pipeline_names") as mock_get_pipelines,
+        patch("farna.api.routes.library.get_existing_agent_names") as mock_get_agents,
     ):
         mock_resolve_schema.return_value = {
             "schema_id": str(SCHEMA_A_ID),

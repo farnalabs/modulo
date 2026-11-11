@@ -11,10 +11,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from modulo.core.seed_data.library_schemas import SCHEMAS
-from modulo.db.crud.schema import create_schema, create_schema_version
-from modulo.db.models.schema import Schema
-from modulo.settings import get_settings
+from farna.core.seed_data.library_schemas import SCHEMAS
+from farna.db.crud.schema import create_schema, create_schema_version
+from farna.db.models.schema import Schema
+from farna.settings import get_settings
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

@@ -8,7 +8,7 @@ from sqlalchemy import CheckConstraint
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 
-from modulo.db.crud.error_tracking import (
+from farna.db.crud.error_tracking import (
     create_error_event,
     get_error_events_by_group,
     get_error_group,
@@ -17,7 +17,7 @@ from modulo.db.crud.error_tracking import (
     update_error_group,
     upsert_error_group,
 )
-from modulo.db.models import Base, ErrorEvent, ErrorGroup, OrgScoped
+from farna.db.models import Base, ErrorEvent, ErrorGroup, OrgScoped
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -466,7 +466,7 @@ class TestAppendOnly:
     @pytest.mark.parametrize("operation", ["update", "delete"])
     def test_listener_blocks(self, operation: str) -> None:
         """The registered guard actually raises AppendOnlyViolationError."""
-        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
+        from farna.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
 
         blocker = _make_blocker(ErrorEvent, "error_events", operation)
         event = ErrorEvent(

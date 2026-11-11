@@ -27,21 +27,21 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.core.lifecycle_map.journeys import (
+from farna.core.lifecycle_map.advancement import advance_journeys
+from farna.core.lifecycle_map.journeys import (
     dismiss_journey,
     get_map_journey,
     list_map_journeys,
     restore_journey,
 )
-from modulo.db.crud.run import _hydrate_journeys
-from modulo.db.lifecycle_refs import canonical_work_item_id, set_refs_counter_hook
-from modulo.db.models.base import Base
-from modulo.db.models.journey import Journey
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import Run
+from farna.db.crud.run import _hydrate_journeys
+from farna.db.lifecycle_refs import canonical_work_item_id, set_refs_counter_hook
+from farna.db.models.base import Base
+from farna.db.models.journey import Journey
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -186,7 +186,7 @@ class TestHydrateDismissSuppression:
     ) -> None:
         """Flag ON: agent entries whose canonical row is a tombstone are
         dismissal-suppressed (counted) and dropped from the mint batch."""
-        import modulo.db.crud.run as run_mod
+        import farna.db.crud.run as run_mod
 
         await _seed_org(session, settings={"work_item_agent_minting_enabled": True})
         await _seed_journey(session, provenance="agent")

@@ -14,7 +14,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0200_runs_runner_marker_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
@@ -67,7 +67,7 @@ def test_sweep_candidate_scan_matches_the_indexed_predicate() -> None:
     """The sweep's batched candidate SQL filters the SAME predicate the index
     covers (org + marker presence) and pages with a cursor + LIMIT â€” the
     index serves the probe, the batch bounds the materialisation."""
-    from modulo.core.runner_capacity import _SWEEP_CANDIDATE_SQL, SWEEP_CANDIDATE_BATCH
+    from farna.core.runner_capacity import _SWEEP_CANDIDATE_SQL, SWEEP_CANDIDATE_BATCH
 
     sql = str(_SWEEP_CANDIDATE_SQL)
     assert "sandbox_dispatch_state IS NOT NULL" in sql

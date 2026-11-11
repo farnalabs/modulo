@@ -1,7 +1,7 @@
 """Unit tests for the library contribution flow — draft, review, publish,
 versioning, import notification, and the version/parse helpers.
 
-Targets the contribution lifecycle in ``modulo.core.library_service``:
+Targets the contribution lifecycle in ``farna.core.library_service``:
   - ``contribute_fixture`` / ``contribute_primitive`` draft creation
   - ``submit_contribution_for_review`` status transitions
   - ``publish_contribution`` community cache + importer notification
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.core.library_service import (
+from farna.core.library_service import (
     _COMMUNITY_PRIMITIVES,
     CONTRIBUTION_DRAFT,
     CONTRIBUTION_PUBLISHED,
@@ -39,7 +39,7 @@ from modulo.core.library_service import (
     submit_contribution_for_review,
     submit_contribution_version,
 )
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 from .helpers import mock_session as _mock_session
 
@@ -145,9 +145,9 @@ class TestContributeFixture:
             return created
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.create_library_primitive", side_effect=_capture),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
         ):
             result = await contribute_fixture(
                 session,
@@ -185,9 +185,9 @@ class TestContributeFixture:
             return created
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.create_library_primitive", side_effect=_capture),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
         ):
             await contribute_fixture(
                 session,
@@ -209,9 +209,9 @@ class TestContributeFixture:
         created = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=created),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=created),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found after creation"),
         ):
             await contribute_fixture(
@@ -229,9 +229,9 @@ class TestContributeFixture:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -260,9 +260,9 @@ class TestContributePrimitiveErrors:
         created = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=created),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=created),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found after creation"),
         ):
             await contribute_primitive(
@@ -281,9 +281,9 @@ class TestContributePrimitiveErrors:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -316,9 +316,9 @@ class TestSubmitContributionForReview:
         updated = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_REVIEW_QUEUE)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
         ):
             result = await submit_contribution_for_review(session, uuid.uuid4(), prim_id, _created_by=uuid.uuid4())
 
@@ -328,8 +328,8 @@ class TestSubmitContributionForReview:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
             await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
@@ -339,8 +339,8 @@ class TestSubmitContributionForReview:
         prim = _fake_primitive(contribution_status=CONTRIBUTION_PUBLISHED)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
             pytest.raises(ContributionInvalidTransitionError, match="expected status 'draft'"),
         ):
             await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
@@ -350,9 +350,9 @@ class TestSubmitContributionForReview:
         prim = _fake_primitive(contribution_status=CONTRIBUTION_DRAFT)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
             await submit_contribution_for_review(session, uuid.uuid4(), uuid.uuid4(), _created_by=uuid.uuid4())
@@ -361,9 +361,9 @@ class TestSubmitContributionForReview:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -383,9 +383,9 @@ class TestPublishContributionErrors:
         prim = _fake_primitive(contribution_status=CONTRIBUTION_DRAFT)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
             await publish_contribution(session, uuid.uuid4(), uuid.uuid4())
@@ -394,9 +394,9 @@ class TestPublishContributionErrors:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -412,10 +412,10 @@ class TestPublishContributionErrors:
         updated = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, visibility="community")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
-            patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock) as notify,
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+            patch("farna.core.library_service.notify_importers_of_update", new_callable=AsyncMock) as notify,
         ):
             await publish_contribution(session, uuid.uuid4(), prim_id)
 
@@ -431,14 +431,14 @@ class TestPublishContributionErrors:
         before_count = len(_COMMUNITY_PRIMITIVES)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=existing,
             ),
-            patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
+            patch("farna.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
         ):
             await publish_contribution(session, uuid.uuid4(), existing.id)
 
@@ -456,9 +456,9 @@ class TestListContributions:
         page = PageResult(items=[], total=0, page=1, page_size=20)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 return_value=page,
             ) as mock_list,
@@ -475,8 +475,8 @@ class TestListContributions:
         page = PageResult(items=[draft, published], total=2, page=1, page_size=20)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=page),
         ):
             result = await list_contributions(session, uuid.uuid4(), contribution_status=CONTRIBUTION_PUBLISHED)
 
@@ -488,9 +488,9 @@ class TestListContributions:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -502,9 +502,9 @@ class TestListContributions:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -536,10 +536,10 @@ class TestSubmitContributionVersion:
             return new_prim
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
-            patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
+            patch("farna.core.library_service.create_library_primitive", side_effect=_capture),
         ):
             result = await submit_contribution_version(
                 session,
@@ -583,10 +583,10 @@ class TestSubmitContributionVersion:
             return updated
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.update_library_primitive", side_effect=_updater),
-            patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.update_library_primitive", side_effect=_updater),
+            patch("farna.core.library_service.create_library_primitive", side_effect=_capture),
         ):
             await submit_contribution_version(
                 session,
@@ -612,8 +612,8 @@ class TestSubmitContributionVersion:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
             await submit_contribution_version(
@@ -633,8 +633,8 @@ class TestSubmitContributionVersion:
         existing = _fake_primitive(contribution_status=CONTRIBUTION_DRAFT)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             pytest.raises(ContributionInvalidTransitionError, match="expected status 'published'"),
         ):
             await submit_contribution_version(
@@ -655,9 +655,9 @@ class TestSubmitContributionVersion:
         existing.version_group_id = None
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="version group seeding"),
         ):
             await submit_contribution_version(
@@ -680,14 +680,14 @@ class TestSubmitContributionVersion:
         new_prim = _fake_primitive(version="1.1")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=new_prim,
             ),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found after creation"),
         ):
             await submit_contribution_version(
@@ -708,10 +708,10 @@ class TestSubmitContributionVersion:
         existing.version_group_id = uuid.uuid4()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -742,8 +742,8 @@ class TestListContributionVersions:
         prim.version_group_id = None
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         ):
             result = await list_contribution_versions(session, uuid.uuid4(), uuid.uuid4())
 
@@ -761,10 +761,10 @@ class TestListContributionVersions:
         newest.version_group_id = group_id
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
             patch(
-                "modulo.core.library_service.list_primitives_by_version_group",
+                "farna.core.library_service.list_primitives_by_version_group",
                 new_callable=AsyncMock,
                 return_value=[older, newest],
             ),
@@ -777,8 +777,8 @@ class TestListContributionVersions:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
             await list_contribution_versions(session, uuid.uuid4(), uuid.uuid4())
@@ -787,9 +787,9 @@ class TestListContributionVersions:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
@@ -808,9 +808,9 @@ class TestNotifyImportersOfUpdate:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -822,9 +822,9 @@ class TestNotifyImportersOfUpdate:
         prim.version_group_id = None
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -845,9 +845,9 @@ class TestNotifyImportersOfUpdate:
         session.execute = AsyncMock(side_effect=[_scalars_result([copy1, copy2]), _scalars_result([])])
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -870,9 +870,9 @@ class TestNotifyImportersOfUpdate:
         session.execute = AsyncMock(side_effect=[_scalars_result([]), _scalars_result([installed])])
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock) as updater,
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -892,14 +892,14 @@ class TestNotifyImportersOfUpdate:
         session.execute = AsyncMock(side_effect=[_scalars_result([copy]), _scalars_result([])])
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=prim),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("boom"),
             ),
-            caplog.at_level("ERROR", logger="modulo.core.library_service"),
+            caplog.at_level("ERROR", logger="farna.core.library_service"),
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -909,13 +909,13 @@ class TestNotifyImportersOfUpdate:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, Exception("no such table")),
             ),
-            caplog.at_level("WARNING", logger="modulo.core.library_service"),
+            caplog.at_level("WARNING", logger="farna.core.library_service"),
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 
@@ -925,9 +925,9 @@ class TestNotifyImportersOfUpdate:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),
@@ -939,13 +939,13 @@ class TestNotifyImportersOfUpdate:
         session = _mock_session()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("boom"),
             ),
-            caplog.at_level("ERROR", logger="modulo.core.library_service"),
+            caplog.at_level("ERROR", logger="farna.core.library_service"),
         ):
             await notify_importers_of_update(session, uuid.uuid4(), uuid.uuid4())
 

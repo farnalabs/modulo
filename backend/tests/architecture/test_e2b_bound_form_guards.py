@@ -26,7 +26,7 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
+SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 PROVIDER_MODULE = "core/runtime_provider/e2b.py"
 SANDBOX_POLICY_MODULE = "core/pipeline_engine/sandbox_policy.py"
@@ -110,7 +110,7 @@ def test_e2b_import_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
     assert "e2b" in found[0]
 
     clean = tmp_path / "clean.py"
-    clean.write_text("from modulo.core.runtime_provider import RuntimeProvider\n", encoding="utf-8")
+    clean.write_text("from farna.core.runtime_provider import RuntimeProvider\n", encoding="utf-8")
     assert not _e2b_import_violations(clean.read_text(encoding="utf-8"), "clean.py")
 
 
@@ -164,7 +164,7 @@ def test_a21_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
     """Anti-vacuity for the A21 guard."""
     planted = tmp_path / "engine.py"
     planted.write_text(
-        "from modulo.core.pipeline_engine.sandbox_policy import apply_sandbox_policy\n"
+        "from farna.core.pipeline_engine.sandbox_policy import apply_sandbox_policy\n"
         "async def go(sandbox):\n"
         "    await apply_sandbox_policy(sandbox, read_only=True)\n",
         encoding="utf-8",

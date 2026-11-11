@@ -75,7 +75,7 @@ def _user_in_org_downloads(ctx: dict[str, Any], org: str, slug: str) -> None:
 
 @given(parsers.parse('the registry has a publisher "{author}" with key "{key}"'))
 def _registry_has_publisher(author: str, key: str) -> None:
-    from modulo.core.registry import register_publisher
+    from farna.core.registry import register_publisher
 
     register_publisher(fingerprint_hex=key, author=author, name=author.capitalize())
 

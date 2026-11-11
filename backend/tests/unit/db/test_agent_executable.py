@@ -6,8 +6,8 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models.agent import Agent
-from modulo.db.models.base import Base
+from farna.db.models.agent import Agent
+from farna.db.models.base import Base
 
 _AGENT_TABLE_NAMES = {
     "organisations",

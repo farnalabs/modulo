@@ -9,12 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.api.routes.admin import InviteUserRequest
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.api.routes.admin import InviteUserRequest
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -102,10 +102,10 @@ def test_invite_user_returns_single_use_link(admin_client: TestClient) -> None:
     invitation, plaintext = _invitation_mock()
     create_mock = AsyncMock(return_value=(invitation, plaintext))
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.admin.create_invitation", new=create_mock),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=create_mock),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -130,10 +130,10 @@ def test_invite_user_expiry_defaults_to_72h(admin_client: TestClient) -> None:
     invitation, _plaintext = _invitation_mock()
     create_mock = AsyncMock(return_value=(invitation, "tok"))
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.admin.create_invitation", new=create_mock),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=create_mock),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         admin_client.post(
             "/api/v1/admin/users/invite",
@@ -149,9 +149,9 @@ def test_invite_user_email_already_member_conflicts(admin_client: TestClient) ->
     existing_account = MagicMock()
     membership = MagicMock(deactivated_at=None)
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=existing_account)),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=existing_account)),
         patch(
-            "modulo.api.routes.admin.get_membership_by_account_and_org",
+            "farna.api.routes.admin.get_membership_by_account_and_org",
             new=AsyncMock(return_value=membership),
         ),
     ):
@@ -172,14 +172,14 @@ def test_invite_user_tombstoned_member_can_be_reinvited(admin_client: TestClient
     tombstoned = MagicMock(deactivated_at="2026-08-01T00:00:00+00:00")
     create_mock = AsyncMock(return_value=(invitation, plaintext))
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=existing_account)),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=existing_account)),
         patch(
-            "modulo.api.routes.admin.get_membership_by_account_and_org",
+            "farna.api.routes.admin.get_membership_by_account_and_org",
             new=AsyncMock(return_value=tombstoned),
         ),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.admin.create_invitation", new=create_mock),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=create_mock),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -191,8 +191,8 @@ def test_invite_user_tombstoned_member_can_be_reinvited(admin_client: TestClient
 
 def test_invite_user_duplicate_pending_invitation_conflicts(admin_client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=True)),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -258,7 +258,7 @@ def test_list_invitations_returns_pending_items(admin_client: TestClient) -> Non
     invitation, _plaintext = _invitation_mock()
     list_mock = AsyncMock(return_value=([invitation], 1))
     with (
-        patch("modulo.api.routes.admin.list_pending_for_org", new=list_mock),
+        patch("farna.api.routes.admin.list_pending_for_org", new=list_mock),
     ):
         resp = admin_client.get("/api/v1/admin/users/invitations")
     assert resp.status_code == 200
@@ -281,7 +281,7 @@ def test_list_invitations_scoped_to_callers_org(admin_client: TestClient) -> Non
         org_role="admin",
     )
     list_mock = AsyncMock(return_value=([], 0))
-    with patch("modulo.api.routes.admin.list_pending_for_org", new=list_mock):
+    with patch("farna.api.routes.admin.list_pending_for_org", new=list_mock):
         resp = admin_client.get("/api/v1/admin/users/invitations")
     assert resp.status_code == 200
     assert not resp.json()["items"]
@@ -298,8 +298,8 @@ def test_revoke_invitation_success(admin_client: TestClient) -> None:
     invitation_id = uuid.uuid4()
     revoke_mock = AsyncMock(return_value=True)
     with (
-        patch("modulo.api.routes.admin.revoke_invitation", new=revoke_mock),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.revoke_invitation", new=revoke_mock),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 204
@@ -310,7 +310,7 @@ def test_revoke_invitation_success(admin_client: TestClient) -> None:
 def test_revoke_invitation_not_in_org_returns_404(admin_client: TestClient) -> None:
     """Cross-org / missing / consumed invitations all map to an identical 404."""
     invitation_id = uuid.uuid4()
-    with patch("modulo.api.routes.admin.revoke_invitation", new=AsyncMock(return_value=False)):
+    with patch("farna.api.routes.admin.revoke_invitation", new=AsyncMock(return_value=False)):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Invitation not found"
@@ -326,12 +326,10 @@ def test_invite_user_integrity_error_conflicts(admin_client: TestClient) -> None
     """A DB-level IntegrityError (e.g. a unique/check violation surfaced after
     the application-level 409 guards) maps to 409, never 500."""
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch(
-            "modulo.api.routes.admin.create_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))
-        ),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -343,13 +341,13 @@ def test_invite_user_integrity_error_conflicts(admin_client: TestClient) -> None
 def test_invite_user_programming_error_feature_unavailable(admin_client: TestClient) -> None:
     """A ProgrammingError (missing migration column) degrades to 501 instead of 500."""
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
         patch(
-            "modulo.api.routes.admin.create_invitation",
+            "farna.api.routes.admin.create_invitation",
             new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
         ),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -361,10 +359,10 @@ def test_invite_user_programming_error_feature_unavailable(admin_client: TestCli
 def test_invite_user_sqlalchemy_error_503(admin_client: TestClient) -> None:
     """A generic SQLAlchemyError degrades to 503 (database temporarily unavailable)."""
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.admin.create_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",
@@ -375,7 +373,7 @@ def test_invite_user_sqlalchemy_error_503(admin_client: TestClient) -> None:
 
 def test_list_invitations_programming_error_501(admin_client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.admin.list_pending_for_org",
+        "farna.api.routes.admin.list_pending_for_org",
         new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
     ):
         resp = admin_client.get("/api/v1/admin/users/invitations")
@@ -383,7 +381,7 @@ def test_list_invitations_programming_error_501(admin_client: TestClient) -> Non
 
 
 def test_list_invitations_sqlalchemy_error_503(admin_client: TestClient) -> None:
-    with patch("modulo.api.routes.admin.list_pending_for_org", new=AsyncMock(side_effect=SQLAlchemyError("down"))):
+    with patch("farna.api.routes.admin.list_pending_for_org", new=AsyncMock(side_effect=SQLAlchemyError("down"))):
         resp = admin_client.get("/api/v1/admin/users/invitations")
     assert resp.status_code == 503
 
@@ -391,10 +389,8 @@ def test_list_invitations_sqlalchemy_error_503(admin_client: TestClient) -> None
 def test_revoke_invitation_integrity_error_conflicts(admin_client: TestClient) -> None:
     invitation_id = uuid.uuid4()
     with (
-        patch(
-            "modulo.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))
-        ),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=IntegrityError("dup", None, None))),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 409
@@ -404,10 +400,10 @@ def test_revoke_invitation_programming_error_501(admin_client: TestClient) -> No
     invitation_id = uuid.uuid4()
     with (
         patch(
-            "modulo.api.routes.admin.revoke_invitation",
+            "farna.api.routes.admin.revoke_invitation",
             new=AsyncMock(side_effect=ProgrammingError("no column", None, None)),
         ),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 501
@@ -416,8 +412,8 @@ def test_revoke_invitation_programming_error_501(admin_client: TestClient) -> No
 def test_revoke_invitation_sqlalchemy_error_503(admin_client: TestClient) -> None:
     invitation_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.admin.revoke_invitation", new=AsyncMock(side_effect=SQLAlchemyError("down"))),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock()),
     ):
         resp = admin_client.delete(f"/api/v1/admin/users/invitations/{invitation_id}")
     assert resp.status_code == 503
@@ -429,10 +425,10 @@ def test_invite_user_audit_failure_is_fail_open(admin_client: TestClient) -> Non
     invitation, plaintext = _invitation_mock()
     create_mock = AsyncMock(return_value=(invitation, plaintext))
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.admin.create_invitation", new=create_mock),
-        patch("modulo.api.routes.admin.append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
+        patch("farna.api.routes.admin.get_account_by_email", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.admin.has_live_for_email", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.admin.create_invitation", new=create_mock),
+        patch("farna.api.routes.admin.append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit down"))),
     ):
         resp = admin_client.post(
             "/api/v1/admin/users/invite",

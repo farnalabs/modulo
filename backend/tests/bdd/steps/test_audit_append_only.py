@@ -1,7 +1,7 @@
 """BDD step definitions: audit append-only enforcement.
 
 Drives the REAL application-layer append-only guard
-(``modulo.core.audit_logger.append_only``) — registration plus the
+(``farna.core.audit_logger.append_only``) — registration plus the
 SQLAlchemy ``before_update`` / ``before_delete`` listeners — against actual
 ORM rows in an in-memory engine, so the immutability claim (``feat-audit``,
 "Append-only enforcement is defense-in-depth") is pinned by executing BDD
@@ -16,13 +16,13 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from modulo.core.audit_logger.append_only import (
+from farna.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
 )
-from modulo.db.models.audit_event import AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.error_event import ErrorEvent
+from farna.db.models.audit_event import AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.error_event import ErrorEvent
 
 scenarios("../features/audit/append_only.feature")
 

@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from unittest.mock import patch as _patch
 
-from modulo.db.crud.variant_group import (
+from farna.db.crud.variant_group import (
     get_all_state_batch_ids,
     get_batch_runs,
     get_batch_state,
@@ -21,7 +21,7 @@ from modulo.db.crud.variant_group import (
     soft_delete_batch_state,
     upsert_batch_state,
 )
-from modulo.db.models.variant_batch_state import VariantBatchState
+from farna.db.models.variant_batch_state import VariantBatchState
 
 
 def _make_result(
@@ -54,7 +54,7 @@ def _make_session(result: MagicMock | None = None) -> AsyncMock:
 
 @contextmanager
 def _patch_get_batch_state(return_value: Any):
-    with _patch("modulo.db.crud.variant_group.get_batch_state", new_callable=AsyncMock, return_value=return_value):
+    with _patch("farna.db.crud.variant_group.get_batch_state", new_callable=AsyncMock, return_value=return_value):
         yield
 
 

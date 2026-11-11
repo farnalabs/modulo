@@ -24,19 +24,19 @@ import pytest
 from sqlalchemy import ARRAY
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-import modulo.db.models  # noqa: F401 — register every model on ``Base.metadata``
-from modulo.core.pipeline_engine.watchdog_retry import (
+import farna.db.models  # noqa: F401 — register every model on ``Base.metadata``
+from farna.core.pipeline_engine.watchdog_retry import (
     _read_run_markers,
     _run_already_delivered,
 )
-from modulo.db.crud.run_node_outputs import write_run_markers
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run_node_outputs import write_run_markers
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.rls import set_rls_org
 
 _DELIVERY_KEY = "run:{run_id}:node:n1:result"
 

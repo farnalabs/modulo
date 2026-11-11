@@ -1,6 +1,6 @@
 """Unit tests for plan-context resolution and feature-flag override paths.
 
-Covers previously-untested code paths in ``modulo.core.feature_flags``:
+Covers previously-untested code paths in ``farna.core.feature_flags``:
   - ``CommunityTier`` / ``LicenseKeyTier`` / ``DbPlanContext`` plan-context classes
   - ``resolve_plan_context`` resolution order and failure fall-through
   - ``FeatureFlagRegistry.resolve_flag`` override precedence
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import InvalidRequestError
 
-from modulo.core.feature_flags import (
+from farna.core.feature_flags import (
     CommunityTier,
     DbPlanContext,
     FeatureFlagRegistry,
@@ -24,7 +24,7 @@ from modulo.core.feature_flags import (
     get_registry,
     resolve_plan_context,
 )
-from modulo.core.license import LicenseData, LicenseValidation
+from farna.core.license import LicenseData, LicenseValidation
 
 
 def _license(tier: str = "team", features: list[str] | None = None) -> LicenseData:
@@ -110,8 +110,8 @@ class TestDbPlanContext:
     ) -> DbPlanContext:
         session = AsyncMock()
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
         ):
             return await DbPlanContext.from_db(session, plan_id, has_license_key, license_features)
 
@@ -168,12 +168,12 @@ class TestResolvePlanContext:
 
         with (
             patch(
-                "modulo.core.feature_flags.DbPlanContext.from_db",
+                "farna.core.feature_flags.DbPlanContext.from_db",
                 new_callable=AsyncMock,
                 return_value=db_ctx,
             ) as from_db,
-            patch("modulo.core.license.get_license", return_value=system_license),
-            patch("modulo.core.license.parse_and_verify", side_effect=_parse_and_verify),
+            patch("farna.core.license.get_license", return_value=system_license),
+            patch("farna.core.license.parse_and_verify", side_effect=_parse_and_verify),
         ):
             result = await resolve_plan_context(settings, session, org)
         return result, from_db, session
@@ -339,11 +339,11 @@ class TestOverrideDbLookups:
         cm.__aexit__ = AsyncMock(return_value=False)
         async_session = MagicMock(return_value=cm)
         with (
-            patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
             patch("sqlalchemy.ext.asyncio.AsyncSession", async_session),
             patch(
-                "modulo.db.crud.organisation.get_organisation",
+                "farna.db.crud.organisation.get_organisation",
                 new_callable=AsyncMock,
                 return_value=org,
                 side_effect=org_error,
@@ -463,10 +463,10 @@ class TestOverrideFromEntitySessionSemantics:
         session = _AutobeginFalseSession(entity)
         with (
             patch("sqlalchemy.ext.asyncio.AsyncSession", return_value=session),
-            patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.settings.get_settings", return_value=MagicMock()),
+            patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.settings.get_settings", return_value=MagicMock()),
             patch(
-                "modulo.db.crud.organisation.get_organisation",
+                "farna.db.crud.organisation.get_organisation",
                 new_callable=AsyncMock,
                 return_value=entity,
             ),
@@ -494,7 +494,7 @@ class TestOverrideFromEntitySessionSemantics:
 
 class TestGetRegistry:
     def test_singleton_and_community_default(self) -> None:
-        import modulo.core.feature_flags as ff
+        import farna.core.feature_flags as ff
 
         saved = ff._registry
         ff._registry = None
@@ -513,8 +513,8 @@ class TestFeatureFlagRegistryDb:
         registry = FeatureFlagRegistry()
         session = AsyncMock()
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
         ):
             await registry.load_from_db(session)
         assert registry.get_flag("dashboard_charts") is not None
@@ -528,8 +528,8 @@ class TestFeatureFlagRegistryDb:
             {"name": "db_off", "description": "Off", "tier_id": "team", "depends_on": None, "is_active": False},
         ]
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=db_flags),
         ):
             await registry.load_from_db(session)
         assert registry.get_flag("db_on") is not None
@@ -545,8 +545,8 @@ class TestFeatureFlagRegistryDb:
             {"name": "pro_flag", "description": "Pro", "tier_id": "pro", "depends_on": None, "is_active": True},
         ]
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=db_flags),
         ):
             await registry.load_from_db(session)
             registry.refresh(current_tier="pro", has_license_key=True)

@@ -1,8 +1,8 @@
-"""Unit tests for modulo.db.seed — the system-schema seeding routine.
+"""Unit tests for farna.db.seed — the system-schema seeding routine.
 
 ``seed_system_schemas`` is invoked on organisation creation
-(``modulo.db.crud.organisation``) and again at startup for every existing
-organisation (``modulo.api.main._seed_system_schemas``). These tests lock the
+(``farna.db.crud.organisation``) and again at startup for every existing
+organisation (``farna.api.main._seed_system_schemas``). These tests lock the
 contract of that routine against a real (hermetic, in-memory SQLite) async
 session:
 
@@ -28,9 +28,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.schema import Schema, SchemaVersion
-from modulo.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
+from farna.db.models.base import Base
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.seed import SYSTEM_SCHEMAS, seed_system_schemas
 
 
 def _needed_tables() -> list:

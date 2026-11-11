@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes import health
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+from farna.api.routes import health
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
 
 class _RecordingSink:
@@ -71,7 +71,7 @@ def capture(sink: _RecordingSink) -> Any:
 
 
 def _make_settings() -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",

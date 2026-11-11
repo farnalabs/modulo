@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from modulo.core.rate_limiter import TokenBucket, TokenBucketRegistry
+from farna.core.rate_limiter import TokenBucket, TokenBucketRegistry
 
 
 class FakeClock:

@@ -1,4 +1,4 @@
-from modulo.db.models import Base
+from farna.db.models import Base
 
 # Tables DELIBERATELY exempt from the "every resource table carries an
 # ``organisation_id`` column" rule. Membership is PINNED by
@@ -246,7 +246,7 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
     )
     # The ORM CheckConstraint is generated from the full 19-value vocabulary —
     # every value must appear and the generated SQL must match exactly.
-    from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
+    from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
     assert f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}" in trigger_checks
     for outcome in VALIDATION_RESULT_VALUES:

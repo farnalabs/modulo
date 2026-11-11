@@ -32,12 +32,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-import modulo.core.run_admission as ra
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine.error_codes import map_legacy_code
-from modulo.core.run_admission import reconcile_pipeline_slots
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
+import farna.core.run_admission as ra
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine.error_codes import map_legacy_code
+from farna.core.run_admission import reconcile_pipeline_slots
+from farna.db.models.base import Base
+from farna.db.models.run import Run
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-000000006666")

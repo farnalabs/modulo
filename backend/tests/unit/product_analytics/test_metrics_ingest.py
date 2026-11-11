@@ -12,11 +12,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import Insert as PGInsert
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.routes import metrics_ingest
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.routes import metrics_ingest
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -76,7 +76,7 @@ def mock_session() -> AsyncMock:
 
 @pytest.fixture
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -105,9 +105,9 @@ def _post_events(client: TestClient, events: list[dict]) -> Any:
 
 
 class TestSuccessfulIngest:
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_batch_insert_returns_204(
         self,
         mock_rls: MagicMock,
@@ -120,9 +120,9 @@ class TestSuccessfulIngest:
         resp = _post_events(client, [_valid_event()])
         assert resp.status_code == 204
 
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_multiple_events(
         self,
         mock_rls: MagicMock,
@@ -138,9 +138,9 @@ class TestSuccessfulIngest:
 
 
 class TestConsentGate:
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_consent_off_returns_204(
         self,
         mock_rls: MagicMock,
@@ -153,9 +153,9 @@ class TestConsentGate:
         resp = _post_events(client, [_valid_event()])
         assert resp.status_code == 204
 
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_no_settings_returns_204(
         self,
         mock_rls: MagicMock,
@@ -168,9 +168,9 @@ class TestConsentGate:
         resp = _post_events(client, [_valid_event()])
         assert resp.status_code == 204
 
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_org_not_found_returns_204(
         self,
         mock_rls: MagicMock,
@@ -236,10 +236,10 @@ class TestEventValidation:
 
 
 class TestApiErrorDailyCap:
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_api_error_cap_skips_excess(
         self,
         mock_rls: MagicMock,
@@ -260,10 +260,10 @@ class TestApiErrorDailyCap:
         # this assertion fails because 5 inserts would appear.
         assert not _insert_calls(mock_session), "api_error events must be skipped once the daily cap is reached"
 
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_api_error_under_cap_accepted(
         self,
         mock_rls: MagicMock,
@@ -285,9 +285,9 @@ class TestApiErrorDailyCap:
 
 
 class TestPayloadPrivacyBoundary:
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_unknown_payload_fields_are_dropped(
         self,
         mock_rls: MagicMock,
@@ -319,9 +319,9 @@ class TestPayloadPrivacyBoundary:
             (_PIPELINE_ID, {"pipeline_id": _PIPELINE_ID}),
         ],
     )
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_identifier_values_are_opaque_uuids_only(
         self,
         mock_rls: MagicMock,
@@ -341,10 +341,10 @@ class TestPayloadPrivacyBoundary:
         assert resp.status_code == 204
         assert _inserted_payload(mock_session) == expected
 
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_api_error_values_are_bounded_scalars(
         self,
         mock_rls: MagicMock,
@@ -375,10 +375,10 @@ class TestPayloadPrivacyBoundary:
             ({"route": "/some/unknown/path", "status": 204}, {"route": "unknown", "status": 204}),
         ],
     )
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_api_error_values_reject_invalid_scalars(
         self,
         mock_rls: MagicMock,
@@ -402,10 +402,10 @@ class TestPayloadPrivacyBoundary:
 
 
 class TestRouteSanitizer:
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_unmatched_route_sanitized(
         self,
         mock_rls: MagicMock,
@@ -428,10 +428,10 @@ class TestRouteSanitizer:
         assert payload["route"] == "unknown", "unmatched route must be sanitized to 'unknown' in the staged payload"
         assert payload["status"] == 500, "non-route fields must be preserved"
 
-    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
-    @patch("modulo.api.routes.metrics_ingest.get_organisation")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
-    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    @patch("farna.api.routes.metrics_ingest._api_error_count_today")
+    @patch("farna.api.routes.metrics_ingest.get_organisation")
+    @patch("farna.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("farna.api.routes.metrics_ingest.set_rls_org")
     def test_registered_route_template_preserved(
         self,
         mock_rls: MagicMock,

@@ -53,21 +53,21 @@ def _mcp_ctx_seams(org_id, run_mock, gate_mock=None, config=None):
         return None
 
     patches = [
-        patch("modulo.api.mcp_server.validate_current_auth", new_callable=AsyncMock, return_value=True),
-        patch("modulo.api.mcp_server._ctx_org_id_val", new=ctx_org),
-        patch("modulo.api.mcp_server._ctx_user_id_val", new=ctx_user),
-        patch("modulo.api.mcp_server._check_agent_tool_scope", new=no_scope_check),
-        patch("modulo.api.mcp_server._session", new=fake_session),
-        patch("modulo.api.mcp_server._load_hitl_run", new_callable=AsyncMock, return_value=run_mock),
+        patch("farna.api.mcp_server.validate_current_auth", new_callable=AsyncMock, return_value=True),
+        patch("farna.api.mcp_server._ctx_org_id_val", new=ctx_org),
+        patch("farna.api.mcp_server._ctx_user_id_val", new=ctx_user),
+        patch("farna.api.mcp_server._check_agent_tool_scope", new=no_scope_check),
+        patch("farna.api.mcp_server._session", new=fake_session),
+        patch("farna.api.mcp_server._load_hitl_run", new_callable=AsyncMock, return_value=run_mock),
     ]
     if gate_mock is not None:
         mcp_mgr = MagicMock()
         mcp_mgr.get_gate = AsyncMock(return_value=gate_mock)
-        patches.append(patch("modulo.api.mcp_server.HITLManager", return_value=mcp_mgr))
+        patches.append(patch("farna.api.mcp_server.HITLManager", return_value=mcp_mgr))
     if config is not None:
         patches.append(
             patch(
-                "modulo.db.crud.hitl_review_config.resolve_hitl_review_config",
+                "farna.db.crud.hitl_review_config.resolve_hitl_review_config",
                 new_callable=AsyncMock,
                 return_value=config,
             )
@@ -160,14 +160,14 @@ def user_claims_gate(username: str, review_id: str, run_name: str, ctx, request,
     ``transition_run`` (the post-claim status flip) is patched — the claim
     transaction itself still runs against the real route.
     """
-    from modulo.core.hitl_manager import NotTeamMemberError
+    from farna.core.hitl_manager import NotTeamMemberError
 
     _ = username, review_id, run_name
     is_member = ctx.get("team_role") in {"runner", "operator"}
 
     with (
-        patch("modulo.api.routes.hitl.HITLManager") as mock_mgr_cls,
-        patch("modulo.api.routes.hitl.transition_run", new_callable=AsyncMock),
+        patch("farna.api.routes.hitl.HITLManager") as mock_mgr_cls,
+        patch("farna.api.routes.hitl.transition_run", new_callable=AsyncMock),
     ):
         if is_member:
             claimed_gate = MagicMock()
@@ -206,7 +206,7 @@ def mcp_attempts_approve(review_id: str, run_name: str, username: str, ctx, requ
     approval. A claim_token is synthesized because an approve action cannot
     reach the human_only check without one.
     """
-    from modulo.api.mcp_server import _review_hitl_impl
+    from farna.api.mcp_server import _review_hitl_impl
 
     _ = run_name, username
     org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -235,7 +235,7 @@ def request_gate_context(run_name: str, review_id: str, ctx, request):
     real implementation assembles the context dict (including
     ``review_config.required_team_id``).
     """
-    from modulo.api.mcp_server import _get_hitl_review_impl
+    from farna.api.mcp_server import _get_hitl_review_impl
 
     _ = run_name
     org_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -296,15 +296,15 @@ def user_approves_gate(username: str, review_id: str, run_name: str, ctx, reques
     scenario asserts the router's actual contract: a real 200 with
     ``{"status": "approved", "run_id": ...}`` and a resumed run.
     """
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     _ = username, review_id, run_name
 
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
     with (
-        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+        patch("farna.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("farna.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
     ):
         mock_exec_cls.return_value.resume = AsyncMock()
         resp = client.post(

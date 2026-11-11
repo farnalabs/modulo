@@ -29,9 +29,9 @@ from uuid import uuid4
 import pytest
 from langchain_core.messages import AIMessage
 
-from modulo.core.eval_engine import EvalBlockedError, EvalDefinition, EvalEngine, EvalType
-from modulo.core.node_output_split import resolve_node_contract_output, split_node_output
-from modulo.core.pipeline_engine.executor import PipelineExecutor, _resolve_post_node_eval_target
+from farna.core.eval_engine import EvalBlockedError, EvalDefinition, EvalEngine, EvalType
+from farna.core.node_output_split import resolve_node_contract_output, split_node_output
+from farna.core.pipeline_engine.executor import PipelineExecutor, _resolve_post_node_eval_target
 
 # Mirrors the FAR-301 PR-review eval shape: a completed node must expose
 # ``pr_url`` AND ``changed_files``. Applied to the telemetry-style outer
@@ -298,9 +298,9 @@ class TestPostNodeLlmJudgeCallable:
         executor = _executor()
 
         with (
-            caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"),
+            caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.executor"),
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
         ):
@@ -370,9 +370,9 @@ class TestPostNodeLlmJudgeCallable:
         hub = _FakeHub(json.dumps({"passed": True, "score": 0.9, "detail": "judged"}))
         executor = _executor()
         with (
-            caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"),
+            caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.executor"),
             patch(
-                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                "farna.core.pipeline_engine.decorator.get_model_backend_hub",
                 return_value=hub,
             ),
         ):
@@ -411,7 +411,7 @@ class TestPostNodeLlmJudgeCallable:
             failure_behaviour="block",
         )
         executor = _executor()
-        with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"):
+        with caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.executor"):
             # "some agent output" matches /agent/ — no EvalBlockedError.
             await executor._run_post_node_evals(
                 "reviewer",

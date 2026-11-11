@@ -21,8 +21,8 @@ from httpx import AsyncClient
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.library_service import community as community_module
-from modulo.core.library_sync.models import SINGLETON_ID, LibrarySyncState
+from farna.core.library_service import community as community_module
+from farna.core.library_sync.models import SINGLETON_ID, LibrarySyncState
 
 # Reuse the auth/seed helpers defined in an existing integration module instead
 # of duplicating them here — the duplicated copies tripped SonarCloud's

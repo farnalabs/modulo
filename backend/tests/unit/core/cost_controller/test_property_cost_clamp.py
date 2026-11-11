@@ -1,9 +1,9 @@
 """Hypothesis property-based tests for the cost clamping and token coercion cores.
 
 Targets:
-* ``clamp_reported`` from ``modulo.core.cost_controller.breakdown.aggregate``
+* ``clamp_reported`` from ``farna.core.cost_controller.breakdown.aggregate``
   -- self-reported model cost clamping (defense-in-depth at enrichment).
-* ``coerce_reported_token`` from ``modulo.core.cost_controller.breakdown.params``
+* ``coerce_reported_token`` from ``farna.core.cost_controller.breakdown.params``
   -- tri-state reported-token coercion (the ONE shared rule, FAR-491).
 
 Properties assert INVARIANTS:
@@ -22,13 +22,13 @@ from decimal import Decimal
 import hypothesis.strategies as st
 from hypothesis import given, settings
 
-from modulo.core.cost_controller.breakdown.aggregate import clamp_reported
-from modulo.core.cost_controller.breakdown.constants import (
+from farna.core.cost_controller.breakdown.aggregate import clamp_reported
+from farna.core.cost_controller.breakdown.constants import (
     MAX_REPORTABLE_BAND_USD,
     MAX_REPORTABLE_USD_MIN,
     MAX_SELF_REPORTED_USD,
 )
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.params import (
     MAX_REPORTABLE_TOKEN_COUNT,
     coerce_reported_token,
 )

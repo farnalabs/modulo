@@ -14,14 +14,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from modulo.determination.models import (
+from farna.determination.models import (
     DeterminationAttempt,
     ProposalContract,
     ProposalFact,
     SourceInventoryItem,
     UnresolvedAssumption,
 )
-from modulo.determination.review import (
+from farna.determination.review import (
     DerivedElementEdit,
     ProposalReviewError,
     ProposalReviewRequest,

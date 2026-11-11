@@ -7,7 +7,7 @@ changed, so every failure mode below is a silent-skip trap:
    span ``/``, so ``backend/src/**/*.py`` did not match ``backend/src/foo.py``
    and the gate fail-opened whenever only files directly under ``backend/src/``
    changed.  It only appeared to work because every module happens to live
-   under ``backend/src/modulo/``.
+   under ``backend/src/farna/``.
 2. Broken base ref — a missing/stale ``origin/main`` must warn distinctly, not
    masquerade as "no files changed", and (FAR-1353) must NOT skip the gate:
    after a best-effort ``git fetch origin main`` retry the check runs
@@ -56,16 +56,14 @@ def test_double_star_matches_file_directly_under_base():
 
 
 def test_double_star_matches_nested_directories():
-    assert mod._matches_pattern(["backend/src/modulo/api/x.py"], "backend/src/**/*.py") == [
-        "backend/src/modulo/api/x.py"
-    ]
+    assert mod._matches_pattern(["backend/src/farna/api/x.py"], "backend/src/**/*.py") == ["backend/src/farna/api/x.py"]
 
 
 def test_double_star_matches_every_depth_at_once():
     files = [
         "backend/src/foo.py",
-        "backend/src/modulo/foo.py",
-        "backend/src/modulo/api/deep/foo.py",
+        "backend/src/farna/foo.py",
+        "backend/src/farna/api/deep/foo.py",
     ]
     assert mod._matches_pattern(files, "backend/src/**/*.py") == files
 
@@ -202,7 +200,7 @@ def test_main_propagates_command_failure_when_diff_fails(monkeypatch):
 
 def test_main_runs_command_when_a_file_matches(monkeypatch):
     _set_argv(monkeypatch, _ARGV)
-    monkeypatch.setattr(mod, "_git_diff_names", lambda: ["backend/src/modulo/core/x.py"])
+    monkeypatch.setattr(mod, "_git_diff_names", lambda: ["backend/src/farna/core/x.py"])
     with patch.object(mod.subprocess, "run") as run:
         run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
         assert mod.main() == 0
@@ -211,7 +209,7 @@ def test_main_runs_command_when_a_file_matches(monkeypatch):
 
 def test_main_propagates_command_failure_exit_code(monkeypatch):
     _set_argv(monkeypatch, _ARGV)
-    monkeypatch.setattr(mod, "_git_diff_names", lambda: ["backend/src/modulo/core/x.py"])
+    monkeypatch.setattr(mod, "_git_diff_names", lambda: ["backend/src/farna/core/x.py"])
     with patch.object(mod.subprocess, "run") as run:
         run.return_value = subprocess.CompletedProcess(args=[], returncode=3)
         assert mod.main() == 3
@@ -344,7 +342,7 @@ def test_gate_end_to_end_diffable_without_matching_files_skips(tmp_path):
 def test_gate_end_to_end_diffable_with_matching_file_runs_and_propagates(tmp_path):
     """Diff computable, changed file matches -> command runs, non-zero exit propagates."""
     repo = _make_repo(tmp_path)
-    _commit(repo, "backend/src/modulo/core/changed.py")
+    _commit(repo, "backend/src/farna/core/changed.py")
     marker = tmp_path / "marker.txt"
     proc = _run_gate(repo, _sentinel(marker, 7))
 

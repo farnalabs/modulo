@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _CONNECTOR_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -53,7 +53,7 @@ def _exec_result(scalar_value: Any = None, scalars_list: list[Any] | None = None
 
 class TestSanitizeSkipSummary:
     def test_strips_nul_and_truncates(self) -> None:
-        from modulo.db.crud.connector_instance import _sanitize_skip_summary
+        from farna.db.crud.connector_instance import _sanitize_skip_summary
 
         # NUL bytes should be stripped
         assert _sanitize_skip_summary("hello\x00world") == "helloworld"
@@ -74,9 +74,9 @@ class TestSanitizeSkipSummary:
 class TestCreateConnectorInstance:
     async def test_creates_with_all_fields(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
+            "farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
         ) as mock_ci_cls:
-            from modulo.db.crud.connector_instance import create_connector_instance
+            from farna.db.crud.connector_instance import create_connector_instance
 
             result = await create_connector_instance(
                 mock_session,
@@ -109,9 +109,9 @@ class TestCreateConnectorInstance:
 
     async def test_creates_with_defaults(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
+            "farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
         ) as mock_ci_cls:
-            from modulo.db.crud.connector_instance import create_connector_instance
+            from farna.db.crud.connector_instance import create_connector_instance
 
             await create_connector_instance(
                 mock_session,
@@ -134,14 +134,14 @@ class TestGetConnectorInstance:
     async def test_returns_instance_when_found(self, mock_session: AsyncMock) -> None:
         ci = _make_connector_instance()
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=ci))
-        from modulo.db.crud.connector_instance import get_connector_instance
+        from farna.db.crud.connector_instance import get_connector_instance
 
         result = await get_connector_instance(mock_session, _CONNECTOR_ID)
         assert result is ci
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalar_value=None))
-        from modulo.db.crud.connector_instance import get_connector_instance
+        from farna.db.crud.connector_instance import get_connector_instance
 
         result = await get_connector_instance(mock_session, _CONNECTOR_ID)
         assert result is None
@@ -156,7 +156,7 @@ class TestListConnectorInstances:
         listing_result.scalars = MagicMock(return_value=list(instances))
         mock_session.execute = AsyncMock(side_effect=[count_result, listing_result])
 
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
 
         result = await list_connector_instances(mock_session, organisation_id=_ORG_ID, page=2, page_size=2)
         assert isinstance(result, PageResult)
@@ -168,7 +168,7 @@ class TestListConnectorInstances:
 
     async def test_uses_cursor_pagination_when_cursor_provided(self, mock_session: AsyncMock) -> None:
         # Import first, then patch
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
 
         instances = [_make_connector_instance()]
         paginator_mock = AsyncMock()
@@ -179,7 +179,7 @@ class TestListConnectorInstances:
         cp_result.has_more = True
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
+        with patch("farna.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             result = await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -195,7 +195,7 @@ class TestListConnectorInstances:
         paginator_mock.paginate.assert_awaited_once()
 
     async def test_cursor_pagination_applies_excluded_tiers(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
         from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
@@ -207,7 +207,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
+        with patch("farna.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -221,7 +221,7 @@ class TestListConnectorInstances:
 
     async def test_cursor_pagination_applies_org_filter(self, mock_session: AsyncMock) -> None:
         """The cursor path must carry the org predicate into the paginated stmt."""
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
         from tests.unit.crud.helpers import compile_sql
 
         instances = [_make_connector_instance()]
@@ -233,7 +233,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
+        with patch("farna.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(
                 mock_session,
                 organisation_id=_ORG_ID,
@@ -246,7 +246,7 @@ class TestListConnectorInstances:
 
     async def test_cursor_pagination_without_organisation_id(self, mock_session: AsyncMock) -> None:
         """With no org supplied the cursor path skips the org predicate but keeps the tier filter."""
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
         from tests.unit.crud.helpers import compile_sql, where_column_names
 
         paginator_mock = AsyncMock()
@@ -257,7 +257,7 @@ class TestListConnectorInstances:
         cp_result.has_more = False
         paginator_mock.paginate = AsyncMock(return_value=cp_result)
 
-        with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
+        with patch("farna.db.crud.connector_instance.CursorPaginator", return_value=paginator_mock):
             await list_connector_instances(mock_session, cursor="test-cursor")
 
         stmt = paginator_mock.paginate.await_args.args[1]
@@ -274,7 +274,7 @@ class TestListConnectorInstances:
         listing_result.scalars = MagicMock(return_value=list(instances))
         mock_session.execute = AsyncMock(side_effect=[count_result, listing_result])
 
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
 
         await list_connector_instances(
             mock_session,
@@ -294,7 +294,7 @@ class TestListConnectorInstances:
         listing_result.scalars = MagicMock(return_value=list(instances))
         mock_session.execute = AsyncMock(side_effect=[count_result, listing_result])
 
-        from modulo.db.crud.connector_instance import list_connector_instances
+        from farna.db.crud.connector_instance import list_connector_instances
 
         result = await list_connector_instances(mock_session, page=1, page_size=20)
         assert isinstance(result, PageResult)
@@ -306,10 +306,10 @@ class TestUpdateConnectorInstance:
     async def test_applies_updates_and_flushes(self, mock_session: AsyncMock) -> None:
         ci = _make_connector_instance()
         with (
-            patch("modulo.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=ci)),
-            patch("modulo.db.crud.connector_instance.apply_updates") as apply_updates,
+            patch("farna.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=ci)),
+            patch("farna.db.crud.connector_instance.apply_updates") as apply_updates,
         ):
-            from modulo.db.crud.connector_instance import update_connector_instance
+            from farna.db.crud.connector_instance import update_connector_instance
 
             result = await update_connector_instance(
                 mock_session, _CONNECTOR_ID, {"name": "updated", "config_json": {"new": "value"}}
@@ -320,8 +320,8 @@ class TestUpdateConnectorInstance:
         assert result is ci
 
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=None)):
-            from modulo.db.crud.connector_instance import update_connector_instance
+        with patch("farna.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=None)):
+            from farna.db.crud.connector_instance import update_connector_instance
 
             result = await update_connector_instance(mock_session, _CONNECTOR_ID, {"name": "updated"})
         assert result is None
@@ -332,7 +332,7 @@ class TestMarkInstancesDegraded:
         instance_ids = {uuid.uuid4(), uuid.uuid4()}
         skipped = {iid: f"error for {iid}" for iid in instance_ids}
 
-        from modulo.db.crud.connector_instance import mark_instances_degraded
+        from farna.db.crud.connector_instance import mark_instances_degraded
 
         await mark_instances_degraded(mock_session, skipped)
 
@@ -347,7 +347,7 @@ class TestMarkInstancesDegraded:
         instance_id = uuid.uuid4()
         skipped = {instance_id: bad_summary}
 
-        from modulo.db.crud.connector_instance import mark_instances_degraded
+        from farna.db.crud.connector_instance import mark_instances_degraded
 
         await mark_instances_degraded(mock_session, skipped)
 
@@ -360,7 +360,7 @@ class TestClearDegradedMarkers:
     async def test_executes_batched_update(self, mock_session: AsyncMock) -> None:
         instance_ids = [uuid.uuid4(), uuid.uuid4()]
 
-        from modulo.db.crud.connector_instance import clear_degraded_markers
+        from farna.db.crud.connector_instance import clear_degraded_markers
 
         await clear_degraded_markers(mock_session, instance_ids)
 
@@ -369,7 +369,7 @@ class TestClearDegradedMarkers:
 
     async def test_accepts_any_collection(self, mock_session: AsyncMock) -> None:
         """Should accept any Collection[UUID], not just list."""
-        from modulo.db.crud.connector_instance import clear_degraded_markers
+        from farna.db.crud.connector_instance import clear_degraded_markers
 
         instance_ids = {uuid.uuid4(), uuid.uuid4()}  # set
         await clear_degraded_markers(mock_session, instance_ids)
@@ -380,8 +380,8 @@ class TestClearDegradedMarkers:
 class TestDeleteConnectorInstance:
     async def test_returns_true_and_deletes(self, mock_session: AsyncMock) -> None:
         ci = _make_connector_instance()
-        with patch("modulo.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=ci)):
-            from modulo.db.crud.connector_instance import delete_connector_instance
+        with patch("farna.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=ci)):
+            from farna.db.crud.connector_instance import delete_connector_instance
 
             result = await delete_connector_instance(mock_session, _CONNECTOR_ID)
 
@@ -390,8 +390,8 @@ class TestDeleteConnectorInstance:
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
-        with patch("modulo.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=None)):
-            from modulo.db.crud.connector_instance import delete_connector_instance
+        with patch("farna.db.crud.connector_instance.get_connector_instance", AsyncMock(return_value=None)):
+            from farna.db.crud.connector_instance import delete_connector_instance
 
             result = await delete_connector_instance(mock_session, _CONNECTOR_ID)
         assert result is False

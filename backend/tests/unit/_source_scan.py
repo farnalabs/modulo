@@ -3,7 +3,7 @@
 A whole-tree scan can list a path during its directory walk and then read it
 after a concurrent test fixture has removed it, raising ``FileNotFoundError``
 for a file that is not part of the committed source. The vulture dead-code gate
-used to stage its ``_far252_dead_probe.py`` probe inside ``backend/src/modulo``
+used to stage its ``_far252_dead_probe.py`` probe inside ``backend/src/farna``
 and trip exactly this; FAR-2334 moved that probe into a temp directory, but any
 transient file under a scanned root (a fixture, an editor swap file, concurrent
 cleanup) still has the same race.

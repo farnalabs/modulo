@@ -6,7 +6,7 @@ test makes each of them structurally impossible to reintroduce.
 Guard 1 — a route that hard-deletes its organisation must not carry ``audited()``
 ---------------------------------------------------------------------------
 ``audited()`` appends its coarse event POST-COMMIT on a FRESH session (see
-``modulo.core.audit_coverage``), while ``audit_events.organisation_id`` FKs
+``farna.core.audit_coverage``), while ``audit_events.organisation_id`` FKs
 ``organisations.id``. On a handler that hard-deletes the organisation, that
 append can never satisfy the FK, so it fails open and records nothing. FAR-1517
 moved ``admin.confirm_org_deletion``, ``admin.delete_org_immediate`` and
@@ -21,7 +21,7 @@ resolved by a small intra-procedural fixed point (the RHS mentions the
 ``Organisation`` model, comes from a call whose return annotation mentions
 ``Organisation``, or flows from an earlier org-typed binding), and callees are
 resolved through their real imports against a lazily-parsed module index of
-``backend/src/modulo`` — so ``delete_organisation`` / ``confirm_org_deletion``
+``backend/src/farna`` — so ``delete_organisation`` / ``confirm_org_deletion``
 are recognised from what they DO, and a synthetically-named helper that deletes
 an org is caught all the same.
 
@@ -79,16 +79,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-SRC_DIR = BACKEND_DIR / "src" / "modulo"
+SRC_DIR = BACKEND_DIR / "src" / "farna"
 ROUTES_DIR = SRC_DIR / "api" / "routes"
 
 #: Decorator attributes that register a FastAPI route handler.
 _ROUTE_METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put"})
 
-#: The coarse audit dependency factories from ``modulo.core.audit_coverage``.
+#: The coarse audit dependency factories from ``farna.core.audit_coverage``.
 _AUDITED_CALL_NAMES = frozenset({"audited", "audited_system"})
 
-#: Inline chain appends from ``modulo.core.audit_logger``. Deliberately excludes
+#: Inline chain appends from ``farna.core.audit_logger``. Deliberately excludes
 #: ``append_system_audit_event`` — that writes the org-independent ledger.
 _INLINE_APPEND_NAMES = frozenset({"append_audit_event", "append_audit_event_isolated"})
 
@@ -104,7 +104,7 @@ _MAX_CALL_DEPTH = 4
 _ORG_MODEL_NAME = "Organisation"
 
 #: Org-model suffix that identifies a resolved symbol as the Organisation class
-#: (``modulo.db.models.organisation.Organisation``).
+#: (``farna.db.models.organisation.Organisation``).
 _ORG_MODEL_SUFFIX = "." + _ORG_MODEL_NAME
 
 
@@ -128,11 +128,11 @@ _SYNTHETIC: dict[str, _ModuleInfo] = {}
 
 
 def _module_name_for_path(path: Path) -> str:
-    """``.../api/routes/admin.py`` -> ``modulo.api.routes.admin``."""
+    """``.../api/routes/admin.py`` -> ``farna.api.routes.admin``."""
     parts = list(path.relative_to(SRC_DIR).with_suffix("").parts)
     if parts[-1] == "__init__":
         parts.pop()
-    return ".".join(("modulo", *parts))
+    return ".".join(("farna", *parts))
 
 
 def _collect_module(tree: ast.Module, name: str) -> _ModuleInfo:
@@ -178,7 +178,7 @@ def _parse_source(source: str, filename: str, module_name: str) -> _ModuleInfo:
 def _load_from_disk(module_name: str) -> _ModuleInfo | None:
     """Parse ``module_name`` on demand; ``None`` when no such module exists."""
     parts = module_name.split(".")
-    if parts[0] != "modulo":
+    if parts[0] != "farna":
         return None
     base = SRC_DIR.joinpath(*parts[1:])
     candidates = [base.with_suffix(".py"), base / "__init__.py"] if parts[1:] else [base / "__init__.py"]
@@ -733,10 +733,10 @@ def coarse_rename_landed() -> bool:
 _ORG_DELETE_VIOLATION = """\
 from fastapi import APIRouter, Depends
 
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.core.audit_coverage import audited
-from modulo.db.crud.organisation import delete_organisation
-from modulo.db.session import get_db_session
+from farna.auth.dependencies import get_current_tenant_user
+from farna.core.audit_coverage import audited
+from farna.db.crud.organisation import delete_organisation
+from farna.db.session import get_db_session
 
 router = APIRouter()
 
@@ -752,9 +752,9 @@ async def delete_own_organisation(session=get_db_session) -> None:
 _ORG_DELETE_CLEAN = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.system_audit_logger import append_system_audit_event
-from modulo.db.crud.organisation import delete_organisation
-from modulo.db.session import get_db_session
+from farna.core.system_audit_logger import append_system_audit_event
+from farna.db.crud.organisation import delete_organisation
+from farna.db.session import get_db_session
 
 router = APIRouter()
 
@@ -770,9 +770,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.core.audit_coverage import audited
-from modulo.db.models.organisation import Organisation
+from farna.auth.dependencies import get_current_tenant_user
+from farna.core.audit_coverage import audited
+from farna.db.models.organisation import Organisation
 
 router = APIRouter()
 
@@ -796,8 +796,8 @@ async def retire_tenant_endpoint(session: AsyncSession) -> None:
 _DOUBLE_AUDIT_VIOLATION = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
-from modulo.core.audit_logger import append_audit_event
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event
 
 router = APIRouter()
 
@@ -813,8 +813,8 @@ async def create_widget(session) -> None:
 _DOUBLE_AUDIT_VIA_WRAPPER = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
-from modulo.core.audit_logger import append_audit_event
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event
 
 router = APIRouter()
 
@@ -834,8 +834,8 @@ async def create_widget(session) -> None:
 _DOUBLE_AUDIT_VIA_MODULE_CONSTANT = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
-from modulo.core.audit_logger import append_audit_event
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event
 
 _COARSE_TYPE = "widget_created"
 
@@ -853,8 +853,8 @@ async def create_widget(session) -> None:
 _DOUBLE_AUDIT_CLEAN = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
-from modulo.core.audit_logger import append_audit_event
+from farna.core.audit_coverage import audited
+from farna.core.audit_logger import append_audit_event
 
 router = APIRouter()
 

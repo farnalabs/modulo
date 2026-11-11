@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.trigger_engine import ConcurrentRunLimitError, TriggerEngine
-from modulo.db.rls import set_rls_org
+from farna.core.trigger_engine import ConcurrentRunLimitError, TriggerEngine
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

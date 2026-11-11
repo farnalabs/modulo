@@ -12,25 +12,25 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.node_category import (
+from farna.db.crud.node_category import (
     delete_node_category,
     get_node_category,
     list_node_categories,
     update_node_category,
 )
-from modulo.db.crud.org_membership import update_membership_role
-from modulo.db.crud.publisher import delete_publisher, get_publisher, update_publisher
-from modulo.db.crud.token_family import (
+from farna.db.crud.org_membership import update_membership_role
+from farna.db.crud.publisher import delete_publisher, get_publisher, update_publisher
+from farna.db.crud.token_family import (
     advance_sequence,
     blacklist_family,
     get_or_create_family,
     is_family_blacklisted,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.node_category import NodeCategory
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.publisher import Publisher
-from modulo.db.models.token_family import TokenFamily
+from farna.db.models.base import Base
+from farna.db.models.node_category import NodeCategory
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.publisher import Publisher
+from farna.db.models.token_family import TokenFamily
 
 _TABLE_NAMES = {"node_categories", "publishers", "org_memberships", "token_families"}
 

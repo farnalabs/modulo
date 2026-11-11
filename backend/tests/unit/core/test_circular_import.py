@@ -17,9 +17,9 @@ import pytest
 # The import paths that previously triggered the circular-import failure.
 # Each must succeed in a FRESH interpreter (no shared module cache).
 _IMPORT_PATHS: list[str] = [
-    "import modulo.api.routes.admin",
-    "import modulo.core.pipeline_engine",
-    "import modulo.core.hitl_manager",
+    "import farna.api.routes.admin",
+    "import farna.core.pipeline_engine",
+    "import farna.core.hitl_manager",
 ]
 
 
@@ -32,7 +32,7 @@ def test_direct_import_succeeds_in_fresh_interpreter(import_stmt: str) -> None:
     """
     # The bound guards against an import that HANGS (a genuine cycle), not
     # against import latency. A cold fresh interpreter spends 35-55s simply
-    # importing modulo.core.pipeline_engine on this machine when it is
+    # importing farna.core.pipeline_engine on this machine when it is
     # otherwise idle, and well past 120s when other test workers are running,
     # so the old 30s bound failed for slowness rather than for a circular
     # import. Measured 2026-09-27 on unmodified main (35.7s) and on the

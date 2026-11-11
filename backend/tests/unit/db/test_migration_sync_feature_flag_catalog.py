@@ -6,7 +6,7 @@ upserted flags into ``feature_flag_catalog`` that the seed catalog missed) and
 the ``0105`` head no longer exist. The feature-flag catalog is now created by
 the reconciliation chain (``0109_schema_teams_library`` adds the table
 columns) and populated at application startup from
-``modulo.core.seed_data.catalog.FLAGS``. These tests assert:
+``farna.core.seed_data.catalog.FLAGS``. These tests assert:
 
 * the reconciliation chain creates the ``feature_flag_catalog`` columns the
   seed path writes to,
@@ -20,8 +20,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.core.feature_flags import _KNOWN_FLAGS
-from modulo.core.seed_data.catalog import FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS
+from farna.core.seed_data.catalog import FLAGS
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 # Flags the old 0072 sync migration upserted (the FAR-114 sync set). The seed
@@ -42,7 +42,7 @@ _CATALOG_MIGRATION_NAME = "0109_schema_teams_library"
 _CATALOG_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

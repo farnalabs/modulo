@@ -5,10 +5,10 @@ Model backends wrap LLM providers behind Farna Control's `ModelBackendBase` ABC.
 ## Architecture
 
 ```
-ModelBackendBase (ABC)      ← modulo/model_backends/base.py
-  ├── AnthropicBackend      ← modulo/model_backends/anthropic/
-  ├── OpenAIBackend         ← modulo/model_backends/openai/
-  ├── OllamaBackend         ← modulo/model_backends/ollama/
+ModelBackendBase (ABC)      ← farna/model_backends/base.py
+  ├── AnthropicBackend      ← farna/model_backends/anthropic/
+  ├── OpenAIBackend         ← farna/model_backends/openai/
+  ├── OllamaBackend         ← farna/model_backends/ollama/
   └── YourBackend           ← your package
 ```
 
@@ -61,7 +61,7 @@ set therefore cannot opt in from its class body.
 
 ## Supported providers
 
-The following backends ship built-in (each in `modulo.model_backends`):
+The following backends ship built-in (each in `farna.model_backends`):
 Ai21, Anthropic, Azure OpenAI, Bedrock, Cohere, DeepSeek, Fireworks, Gemini,
 Grok, Groq, Jan, LlamaCpp, LM Studio, LocalAI, Mistral, Ollama, OpenAI,
 OpenCode, OpenRouter, Perplexity, Qwen, Stub, TGI, TogetherAI, Vertex AI,
@@ -71,11 +71,11 @@ their own.
 
 | Provider | Backend class | Package / entry point |
 |----------|--------------|------------------------|
-| Anthropic | `AnthropicBackend` | `modulo.model_backends.anthropic` |
-| OpenAI | `OpenAIBackend` | `modulo.model_backends.openai` |
-| Azure OpenAI | `AzureOpenAIBackend` | `modulo.model_backends.azure_openai` |
-| Ollama | `OllamaBackend` | `modulo.model_backends.ollama` |
-| Custom plugin | `YourBackend` | plugin group `modulo.model_backends.your_backend` |
+| Anthropic | `AnthropicBackend` | `farna.model_backends.anthropic` |
+| OpenAI | `OpenAIBackend` | `farna.model_backends.openai` |
+| Azure OpenAI | `AzureOpenAIBackend` | `farna.model_backends.azure_openai` |
+| Ollama | `OllamaBackend` | `farna.model_backends.ollama` |
+| Custom plugin | `YourBackend` | plugin group `farna.model_backends.your_backend` |
 
 > The per-provider classes in this table are the authoring surface, but most are
 > not the objects the hub instantiates: `ModelBackendHub._build_backend`
@@ -86,7 +86,7 @@ their own.
 ## Implementation example
 
 ```python
-from modulo.model_backends.base import ModelBackendBase
+from farna.model_backends.base import ModelBackendBase
 
 
 class MyCustomBackend(ModelBackendBase):
@@ -125,7 +125,7 @@ backend class); it is not run automatically at load time.
 ```python
 from langchain_core.messages import HumanMessage
 
-from modulo.model_backends.base import HealthResult
+from farna.model_backends.base import HealthResult
 
 
 async def health_check(self) -> HealthResult:
@@ -211,13 +211,13 @@ Via entry points in `pyproject.toml` (the entry point must reference a
 **builder function**, not the class directly; see [Plugin API](./plugin-api.md)):
 
 ```toml
-[project.entry-points."modulo.model_backends"]
+[project.entry-points."farna.model_backends"]
 my_backend = "my_package.backend:build_my_backend"
 ```
 
 ```python
 # my_package/backend.py
-from modulo.model_backends.base import ModelBackendBase
+from farna.model_backends.base import ModelBackendBase
 
 
 def build_my_backend(api_key: str, model_id: str, **params) -> ModelBackendBase:
@@ -227,7 +227,7 @@ def build_my_backend(api_key: str, model_id: str, **params) -> ModelBackendBase:
 Or programmatically:
 
 ```python
-from modulo.core.plugin_registry import PluginManifest, get_plugin_registry
+from farna.core.plugin_registry import PluginManifest, get_plugin_registry
 from my_package.backend import MyCustomBackend
 
 manifest = PluginManifest(

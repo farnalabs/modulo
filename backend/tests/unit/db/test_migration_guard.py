@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.db.migration_guard import (
+from farna.db.migration_guard import (
     DivergenceCheckResult,
     _load_repo_revisions,
     check_migration_divergence,
@@ -43,7 +43,7 @@ class TestLoadRepoRevisionsEdgeCases:
     """FAR-872 fail-open + merge-tuple handling for the repo revision loader."""
 
     def test_merge_tuple_down_revisions_are_collected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.db.migration_guard as mg
+        import farna.db.migration_guard as mg
 
         monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
         walks = [
@@ -57,7 +57,7 @@ class TestLoadRepoRevisionsEdgeCases:
         assert revisions == {"0001", "0002", "0003"}
 
     def test_merge_tuple_with_empty_entry_skips_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.db.migration_guard as mg
+        import farna.db.migration_guard as mg
 
         monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
         walks = [_FakeWalk("0003", ("0001", ""))]
@@ -68,7 +68,7 @@ class TestLoadRepoRevisionsEdgeCases:
         assert revisions == {"0001", "0003"}
 
     def test_tree_load_failure_returns_empty_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.db.migration_guard as mg
+        import farna.db.migration_guard as mg
 
         monkeypatch.setattr(mg, "_REPO_REVISIONS", None)
         with patch("alembic.script.ScriptDirectory.from_config", side_effect=RuntimeError("boom")):
@@ -82,7 +82,7 @@ class TestCheckMigrationDivergence:
         """No divergence when all applied revisions exist in the repo."""
         fake_repo = {"0001", "0002", "0003"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence({"0001", "0002"})
@@ -93,7 +93,7 @@ class TestCheckMigrationDivergence:
         """Divergence when DB has a revision the repo does not ship."""
         fake_repo = {"0001", "0002"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence({"0001", "0002", "0099"})
@@ -105,7 +105,7 @@ class TestCheckMigrationDivergence:
         """No divergence when applied exactly matches repo revisions."""
         fake_repo = {"0001", "0002"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence({"0001", "0002"})
@@ -115,7 +115,7 @@ class TestCheckMigrationDivergence:
         """An empty DB (no applied revisions) is never diverged."""
         fake_repo = {"0001"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence(set())
@@ -124,7 +124,7 @@ class TestCheckMigrationDivergence:
     def test_repo_load_failure_returns_clean(self) -> None:
         """When repo tree cannot be loaded, divergence check is skipped (fail-open)."""
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=set(),
         ):
             result = check_migration_divergence({"0001", "0099"})
@@ -135,7 +135,7 @@ class TestCheckMigrationDivergence:
         """Result is a DivergenceCheckResult dataclass."""
         fake_repo = {"0001"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence({"0001"})
@@ -150,7 +150,7 @@ class TestCheckMigrationDivergence:
         """Multiple orphaned revisions are all reported."""
         fake_repo = {"0001"}
         with patch(
-            "modulo.db.migration_guard._load_repo_revisions",
+            "farna.db.migration_guard._load_repo_revisions",
             return_value=fake_repo,
         ):
             result = check_migration_divergence({"0001", "0098", "0099"})

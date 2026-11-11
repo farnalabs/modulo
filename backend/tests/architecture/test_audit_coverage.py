@@ -51,7 +51,7 @@ async def create_widget() -> dict[str, str]:
 _DEPENDENCIES_FORM = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
+from farna.core.audit_coverage import audited
 
 router = APIRouter()
 
@@ -64,7 +64,7 @@ async def create_widget() -> dict[str, str]:
 _DECORATOR_FORM = """\
 from fastapi import APIRouter
 
-from modulo.core.audit_coverage import audited
+from farna.core.audit_coverage import audited
 
 router = APIRouter()
 
@@ -90,7 +90,7 @@ async def list_widgets() -> dict[str, str]:
 _SYSTEM_DEPENDENCIES_FORM = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited_system
+from farna.core.audit_coverage import audited_system
 
 router = APIRouter()
 
@@ -104,7 +104,7 @@ async def create_widget() -> dict[str, str]:
 _SYSTEM_DECORATOR_FORM = """\
 from fastapi import APIRouter
 
-from modulo.core.audit_coverage import audited_system
+from farna.core.audit_coverage import audited_system
 
 router = APIRouter()
 
@@ -118,7 +118,7 @@ async def create_widget() -> dict[str, str]:
 _MULTILINE_DECORATOR = """\
 from fastapi import APIRouter, Depends
 
-from modulo.core.audit_coverage import audited
+from farna.core.audit_coverage import audited
 
 router = APIRouter()
 
@@ -135,7 +135,7 @@ async def create_widget() -> dict[str, str]:
 _SYSTEM_ACTOR_FORM = """\
 from fastapi import APIRouter
 
-from modulo.core.audit_coverage import audited_system
+from farna.core.audit_coverage import audited_system
 
 router = APIRouter()
 
@@ -161,7 +161,7 @@ async def delete_widget(widget_id: str) -> dict[str, str]:
 _MCP_ANNOTATED_TOOL = """\
 from mcp.server.fastmcp import FastMCP
 
-from modulo.api.mcp_audit import mcp_audited
+from farna.api.mcp_audit import mcp_audited
 
 mcp = FastMCP("Modulo")
 

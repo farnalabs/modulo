@@ -34,7 +34,7 @@
 #
 #   1. When a populated bundled data dir exists, the installer ENFORCES a
 #      pre-upgrade pg_dump via the OLD installation's bundled runtime
-#      (python -m modulo.launcher.upgrade): bundled pg_dump client, dump
+#      (python -m farna.launcher.upgrade): bundled pg_dump client, dump
 #      written to a versioned snapshot dir inside the data dir, verified
 #      non-empty. ANY dump failure aborts the whole installer — no binary
 #      swap happens without a verified snapshot.
@@ -490,14 +490,26 @@ refuse_when_locked() {
 run_pre_upgrade_dump() {
   local old_root="${INSTALL_ROOT}/current"
   local py="${old_root}/runtime/bin/python3"
-  local helper="${old_root}/backend/src/modulo/launcher/upgrade.py"
+  local helper module
   local rc snapshot_path
+  # Resolve BOTH bundle layouts: pre-rebrand installs ship the helper under
+  # backend/src/modulo, post-rebrand installs under backend/src/farna. Without
+  # the modulo fallback every upgrade FROM a pre-rebrand install dies with the
+  # misleading "predates the launcher upgrade helper" message.
+  if [[ -f "${old_root}/backend/src/farna/launcher/upgrade.py" ]]; then
+    helper="${old_root}/backend/src/farna/launcher/upgrade.py"
+    module="farna.launcher.upgrade"
+  elif [[ -f "${old_root}/backend/src/modulo/launcher/upgrade.py" ]]; then
+    helper="${old_root}/backend/src/modulo/launcher/upgrade.py"
+    module="modulo.launcher.upgrade"
+  else
+    die "cannot run the pre-upgrade pg_dump: the installed bundle predates the launcher upgrade helper (looked for backend/src/{farna,modulo}/launcher/upgrade.py)"
+  fi
   [[ -x "${py}" ]] || die "cannot run the pre-upgrade pg_dump: no bundled runtime at ${py} (no prior native install to upgrade — remove the populated data dir or ignore)"
-  [[ -f "${helper}" ]] || die "cannot run the pre-upgrade pg_dump: the installed bundle predates the launcher upgrade helper (${helper})"
   info "Pre-upgrade pg_dump (enforced by FAR-672) — the bundled stack must be running..."
   if snapshot_path="$(PYTHONPATH="${old_root}/backend/src${PYTHONPATH:+:${PYTHONPATH}}" \
       MODULO_BUNDLED_BIN_DIR="${old_root}/pg" \
-      "${py}" -m modulo.launcher.upgrade --data-dir "${DATA_DIR}")"; then
+      "${py}" -m "${module}" --data-dir "${DATA_DIR}")"; then
     :
   else
     rc=$?
@@ -625,7 +637,7 @@ tmp="$(mktemp -d)"
 
 # The embedded ed25519 trust store (SPKI DER, base64) - current + next.
 # The current production public key is provisioned; NEXT remains reserved for
-# rotation. The SAME keys must go into backend/src/modulo/launcher/manifest.py
+# rotation. The SAME keys must go into backend/src/farna/launcher/manifest.py
 # (_TRUST_ROWS) - a unit test asserts the two assemblies stay equal (no drift).
 # Rotation follows ADR 031 Decision 3.
 TRUST_KEY_CURRENT_B64="MCowBQYDK2VwAyEAc/fdFIP/8MDfRdcGrpznpoFRlCuOLovHFbXZvrcZtbA="
@@ -694,7 +706,7 @@ verify_shipped_manifest() {
   [[ -f "${manifest_file}" ]] || die "the signed release manifest is missing: ${manifest_file}"
   [[ -f "${signature_file}" ]] || die "the signature file is missing: ${signature_file}"
   [[ -n "${TRUST_KEY_CURRENT_B64}" ]] || [[ -n "${TRUST_KEY_NEXT_B64}" ]] || die \
-    "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/modulo/launcher/manifest.py PROVISIONING_NOTE)"
+    "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/farna/launcher/manifest.py PROVISIONING_NOTE)"
   local key_file sig_file openssl_log sig_hex sig_key_id candidate_keys key_b64 verified=0
   local openssl_output=""
   key_file="$(mktemp)"

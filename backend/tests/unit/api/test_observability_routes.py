@@ -14,9 +14,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.observability import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.observability import (
     _DEFAULT_OTEL_CONFIG,
     _build_degraded_response,
     _cached_config,
@@ -26,9 +26,9 @@ from modulo.api.routes.observability import (
     _invalidate_cache,
     _update_cache,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = str(uuid.uuid4())
@@ -106,7 +106,7 @@ def free_client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.observability.validate_outbound_url_async", new=AsyncMock()):
+    with patch("farna.api.routes.observability.validate_outbound_url_async", new=AsyncMock()):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -210,7 +210,7 @@ class TestConfigToResponse:
         assert resp.has_langsmith_api_key is False
 
     def test_sensitive_headers_are_masked(self) -> None:
-        from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+        from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         config = {
             "otlp_headers": {
@@ -248,7 +248,7 @@ class TestObservabilityGetEndpoint:
     def test_get_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability._fetch_and_cache",
+                "farna.api.routes.observability._fetch_and_cache",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
         ):
@@ -259,7 +259,7 @@ class TestObservabilityGetEndpoint:
 
     def test_get_returns_degraded_on_db_timeout(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
@@ -271,7 +271,7 @@ class TestObservabilityGetEndpoint:
 
     def test_get_returns_degraded_on_generic_error(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
         ):
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
@@ -282,7 +282,7 @@ class TestObservabilityGetEndpoint:
     def test_get_uses_stale_cache_on_timeout(self, free_client: TestClient) -> None:
         _update_cache(str(_ORG_UUID), {"otlp_endpoint": "http://cached:4318", "langsmith_enabled": True})
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
@@ -293,7 +293,7 @@ class TestObservabilityGetEndpoint:
     def test_get_uses_stale_cache_on_generic_error(self, free_client: TestClient) -> None:
         _update_cache(str(_ORG_UUID), {"otlp_endpoint": "http://cached:4318"})
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
         ):
             resp = free_client.get("/api/v1/settings/observability")
         assert resp.status_code == 200
@@ -310,7 +310,7 @@ class TestObservabilityPreviewEndpoint:
     def test_preview_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability._fetch_and_cache",
+                "farna.api.routes.observability._fetch_and_cache",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
         ):
@@ -321,7 +321,7 @@ class TestObservabilityPreviewEndpoint:
 
     def test_preview_returns_defaults_on_db_timeout(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.get("/api/v1/settings/observability/preview")
         assert resp.status_code == 200
@@ -335,7 +335,7 @@ class TestObservabilityPreviewEndpoint:
     def test_preview_uses_stale_cache_on_timeout(self, free_client: TestClient) -> None:
         _update_cache(str(_ORG_UUID), {"otlp_endpoint": "http://cached:4318"})
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.get("/api/v1/settings/observability/preview")
         assert resp.status_code == 200
@@ -344,7 +344,7 @@ class TestObservabilityPreviewEndpoint:
 
     def test_preview_returns_defaults_on_generic_error(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
+            patch("farna.api.routes.observability._fetch_and_cache", side_effect=RuntimeError("unexpected")),
         ):
             resp = free_client.get("/api/v1/settings/observability/preview")
         assert resp.status_code == 200
@@ -369,7 +369,7 @@ class TestObservabilityPutEndpoint:
     def test_put_returns_501_on_programming_error(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
         ):
@@ -383,7 +383,7 @@ class TestObservabilityPutEndpoint:
         not the generic 503 the ``except SQLAlchemyError`` arm still answers."""
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 side_effect=_lock_timeout_operational(),
             ),
         ):
@@ -394,7 +394,7 @@ class TestObservabilityPutEndpoint:
     def test_put_returns_503_on_sqlalchemy_error(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 side_effect=SQLAlchemyError("connection refused"),
             ),
         ):
@@ -405,7 +405,7 @@ class TestObservabilityPutEndpoint:
 
     def test_put_reraises_on_db_timeout(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability.update_otel_config", side_effect=TimeoutError("db timeout")),
+            patch("farna.api.routes.observability.update_otel_config", side_effect=TimeoutError("db timeout")),
         ):
             resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
         assert resp.status_code == 504
@@ -416,7 +416,7 @@ class TestObservabilityPutEndpoint:
 
     def test_put_reraises_on_generic_error(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.observability.update_otel_config", side_effect=RuntimeError("unexpected")),
+            patch("farna.api.routes.observability.update_otel_config", side_effect=RuntimeError("unexpected")),
         ):
             resp = free_client.put("/api/v1/settings/observability", json={"otlp_endpoint": "http://e:4318"})
         assert resp.status_code == 500
@@ -424,7 +424,7 @@ class TestObservabilityPutEndpoint:
     def test_put_success_returns_200(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 return_value={**dict(_DEFAULT_OTEL_CONFIG), "otlp_endpoint": "http://e:4318"},
             ),
         ):
@@ -436,7 +436,7 @@ class TestObservabilityPutEndpoint:
     def test_put_updates_langsmith_key(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 return_value={
                     **dict(_DEFAULT_OTEL_CONFIG),
                     "langsmith_enabled": True,
@@ -456,7 +456,7 @@ class TestObservabilityPutEndpoint:
     def test_put_clears_langsmith_key_with_empty_string(self, free_client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 return_value={**dict(_DEFAULT_OTEL_CONFIG), "langsmith_api_key_ciphertext": None},
             ),
         ):
@@ -496,7 +496,7 @@ class TestObservabilityTestEndpoint:
             )
 
         with (
-            patch("modulo.api.routes.observability.pinned_async_client", new=_fake_pinned),
+            patch("farna.api.routes.observability.pinned_async_client", new=_fake_pinned),
         ):
             resp = free_client.post(
                 "/api/v1/settings/observability/test",
@@ -584,7 +584,7 @@ class TestDegradedReadDoesNotHideSessionContractViolations:
 
         with (
             patch(
-                "modulo.api.routes.observability._fetch_and_cache",
+                "farna.api.routes.observability._fetch_and_cache",
                 side_effect=InvalidRequestError("session used outside a transaction"),
             ),
         ):
@@ -599,7 +599,7 @@ class TestDegradedReadDoesNotHideSessionContractViolations:
 
         with (
             patch(
-                "modulo.api.routes.observability._fetch_and_cache",
+                "farna.api.routes.observability._fetch_and_cache",
                 side_effect=InvalidRequestError("session used outside a transaction"),
             ),
         ):
@@ -615,7 +615,7 @@ class TestDegradedReadDoesNotHideSessionContractViolations:
 
         with (
             patch(
-                "modulo.api.routes.observability.update_otel_config",
+                "farna.api.routes.observability.update_otel_config",
                 side_effect=InvalidRequestError("session used outside a transaction"),
             ),
         ):

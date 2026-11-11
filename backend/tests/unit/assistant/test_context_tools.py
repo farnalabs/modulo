@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     SENSITIVE_CONFIG_KEYS,
     _ctx_org_id,
     _get_doc_index,
@@ -22,7 +22,7 @@ from modulo.api.mcp_server import (
     get_org_config,
     search_documentation,
 )
-from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
+from farna.core.documentation_indexer import DocEntry, DocumentationIndex
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -85,8 +85,8 @@ class TestSearchDocumentationTool:
     async def test_returns_no_results_message_when_no_match(self) -> None:
         index = DocumentationIndex(entries=[])
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._get_doc_index", return_value=index),
         ):
             result = await search_documentation("nonexistent-topic")
         assert result == {"results": "No documentation found for query.", "count": 0}
@@ -107,8 +107,8 @@ class TestSearchDocumentationTool:
             ]
         )
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._get_doc_index", return_value=index),
         ):
             result = await search_documentation("pipeline")
         assert result["count"] == 2
@@ -123,8 +123,8 @@ class TestSearchDocumentationTool:
             ]
         )
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._get_doc_index", return_value=index),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._get_doc_index", return_value=index),
         ):
             result = await search_documentation("overview", section="Pipelines")
         assert result["count"] == 1
@@ -132,14 +132,14 @@ class TestSearchDocumentationTool:
         assert "Schema Types" not in result["results"]
 
     async def test_returns_auth_error_when_unauthenticated(self) -> None:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=False):
             result = await search_documentation("pipeline")
         assert result["error"] == "auth_expired"
 
     async def test_returns_internal_error_on_failure(self) -> None:
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._get_doc_index", side_effect=RuntimeError("boom")),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._get_doc_index", side_effect=RuntimeError("boom")),
         ):
             result = await search_documentation("pipeline")
         assert result == {"error": "server_error", "detail": "Failed to search documentation"}
@@ -166,8 +166,8 @@ class TestGetIntegrationStatus:
         session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value.__aenter__.return_value = session
             result = await get_integration_status()
@@ -207,8 +207,8 @@ class TestGetIntegrationStatus:
         session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value.__aenter__.return_value = session
             result = await get_integration_status()
@@ -237,8 +237,8 @@ class TestGetIntegrationStatus:
         session.execute = AsyncMock(side_effect=[connector_result, backend_result, count_result])
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
         ):
             mock_session.return_value.__aenter__.return_value = session
             result = await get_integration_status()
@@ -247,7 +247,7 @@ class TestGetIntegrationStatus:
         assert "| Claude | anthropic | claude-sonnet-4 | no | active |" in result["results"]
 
     async def test_returns_auth_error_when_unauthenticated(self) -> None:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=False):
             result = await get_integration_status()
         assert result["error"] == "auth_expired"
 
@@ -259,7 +259,7 @@ class TestGetOrgConfig:
     def _set_org(self) -> Iterator[None]:
         # FAR-1942: get_org_config mirrors its REST twin's strict
         # is_system_admin gate; these tests exercise the body.
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         org_token = _ctx_org_id.set(ORG_ID)
         role_token = _ctx_role.set("admin")
@@ -281,10 +281,10 @@ class TestGetOrgConfig:
             self._config("feature_flags", {"assistant_enabled": True}),
         ]
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
             patch(
-                "modulo.db.crud.system_config.list_config",
+                "farna.db.crud.system_config.list_config",
                 new_callable=AsyncMock,
                 return_value=configs,
             ) as mock_list,
@@ -304,9 +304,9 @@ class TestGetOrgConfig:
             self._config("database_url", "postgres://..."),
         ]
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await get_org_config()
@@ -319,9 +319,9 @@ class TestGetOrgConfig:
     async def test_long_values_truncated(self) -> None:
         configs = [self._config("rate_limits", {"policy": "x" * 500})]
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await get_org_config()
@@ -333,9 +333,9 @@ class TestGetOrgConfig:
     async def test_dict_values_rendered_as_json(self) -> None:
         configs = [self._config("rate_limits", {"nested": {"key": "value"}})]
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=configs),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await get_org_config()
@@ -345,9 +345,9 @@ class TestGetOrgConfig:
 
     async def test_no_config_found_returns_count_zero(self) -> None:
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=[]),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.system_config.list_config", new_callable=AsyncMock, return_value=[]),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await get_org_config(section="plan")
@@ -356,13 +356,13 @@ class TestGetOrgConfig:
         assert "No configuration found" in result["results"]
 
     async def test_invalid_section_returns_error(self) -> None:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             result = await get_org_config(section="bogus")
         assert result["error"] == "invalid_section"
         assert "assistant" in result["detail"]
 
     async def test_returns_auth_error_when_unauthenticated(self) -> None:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=False):
             result = await get_org_config(section="assistant")
         assert result["error"] == "auth_expired"
 
@@ -393,10 +393,10 @@ class TestGetAvailableFeatures:
         plan_ctx = self._plan_ctx(flags, "community")
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock),
-            patch("modulo.core.feature_flags.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session") as mock_session,
+            patch("farna.db.crud.organisation.get_organisation", new_callable=AsyncMock),
+            patch("farna.core.feature_flags.resolve_plan_context", new_callable=AsyncMock, return_value=plan_ctx),
         ):
             mock_session.return_value.__aenter__.return_value = AsyncMock()
             result = await get_available_features()
@@ -409,7 +409,7 @@ class TestGetAvailableFeatures:
         assert "| custom_skills | team | no |" in result["results"]
 
     async def test_returns_auth_error_when_unauthenticated(self) -> None:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=False):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=False):
             result = await get_available_features()
         assert result["error"] == "auth_expired"
 

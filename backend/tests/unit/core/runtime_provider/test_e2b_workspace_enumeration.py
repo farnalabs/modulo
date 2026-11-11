@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.runtime_provider import ProviderCapabilityUnsupportedError, WorkspaceSpec
-from modulo.core.runtime_provider.e2b import (
+from farna.core.runtime_provider import ProviderCapabilityUnsupportedError, WorkspaceSpec
+from farna.core.runtime_provider.e2b import (
     _CREATED_AT_METADATA_KEY,
     _DEPLOYMENT_IDENTITY_ENV,
     _DEPLOYMENT_IDENTITY_METADATA_KEY,
@@ -327,7 +327,7 @@ async def test_list_tolerates_a_malformed_creation_marker(monkeypatch: pytest.Mo
 async def test_abc_default_on_a_non_overriding_provider_is_typed() -> None:
     """The refusal a tier without an identity surface (e.g. Local) surfaces
     is the typed capability error, never NotImplementedError."""
-    from modulo.core.runtime_provider.local import LocalRuntimeProvider
+    from farna.core.runtime_provider.local import LocalRuntimeProvider
 
     provider = LocalRuntimeProvider()
     with pytest.raises(ProviderCapabilityUnsupportedError, match="list_workspaces_by_identity"):

@@ -64,7 +64,7 @@ def connector_write(filename: str, content: str, request):
 
 @when(parsers.parse('the connector tries to read "{path}"'))
 def connector_read_path(path: str, request):
-    from modulo.connectors.filesystem import PathTraversalError
+    from farna.connectors.filesystem import PathTraversalError
 
     base = Path(getattr(request.node, "_connector_base", "/data"))
     try:
@@ -319,7 +319,7 @@ def milestone_created(request):
 
 @when(parsers.parse("I GET /api/v1/connectors/{connector_id}/health"))
 def get_connector_health(connector_id, request):
-    from modulo.connectors.base import HealthResult
+    from farna.connectors.base import HealthResult
 
     healthy = getattr(request.node, "_connector_healthy", True)
     health = HealthResult(
@@ -344,11 +344,11 @@ def get_connector_health(connector_id, request):
     if client is None:
         raise RuntimeError("No client set; authenticate before calling the health endpoint")
     with (
-        patch("modulo.api.routes.connectors.get_connector_instance", new_callable=AsyncMock, return_value=ci),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
-        patch("modulo.api.routes.connectors.create_secrets_backend"),
-        patch("modulo.api.routes.connectors.ConnectorHub", return_value=hub_mock),
+        patch("farna.api.routes.connectors.get_connector_instance", new_callable=AsyncMock, return_value=ci),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.create_secrets_backend"),
+        patch("farna.api.routes.connectors.ConnectorHub", return_value=hub_mock),
     ):
         resp = client.get(f"/api/v1/connectors/{connector_id}/health")
     request.node._resp = resp

@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-import modulo.compliance.pack as pack_module
-from modulo.compliance.artifacts import (
+import farna.compliance.pack as pack_module
+from farna.compliance.artifacts import (
     ARTIFACT_CUSTOMER_RECORDS,
     COVERAGE_CUSTOMER_RESPONSIBILITY,
     COVERAGE_GAP,
@@ -25,7 +25,7 @@ from modulo.compliance.artifacts import (
     PROVENANCE_CUSTOMER_SUPPLIED,
     PROVENANCE_OBSERVED,
 )
-from modulo.compliance.pack import (
+from farna.compliance.pack import (
     FRAMEWORK_IDS,
     PACK_VERSION_PATTERN,
     SOC2_REQUIRED_CLAUSES,

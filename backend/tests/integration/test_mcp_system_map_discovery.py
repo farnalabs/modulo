@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _ctx_auth_token,
     _ctx_auth_type,
     _ctx_key_grants,
@@ -25,7 +25,7 @@ from modulo.api.mcp_server import (
     _system_maps_http_error_payload,
     discover_system_map,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 from tests.integration.test_system_maps_ai_discovery import _insert_backend, _insert_eval
 
 pytestmark = pytest.mark.integration
@@ -54,11 +54,11 @@ async def mcp_discovery_context(
         modulo_dev_mode=True,
     )
     with (
-        patch("modulo.api.mcp_server.get_settings", return_value=settings),
-        patch("modulo.api.routes.system_maps.get_settings", return_value=settings),
-        patch("modulo.api.mcp_server._get_session_factory", return_value=factory),
-        patch("modulo.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
-        patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server.get_settings", return_value=settings),
+        patch("farna.api.routes.system_maps.get_settings", return_value=settings),
+        patch("farna.api.mcp_server._get_session_factory", return_value=factory),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
     ):
         yield
     for context_var in (

@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -185,28 +185,28 @@ class TestTeamSuccess:
     def test_list_teams_succeeds_when_enabled(self, licensed_client: TestClient) -> None:
         page_result = MagicMock(items=[_make_team()], total=1, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.teams.list_teams", return_value=page_result),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("farna.api.routes.teams.list_teams", return_value=page_result),
+            patch("farna.api.routes.teams.set_rls_org"),
+            patch("farna.api.routes.teams.set_rls_user_context"),
         ):
             resp = licensed_client.get("/api/v1/teams")
         assert resp.status_code == 200
 
     def test_create_team_succeeds_when_enabled(self, licensed_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.teams.create_team", return_value=_make_team(name="New Team")),
-            patch("modulo.api.routes.teams.get_team_by_name", return_value=None),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("farna.api.routes.teams.create_team", return_value=_make_team(name="New Team")),
+            patch("farna.api.routes.teams.get_team_by_name", return_value=None),
+            patch("farna.api.routes.teams.set_rls_org"),
+            patch("farna.api.routes.teams.set_rls_user_context"),
         ):
             resp = licensed_client.post("/api/v1/teams", json={"name": "New Team"})
         assert resp.status_code == 201
 
     def test_get_team_succeeds_when_enabled(self, licensed_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.teams.get_team", return_value=_make_team()),
-            patch("modulo.api.routes.teams.set_rls_org"),
-            patch("modulo.api.routes.teams.set_rls_user_context"),
+            patch("farna.api.routes.teams.get_team", return_value=_make_team()),
+            patch("farna.api.routes.teams.set_rls_org"),
+            patch("farna.api.routes.teams.set_rls_user_context"),
         ):
             resp = licensed_client.get(f"/api/v1/teams/{_TEAM_ID}")
         assert resp.status_code == 200
@@ -223,15 +223,15 @@ class TestTeamSuccess:
         membership.role = "viewer"
         membership.created_at = _NOW
         with (
-            patch("modulo.api.routes.teams.add_team_member", new=AsyncMock(return_value=membership)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
+            patch("farna.api.routes.teams.add_team_member", new=AsyncMock(return_value=membership)),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(return_value=target_account)),
             patch(
-                "modulo.api.routes.teams.get_membership_by_account_and_org",
+                "farna.api.routes.teams.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=target_membership),
             ),
-            patch("modulo.api.routes.teams.get_team", new=AsyncMock(return_value=_make_team())),
-            patch("modulo.api.routes.teams.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.teams.set_rls_user_context", new=AsyncMock()),
+            patch("farna.api.routes.teams.get_team", new=AsyncMock(return_value=_make_team())),
+            patch("farna.api.routes.teams.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.teams.set_rls_user_context", new=AsyncMock()),
         ):
             resp = licensed_client.post(
                 f"/api/v1/teams/{_TEAM_ID}/members",
@@ -245,9 +245,9 @@ class TestNonTeamEndpoints:
 
     def test_list_api_keys_returns_200_on_free(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.api_keys.set_rls_org"),
-            patch("modulo.api.routes.api_keys.set_rls_user_context"),
-            patch("modulo.api.routes.api_keys.list_api_keys", return_value=[]),
+            patch("farna.api.routes.api_keys.set_rls_org"),
+            patch("farna.api.routes.api_keys.set_rls_user_context"),
+            patch("farna.api.routes.api_keys.list_api_keys", return_value=[]),
         ):
             resp = free_client.get("/api/v1/api-keys")
         assert resp.status_code == 200
@@ -258,9 +258,9 @@ class TestNonTeamEndpoints:
 
     def test_revoke_api_key_returns_404_on_free(self, free_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.api_keys.set_rls_org"),
-            patch("modulo.api.routes.api_keys.set_rls_user_context"),
-            patch("modulo.api.routes.api_keys.revoke_api_key", return_value=False),
+            patch("farna.api.routes.api_keys.set_rls_org"),
+            patch("farna.api.routes.api_keys.set_rls_user_context"),
+            patch("farna.api.routes.api_keys.revoke_api_key", return_value=False),
         ):
             resp = free_client.delete(f"/api/v1/api-keys/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -290,11 +290,11 @@ class TestApiKeyTeamGating:
     def test_create_key_without_team_id_succeeds(self, free_client: TestClient) -> None:
         key = self._make_key_mock()
         with (
-            patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test")),
-            patch("modulo.api.routes.api_keys.set_rls_org"),
-            patch("modulo.api.routes.api_keys.set_rls_user_context"),
+            patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_test")),
+            patch("farna.api.routes.api_keys.set_rls_org"),
+            patch("farna.api.routes.api_keys.set_rls_user_context"),
             patch(
-                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                "farna.api.routes.api_keys.resolve_role_from_membership",
                 new=AsyncMock(return_value="admin"),
             ),
         ):

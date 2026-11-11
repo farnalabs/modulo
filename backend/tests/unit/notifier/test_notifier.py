@@ -17,16 +17,16 @@ from httpx import Response
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.notifier.conftest import begin_context, make_scalar_result, session_factory_for
 
-from modulo.core.notifier import (
+from farna.core.notifier import (
     MAX_ATTEMPTS,
     MAX_DEAD_LETTERS,
     RETRY_DELAYS,
     DispatchResult,
     Notifier,
 )
-from modulo.core.notifier.event_mapper import NotificationEventMapper
-from modulo.db.models.notification_delivery import NotificationDeliveryLog
-from modulo.db.models.notification_endpoint import NotificationEndpoint
+from farna.core.notifier.event_mapper import NotificationEventMapper
+from farna.db.models.notification_delivery import NotificationDeliveryLog
+from farna.db.models.notification_endpoint import NotificationEndpoint
 
 _KEY = Fernet.generate_key().decode()
 _ORG = uuid.uuid4()
@@ -176,7 +176,7 @@ async def test_get_subscribed_endpoints_sets_rls_org_context() -> None:
     deliver to nobody."""
     ep = _fake_endpoint()
 
-    with patch("modulo.core.notifier.set_rls_org", AsyncMock()) as mock_set_rls:
+    with patch("farna.core.notifier.set_rls_org", AsyncMock()) as mock_set_rls:
         found = await _get_endpoints_for_event([ep])
 
     assert len(found) == 1
@@ -232,7 +232,7 @@ async def test_has_subscribers_false_on_db_failure(notifier: Notifier, caplog: p
     marker) and logs, never raising into the deadline sweep."""
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(side_effect=RuntimeError("db down"))),
-        caplog.at_level(logging.ERROR, logger="modulo.core.notifier"),
+        caplog.at_level(logging.ERROR, logger="farna.core.notifier"),
     ):
         assert await notifier.has_subscribers(_ORG, "hitl_deadline_warning") is False
 
@@ -413,7 +413,7 @@ async def test_dispatch_masks_secrets_in_response_body(notifier: Notifier, caplo
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        caplog.at_level(logging.WARNING, logger="modulo.core.notifier"),
+        caplog.at_level(logging.WARNING, logger="farna.core.notifier"),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(401, text=secret_body))
@@ -452,7 +452,7 @@ async def test_dispatch_masks_secrets_in_request_error(notifier: Notifier, caplo
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        caplog.at_level(logging.WARNING, logger="modulo.core.notifier"),
+        caplog.at_level(logging.WARNING, logger="farna.core.notifier"),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(side_effect=error_with_token)
@@ -552,7 +552,7 @@ async def test_dispatch_429_honors_retry_after_before_dead_letter(notifier: Noti
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+        patch("farna.core.notifier.asyncio.sleep", _fake_sleep),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(429, headers={"Retry-After": "3"}))
@@ -574,7 +574,7 @@ async def test_dispatch_429_retry_after_capped_at_60(notifier: Notifier) -> None
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+        patch("farna.core.notifier.asyncio.sleep", _fake_sleep),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(429, headers={"Retry-After": "120"}))
@@ -595,7 +595,7 @@ async def test_dispatch_429_invalid_retry_after_uses_default_backoff(notifier: N
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+        patch("farna.core.notifier.asyncio.sleep", _fake_sleep),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(429, headers={"Retry-After": "soon"}))
@@ -615,7 +615,7 @@ async def test_dispatch_429_missing_retry_after_uses_default_backoff(notifier: N
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
-        patch("modulo.core.notifier.asyncio.sleep", _fake_sleep),
+        patch("farna.core.notifier.asyncio.sleep", _fake_sleep),
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(429))
@@ -665,7 +665,7 @@ async def test_dispatch_retain_payload_encrypt_failure_logs_and_continues(notifi
         patch.object(notifier, "_record_delivery", _record),
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
         patch.object(notifier, "_reset_dead_letter", AsyncMock()),
-        patch("modulo.core.notifier._log.exception") as mock_log,
+        patch("farna.core.notifier._log.exception") as mock_log,
     ):
         async with respx.mock:
             respx.post(ep.url).mock(Response(200))
@@ -739,7 +739,7 @@ async def test_increment_dead_letter_survives_db_error(notifier: Notifier) -> No
 
     with (
         patch.object(notifier, "_session_factory", factory),
-        patch("modulo.core.notifier._log.exception") as mock_log,
+        patch("farna.core.notifier._log.exception") as mock_log,
     ):
         await notifier._increment_dead_letter(ep)
 
@@ -795,7 +795,7 @@ async def test_reset_dead_letter_survives_db_error(notifier: Notifier) -> None:
 
     with (
         patch.object(notifier, "_session_factory", factory),
-        patch("modulo.core.notifier._log.exception") as mock_log,
+        patch("farna.core.notifier._log.exception") as mock_log,
     ):
         await notifier._reset_dead_letter(ep)
 
@@ -860,7 +860,7 @@ async def test_record_delivery_survives_db_error(notifier: Notifier) -> None:
 
     with (
         patch.object(notifier, "_session_factory", factory),
-        patch("modulo.core.notifier._log.exception") as mock_log,
+        patch("farna.core.notifier._log.exception") as mock_log,
     ):
         await notifier._record_delivery(ep, "hitl_awaiting", _RUN, "delivered", 1, 200, None, None)
 
@@ -902,7 +902,7 @@ async def test_dispatch_event_creates_in_app_notification_with_zero_webhook_endp
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
         patch(
-            "modulo.core.notifier.event_mapper.NotificationEventMapper",
+            "farna.core.notifier.event_mapper.NotificationEventMapper",
             return_value=mapper_instance,
         ),
         patch.object(notifier, "_session_factory") as factory,
@@ -950,7 +950,7 @@ async def test_dispatch_event_in_app_failure_does_not_abort_webhooks(notifier: N
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])),
         patch.object(notifier, "_dispatch_endpoint_pinned") as mock_dispatch,
         patch.object(NotificationEventMapper, "create_from_event", AsyncMock(side_effect=RuntimeError("db down"))),
-        patch("modulo.core.notifier._log.exception") as mock_log,
+        patch("farna.core.notifier._log.exception") as mock_log,
     ):
         mock_dispatch.return_value = DispatchResult(
             endpoint_id=ep.id,
@@ -976,10 +976,10 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
         patch.object(notifier, "_session_factory") as factory,
         patch(
-            "modulo.core.notifier.event_mapper.NotificationEventMapper",
+            "farna.core.notifier.event_mapper.NotificationEventMapper",
             return_value=mapper_instance,
         ),
-        patch("modulo.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
+        patch("farna.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
     ):
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         session.begin = MagicMock(return_value=begin_context())
@@ -1000,7 +1000,7 @@ async def test_dispatch_pins_client_to_validated_endpoint(notifier: Notifier) ->
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get,
         patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
-        patch("modulo.core.notifier.pinned_async_client") as mock_pinned,
+        patch("farna.core.notifier.pinned_async_client") as mock_pinned,
     ):
         mock_dispatch.return_value = DispatchResult(
             endpoint_id=ep.id,
@@ -1039,7 +1039,7 @@ async def test_dispatch_rejects_ssrf_rebind_to_metadata(notifier: Notifier) -> N
         patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
         patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
         patch.object(notifier, "_increment_dead_letter", AsyncMock()) as mock_dead,
-        patch("modulo.core.notifier.pinned_async_client", _fake_pinned),
+        patch("farna.core.notifier.pinned_async_client", _fake_pinned),
     ):
         results = await notifier.dispatch_event(_ORG, "hitl_awaiting", {"run_id": str(_RUN)})
 
@@ -1085,7 +1085,7 @@ async def test_dispatch_event_retains_payload_end_to_end(notifier: Notifier) -> 
         patch.object(notifier, "_increment_dead_letter", AsyncMock()),
         patch.object(notifier, "_reset_dead_letter", AsyncMock()),
         patch(
-            "modulo.core.notifier.event_mapper.NotificationEventMapper",
+            "farna.core.notifier.event_mapper.NotificationEventMapper",
             return_value=mapper_instance,
         ),
     ):

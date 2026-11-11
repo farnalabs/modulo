@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.main import app
-from modulo.api.routes.health import (
+from farna.api.main import app
+from farna.api.routes.health import (
     _LOOP_LAG_DEGRADED_MS,
     CheckResult,
     DbHygieneReading,
@@ -33,10 +33,10 @@ from modulo.api.routes.health import (
     _per_check_timeout,
     evaluate_readiness,
 )
-from modulo.core.health_alerts import SEVERE_EVENT_LOOP_STALL_MS
-from modulo.db.migration_guard import DivergenceCheckResult
-from modulo.settings import Settings, get_settings
-from modulo.version import get_version
+from farna.core.health_alerts import SEVERE_EVENT_LOOP_STALL_MS
+from farna.db.migration_guard import DivergenceCheckResult
+from farna.settings import Settings, get_settings
+from farna.version import get_version
 
 
 def _make_settings() -> Settings:
@@ -62,7 +62,7 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
     """FAR-1439: ``_check_migrations`` memoizes the parsed alembic heads in a
     process-wide cache; reset it around every test so one test's canned (or
     real) heads can never leak into another test's assertions."""
-    from modulo.api.routes import health as health_mod
+    from farna.api.routes import health as health_mod
 
     health_mod._REPO_HEADS_CACHE = None
     health_mod._DEPLOY_RUN_URL_CACHE = None
@@ -152,17 +152,17 @@ class TestReadiness:
 
     def test_healthz_ready_degraded_overall(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
             patch(
-                "modulo.api.routes.health._check_redis", AsyncMock(return_value=_degraded_check("redis not configured"))
+                "farna.api.routes.health._check_redis", AsyncMock(return_value=_degraded_check("redis not configured"))
             ),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -176,15 +176,15 @@ class TestReadiness:
 
     def test_healthz_ready_unavailable_overall(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_unavailable_check("db down"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_unavailable_check("db down"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -196,15 +196,15 @@ class TestReadiness:
 
     def test_healthz_ready_all_ok(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -217,15 +217,15 @@ class TestReadiness:
 
     def test_healthz_ready_check_keys_present(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -242,15 +242,15 @@ class TestReadiness:
         stale past the 300s tier — wedged system worker) 503s readiness even
         when every other check is ok."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_unavailable_check("dispatcher_reconcile stale 360s")),
             ),
         ):
@@ -267,15 +267,15 @@ class TestReadiness:
         advisory. A SINGLE missed tick never reaches this tier (see
         ``tests/unit/api/routes/test_health.py``)."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_degraded_check("dispatcher_reconcile stale 120s")),
             ),
         ):
@@ -290,17 +290,17 @@ class TestHttpTimeout:
     def test_healthz_ready_with_timeout_check(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.health._check_database",
+                "farna.api.routes.health._check_database",
                 AsyncMock(return_value=_unavailable_check("timeout after 5s")),
             ),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -357,8 +357,8 @@ class TestPerCheckTimeouts:
     async def test_database_check_times_out(self) -> None:
         settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 0.2})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             result = await _check_database()
         assert result.status == "unavailable"
@@ -375,8 +375,8 @@ class TestPerCheckTimeouts:
         redis_client = AsyncMock()
         redis_client.ping.side_effect = _hang
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=redis_client),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=redis_client),
         ):
             result = await _check_redis()
         assert result.status == "degraded"
@@ -388,8 +388,8 @@ class TestPerCheckTimeouts:
         settings = _make_settings().model_copy(update={"modulo_health_checkpointer_timeout_seconds": 0.2})
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             result = await _check_checkpointer()
         assert result.status == "degraded"
@@ -411,13 +411,13 @@ class TestPerCheckTimeouts:
         whenever the pool can run the schema query.
         """
         settings = _make_settings()
-        with patch("modulo.api.routes.health.get_settings", return_value=settings):
+        with patch("farna.api.routes.health.get_settings", return_value=settings):
             engine = AsyncMock()
             conn = AsyncMock()
             conn.__aenter__ = AsyncMock(return_value=conn)
             conn.__aexit__ = AsyncMock(return_value=None)
             engine.connect = lambda: conn
-            with patch("modulo.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory:
+            with patch("farna.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory:
                 result = await _check_checkpointer()
 
         engine_factory.assert_called_once_with(settings)
@@ -427,12 +427,12 @@ class TestPerCheckTimeouts:
     async def test_migrations_check_times_out(self) -> None:
         settings = _make_settings().model_copy(update={"modulo_health_migrations_timeout_seconds": 0.2})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             # ScriptDirectory patched so the probe does not spawn a real
             # (lingering) migration-tree parse in a worker thread — this
             # test is about the DB-hang timeout, not the parse (FAR-1439).
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             script_cls.from_config.return_value.get_heads.return_value = {"0001"}
             result = await _check_migrations()
@@ -444,8 +444,8 @@ class TestPerCheckTimeouts:
     async def test_database_check_ok_reports_latency(self) -> None:
         settings = _make_settings().model_copy(update={"modulo_health_timeout_seconds": 1.0})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine") as engine_factory,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine") as engine_factory,
         ):
             engine = AsyncMock()
             conn = AsyncMock()
@@ -509,10 +509,10 @@ class TestCheckMigrationsDivergence:
             detail="clean",
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_FakeMigrationEngine(["0001"])),
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=clean),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_FakeMigrationEngine(["0001"])),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=clean),
         ):
             script_cls.from_config.return_value.get_heads.return_value = {"0001"}
             result = await _check_migrations()
@@ -529,13 +529,13 @@ class TestCheckMigrationsDivergence:
             detail="diverged",
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_FakeMigrationEngine(["0001", "0099"]),
             ),
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=diverged),
         ):
             script_cls.from_config.return_value.get_heads.return_value = {"0001", "0100"}
             result = await _check_migrations()
@@ -548,11 +548,11 @@ class TestCheckMigrationsDivergence:
     async def test_divergence_check_error_is_fail_open(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_FakeMigrationEngine(["0001"])),
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_FakeMigrationEngine(["0001"])),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
             patch(
-                "modulo.api.routes.health.check_migration_divergence",
+                "farna.api.routes.health.check_migration_divergence",
                 side_effect=RuntimeError("divergence probe exploded"),
             ),
         ):
@@ -615,7 +615,7 @@ class TestFetchLatestDeployRunUrl:
             _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/42"}]})
         )
         factory = AsyncMock(return_value=client)
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             url = await _fetch_latest_deploy_run_url(settings)
 
         assert url == "https://github.com/o/r/actions/runs/42"
@@ -634,8 +634,8 @@ class TestFetchLatestDeployRunUrl:
             _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/1"}]})
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.pinned_async_client", AsyncMock(return_value=client)),
         ):
             url = await _fetch_latest_deploy_run_url()
 
@@ -647,7 +647,7 @@ class TestFetchLatestDeployRunUrl:
             _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/7"}]})
         )
         factory = AsyncMock(return_value=client)
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             first = await _fetch_latest_deploy_run_url(settings)
             second = await _fetch_latest_deploy_run_url(settings)
 
@@ -656,7 +656,7 @@ class TestFetchLatestDeployRunUrl:
         factory.assert_awaited_once()
 
     async def test_expired_cache_refetches(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.api.routes import health as health_mod
+        from farna.api.routes import health as health_mod
 
         settings = self._settings(monkeypatch)
         health_mod._DEPLOY_RUN_URL_CACHE = ("https://stale", time.time() - 301)
@@ -664,7 +664,7 @@ class TestFetchLatestDeployRunUrl:
             _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/9"}]})
         )
         factory = AsyncMock(return_value=client)
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             url = await _fetch_latest_deploy_run_url(settings)
 
         assert url == "https://github.com/o/r/actions/runs/9"
@@ -674,7 +674,7 @@ class TestFetchLatestDeployRunUrl:
         settings = self._settings(monkeypatch)
         client = _FakeGitHubClient(_FakeGitHubResponse(raise_exc=RuntimeError("502 Bad Gateway")))
         factory = AsyncMock(return_value=client)
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             first = await _fetch_latest_deploy_run_url(settings)
             second = await _fetch_latest_deploy_run_url(settings)
 
@@ -686,26 +686,26 @@ class TestFetchLatestDeployRunUrl:
     async def test_empty_runs_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
         client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": []}))
-        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+        with patch("farna.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
             assert await _fetch_latest_deploy_run_url(settings) is None
 
     async def test_non_string_html_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
         client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": 123}]}))
-        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+        with patch("farna.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
             assert await _fetch_latest_deploy_run_url(settings) is None
 
     async def test_empty_html_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
         client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": ""}]}))
-        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+        with patch("farna.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
             assert await _fetch_latest_deploy_run_url(settings) is None
 
     async def test_no_token_skips_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_REVIEWBOT_PAT", raising=False)
         factory = AsyncMock()
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             assert await _fetch_latest_deploy_run_url(_make_settings()) is None
         factory.assert_not_awaited()
 
@@ -713,14 +713,14 @@ class TestFetchLatestDeployRunUrl:
         monkeypatch.setenv("GITHUB_TOKEN", "test-token")
         factory = AsyncMock()
         settings = _make_settings().model_copy(update={"modulo_deploy_run_repo": "  "})
-        with patch("modulo.api.routes.health.pinned_async_client", factory):
+        with patch("farna.api.routes.health.pinned_async_client", factory):
             assert await _fetch_latest_deploy_run_url(settings) is None
         factory.assert_not_awaited()
 
     async def test_client_construction_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
         with patch(
-            "modulo.api.routes.health.pinned_async_client",
+            "farna.api.routes.health.pinned_async_client",
             AsyncMock(side_effect=RuntimeError("pin failed")),
         ):
             assert await _fetch_latest_deploy_run_url(settings) is None
@@ -735,15 +735,15 @@ class TestFetchLatestDeployRunUrl:
             detail="diverged",
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_FakeMigrationEngine(["0001", "0099"]),
             ),
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=diverged),
             patch(
-                "modulo.api.routes.health._fetch_latest_deploy_run_url",
+                "farna.api.routes.health._fetch_latest_deploy_run_url",
                 AsyncMock(return_value="https://github.com/o/r/actions/runs/77"),
             ),
         ):
@@ -763,14 +763,14 @@ class TestFetchLatestDeployRunUrl:
             detail="diverged",
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_FakeMigrationEngine(["0001", "0099"]),
             ),
-            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
-            patch("modulo.api.routes.health._fetch_latest_deploy_run_url", AsyncMock(return_value=None)),
+            patch("farna.api.routes.health.ScriptDirectory") as script_cls,
+            patch("farna.api.routes.health.check_migration_divergence", return_value=diverged),
+            patch("farna.api.routes.health._fetch_latest_deploy_run_url", AsyncMock(return_value=None)),
         ):
             script_cls.from_config.return_value.get_heads.return_value = {"0001"}
             result = await _check_migrations()
@@ -832,7 +832,7 @@ def reset_stale_probes() -> Generator[None, None, None]:
     that DO want the boot grace re-patch ``_START_TIME`` locally (inner patch
     wins while active).
     """
-    import modulo.api.routes.health as health_mod
+    import farna.api.routes.health as health_mod
 
     health_mod._consecutive_stale_probes = 0
     health_mod._consecutive_cron_stale_probes = 0
@@ -851,9 +851,9 @@ class TestLiveWorkerHostnamesMsScores:
         settings = _make_settings()
         fake = _FakeStatsRedis(stats, blobs)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=now_ms / 1000),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=now_ms / 1000),
         ):
             return await _live_worker_hostnames("runs")
 
@@ -898,9 +898,9 @@ class TestCheckSaqWorkersPerQueue:
     ) -> CheckResult:
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames") as live,
         ):
 
             async def _live_side_effect(qname: str) -> set[str]:
@@ -913,9 +913,9 @@ class TestCheckSaqWorkersPerQueue:
         """One probe where EVERY queue read fails (undeterminable, ADR 043)."""
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames", side_effect=RuntimeError("redis down")),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames", side_effect=RuntimeError("redis down")),
         ):
             return await _check_saq_workers()
 
@@ -969,9 +969,9 @@ class TestCheckSaqWorkersPerQueue:
         together — the read error must not reset or isolate the tier."""
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames", side_effect=RuntimeError("redis down")),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames", side_effect=RuntimeError("redis down")),
         ):
             mixed_error = await _check_saq_workers()
         assert mixed_error.status == "degraded"
@@ -995,9 +995,9 @@ class TestCheckSaqWorkersPerQueue:
 
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames", side_effect=_mixed),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames", side_effect=_mixed),
         ):
             result = await _check_saq_workers()
         assert result.status == "degraded"
@@ -1008,7 +1008,7 @@ class TestCheckSaqWorkersPerQueue:
         """Both fleet gates get boot grace (ADR 043): inside the 120s window a
         dead deployment reports ok AND the probe counter does not advance —
         the first post-grace probe is 1/4, not 5/4."""
-        import modulo.api.routes.health as health_mod
+        import farna.api.routes.health as health_mod
 
         with patch.object(health_mod, "_START_TIME", datetime.now(UTC)):
             result = await self._run({"runs": set(), "system": set()})
@@ -1041,9 +1041,9 @@ class TestCheckSaqWorkersPerQueue:
         shared counter, and names the ``<queue-config>`` sentinel."""
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health._configured_queues",
+                "farna.api.routes.health._configured_queues",
                 side_effect=RuntimeError("queue config exploded"),
             ),
         ):
@@ -1056,14 +1056,14 @@ class TestCheckSaqWorkersPerQueue:
         """Cancellation is never swallowed (ADR 043): an in-flight queue read
         cancelled during shutdown must propagate, NOT be counted as a failed
         probe that would gate readiness."""
-        import modulo.api.routes.health as health_mod
+        import farna.api.routes.health as health_mod
 
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs"])),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs"])),
             patch(
-                "modulo.api.routes.health._live_worker_hostnames",
+                "farna.api.routes.health._live_worker_hostnames",
                 side_effect=asyncio.CancelledError(),
             ),
             pytest.raises(asyncio.CancelledError),
@@ -1087,10 +1087,10 @@ class TestCheckSaqWorkersEndToEnd:
         settings = _make_settings().model_copy(update={"saq_hard_gate": True})
         fake = _PerQueueFakeStatsRedis(stats, blobs)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=self.NOW_MS / 1000),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=self.NOW_MS / 1000),
         ):
             return await _check_saq_workers()
 
@@ -1161,9 +1161,9 @@ class TestCheckFleetSaqWorkers:
     async def _run(self, live_by_queue: dict[str, set[str]], *, saq_hard_gate: bool = True) -> CheckResult:
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames") as live,
         ):
 
             async def _live_side_effect(qname: str) -> set[str]:
@@ -1205,10 +1205,10 @@ class TestCheckFleetSaqWorkers:
         staying open forever."""
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
             patch(
-                "modulo.api.routes.health._live_worker_hostnames",
+                "farna.api.routes.health._live_worker_hostnames",
                 side_effect=RuntimeError("redis down"),
             ),
         ):
@@ -1232,9 +1232,9 @@ class TestCheckSaqWorkersProcessGroup:
     ) -> CheckResult:
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames") as live,
             patch.dict("os.environ", env, clear=False),
         ):
 
@@ -1267,9 +1267,9 @@ class TestCheckSaqWorkersProcessGroup:
     async def test_fleet_outage_unavailable_on_any_process_group(self, reset_stale_probes: None) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
-            patch("modulo.api.routes.health._live_worker_hostnames", return_value=set()),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health._configured_queues", MagicMock(return_value=["runs", "system"])),
+            patch("farna.api.routes.health._live_worker_hostnames", return_value=set()),
             patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
         ):
             statuses = [(await _check_saq_workers()).status for _ in range(4)]
@@ -1320,9 +1320,9 @@ class TestCheckFleetSystemCrons:
         settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
         fake = _FakeHeartbeatRedis(heartbeats)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=self.NOW if now is None else now),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=self.NOW if now is None else now),
         ):
             return await _check_fleet_system_crons()
 
@@ -1346,7 +1346,7 @@ class TestCheckFleetSystemCrons:
         """Both fleet gates get boot grace (ADR 043): right after process
         start an absent fleet heartbeat reports ok, and the counter does not
         advance."""
-        import modulo.api.routes.health as health_mod
+        import farna.api.routes.health as health_mod
 
         with patch.object(health_mod, "_START_TIME", datetime.now(UTC)):
             result = await self._run({})
@@ -1375,8 +1375,8 @@ class TestCheckFleetSystemCrons:
                 return None
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=_BrokenRedis()),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=_BrokenRedis()),
         ):
             first = await _check_fleet_system_crons()
             statuses = [first.status]
@@ -1407,9 +1407,9 @@ class TestCheckSystemCronsProcessGroup:
         fake = _FakeHeartbeatRedis(heartbeats)
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=self.NOW),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=self.NOW),
             patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
         ):
             result = await _check_system_crons()
@@ -1423,9 +1423,9 @@ class TestCheckSystemCronsProcessGroup:
         fake = _FakeHeartbeatRedis(heartbeats)
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=self.NOW),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=self.NOW),
             patch.dict("os.environ", {"FLY_MACHINE_ID": "machine-a", "FLY_PROCESS_GROUP": "worker"}, clear=False),
         ):
             result = await _check_system_crons()
@@ -1435,9 +1435,9 @@ class TestCheckSystemCronsProcessGroup:
         fake = _FakeHeartbeatRedis({})
         settings = _make_settings()
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
-            patch("modulo.api.routes.health.time.time", return_value=self.NOW),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("farna.api.routes.health.time.time", return_value=self.NOW),
             patch.dict("os.environ", {"FLY_MACHINE_ID": "machine-a", "FLY_PROCESS_GROUP": "worker"}, clear=False),
         ):
             statuses = [(await _check_system_crons()).status for _ in range(4)]
@@ -1465,7 +1465,7 @@ class TestMigrationsDivergence:
     """
 
     async def test_divergence_surfaces_degraded_detail(self) -> None:
-        from modulo.db.migration_guard import DivergenceCheckResult
+        from farna.db.migration_guard import DivergenceCheckResult
 
         settings = _make_settings()
         divergent = DivergenceCheckResult(
@@ -1478,13 +1478,13 @@ class TestMigrationsDivergence:
         script = MagicMock()
         script.get_heads.return_value = ["0001"]
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_fake_migrations_engine(["0001", "0000"]),
             ),
-            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=divergent),
+            patch("farna.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("farna.api.routes.health.check_migration_divergence", return_value=divergent),
         ):
             result = await _check_migrations()
         assert result.status == "degraded"
@@ -1496,14 +1496,14 @@ class TestMigrationsDivergence:
         script = MagicMock()
         script.get_heads.return_value = ["0001"]
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_fake_migrations_engine(["0001"]),
             ),
-            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
-            patch("modulo.api.routes.health.check_migration_divergence", side_effect=RuntimeError("boom")),
-            patch("modulo.api.routes.health._log") as log,
+            patch("farna.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("farna.api.routes.health.check_migration_divergence", side_effect=RuntimeError("boom")),
+            patch("farna.api.routes.health._log") as log,
         ):
             result = await _check_migrations()
         # FAR-925: a crashed guard returns degraded, not ok — the check
@@ -1539,14 +1539,14 @@ class TestEventLoopStallGuard:
         script = MagicMock()
         script.get_heads.side_effect = _recorded_get_heads
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.ScriptDirectory.from_config", return_value=script),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_fake_migrations_engine(["0001"]),
             ),
             patch(
-                "modulo.api.routes.health.check_migration_divergence",
+                "farna.api.routes.health.check_migration_divergence",
                 return_value=DivergenceCheckResult(
                     diverged=False,
                     db_revisions={"0001"},
@@ -1576,13 +1576,13 @@ class TestEventLoopStallGuard:
             detail="clean",
         )
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.ScriptDirectory.from_config", return_value=script),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_fake_migrations_engine(["0001"]),
             ),
-            patch("modulo.api.routes.health.check_migration_divergence", return_value=clean),
+            patch("farna.api.routes.health.check_migration_divergence", return_value=clean),
         ):
             first = await _check_migrations()
             second = await _check_migrations()
@@ -1595,19 +1595,19 @@ class TestEventLoopStallGuard:
     def test_readiness_reports_advisory_event_loop_lag_check_when_healthy(self, client: TestClient) -> None:
         """A stall-free probe surfaces an ok ``event_loop_lag`` check."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
         ):
@@ -1624,19 +1624,19 @@ class TestEventLoopStallGuard:
         failure mode — must surface on the advisory ``event_loop_lag`` check
         and must NOT gate readiness."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
         ):
@@ -1657,19 +1657,19 @@ class TestEventLoopStallGuard:
         severity gate's trigger, so it has to survive the payload — while the
         endpoint stays HTTP 200 (advisory; still never gates readiness)."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", new=_long_stalling_redis_check),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", new=_long_stalling_redis_check),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
         ):
@@ -1689,22 +1689,22 @@ class TestEventLoopStallGuard:
         WINDOW of the worst oversleep (so it can read the stack samples that
         cover exactly the freeze), and a stall-free probe never consults it."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
-            patch("modulo.api.routes.health.report_event_loop_stall_attribution") as report,
+            patch("farna.api.routes.health.report_event_loop_stall_attribution") as report,
         ):
             healthy = client.get("/healthz/ready")
             report.assert_not_called()
@@ -1712,22 +1712,22 @@ class TestEventLoopStallGuard:
         assert healthy.status_code == 200
 
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
-            patch("modulo.api.routes.health.report_event_loop_stall_attribution") as report,
+            patch("farna.api.routes.health.report_event_loop_stall_attribution") as report,
         ):
             stalled = client.get("/healthz/ready")
 
@@ -1767,28 +1767,28 @@ class TestEventLoopStallGuard:
         """
         if isinstance(report_result, Exception):
             report_patch = patch(
-                "modulo.api.routes.health.report_event_loop_stall_attribution",
+                "farna.api.routes.health.report_event_loop_stall_attribution",
                 side_effect=report_result,
             )
         else:
             report_patch = patch(
-                "modulo.api.routes.health.report_event_loop_stall_attribution",
+                "farna.api.routes.health.report_event_loop_stall_attribution",
                 return_value=report_result,
             )
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", new=_stalling_redis_check),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", new=_stalling_redis_check),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health._check_decision_record_reconcile",
+                "farna.api.routes.health._check_decision_record_reconcile",
                 AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
             report_patch,
@@ -1825,11 +1825,11 @@ class TestEventLoopStallGuard:
         yields an empty head set is retried on the next probe rather than
         pinned in the process-wide cache for the process's lifetime.
         """
-        from modulo.api.routes import health as health_mod
+        from farna.api.routes import health as health_mod
 
         script = MagicMock()
         script.get_heads.return_value = set()
-        with patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script):
+        with patch("farna.api.routes.health.ScriptDirectory.from_config", return_value=script):
             first = health_mod._load_repo_heads(_make_settings())
             second = health_mod._load_repo_heads(_make_settings())
         assert first == set()
@@ -2099,8 +2099,8 @@ class TestDbHygieneCheck:
         settings = _make_settings().model_copy(update=settings_updates)
         engine = _FakeHygieneEngine(row)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine),
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=engine),
         ):
             return await _check_db_hygiene(), engine
 
@@ -2140,8 +2140,8 @@ class TestDbHygieneCheck:
         settings = _make_settings()
         engine = _FakeHygieneEngine(_HYGIENE_HEALTHY_ROW)
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=settings),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory,
+            patch("farna.api.routes.health.get_settings", return_value=settings),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=engine) as engine_factory,
         ):
             result = await _check_db_hygiene()
         engine_factory.assert_called_once_with(settings)
@@ -2151,10 +2151,10 @@ class TestDbHygieneCheck:
         settings_updates = {"modulo_health_db_hygiene_timeout_seconds": 0.2}
         with (
             patch(
-                "modulo.api.routes.health.get_settings",
+                "farna.api.routes.health.get_settings",
                 return_value=_make_settings().model_copy(update=settings_updates),
             ),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             result = await _check_db_hygiene()
         assert result.status == "degraded"
@@ -2171,8 +2171,8 @@ class TestDbHygieneCheck:
 
     async def test_probe_failure_reports_degraded_never_unavailable(self) -> None:
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
+            patch("farna.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
         ):
             result = await _check_db_hygiene()
         assert result.status == "degraded"
@@ -2262,18 +2262,18 @@ class TestDbHygieneAggregation:
 
     def test_degraded_hygiene_keeps_http_200_and_overall_degraded(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_db_hygiene",
+                "farna.api.routes.health._check_db_hygiene",
                 AsyncMock(return_value=_degraded_check('DEAD-TUPLE BLOAT: worst table "runs"')),
             ),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -2288,15 +2288,15 @@ class TestDbHygieneAggregation:
 
     def test_healthy_hygiene_keeps_overall_ok(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -2310,18 +2310,18 @@ class TestDbHygieneAggregation:
         """Even the worst hygiene outcome leaves the 503 to the real gates:
         with hygiene degraded AND every other gate ok, the endpoint is 200."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch(
-                "modulo.api.routes.health._check_db_hygiene",
+                "farna.api.routes.health._check_db_hygiene",
                 AsyncMock(return_value=CheckResult(status="degraded", detail="DEAD-TUPLE BLOAT: runs")),
             ),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
         ):
@@ -2354,19 +2354,19 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
         readiness email), while the body still shows db_hygiene as non-ok and
         names the real condition — hygiene was not measured."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             # The REAL _check_db_hygiene runs here, against an engine whose
             # connect() never returns — the production event-loop-stall shape.
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             resp = client.get("/healthz/ready")
         # The gate that fired the false emails: aggregate must stay ok, and
@@ -2388,18 +2388,18 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
         aggregate exactly as before FAR-1510 — the fix excludes only a probe
         that never produced a reading."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
             patch(
-                "modulo.api.routes.health.get_or_create_engine",
+                "farna.api.routes.health.get_or_create_engine",
                 return_value=_FakeHygieneEngine(_HYGIENE_INCIDENT_ROW),
             ),
         ):
@@ -2419,17 +2419,17 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
         """The shared implementation (also what the health_readiness_alert
         cron emails from) must not degrade on a db_hygiene timeout alone."""
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_HangingEngine()),
         ):
             result = await evaluate_readiness()
         assert result.status == "ok"
@@ -2453,17 +2453,17 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
         """
         # (a) the probe raises
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_ExplodingHygieneEngine()),
         ):
             raised = await evaluate_readiness()
         assert raised.status == "ok"
@@ -2475,17 +2475,17 @@ class TestDbHygieneProbeDidNotCompleteIsAdvisory:
 
         # (b) the query returns no row — same except branch, same verdict
         with (
-            patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
-            patch("modulo.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
-            patch("modulo.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
-            patch("modulo.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
-            patch("modulo.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
+            patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),
+            patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
+            patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
+            patch("farna.api.routes.health._check_saq_workers", AsyncMock(return_value=_ok_check("saq_workers"))),
+            patch("farna.api.routes.health._check_system_crons", AsyncMock(return_value=_ok_check("system_crons"))),
             patch(
-                "modulo.api.routes.health._check_dispatcher_reconcile",
+                "farna.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=_FakeHygieneEngine(None)),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=_FakeHygieneEngine(None)),
         ):
             empty = await evaluate_readiness()
         assert empty.status == "ok"

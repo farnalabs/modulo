@@ -51,8 +51,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
-from modulo.core.seed_data.catalog import FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
+from farna.core.seed_data.catalog import FLAGS
 
 pytestmark = [pytest.mark.integration]
 
@@ -71,7 +71,7 @@ UNKNOWN_SENTINEL = "zzz_far1875_unknown_sentinel"
 #: The live code registry — the invariant source of truth for the structural test.
 LIVE_FLAG_NAMES: frozenset[str] = frozenset(str(flag["name"]) for flag in FLAGS)
 
-_MIGRATION_PATH = BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / f"{MIGRATION_REV}.py"
+_MIGRATION_PATH = BACKEND_ROOT / "src" / "farna" / "db" / "migrations" / "versions" / f"{MIGRATION_REV}.py"
 
 
 def _migration_module() -> ModuleType:
@@ -88,7 +88,7 @@ def _alembic_config(db_url: str) -> Config:
     config.set_main_option("sqlalchemy.url", db_url)
     config.set_main_option(
         "script_location",
-        str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"),
+        str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"),
     )
     config.config_file_name = None
     return config

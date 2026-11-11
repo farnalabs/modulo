@@ -13,16 +13,16 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import require_permission, require_system_or_org_admin, require_target_org_role
-from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import (
+from farna.api.dependencies import require_permission, require_system_or_org_admin, require_target_org_role
+from farna.auth.jwt import TenantPrincipal
+from farna.auth.permissions import (
     PermissionDenied,
     _authz_enforce_ctx,
     assert_org_role,
     reset_authz_enforce,
     set_authz_enforce,
 )
-from modulo.db.settings_resolver import resolve_authz_enforce
+from farna.db.settings_resolver import resolve_authz_enforce
 
 _ORG_A = uuid.uuid4()
 _ORG_B = uuid.uuid4()

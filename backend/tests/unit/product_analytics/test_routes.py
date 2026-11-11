@@ -21,12 +21,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.constants import MSG_ORGANISATION_NOT_FOUND
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes import product_analytics as pa_module
-from modulo.api.routes.product_analytics import router as product_analytics_router
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.constants import MSG_ORGANISATION_NOT_FOUND
+from farna.api.dependencies import get_db_session
+from farna.api.routes import product_analytics as pa_module
+from farna.api.routes.product_analytics import router as product_analytics_router
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
 
 # Mount only the product-analytics router on a minimal app so we exercise the
 # real handlers through TestClient without pulling in the full API surface
@@ -158,7 +158,7 @@ class TestConsentEndpoint:
             org.settings_json = merged
             return merged
 
-        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
+        with patch("farna.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
             resp = _client().post(_CONSENT_URL, json={"action": "accept"})
         assert resp.status_code == 200, resp.text
         assert captured["patch"] is None
@@ -240,7 +240,7 @@ class TestUpdateLevelEndpoint:
             org.settings_json = merged
             return merged
 
-        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
+        with patch("farna.api.routes._org_settings.update_org_settings_patch", new=_fake_patch):
             resp = _client().put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
         assert resp.status_code == 200, resp.text
         assert captured["patch"] is None
@@ -329,7 +329,7 @@ class TestNotFoundBodies:
         async def _refuse(*_args, **_kwargs):
             raise LookupError("organisation not found")
 
-        with patch("modulo.api.routes._org_settings.update_org_settings_patch", new=_refuse):
+        with patch("farna.api.routes._org_settings.update_org_settings_patch", new=_refuse):
             resp = _client().post(_CONSENT_URL, json={"action": "accept"})
         assert resp.status_code == 404, resp.text
         assert resp.json()["detail"] == MSG_ORGANISATION_NOT_FOUND

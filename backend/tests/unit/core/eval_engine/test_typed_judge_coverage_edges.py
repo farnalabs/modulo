@@ -19,14 +19,14 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.eval_definition_write import (
+import farna.core.pipeline_engine.llm_judge as llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.eval_definition_write import (
     _resolve_typed_backings,
     _typed_backend_refs,
 )
-from modulo.core.eval_engine.execute_suite_run import _case_results_async, _run_suite_cases
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.execute_suite_run import _case_results_async, _run_suite_cases
+from farna.core.eval_engine.typed_judge import (
     JudgeConfigWriteError,
     JudgeErrorCode,
     JudgeExecutionError,
@@ -39,9 +39,9 @@ from modulo.core.eval_engine.typed_judge import (
     transport,
     verdict_from_typed_response,
 )
-from modulo.core.eval_engine.typed_judge import bridge as judge_bridge
-from modulo.core.eval_engine.typed_judge.config import typed_config_questions
-from modulo.core.eval_engine.typed_judge.transport import JudgeBackendHandle, judge_questions, reset_circuit_breaker
+from farna.core.eval_engine.typed_judge import bridge as judge_bridge
+from farna.core.eval_engine.typed_judge.config import typed_config_questions
+from farna.core.eval_engine.typed_judge.transport import JudgeBackendHandle, judge_questions, reset_circuit_breaker
 
 
 @pytest.fixture(autouse=True)

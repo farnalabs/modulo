@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core import run_teardown
-from modulo.core.run_teardown import (
+from farna.core import run_teardown
+from farna.core.run_teardown import (
     TEARDOWN_SEALED_EVENT_TYPE,
     RunTeardownSealError,
     seal_run_teardown,
@@ -58,7 +58,7 @@ def _session_factory() -> _FakeSession:
 def seal_fact(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Capture the ONE ``run.teardown_sealed`` append (patch it at its source)."""
     mock = AsyncMock()
-    monkeypatch.setattr("modulo.core.system_audit_logger.append_system_audit_event", mock)
+    monkeypatch.setattr("farna.core.system_audit_logger.append_system_audit_event", mock)
     return mock
 
 

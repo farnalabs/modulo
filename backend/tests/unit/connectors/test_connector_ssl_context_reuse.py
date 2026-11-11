@@ -11,9 +11,9 @@ process.
 These tests pin the fix: ONE TLS context per connector instance across any
 number of client constructions, actually used by the pinned transport, with
 ``SSRF_TRUST_PROXY``-driven CA-bundle selection kept in lock-step with
-``modulo.core.ssrf``.
+``farna.core.ssrf``.
 
-The ``modulo.connectors._egress`` imports are function-local so the
+The ``farna.connectors._egress`` imports are function-local so the
 construction-count test below still runs (and still fails for the right
 reason) on a tree where the fix does not exist.
 """
@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 import pytest
 
-from modulo.connectors.asana import AsanaConnector
+from farna.connectors.asana import AsanaConnector
 
 TOKEN = "test-token"  # nosec B105 - test fixture value, not a credential
 
@@ -78,7 +78,7 @@ def test_each_connector_instance_builds_its_own_context(
     ssl_context_builds: _CountingSSLContextFactory,
 ) -> None:
     """The cache is per connector instance — no process-wide singleton."""
-    from modulo.connectors._egress import egress_ssl_context
+    from farna.connectors._egress import egress_ssl_context
 
     first = AsanaConnector(TOKEN)
     second = AsanaConnector(TOKEN)
@@ -92,7 +92,7 @@ def test_each_connector_instance_builds_its_own_context(
 
 async def test_pinned_transport_reuses_the_instance_ssl_context() -> None:
     """The reuse is real: the client's transport holds the instance context."""
-    from modulo.connectors._egress import egress_ssl_context
+    from farna.connectors._egress import egress_ssl_context
 
     connector = AsanaConnector(TOKEN)
     instance_ctx = egress_ssl_context(connector)
@@ -106,7 +106,7 @@ async def test_pinned_transport_reuses_the_instance_ssl_context() -> None:
 
 async def test_context_is_reused_after_the_previous_client_was_closed() -> None:
     """The realistic path: ``async with self._client()`` closes every client."""
-    from modulo.connectors._egress import egress_ssl_context
+    from farna.connectors._egress import egress_ssl_context
 
     connector = AsanaConnector(TOKEN)
     expected = egress_ssl_context(connector)
@@ -126,7 +126,7 @@ def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, 
     """``connectors._egress`` shares the ONE ``core.ssrf`` trust-env resolver.
 
     ``connectors._egress`` imports the shared resolver from
-    ``modulo.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
+    ``farna.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
     ``connectors-do-not-import-core`` contract carries a deliberate per-module
     allowance for this shared security primitive). Pinning the bound name to
     the SSRF module's function OBJECT is what stops drift: a future edit that
@@ -135,8 +135,8 @@ def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, 
     not — since the dedup, both sides are the same function, so such a
     comparison would only test that a function equals itself.
     """
-    from modulo.connectors import _egress
-    from modulo.core import ssrf
+    from farna.connectors import _egress
+    from farna.core import ssrf
 
     if value == "__unset__":
         monkeypatch.delenv("SSRF_TRUST_PROXY", raising=False)
@@ -169,7 +169,7 @@ def test_cached_context_trust_anchors_match_a_plain_verify_true_build(monkeypatc
     with different anchors would silently change which certificate authorities
     every connector egress trusts.
     """
-    from modulo.connectors._egress import egress_ssl_context
+    from farna.connectors._egress import egress_ssl_context
 
     monkeypatch.delenv("SSRF_TRUST_PROXY", raising=False)
 

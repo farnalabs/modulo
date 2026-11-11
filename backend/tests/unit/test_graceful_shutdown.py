@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
+from farna.core.graceful_shutdown import ShutdownManager, ShutdownMiddleware
 
 
 @pytest.fixture

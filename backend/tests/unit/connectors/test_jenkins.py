@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
-from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
+from farna.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
+from farna.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
 
 _JENKINS_BASE = "http://jenkins.example.com"
 
@@ -194,7 +194,7 @@ async def test_get_run_status_invalid_id_fails_loud():
 )
 def test_split_build_run_id_rejects_unsafe_job_names(run_id: str):
     """Unsafe job-name segments/characters are refused at parse time."""
-    from modulo.connectors.jenkins import _split_build_run_id
+    from farna.connectors.jenkins import _split_build_run_id
 
     with pytest.raises(ValueError, match=r"Unsafe job name|Invalid run_id format"):
         _split_build_run_id(run_id)
@@ -211,7 +211,7 @@ def test_split_build_run_id_rejects_unsafe_job_names(run_id: str):
     ],
 )
 def test_split_build_run_id_accepts_safe_job_names(run_id: str, job_name: str, build_number: str):
-    from modulo.connectors.jenkins import _split_build_run_id
+    from farna.connectors.jenkins import _split_build_run_id
 
     assert _split_build_run_id(run_id) == (job_name, build_number)
 
@@ -688,7 +688,7 @@ async def test_double_list_runs(jenkins_double):
 def test_reject_unsafe_job_name_rejects_a_non_string():
     """A dict/list/None job name (Any-typed filter/payload) is refused — never
     f-stringed into a credentialed path."""
-    from modulo.connectors.jenkins import _reject_unsafe_job_name
+    from farna.connectors.jenkins import _reject_unsafe_job_name
 
     with pytest.raises(ValueError, match="is not a string job path"):
         _reject_unsafe_job_name(None, "run id")  # type: ignore[arg-type]

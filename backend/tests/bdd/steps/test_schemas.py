@@ -86,8 +86,8 @@ def _post_create_schema(client, request, docstring):
     data = json.loads(docstring)
     mock_schema = _make_mock_schema(name=data["name"], description=data.get("description"))
     with (
-        patch("modulo.api.routes.schemas.create_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post("/api/v1/schemas", json=data)
     request.node._resp = resp
@@ -99,9 +99,9 @@ def _post_create_schema_version(client, request, docstring):
     mock_schema = _make_mock_schema()
     mock_sv = _make_mock_schema_version(version=data["version"])
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.create_schema_version", return_value=mock_sv),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.create_schema_version", return_value=mock_sv),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}/versions", json=data)
     request.node._resp = resp
@@ -112,8 +112,8 @@ def _get_list_schemas(client, request):
     mock_schemas = [_make_mock_schema(name=f"schema-{i}") for i in range(22)]
     page_result = MagicMock(items=mock_schemas, total=22, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.list_schemas", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.list_schemas", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get("/api/v1/schemas")
     request.node._resp = resp
@@ -124,8 +124,8 @@ def _get_list_schemas_paginated(client, request):
     mock_schemas = [_make_mock_schema(name=f"schema-{i}") for i in range(10)]
     page_result = MagicMock(items=mock_schemas, total=22, page=1, page_size=10)
     with (
-        patch("modulo.api.routes.schemas.list_schemas", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.list_schemas", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get("/api/v1/schemas?page=1&page_size=10")
     request.node._resp = resp
@@ -134,8 +134,8 @@ def _get_list_schemas_paginated(client, request):
 @when("the user requests GET /api/v1/schemas/{schema_id}")
 def _get_schema(client, request):
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_mock_schema()),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema()),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}")
     request.node._resp = resp
@@ -144,8 +144,8 @@ def _get_schema(client, request):
 @when("the user requests GET /api/v1/schemas/00000000-0000-0000-0000-000000099999")
 def _get_schema_not_found(client, request):
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=None),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=None),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get("/api/v1/schemas/00000000-0000-0000-0000-000000099999")
     request.node._resp = resp
@@ -156,8 +156,8 @@ def _patch_update_schema(client, request, docstring):
     data = json.loads(docstring)
     mock_schema = _make_mock_schema(description=data.get("description"))
     with (
-        patch("modulo.api.routes.schemas.update_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.update_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}", json=data)
     request.node._resp = resp
@@ -169,8 +169,8 @@ def _patch_deprecate_schema(client, request):
     mock_schema.deprecated = True
     mock_schema.deprecated_at = _NOW
     with (
-        patch("modulo.api.routes.schemas.deprecate_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.deprecate_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.patch(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}/deprecate")
     request.node._resp = resp
@@ -179,8 +179,8 @@ def _patch_deprecate_schema(client, request):
 @when("the user sends DELETE /api/v1/schemas/{schema_id}")
 def _delete_schema(client, request):
     with (
-        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.delete_schema", return_value=True),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}")
     request.node._resp = resp
@@ -192,9 +192,9 @@ def _get_list_versions(client, request):
     mock_versions = [_make_mock_schema_version(f"{i}.0") for i in range(1, 3)]
     page_result = MagicMock(items=mock_versions, total=2, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=mock_schema),
-        patch("modulo.api.routes.schemas.list_schema_versions", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.list_schema_versions", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}/versions")
     request.node._resp = resp
@@ -204,8 +204,8 @@ def _get_list_versions(client, request):
 def _get_schema_version(client, request):
     mock_sv = _make_mock_schema_version("1.0")
     with (
-        patch("modulo.api.routes.schemas.get_schema_version", return_value=mock_sv),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema_version", return_value=mock_sv),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_MOCK_SCHEMA_ID}/versions/1.0")
     request.node._resp = resp

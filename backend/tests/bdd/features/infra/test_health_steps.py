@@ -18,8 +18,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.routes.health import CheckResult
-from modulo.settings import Settings
+from farna.api.routes.health import CheckResult
+from farna.settings import Settings
 
 scenarios("health.feature")
 
@@ -53,8 +53,8 @@ _OUTCOMES = ("ok", "degraded", "unavailable")
 
 def _build_app() -> FastAPI:
     """Fresh app over the real health router with settings overridden."""
-    from modulo.api.routes import health as health_mod
-    from modulo.settings import get_settings
+    from farna.api.routes import health as health_mod
+    from farna.settings import get_settings
 
     app = FastAPI()
     app.include_router(health_mod.router)
@@ -88,7 +88,7 @@ def _bdd_readiness(request: Any) -> None:
         for name, status in statuses.items():
             stack.enter_context(
                 patch(
-                    f"modulo.api.routes.health._check_{name}",
+                    f"farna.api.routes.health._check_{name}",
                     AsyncMock(return_value=_result(name, status)),
                 )
             )

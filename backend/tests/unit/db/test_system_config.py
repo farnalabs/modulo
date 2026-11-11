@@ -6,15 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.system_config import (
+from farna.db.crud.system_config import (
     delete_config,
     get_config,
     list_config,
     set_config,
     update_config,
 )
-from modulo.db.models.system_config import SystemConfig
-from modulo.db.settings_resolver import get_effective_setting
+from farna.db.models.system_config import SystemConfig
+from farna.db.settings_resolver import get_effective_setting
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ class TestSystemConfigModel:
         assert SystemConfig.__tablename__ == "system_config"
 
     def test_columns_exist(self) -> None:
-        from modulo.db.models import Base
+        from farna.db.models import Base
 
         cols = Base.metadata.tables["system_config"].c
         assert "id" in cols
@@ -268,7 +268,7 @@ class TestGetEffectiveSetting:
 
         get_organisation_result = AsyncMock(return_value=org)
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", get_organisation_result)
+            m.setattr("farna.db.settings_resolver.get_organisation", get_organisation_result)
             result = await get_effective_setting(session, uuid.uuid4(), "theme")
             assert result == "dark"
 
@@ -284,8 +284,8 @@ class TestGetEffectiveSetting:
         get_cfg = AsyncMock(return_value=config_entity)
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", get_org)
-            m.setattr("modulo.db.settings_resolver.get_config", get_cfg)
+            m.setattr("farna.db.settings_resolver.get_organisation", get_org)
+            m.setattr("farna.db.settings_resolver.get_config", get_cfg)
 
             result = await get_effective_setting(session, uuid.uuid4(), "theme")
             assert result == "system_wide"
@@ -299,8 +299,8 @@ class TestGetEffectiveSetting:
         get_cfg = AsyncMock(return_value=None)
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_organisation", get_org)
-            m.setattr("modulo.db.settings_resolver.get_config", get_cfg)
+            m.setattr("farna.db.settings_resolver.get_organisation", get_org)
+            m.setattr("farna.db.settings_resolver.get_config", get_cfg)
 
             result = await get_effective_setting(session, uuid.uuid4(), "theme", default="light")
             assert result == "light"
@@ -313,7 +313,7 @@ class TestGetEffectiveSetting:
         get_cfg = AsyncMock(return_value=config_entity)
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_config", get_cfg)
+            m.setattr("farna.db.settings_resolver.get_config", get_cfg)
 
             result = await get_effective_setting(session, None, "theme", default="fallback")
             assert result == "from_system"
@@ -323,7 +323,7 @@ class TestGetEffectiveSetting:
         get_cfg = AsyncMock(return_value=None)
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr("modulo.db.settings_resolver.get_config", get_cfg)
+            m.setattr("farna.db.settings_resolver.get_config", get_cfg)
 
             result = await get_effective_setting(session, None, "theme", default="fallback")
             assert result == "fallback"

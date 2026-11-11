@@ -57,9 +57,9 @@ from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine import recovery as recovery_module
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine import recovery as recovery_module
 from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
@@ -288,7 +288,7 @@ async def _run_reconcile(
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
         stack.enter_context(
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
         )
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session
@@ -434,7 +434,7 @@ class TestPredicateSelectsTheOverrideResumeClass:
     def test_predicate_carries_the_override_resume_leg(self) -> None:
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -463,7 +463,7 @@ class TestPredicateSelectsTheOverrideResumeClass:
         second time."""
         import sqlalchemy as sa
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         predicate = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -562,7 +562,7 @@ class TestHeartbeatStampSlotWindowInvariant:
             run_claim_stale_seconds=450,
             slot_reconcile_stale_seconds=450 + guard,
         )
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: settings)
+        monkeypatch.setattr("farna.settings.get_settings", lambda: settings)
         with caplog.at_level(logging.WARNING):
             stamp = recovery_module._immediately_claimable_heartbeat()
         assert isinstance(stamp, datetime)
@@ -573,7 +573,7 @@ class TestHeartbeatStampSlotWindowInvariant:
             run_claim_stale_seconds=450,
             slot_reconcile_stale_seconds=1800,
         )
-        monkeypatch.setattr("modulo.settings.get_settings", lambda: settings)
+        monkeypatch.setattr("farna.settings.get_settings", lambda: settings)
         with caplog.at_level(logging.WARNING):
             recovery_module._immediately_claimable_heartbeat()
         assert "slot_sweep_window_below_heartbeat_stamp_depth" not in caplog.text

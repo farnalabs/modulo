@@ -4,7 +4,7 @@ import uuid
 
 import factory
 
-from modulo.db.models import Account, Organisation, Pipeline, PipelineSnapshot, Run
+from farna.db.models import Account, Organisation, Pipeline, PipelineSnapshot, Run
 
 
 class OrganisationFactory(factory.alchemy.SQLAlchemyModelFactory):

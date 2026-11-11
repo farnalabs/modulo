@@ -22,15 +22,15 @@ import respx
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, ConnectorACL, ConnectorPermissionError
-from modulo.connectors.buildkite import BuildkiteConnector
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
-from modulo.connectors.ci_runner.base import CIRunnerBase
-from modulo.connectors.circleci import CircleCIConnector
-from modulo.connectors.jenkins import JenkinsConnector
-from modulo.connectors.teamcity import TeamCityConnector
-from modulo.core.connector_hub import _TracedConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.base import CIRun, CIRunLog, CIRunStatus, ConnectorACL, ConnectorPermissionError
+from farna.connectors.buildkite import BuildkiteConnector
+from farna.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from farna.connectors.ci_runner.base import CIRunnerBase
+from farna.connectors.circleci import CircleCIConnector
+from farna.connectors.jenkins import JenkinsConnector
+from farna.connectors.teamcity import TeamCityConnector
+from farna.core.connector_hub import _TracedConnector
 
 _DISPATCH_OPS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
 
@@ -1041,11 +1041,11 @@ def test_every_id_the_dispatch_accept_set_names_is_a_hub_buildable_type() -> Non
     and then raise ``Unknown connector type`` on the first run. This pins the
     set to the hub's real ``case`` arms, in both directions.
     """
-    from modulo.connectors.base import (
+    from farna.connectors.base import (
         _HUB_CI_RUNNER_TYPE_IDS,
         connector_type_supports_dispatch,
     )
-    from modulo.core.connector_hub import _build_connector
+    from farna.core.connector_hub import _build_connector
 
     assert frozenset({"github_actions_ci", "gitlab_ci", "woodpecker"}) == _HUB_CI_RUNNER_TYPE_IDS
     for type_id in sorted(_HUB_CI_RUNNER_TYPE_IDS):

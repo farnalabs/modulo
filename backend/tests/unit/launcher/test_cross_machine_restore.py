@@ -37,13 +37,13 @@ requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="restore tak
 
 
 def _settings_env_ready() -> bool:
-    """``modulo.cli`` builds Settings at import; the CI jobs export these."""
+    """``farna.cli`` builds Settings at import; the CI jobs export these."""
     return all(os.environ.get(name) for name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"))
 
 
 requires_cli_env = pytest.mark.skipif(
     not _settings_env_ready(),
-    reason="modulo.cli import chain builds Settings at import — exported by CI",
+    reason="farna.cli import chain builds Settings at import — exported by CI",
 )
 
 
@@ -58,7 +58,7 @@ _FERNET_KEY = "9u9GToDRLOtSKkZGkZlFnXlJpNdIay2y5vUsVC5J0Bk="
 
 def real_snapshot_files(data_dir: Path, backup_dir: Path) -> tuple[dict[str, Any], list[str]]:
     """The REAL launcher-artefact rides-along (state + secrets + conf)."""
-    from modulo.cli.backup import _launcher_snapshot_files
+    from farna.cli.backup import _launcher_snapshot_files
 
     return _launcher_snapshot_files(data_dir, backup_dir, include_secrets=True)
 
@@ -66,27 +66,27 @@ def real_snapshot_files(data_dir: Path, backup_dir: Path) -> tuple[dict[str, Any
 def _enter_restore_patches(stack: contextlib.ExitStack, fernet_key: str) -> None:
     """The DB-side restore seams (psql/checks) under test control."""
     for factory in (
-        lambda: patch("modulo.cli.backup._run_psql"),
-        lambda: patch("modulo.cli.backup._ensure_restore_posture"),
+        lambda: patch("farna.cli.backup._run_psql"),
+        lambda: patch("farna.cli.backup._ensure_restore_posture"),
         lambda: patch(
-            "modulo.cli.backup.get_settings",
+            "farna.cli.backup.get_settings",
             **{
                 "return_value.fernet_key": fernet_key,
                 "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo",
             },
         ),
-        lambda: patch("modulo.cli.backup._db_has_modulo_tables", return_value=False),
-        lambda: patch("modulo.cli.backup._get_schema_versions", return_value=["rev1"]),
-        lambda: patch("modulo.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake")),
-        lambda: patch("modulo.cli.backup._check_collation_versions_sync"),
+        lambda: patch("farna.cli.backup._db_has_modulo_tables", return_value=False),
+        lambda: patch("farna.cli.backup._get_schema_versions", return_value=["rev1"]),
+        lambda: patch("farna.cli.backup._take_safety_dump", return_value=Path("pre-restore-dump-fake")),
+        lambda: patch("farna.cli.backup._check_collation_versions_sync"),
     ):
         stack.enter_context(factory())
 
 
 def _boot_machine(tmp_path: Path, name: str) -> tuple[Path, Any]:
     """One isolated machine: its own secrets/state, with a seeded cluster."""
-    import modulo.launcher.secrets_file as secrets_file_module
-    from modulo.launcher.state import LauncherState, save_state
+    import farna.launcher.secrets_file as secrets_file_module
+    from farna.launcher.state import LauncherState, save_state
 
     data_dir = tmp_path / name
     data_dir.mkdir()
@@ -105,7 +105,7 @@ def _boot_machine(tmp_path: Path, name: str) -> tuple[Path, Any]:
 
 def _fabricate_machine_backup(data_dir: Path, archive_dir: Path) -> Path:
     """A REAL machine-migration archive: state_MAC + include_secrets."""
-    from modulo.cli.backup import (
+    from farna.cli.backup import (
         MANIFEST_VERSION,
         _fernet_key_hash,
         _file_checksum,
@@ -136,7 +136,7 @@ def _fabricate_machine_backup(data_dir: Path, archive_dir: Path) -> Path:
 
 def _restore_invocation(archive_dir: Path, machine_data_dir: Path) -> Any:
     """Run the machine-migration CLI invocation under the restore seams."""
-    from modulo.cli.backup import cli
+    from farna.cli.backup import cli
 
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, _FERNET_KEY)
@@ -150,8 +150,8 @@ def _restore_invocation(archive_dir: Path, machine_data_dir: Path) -> Any:
 @requires_cli_env
 def test_machine_b_restores_machine_a_backup_onto_a_fresh_target(tmp_path: Path) -> None:
     """A restores onto a fresh B: exemption + adoption + credential match."""
-    import modulo.launcher.secrets_file as secrets_file_module
-    from modulo.launcher.state import load_state
+    import farna.launcher.secrets_file as secrets_file_module
+    from farna.launcher.state import load_state
 
     machine_a, secrets_a = _boot_machine(tmp_path, "machine-a")
     archive = _fabricate_machine_backup(machine_a, tmp_path / "archive")

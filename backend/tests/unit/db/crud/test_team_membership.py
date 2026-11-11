@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult
+from farna.db.crud.base import PageResult
 
 
 @pytest.fixture
@@ -38,10 +38,10 @@ def _make_membership(**overrides: object) -> MagicMock:
 class TestAddMember:
     async def test_adds_and_returns_membership(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.team_membership.TeamMembership",
+            "farna.db.crud.team_membership.TeamMembership",
             return_value=_make_membership(),
         ) as mock_membership:
-            from modulo.db.crud.team_membership import add_team_member
+            from farna.db.crud.team_membership import add_team_member
 
             result = await add_team_member(
                 mock_session,
@@ -63,10 +63,10 @@ class TestAddMember:
 
     async def test_adds_with_custom_role(self, mock_session: AsyncMock) -> None:
         with patch(
-            "modulo.db.crud.team_membership.TeamMembership",
+            "farna.db.crud.team_membership.TeamMembership",
             return_value=_make_membership(role="admin"),
         ) as mock_membership:
-            from modulo.db.crud.team_membership import add_team_member
+            from farna.db.crud.team_membership import add_team_member
 
             result = await add_team_member(
                 mock_session,
@@ -90,7 +90,7 @@ class TestGetMembership:
         membership = _make_membership()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
-        from modulo.db.crud.team_membership import get_membership
+        from farna.db.crud.team_membership import get_membership
 
         result = await get_membership(mock_session, _MEMBERSHIP_ID)
         assert result is not None
@@ -99,7 +99,7 @@ class TestGetMembership:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team_membership import get_membership
+        from farna.db.crud.team_membership import get_membership
 
         result = await get_membership(mock_session, uuid.uuid4())
         assert result is None
@@ -125,7 +125,7 @@ class TestListTeamMembers:
             ]
         )
 
-        from modulo.db.crud.team_membership import list_team_members
+        from farna.db.crud.team_membership import list_team_members
 
         result = await list_team_members(mock_session, team_id=_TEAM_ID, page=1, page_size=20)
         assert isinstance(result, PageResult)
@@ -140,7 +140,7 @@ class TestUpdateMemberRole:
         membership = _make_membership(role="admin")
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
-        from modulo.db.crud.team_membership import update_member_role
+        from farna.db.crud.team_membership import update_member_role
 
         result = await update_member_role(mock_session, _MEMBERSHIP_ID, "admin")
         assert result is not None
@@ -149,7 +149,7 @@ class TestUpdateMemberRole:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team_membership import update_member_role
+        from farna.db.crud.team_membership import update_member_role
 
         result = await update_member_role(mock_session, uuid.uuid4(), "admin")
         assert result is None
@@ -160,7 +160,7 @@ class TestRemoveMember:
         membership = _make_membership()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
-        from modulo.db.crud.team_membership import remove_team_member
+        from farna.db.crud.team_membership import remove_team_member
 
         result = await remove_team_member(mock_session, _MEMBERSHIP_ID)
         assert result is True
@@ -169,7 +169,7 @@ class TestRemoveMember:
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team_membership import remove_team_member
+        from farna.db.crud.team_membership import remove_team_member
 
         result = await remove_team_member(mock_session, uuid.uuid4())
         assert result is False
@@ -180,7 +180,7 @@ class TestGetTeamMembershipByTeamAndAccount:
         membership = _make_membership()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=membership)))
 
-        from modulo.db.crud.team_membership import get_membership_by_team_and_account
+        from farna.db.crud.team_membership import get_membership_by_team_and_account
 
         result = await get_membership_by_team_and_account(mock_session, _TEAM_ID, _USER_ID)
         assert result is not None
@@ -190,7 +190,7 @@ class TestGetTeamMembershipByTeamAndAccount:
     async def test_returns_none_when_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
 
-        from modulo.db.crud.team_membership import get_membership_by_team_and_account
+        from farna.db.crud.team_membership import get_membership_by_team_and_account
 
         result = await get_membership_by_team_and_account(mock_session, _TEAM_ID, uuid.uuid4())
         assert result is None

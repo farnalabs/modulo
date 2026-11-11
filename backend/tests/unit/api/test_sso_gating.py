@@ -10,18 +10,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     get_anonymous_plan_context,
     get_db_session,
     get_plan_context,
     get_system_db_session,
 )
-from modulo.api.main import app
-from modulo.api.models.problem import ProblemException
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.api.models.problem import ProblemException
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import PlanStub
 
@@ -41,7 +41,7 @@ def _signed_licence(*, tier: str, features: list[str], org_id: str = "", days: i
     import base64
     from datetime import timedelta
 
-    from modulo.core.registry.crypto import generate_keypair, sign_primitive
+    from farna.core.registry.crypto import generate_keypair, sign_primitive
 
     keypair = generate_keypair()
     payload = {
@@ -185,7 +185,7 @@ class TestAdminSsoGating:
         mock_provider.created_at = datetime(2025, 1, 1, tzinfo=UTC)
         mock_provider.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
 
-        with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
+        with patch("farna.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
             resp = client_with_sso.get("/api/v1/admin/sso/providers")
             assert resp.status_code == 200
 
@@ -309,8 +309,8 @@ class TestSsoAuthGating:
     def test_sso_providers_returns_200_empty_when_no_providers_configured(self, client_no_sso: TestClient) -> None:
         """Nothing configured -> normal 200 with an empty providers list (no 402/401)."""
         with (
-            patch("modulo.core.license.get_license", return_value=None),
-            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            patch("farna.core.license.get_license", return_value=None),
+            patch.dict("farna.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
         ):
             resp = client_no_sso.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
@@ -338,8 +338,8 @@ class TestSsoAuthGating:
         try:
             client = TestClient(app)
             with (
-                patch("modulo.core.license.get_license", return_value=None),
-                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+                patch("farna.core.license.get_license", return_value=None),
+                patch.dict("farna.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
             ):
                 resp = client.get("/api/v1/auth/sso/providers")
         finally:
@@ -358,7 +358,7 @@ class TestSsoAuthGating:
         """
         from fastapi import HTTPException
 
-        from modulo.api.dependencies import resolve_anonymous_plan_context
+        from farna.api.dependencies import resolve_anonymous_plan_context
 
         broken_session = MagicMock()
 
@@ -368,7 +368,7 @@ class TestSsoAuthGating:
         broken_session.begin.side_effect = _begin_raises
 
         with (
-            caplog.at_level("ERROR", logger="modulo.api.dependencies"),
+            caplog.at_level("ERROR", logger="farna.api.dependencies"),
             pytest.raises(HTTPException) as excinfo,
         ):
             await resolve_anonymous_plan_context(_settings_without_license(), broken_session)
@@ -382,7 +382,7 @@ class TestSsoAuthGating:
         """Single-org invariant + ambiguous tenant -> 5xx, never system scope."""
         from fastapi import HTTPException
 
-        from modulo.api.dependencies import resolve_anonymous_plan_context
+        from farna.api.dependencies import resolve_anonymous_plan_context
 
         app.dependency_overrides.clear()
         session = _make_mock_session()
@@ -414,7 +414,7 @@ class TestSsoAuthGating:
         app.dependency_overrides[get_db_session] = override_session
         app.dependency_overrides[get_system_db_session] = override_session
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        monkeypatch.setattr("modulo.core.feature_flags.resolve_plan_context", _malformed_catalog)
+        monkeypatch.setattr("farna.core.feature_flags.resolve_plan_context", _malformed_catalog)
         try:
             client = TestClient(app, follow_redirects=False)
             resp = client.get("/api/v1/auth/oidc/google/login")
@@ -447,8 +447,8 @@ class TestSsoAuthGating:
         app.dependency_overrides[get_settings] = lambda: settings
         licensed = SimpleNamespace(tier="team", features=["sso"], expires_at=None)
         with (
-            patch("modulo.core.license.get_license", return_value=licensed),
-            patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+            patch("farna.core.license.get_license", return_value=licensed),
+            patch.dict("farna.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
         ):
             resp = client_with_sso.get("/api/v1/auth/sso/providers")
         assert resp.status_code == 200
@@ -573,8 +573,8 @@ class TestSsoAuthGating:
         client = _client_with_anonymous_plan(_env_oidc_settings(), PlanStub(enabled=False, tier="community"))
         try:
             with (
-                patch("modulo.core.license.get_license", return_value=None),
-                patch.dict("modulo.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
+                patch("farna.core.license.get_license", return_value=None),
+                patch.dict("farna.core.feature_flags.FeatureFlagRegistry._overrides", {}, clear=True),
             ):
                 resp = client.get("/api/v1/auth/sso/providers")
         finally:
@@ -587,7 +587,7 @@ class TestSsoAuthGating:
         determinate = _DeterminatePlan(enabled=False, has_license_key=True)
         client = _client_with_anonymous_plan(_env_oidc_settings(license_key="valid-key"), determinate)
         try:
-            with patch("modulo.core.feature_flags.resolve_plan_context", AsyncMock(return_value=determinate)):
+            with patch("farna.core.feature_flags.resolve_plan_context", AsyncMock(return_value=determinate)):
                 resp = client.get("/api/v1/auth/sso/providers")
         finally:
             app.dependency_overrides.clear()
@@ -614,9 +614,9 @@ class TestRealLicenceResolution:
         resolves but does not grant ``sso``, so the gate must still 402 — and
         the boundary is left exactly as-is (a policy question for Duncan).
         """
-        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
-        from modulo.core import license as license_mod
-        from modulo.core.feature_flags import FeatureFlagRegistry
+        from farna.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from farna.core import license as license_mod
+        from farna.core.feature_flags import FeatureFlagRegistry
 
         key, public_key = _signed_licence(tier="community", features=[])
         monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
@@ -646,9 +646,9 @@ class TestRealLicenceResolution:
 
     async def test_real_team_key_grants_the_feature(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Control: the same real ladder with SSO in the claims PASSES the gate."""
-        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
-        from modulo.core import license as license_mod
-        from modulo.core.feature_flags import FeatureFlagRegistry
+        from farna.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from farna.core import license as license_mod
+        from farna.core.feature_flags import FeatureFlagRegistry
 
         key, public_key = _signed_licence(tier="team", features=["sso"])
         monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
@@ -673,10 +673,10 @@ class TestRealLicenceResolution:
 
     async def test_team_key_inside_delivery_grace_still_grants_sso(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2059 grace boundary: an expiry 13 days ago still retains Team."""
-        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
-        from modulo.core import license as license_mod
-        from modulo.core.feature_flags import FeatureFlagRegistry
-        from modulo.core.license import LICENCE_GRACE_DAYS
+        from farna.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from farna.core import license as license_mod
+        from farna.core.feature_flags import FeatureFlagRegistry
+        from farna.core.license import LICENCE_GRACE_DAYS
 
         key, public_key = _signed_licence(tier="team", features=["sso"], days=-(LICENCE_GRACE_DAYS - 1))
         monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
@@ -707,10 +707,10 @@ class TestRealLicenceResolution:
         (authentication is not blocked) but the resolved plan is Community and
         every Team feature is off post-auth.
         """
-        from modulo.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
-        from modulo.core import license as license_mod
-        from modulo.core.feature_flags import FeatureFlagRegistry
-        from modulo.core.license import LICENCE_GRACE_DAYS
+        from farna.api.dependencies import require_feature_anonymous, resolve_anonymous_plan_context
+        from farna.core import license as license_mod
+        from farna.core.feature_flags import FeatureFlagRegistry
+        from farna.core.license import LICENCE_GRACE_DAYS
 
         key, public_key = _signed_licence(tier="team", features=["sso"], days=-(LICENCE_GRACE_DAYS + 1))
         monkeypatch.setattr(license_mod, "_configured_public_key_hex", public_key)
@@ -904,7 +904,7 @@ class TestOidcLoginPublicUrlBridge:
     """
 
     def test_oidc_login_redirect_uri_uses_public_url_override(self, client_with_sso: TestClient) -> None:
-        from modulo.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
+        from farna.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
 
         captured: dict[str, str] = {}
 
@@ -924,7 +924,7 @@ class TestOidcLoginPublicUrlBridge:
         store.set_override("MODULO_PUBLIC_URL", "https://hot.example.com")
         try:
             with patch(
-                "modulo.api.routes.sso.oidc_get_authorize_url",
+                "farna.api.routes.sso.oidc_get_authorize_url",
                 new=AsyncMock(side_effect=_fake_authorize_url),
             ):
                 resp = client_with_sso.get("/api/v1/auth/oidc/google/login", follow_redirects=False)

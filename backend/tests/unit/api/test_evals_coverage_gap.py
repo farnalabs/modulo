@@ -15,8 +15,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.routes.evals import eval_coverage_gap
-from modulo.core.eval_engine.coverage_gap import CoverageGapSummary
+from farna.api.routes.evals import eval_coverage_gap
+from farna.core.eval_engine.coverage_gap import CoverageGapSummary
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -61,7 +61,7 @@ class TestEvalCoverageGap:
 
         summary = _summary()
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             return_value=summary,
         ) as mock_compute:
@@ -91,7 +91,7 @@ class TestEvalCoverageGap:
         batch_id = uuid.uuid4()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             return_value=_summary(),
         ) as mock_compute:
@@ -114,7 +114,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             return_value=_summary(),
         ) as mock_compute:
@@ -136,7 +136,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
         ) as mock_compute:
             with pytest.raises(HTTPException) as exc:
@@ -156,7 +156,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("mock", "mock", "mock"),
         ):
@@ -176,7 +176,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             side_effect=ValueError("unexpected"),
         ):
@@ -196,7 +196,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("mock", "mock", "mock"),
         ):
@@ -216,7 +216,7 @@ class TestEvalCoverageGap:
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.evals.compute_coverage_gap",
+            "farna.api.routes.evals.compute_coverage_gap",
             new_callable=AsyncMock,
             side_effect=IntegrityError("mock", "mock", "mock"),
         ):
@@ -241,7 +241,7 @@ class TestComputeCoverageGapOrgIsolation:
         isolation control; asserting it is present in the emitted SQL proves a
         cross-org variant group can never be read.
         """
-        from modulo.core.eval_engine.coverage_gap import _load_runs
+        from farna.core.eval_engine.coverage_gap import _load_runs
 
         mock_session = make_session_mock()
         org_id = uuid.uuid4()

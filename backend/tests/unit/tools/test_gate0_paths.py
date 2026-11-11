@@ -55,10 +55,10 @@ def test_gate0_paths_file_exists_and_is_nonempty() -> None:
 def test_gate0_covers_bundled_boot_critical_modules() -> None:
     patterns = _load_patterns()
     critical = [
-        "backend/src/modulo/db/url_utils.py",
-        "backend/src/modulo/settings.py",
-        "backend/src/modulo/api/main.py",
-        "backend/src/modulo/launcher/service.py",
+        "backend/src/farna/db/url_utils.py",
+        "backend/src/farna/settings.py",
+        "backend/src/farna/api/main.py",
+        "backend/src/farna/launcher/service.py",
     ]
     uncovered = [path for path in critical if not _covered(patterns, path)]
     assert not uncovered, (
@@ -71,8 +71,8 @@ def test_gate0_covers_bundled_boot_critical_modules() -> None:
 def test_gate0_covers_bundled_boot_critical_directories() -> None:
     patterns = _load_patterns()
     critical_dirs = [
-        "backend/src/modulo/db/migrations",
-        "backend/src/modulo/db/settings_resolver.py",
+        "backend/src/farna/db/migrations",
+        "backend/src/farna/db/settings_resolver.py",
         "deploy/fly/entrypoint.sh",
         "scripts/macos/install.sh",
         "scripts/create-macos-info-plist.sh",

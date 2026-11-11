@@ -31,13 +31,13 @@ def saq_settings_env(saq_redis_url: str, migrated_db_url: str, monkeypatch: pyte
     monkeypatch.setenv("FERNET_KEY", "b" * 44)
     monkeypatch.setenv("MODULO_ADMIN_PASSWORD", "test")
 
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
 
     # Force the module-level engines to rebuild against the test DB/Redis.
-    import modulo.core.cron_helpers as ch
-    from modulo.core import dispatch
+    import farna.core.cron_helpers as ch
+    from farna.core import dispatch
 
     ch._ENGINE = None
     dispatch._ENGINE = None

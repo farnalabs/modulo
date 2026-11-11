@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.worker_memory (FAR-776).
+"""Unit tests for farna.core.worker_memory (FAR-776).
 
 Covers: /proc/meminfo parsing, cgroup v1 counter reads, memory capture with
 fake FS paths, alarm evaluation at thresholds, and the cron wrapper. All
@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-import modulo.core.worker_memory as wm
+import farna.core.worker_memory as wm
 
 # ---------------------------------------------------------------------------
 # /proc/meminfo parsing

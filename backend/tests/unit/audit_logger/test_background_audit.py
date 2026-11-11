@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.audit_logger import background
-from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from farna.core.audit_logger import background
+from farna.core.audit_logger.labels import SYSTEM_ACTOR
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-0000000000bb")

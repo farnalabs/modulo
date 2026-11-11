@@ -12,8 +12,8 @@ from typing import Any, cast
 
 import pytest
 
-from modulo.core.library_service._seed_data import _MODULO_PRIMITIVES
-from modulo.core.library_service.install import (
+from farna.core.library_service._seed_data import _MODULO_PRIMITIVES
+from farna.core.library_service.install import (
     _definition_from_field_spec,
     _schema_definition_from_content,
 )

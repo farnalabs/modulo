@@ -1,11 +1,11 @@
-"""Focused coverage for the S3776 decomposition of ``modulo.cli.apply``."""
+"""Focused coverage for the S3776 decomposition of ``farna.cli.apply``."""
 
 from pathlib import Path
 
 import click
 from click.testing import CliRunner
 
-from modulo.cli.apply import register_apply
+from farna.cli.apply import register_apply
 
 
 def _group() -> click.Group:

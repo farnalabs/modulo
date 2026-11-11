@@ -16,19 +16,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     _is_sensitive_key,
     _value_looks_sensitive,
     create_agent,
     get_org_config,
 )
-from modulo.api.routes.health import (
+from farna.api.routes.health import (
     _check_checkpointer,
     _check_database,
     _check_migrations,
     _check_redis,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 
@@ -39,7 +39,7 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
     ``_resolve_alembic_ini``-raises test cannot be short-circuited by a cache
     warmed elsewhere (which would silently turn the intended fail path into
     a database path)."""
-    from modulo.api.routes import health as health_mod
+    from farna.api.routes import health as health_mod
 
     health_mod._REPO_HEADS_CACHE = None
     yield
@@ -52,10 +52,10 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
 
 
 class TestCreateAgentNoLeak(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     @patch(
-        "modulo.db.crud.agent.create_agent",
+        "farna.db.crud.agent.create_agent",
         side_effect=RuntimeError("db host 10.0.0.54 timeout"),
     )
     async def test_error_detail_is_static_no_exception_text(
@@ -134,9 +134,9 @@ class TestIsSensitiveKeySharedMatcher:
 class TestValueLooksSensitiveCharCap:
     def test_patterns_only_run_over_capped_slice(self) -> None:
         """SECRET_VALUE_PATTERNS must never be searched over an unbounded string."""
-        from modulo.core.secret_patterns import SECRET_VALUE_REDACT_CHAR_CAP
+        from farna.core.secret_patterns import SECRET_VALUE_REDACT_CHAR_CAP
 
-        with patch("modulo.core.secret_patterns.SECRET_VALUE_PATTERNS") as mock_patterns:
+        with patch("farna.core.secret_patterns.SECRET_VALUE_PATTERNS") as mock_patterns:
             pattern = MagicMock()
             mock_patterns.__iter__.return_value = [(pattern, "...")]
 
@@ -176,22 +176,22 @@ class _SystemAdminAuthContext(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         _ctx_is_system_admin.set(False)
         super().teardown_method()
 
 
 class TestGetOrgConfigMasking(_SystemAdminAuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_nested_sensitive_key_filtered_out(
         self,
         mock_list_config: AsyncMock,
@@ -210,9 +210,9 @@ class TestGetOrgConfigMasking(_SystemAdminAuthContext):
         assert "assistant_config:org123:api_key" not in result["results"]
         assert "assistant_config:org123:enabled" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_secret_pattern_value_masked_in_table(
         self,
         mock_list_config: AsyncMock,
@@ -236,9 +236,9 @@ class TestGetOrgConfigMasking(_SystemAdminAuthContext):
         # The normal value should still be visible
         assert "| app_name | modulo |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_non_sensitive_key_not_masked(
         self,
         mock_list_config: AsyncMock,
@@ -257,9 +257,9 @@ class TestGetOrgConfigMasking(_SystemAdminAuthContext):
         assert "| APP_NAME | modulo |" in result["results"]
         assert "| LOG_LEVEL | info |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_suffixed_secret_keys_filtered_out(
         self,
         mock_list_config: AsyncMock,
@@ -306,9 +306,9 @@ class TestFeatureFlagNoNameLeak:
     def test_get_flag_500_does_not_contain_flag_name(self) -> None:
         from fastapi.testclient import TestClient
 
-        from modulo.api.main import app
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.api.main import app
+        from farna.auth.dependencies import get_current_user
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         app.dependency_overrides.clear()
         app.dependency_overrides[get_settings] = self._make_settings
@@ -323,7 +323,7 @@ class TestFeatureFlagNoNameLeak:
 
         # Simulate an unexpected exception during flag resolution
         with patch(
-            "modulo.api.routes.admin_feature_flags._build_registry",
+            "farna.api.routes.admin_feature_flags._build_registry",
             side_effect=RuntimeError("boom"),
         ):
             client = TestClient(app)
@@ -356,8 +356,8 @@ class TestHealthCheckNoExceptionLeak:
     @pytest.mark.asyncio
     async def test_database_check_detail_hides_exception(self) -> None:
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_engine,
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health.get_or_create_engine") as mock_engine,
         ):
             # ``engine.connect`` must return the ASYNC context manager itself
             # (a sync lambda), not an AsyncMock child: awaiting the coroutine
@@ -382,8 +382,8 @@ class TestHealthCheckNoExceptionLeak:
     @pytest.mark.asyncio
     async def test_redis_check_detail_hides_exception(self) -> None:
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis") as mock_redis_cls,
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health.aioredis.Redis") as mock_redis_cls,
         ):
             redis_inst = AsyncMock()
             redis_inst.ping.side_effect = ConnectionError("redis://default:password@10.0.0.99:6379")
@@ -407,8 +407,8 @@ class TestHealthCheckNoExceptionLeak:
         engine.connect = lambda: conn
 
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.get_or_create_engine", return_value=engine),
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health.get_or_create_engine", return_value=engine),
         ):
             result = await _check_checkpointer()
 
@@ -419,8 +419,8 @@ class TestHealthCheckNoExceptionLeak:
     @pytest.mark.asyncio
     async def test_migrations_check_detail_hides_exception(self) -> None:
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health._resolve_alembic_ini") as mock_ini,
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health._resolve_alembic_ini") as mock_ini,
         ):
             mock_ini.side_effect = ConnectionError("Cannot connect to db.prod.internal:5432")
 
@@ -435,8 +435,8 @@ class TestHealthCheckNoExceptionLeak:
     async def test_database_check_preserves_unavailable_semantics(self) -> None:
         """Database failures must stay 'unavailable' (gates bluegreen)."""
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.get_or_create_engine") as mock_engine,
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health.get_or_create_engine") as mock_engine,
         ):
             conn_cm = AsyncMock()
             conn_cm.__aenter__ = AsyncMock(return_value=conn_cm)
@@ -454,8 +454,8 @@ class TestHealthCheckNoExceptionLeak:
     async def test_redis_check_preserves_degraded_semantics(self) -> None:
         """Redis failures must stay 'degraded' (non-gating)."""
         with (
-            patch("modulo.api.routes.health.get_settings", return_value=_make_health_settings()),
-            patch("modulo.api.routes.health.aioredis.Redis") as mock_redis_cls,
+            patch("farna.api.routes.health.get_settings", return_value=_make_health_settings()),
+            patch("farna.api.routes.health.aioredis.Redis") as mock_redis_cls,
         ):
             redis_inst = AsyncMock()
             redis_inst.ping.side_effect = OSError("Connection refused")
@@ -483,8 +483,8 @@ class TestAdminEmailDecryptFailure:
         )
 
     def test_decrypt_failure_returns_500_not_ciphertext(self) -> None:
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=uuid.uuid4(),
@@ -503,10 +503,10 @@ class TestAdminEmailDecryptFailure:
         try:
             from fastapi.testclient import TestClient
 
-            from modulo.api.dependencies import get_plan_context
-            from modulo.api.main import app
-            from modulo.auth.dependencies import get_current_user
-            from modulo.auth.jwt import AuthenticatedPrincipal
+            from farna.api.dependencies import get_plan_context
+            from farna.api.main import app
+            from farna.auth.dependencies import get_current_user
+            from farna.auth.jwt import AuthenticatedPrincipal
 
             principal = AuthenticatedPrincipal(
                 username="admin@test",
@@ -545,8 +545,8 @@ class TestAdminEmailDecryptFailure:
             app.dependency_overrides.clear()
 
     def test_decrypt_failure_does_not_attempt_send(self) -> None:
-        from modulo.api.routes import admin_email
-        from modulo.db.models.organisation import Organisation
+        from farna.api.routes import admin_email
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(
             id=uuid.uuid4(),
@@ -565,10 +565,10 @@ class TestAdminEmailDecryptFailure:
         try:
             from fastapi.testclient import TestClient
 
-            from modulo.api.dependencies import get_plan_context
-            from modulo.api.main import app
-            from modulo.auth.dependencies import get_current_user
-            from modulo.auth.jwt import AuthenticatedPrincipal
+            from farna.api.dependencies import get_plan_context
+            from farna.api.main import app
+            from farna.auth.dependencies import get_current_user
+            from farna.auth.jwt import AuthenticatedPrincipal
 
             principal = AuthenticatedPrincipal(
                 username="admin@test",

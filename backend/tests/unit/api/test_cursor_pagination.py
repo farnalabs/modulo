@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.pagination import CursorPage, CursorPaginator
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.db.crud.pagination import CursorPage, CursorPaginator
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -166,9 +166,9 @@ class TestPipelinesEndpointCursor:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipelines?cursor=abc123&page_size=10")
 
@@ -211,9 +211,9 @@ class TestPipelinesEndpointCursor:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipelines")
 
@@ -262,9 +262,9 @@ class TestPipelinesEndpointCursor:
         )
 
         with (
-            patch("modulo.api.routes.pipelines.list_pipelines", return_value=page_result),
-            patch("modulo.api.routes.pipelines.set_rls_org"),
-            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+            patch("farna.api.routes.pipelines.list_pipelines", return_value=page_result),
+            patch("farna.api.routes.pipelines.set_rls_org"),
+            patch("farna.api.routes.pipelines.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/pipelines?cursor=prev-cursor&page_size=1")
 
@@ -289,9 +289,9 @@ class TestConnectorsEndpointCursor:
         )
 
         with (
-            patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result),
-            patch("modulo.api.routes.connectors.set_rls_org"),
-            patch("modulo.api.routes.connectors.set_rls_user_context"),
+            patch("farna.api.routes.connectors.list_connector_instances", return_value=page_result),
+            patch("farna.api.routes.connectors.set_rls_org"),
+            patch("farna.api.routes.connectors.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/connectors?cursor=abc")
 
@@ -316,9 +316,9 @@ class TestLibraryEndpointCursor:
         )
 
         with (
-            patch("modulo.api.routes.library.list_primitives", return_value=page_result),
-            patch("modulo.api.routes.library.set_rls_org"),
-            patch("modulo.api.routes.library.set_rls_user_context"),
+            patch("farna.api.routes.library.list_primitives", return_value=page_result),
+            patch("farna.api.routes.library.set_rls_org"),
+            patch("farna.api.routes.library.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/libraries?cursor=xyz&page_size=5")
 

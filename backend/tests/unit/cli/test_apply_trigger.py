@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.trigger_apply (FAR-681 slice 2).
+"""Unit tests for farna.cli.apply.trigger_apply (FAR-681 slice 2).
 
 HTTP mocked via respx. Round-trip payloads are validated against the REAL
 API pydantic models (contract round-trip), not hand-built response fixtures.
@@ -14,10 +14,10 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.triggers import TriggerCreate, TriggerUpdate
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.trigger_apply import _apply_one_trigger
+from farna.api.routes.triggers import TriggerCreate, TriggerUpdate
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.trigger_apply import _apply_one_trigger
 from tests.unit.cli.test_apply_executor import _mock_current
 
 LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}

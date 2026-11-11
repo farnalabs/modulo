@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     _CONTENT_BEGIN,
     _CONTENT_END,
     _GUARD_INSTRUCTION,
@@ -24,7 +24,7 @@ from modulo.core.eval_engine import (
     _has_nested_quantifier,
     _result_from_judge_dict,
 )
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.typed_judge import (
     JudgeErrorCode,
     JudgeExecutionError,
     JudgeIdentity,
@@ -399,7 +399,7 @@ class TestModelJudgeEval:
 class TestJudgeDetailBound:
     def test_a_verbose_detail_is_truncated_but_the_envelope_keeps_it(self) -> None:
         """The column is String(2000); a verbose judge must not fail the INSERT."""
-        from modulo.core.eval_engine import _DETAIL_MAX_LENGTH
+        from farna.core.eval_engine import _DETAIL_MAX_LENGTH
 
         engine = EvalEngine()
         eval_def = _make_eval_def("model_judge", {"field": "output"})

@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.schema_registry._common import invoke_and_parse, parse_schema_from_response
-from modulo.core.schema_registry.inference import (
+from farna.core.schema_registry._common import invoke_and_parse, parse_schema_from_response
+from farna.core.schema_registry.inference import (
     _INFERENCE_SYSTEM_PROMPT,
     SchemaInferenceError,
     SchemaInferenceService,
@@ -143,7 +143,7 @@ class TestBuildInferPrompt:
         assert "git host" in messages[0].content
 
     def test_connector_category_helper(self) -> None:
-        from modulo.core.schema_registry.inference import connector_category
+        from farna.core.schema_registry.inference import connector_category
 
         assert connector_category("jira") == "issue-tracker"
         assert connector_category("linear") == "generic"
@@ -249,7 +249,7 @@ class TestSupportedInferenceTypes:
     connector-type category map it is derived from (single source of truth)."""
 
     def test_supported_types_derive_from_the_category_map(self) -> None:
-        from modulo.core.schema_registry.inference import (
+        from farna.core.schema_registry.inference import (
             _CONNECTOR_TYPE_CATEGORY,
             SUPPORTED_INFERENCE_TYPES,
         )
@@ -259,8 +259,8 @@ class TestSupportedInferenceTypes:
         )
 
     def test_non_sampled_connector_types_are_not_admitted(self) -> None:
-        from modulo.connectors.base import ConnectorType
-        from modulo.core.schema_registry.inference import SUPPORTED_INFERENCE_TYPES
+        from farna.connectors.base import ConnectorType
+        from farna.core.schema_registry.inference import SUPPORTED_INFERENCE_TYPES
 
         # Abstract markers and non-record connectors have no sampleable resource,
         # so the route must reject them (400) rather than run inference on nothing.
@@ -273,7 +273,7 @@ class TestSupportedInferenceTypes:
             assert unsupported.value not in SUPPORTED_INFERENCE_TYPES
 
     def test_every_admitted_type_has_concrete_guidance(self) -> None:
-        from modulo.core.schema_registry.inference import (
+        from farna.core.schema_registry.inference import (
             _CONNECTOR_CATEGORY_GUIDANCE,
             SUPPORTED_INFERENCE_TYPES,
             connector_category,
@@ -501,7 +501,7 @@ class TestSchemaInferenceService:
         backend = _FlakyBackend(response=json.dumps(expected), failures_before_success=2)
         service = SchemaInferenceService(backend)
 
-        with patch("modulo.core.schema_registry._common.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with patch("farna.core.schema_registry._common.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result = await service.infer([{"name": "test"}])
 
         assert result == expected

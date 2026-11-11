@@ -10,11 +10,11 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.connector_instance import list_connector_instances
-from modulo.db.crud.eval_run import get_evals_for_runs, get_run_evals
-from modulo.db.crud.template import _preview_data_from_content
-from modulo.db.crud.trigger import apply_trigger_event_cursor
-from modulo.db.repositories import RepositoryHub
+from farna.db.crud.connector_instance import list_connector_instances
+from farna.db.crud.eval_run import get_evals_for_runs, get_run_evals
+from farna.db.crud.template import _preview_data_from_content
+from farna.db.crud.trigger import apply_trigger_event_cursor
+from farna.db.repositories import RepositoryHub
 
 
 async def test_connector_list_returns_empty_page_on_count_programming_error() -> None:

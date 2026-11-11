@@ -418,8 +418,8 @@ jobs:
         run: |
           bash ../scripts/uv_sync_with_retry.sh --frozen
           uv run --no-build --no-sync ruff check .
-          uv run --no-build --no-sync mypy src/modulo/
-          uv run --no-build --no-sync bandit -r src/modulo/ -ll
+          uv run --no-build --no-sync mypy src/farna/
+          uv run --no-build --no-sync bandit -r src/farna/ -ll
 
   backend-unit:
     name: "Pre-deploy: Backend unit tests"
@@ -653,7 +653,7 @@ jobs:
           BACKOFF_SECONDS=30
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "--- Integration tests attempt $attempt of $MAX_ATTEMPTS ---"
-            if uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings; then
+            if uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/farna --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings; then
               echo "Integration tests passed on attempt $attempt"
               exit 0
             else

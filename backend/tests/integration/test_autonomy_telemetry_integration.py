@@ -13,8 +13,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from modulo.core.run_context import autonomy_telemetry as at
-from modulo.db.rls import set_rls_org
+from farna.core.run_context import autonomy_telemetry as at
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

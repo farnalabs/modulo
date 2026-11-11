@@ -23,16 +23,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     mask_pipeline_graph_node,
     merge_masked_graph_nodes,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -157,7 +157,7 @@ def test_mask_graph_node_fail_closed_scrubs_when_masker_raises(monkeypatch: Any)
     def _boom(text: str) -> str:
         raise AssertionError("masker sentinel failure")
 
-    monkeypatch.setattr("modulo.api.middleware.sensitive_mask.mask_secret_values_in_text", _boom)
+    monkeypatch.setattr("farna.api.middleware.sensitive_mask.mask_secret_values_in_text", _boom)
 
     masked = mask_pipeline_graph_node(node)
 
@@ -284,11 +284,11 @@ def _make_pipeline(graph_nodes_json: list[dict[str, Any]]) -> MagicMock:
 def test_get_graph_masks_node_env(client: TestClient) -> None:
     with (
         patch(
-            "modulo.api.routes.pipelines.get_pipeline_graph",
+            "farna.api.routes.pipelines.get_pipeline_graph",
             return_value=([dict(_NODE_WITH_SECRET)], []),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -310,20 +310,20 @@ def test_patch_graph_resolves_masked_echo_against_stored(client: TestClient) -> 
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=([dict(_NODE_WITH_SECRET)], []),
         ) as replace_mock,
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -344,20 +344,20 @@ def test_patch_graph_persists_echoless_deletion(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=([dict(emptied_node)], []),
         ) as replace_mock,
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -393,11 +393,11 @@ def test_masked_read_to_rest_patch_round_trip_preserves_stored_secret(client: Te
     """
     with (
         patch(
-            "modulo.api.routes.pipelines.get_pipeline_graph",
+            "farna.api.routes.pipelines.get_pipeline_graph",
             return_value=([dict(_NODE_WITH_SECRET)], []),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         read_resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -414,20 +414,20 @@ def test_masked_read_to_rest_patch_round_trip_preserves_stored_secret(client: Te
     validation.issues = []
     with (
         patch(
-            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            "farna.api.routes.pipelines.replace_pipeline_graph",
             return_value=([dict(_NODE_WITH_SECRET)], []),
         ) as replace_mock,
         patch(
-            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            "farna.api.routes.pipelines.GraphValidator.validate_definition",
             return_value=validation,
         ),
         patch(
-            "modulo.api.routes.pipelines._resolve_graph_references",
+            "farna.api.routes.pipelines._resolve_graph_references",
             return_value=([], []),
         ),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         write_resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -454,15 +454,15 @@ async def test_masked_read_to_mcp_graph_write_round_trip_preserves_stored_secret
     ``replace_pipeline_graph``, and the tool's response re-masks so the caller
     never sees the stored secret echoed back.
     """
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     with (
         patch(
-            "modulo.api.routes.pipelines.get_pipeline_graph",
+            "farna.api.routes.pipelines.get_pipeline_graph",
             return_value=([dict(_NODE_WITH_SECRET)], []),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         read_resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
 
@@ -486,10 +486,10 @@ async def test_masked_read_to_mcp_graph_write_round_trip_preserves_stored_secret
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "check_tool_scope", MagicMock()),
             patch.object(ms, "_session", return_value=session_cm),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
             patch(
-                "modulo.db.crud.pipeline.replace_pipeline_graph",
+                "farna.db.crud.pipeline.replace_pipeline_graph",
                 new=AsyncMock(return_value=([dict(_NODE_WITH_SECRET)], [])),
             ) as mcp_replace,
         ):
@@ -538,11 +538,11 @@ def test_snapshot_detail_masks_graph_nodes(client: TestClient) -> None:
 
     with (
         patch(
-            "modulo.api.routes.pipelines.get_snapshot_detail",
+            "farna.api.routes.pipelines.get_snapshot_detail",
             return_value=snapshot,
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}")
 
@@ -589,9 +589,9 @@ def test_snapshot_detail_strips_credential_fields_entirely(client: TestClient) -
     )
 
     with (
-        patch("modulo.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_snapshot_detail", return_value=snapshot),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{snapshot_id}")
 
@@ -607,7 +607,7 @@ def test_snapshot_detail_strips_credential_fields_entirely(client: TestClient) -
 def test_sanitized_snapshot_graph_passes_through_non_dict_and_malformed_nodes() -> None:
     """FAR-2456: the historic sanitiser tolerates non-dict graphs, non-list nodes
     and non-dict node entries instead of crashing on them."""
-    from modulo.api.routes.pipelines import _sanitized_snapshot_graph
+    from farna.api.routes.pipelines import _sanitized_snapshot_graph
 
     assert _sanitized_snapshot_graph(None) is None
     assert _sanitized_snapshot_graph(["x"]) == ["x"]
@@ -641,7 +641,7 @@ def test_export_fixture_masks_snapshot_graph_credentials(client: TestClient) -> 
     holding ``run.output`` — the same credential class the graph, snapshot
     detail, MCP tool and composite-template reads mask.
     """
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     node = {
         "id": "n1",
@@ -669,16 +669,16 @@ def test_export_fixture_masks_snapshot_graph_credentials(client: TestClient) -> 
     snapshot = SimpleNamespace(id=run.snapshot_id, graph_json=graph_json)
 
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
         patch(
-            "modulo.api.routes.runs._load_snapshot_for_run",
+            "farna.api.routes.runs._load_snapshot_for_run",
             new=AsyncMock(return_value=snapshot),
         ),
         patch(
-            "modulo.api.routes.runs.read_run_blobs",
+            "farna.api.routes.runs.read_run_blobs",
             new=AsyncMock(return_value=RunBlobs(outputs={"node-1": "done"}, telemetry={}, markers=None)),
         ),
-        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_rls_org", new=AsyncMock()),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
 
@@ -711,7 +711,7 @@ def test_export_fixture_masks_snapshot_graph_credentials(client: TestClient) -> 
 
 
 async def _call_mcp_snapshot_resource(snapshot: Any) -> str:
-    import modulo.api.mcp_server as ms
+    import farna.api.mcp_server as ms
 
     ms._ctx_org_id.set(_ORG_ID)
     mock_session: Any = AsyncMock()
@@ -722,9 +722,9 @@ async def _call_mcp_snapshot_resource(snapshot: Any) -> str:
     with (
         patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
         patch.object(ms, "_session", return_value=session_cm),
-        patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
         patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
+            "farna.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
             new=AsyncMock(return_value=snapshot),
         ),
     ):
@@ -849,7 +849,7 @@ async def test_v1_export_strips_node_credentials_and_records_redactions() -> Non
     placeholder would be dropped silently. The removals are recorded so the
     import can warn, and non-secret node content still ships.
     """
-    from modulo.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
+    from farna.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
 
     data = await export_pipeline_bundle(_export_session_for([dict(_SECRET_NODE)]), _PIPELINE_ID)
     bundle = extract_bundle_json_from_zip(data)
@@ -897,8 +897,8 @@ async def test_v1_import_warns_that_exported_credentials_were_stripped(
     ABSENT (there is no stored value on this instance to restore), so it must
     name them; the import itself must otherwise behave exactly as before.
     """
-    from modulo.core import workflow_import_export as wix
-    from modulo.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
+    from farna.core import workflow_import_export as wix
+    from farna.core.workflow_import_export import export_pipeline_bundle, extract_bundle_json_from_zip
 
     export_data = await export_pipeline_bundle(_export_session_for([dict(_SECRET_NODE)]), _PIPELINE_ID)
     bundle = extract_bundle_json_from_zip(export_data)
@@ -949,7 +949,7 @@ def _git_prompt_bundle(prompt_template: str) -> dict[str, Any]:
 
 def _import_session(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Session fake + CRUD patches for materialize_import without a database."""
-    from modulo.core import workflow_import_export as wix
+    from farna.core import workflow_import_export as wix
 
     monkeypatch.setattr(wix, "create_pipeline", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
     monkeypatch.setattr(wix, "create_library_primitive", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4())))
@@ -972,8 +972,8 @@ async def test_import_rejects_unpinned_git_content_agent_prompt(monkeypatch: pyt
     leaking an unpinned ref into the database where every later run dispatches
     the raw movable ref.
     """
-    from modulo.core import workflow_import_export as wix
-    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from farna.core import workflow_import_export as wix
+    from farna.core.pipeline_engine.git_content import GitContentRefError
 
     session = _import_session(monkeypatch)
 
@@ -991,8 +991,8 @@ async def test_import_rejects_malformed_git_content_agent_prompt(monkeypatch: py
     Malformed ``git+`` values cannot be pinned or audited, so the same
     fail-closed semantics apply: typed error, nothing materialized.
     """
-    from modulo.core import workflow_import_export as wix
-    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from farna.core import workflow_import_export as wix
+    from farna.core.pipeline_engine.git_content import GitContentRefError
 
     session = _import_session(monkeypatch)
 
@@ -1010,7 +1010,7 @@ async def test_import_accepts_pinned_git_content_agent_prompt(monkeypatch: pytes
     refs; a properly pinned prompt persists unchanged with the rest of the
     bundle.
     """
-    from modulo.core import workflow_import_export as wix
+    from farna.core import workflow_import_export as wix
 
     session = _import_session(monkeypatch)
 
@@ -1030,7 +1030,7 @@ def test_v2_export_carries_no_graph_nodes() -> None:
     stripping: if a graph-node payload ever reaches the v2 envelope, this
     fails before the bundle can leak one.
     """
-    from modulo.core.workflow_import_export import _build_v2_bundle, _V2ExportParts
+    from farna.core.workflow_import_export import _build_v2_bundle, _V2ExportParts
 
     pipeline = SimpleNamespace(id=_PIPELINE_ID, name="Secret Pipeline", visibility="org", owner_team_id=None)
     parts = _V2ExportParts(agents=[], schemas=[], edges=[], triggers=[], owner_team_name=None, author="a@b.c")
@@ -1049,7 +1049,7 @@ def test_v2_export_carries_no_graph_nodes() -> None:
 
 def test_strip_graph_node_credentials_passes_non_dict_nodes_through() -> None:
     """A non-dict entry in ``graph_nodes`` is echoed unchanged, never indexed."""
-    from modulo.core.workflow_import_export import strip_graph_node_credentials
+    from farna.core.workflow_import_export import strip_graph_node_credentials
 
     nodes, redactions = strip_graph_node_credentials(["not-a-node", None])  # type: ignore[list-item]
 
@@ -1066,8 +1066,8 @@ def test_strip_graph_node_credentials_fails_closed_when_stripping_raises(
     misfired, so the field goes and the removal is recorded as
     ``stripping_failed`` for the import-side warning.
     """
-    from modulo.core import workflow_import_export as wix
-    from modulo.core.workflow_import_export import strip_graph_node_credentials
+    from farna.core import workflow_import_export as wix
+    from farna.core.workflow_import_export import strip_graph_node_credentials
 
     def _boom(_node: dict[str, Any]) -> Any:
         raise RuntimeError("detector misfired")
@@ -1089,7 +1089,7 @@ def test_strip_graph_node_credentials_fails_closed_when_stripping_raises(
 
 def test_has_secret_value_ignores_non_string_and_empty() -> None:
     """The value-tier detector is a no-op for non-strings and the empty string."""
-    from modulo.core.workflow_import_export import _has_secret_value
+    from farna.core.workflow_import_export import _has_secret_value
 
     assert _has_secret_value(None) is False
     assert _has_secret_value("") is False
@@ -1098,7 +1098,7 @@ def test_has_secret_value_ignores_non_string_and_empty() -> None:
 
 def test_strip_context_files_keeps_clean_content() -> None:
     """Only secret-bearing file CONTENT is removed; clean files survive."""
-    from modulo.core.workflow_import_export import _strip_context_files
+    from farna.core.workflow_import_export import _strip_context_files
 
     kept, redactions = _strip_context_files(
         "n1",
@@ -1113,7 +1113,7 @@ def test_strip_context_files_keeps_clean_content() -> None:
 
 def test_strip_deep_values_walks_lists_and_drops_secret_elements() -> None:
     """Deep parameter values are walked through nested LISTS as well as dicts."""
-    from modulo.core.workflow_import_export import _strip_deep_values
+    from farna.core.workflow_import_export import _strip_deep_values
 
     redactions: list[dict[str, str]] = []
     value = {
@@ -1146,7 +1146,7 @@ def test_merge_masked_graph_nodes_skips_non_dict_and_id_less_stored_nodes() -> N
 
 def test_masked_snapshot_graph_passes_through_non_dict() -> None:
     """A null / non-dict snapshot graph is returned unchanged, not indexed."""
-    from modulo.api.routes.pipelines import _masked_snapshot_graph
+    from farna.api.routes.pipelines import _masked_snapshot_graph
 
     assert _masked_snapshot_graph(None) is None
     assert _masked_snapshot_graph(["x"]) == ["x"]

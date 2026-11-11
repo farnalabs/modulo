@@ -11,9 +11,9 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.lifecycle_map.import_export import build_export_envelope, import_lifecycle_map_envelope
-from modulo.core.lifecycle_map.service import create_lifecycle_map, get_lifecycle_map, save_map_version
-from modulo.db.crud.library_primitive import list_library_primitives
+from farna.core.lifecycle_map.import_export import build_export_envelope, import_lifecycle_map_envelope
+from farna.core.lifecycle_map.service import create_lifecycle_map, get_lifecycle_map, save_map_version
+from farna.db.crud.library_primitive import list_library_primitives
 
 pytestmark = pytest.mark.integration
 

@@ -30,19 +30,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.trigger_engine import (
+from farna.core.trigger_engine import (
     HmacValidationError,
     TimestampExpiredError,
     TriggerEngine,
     sha256_hex,
 )
-from modulo.core.trigger_engine.pre_guardrail import (
+from farna.core.trigger_engine.pre_guardrail import (
     GuardrailBlockedAtIntakeError,
     canonical_payload_hash,
     run_pre_trigger_guardrail_pass,
 )
-from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
-from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES
+from farna.db.models.webhook import WebhookDedupHash, WebhookPayload
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -55,7 +55,7 @@ _VALID_32 = "a" * 32
 
 @pytest.fixture(autouse=True)
 def _org_not_paused() -> Generator[None, None, None]:
-    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
+    with patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
         yield
 
 
@@ -247,7 +247,7 @@ async def test_handle_webhook_block_fires_before_dedup() -> None:
     session = _make_session(trigger=trigger, guardrail_rows=[_make_guardrail_row(action="block")])
 
     with (
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
         pytest.raises(GuardrailBlockedAtIntakeError) as exc_info,
     ):
         await TriggerEngine().handle_webhook(
@@ -285,8 +285,8 @@ async def test_handle_webhook_block_never_creates_run() -> None:
     session = _make_session(trigger=trigger, guardrail_rows=[_make_guardrail_row(action="block")])
 
     with (
-        patch("modulo.core.trigger_engine.create_run") as mock_create,
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run") as mock_create,
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
         pytest.raises(GuardrailBlockedAtIntakeError),
     ):
         await TriggerEngine().handle_webhook(
@@ -312,8 +312,8 @@ async def test_handle_webhook_clean_payload_not_blocked() -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -357,8 +357,8 @@ async def test_handle_webhook_redact_applies_masks_before_dedup_and_run() -> Non
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock) as mock_create,
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -395,8 +395,8 @@ async def test_handle_webhook_no_guardrails_uses_canonical_dedup_hash() -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         await TriggerEngine().handle_webhook(
             session,
@@ -427,8 +427,8 @@ async def test_handle_webhook_warn_is_advisory() -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -454,8 +454,8 @@ async def test_handle_webhook_observe_is_advisory() -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -486,7 +486,7 @@ async def test_handle_webhook_mechanism_error_fails_closed_for_block() -> None:
 
     with (
         patch(
-            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            "farna.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
         pytest.raises(GuardrailBlockedAtIntakeError) as exc_info,
@@ -515,7 +515,7 @@ async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_acti
 
     with (
         patch(
-            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            "farna.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
         patch.object(TriggerEngine, "_persist_pre_trigger_guardrail_evidence", new_callable=MagicMock) as persist,
@@ -550,12 +550,12 @@ async def test_handle_webhook_mechanism_error_does_not_block_muted_block() -> No
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
         patch(
-            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            "farna.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -580,12 +580,12 @@ async def test_handle_webhook_mechanism_error_advisory_for_observe() -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("farna.core.trigger_engine.create_run", return_value=run_mock),
         patch(
-            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            "farna.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
     ):
         run, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -696,7 +696,7 @@ async def test_replay_event_pre_trigger_pass_is_detection_only() -> None:
     )
     run_mock = MagicMock(id=uuid.uuid4())
 
-    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock):
+    with patch("farna.core.trigger_engine.create_run", return_value=run_mock):
         run, te, _ = await TriggerEngine().replay_event(
             session,
             event_id=event.id,
@@ -835,7 +835,7 @@ async def test_handle_webhook_encrypted_hmac_secret_roundtrips() -> None:
 
     from cryptography.fernet import Fernet
 
-    from modulo.auth.secret_storage import encrypt_stored_secret
+    from farna.auth.secret_storage import encrypt_stored_secret
 
     plaintext_secret = "whsec_encrypted_intake_1234567890"
     fernet_key = Fernet.generate_key().decode()
@@ -853,9 +853,9 @@ async def test_handle_webhook_encrypted_hmac_secret_roundtrips() -> None:
     fake_settings = MagicMock()
     fake_settings.fernet_key = fernet_key
     with (
-        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
-        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
-        patch("modulo.settings.get_settings", return_value=fake_settings),
+        patch("farna.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        patch("farna.core.trigger_engine.time.time", return_value=int(time.time())),
+        patch("farna.settings.get_settings", return_value=fake_settings),
     ):
         _, te, _ = await TriggerEngine().handle_webhook(
             session,
@@ -875,7 +875,7 @@ async def test_handle_webhook_encrypted_hmac_secret_rejects_tampered_payload() -
     """Tampering with an encrypted-secret webhook is still rejected."""
     from cryptography.fernet import Fernet
 
-    from modulo.auth.secret_storage import encrypt_stored_secret
+    from farna.auth.secret_storage import encrypt_stored_secret
 
     plaintext_secret = "whsec_encrypted_intake_1234567890"
     fernet_key = Fernet.generate_key().decode()
@@ -891,7 +891,7 @@ async def test_handle_webhook_encrypted_hmac_secret_rejects_tampered_payload() -
     fake_settings = MagicMock()
     fake_settings.fernet_key = fernet_key
     with (
-        patch("modulo.settings.get_settings", return_value=fake_settings),
+        patch("farna.settings.get_settings", return_value=fake_settings),
         pytest.raises(HmacValidationError),
     ):
         await TriggerEngine().handle_webhook(

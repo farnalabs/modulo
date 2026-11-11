@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.auth.team_rbac import (
+from farna.auth.team_rbac import (
     ORG_ROLE_HIERARCHY,
     TEAM_ROLE_HIERARCHY,
     VALID_ORG_ROLES,

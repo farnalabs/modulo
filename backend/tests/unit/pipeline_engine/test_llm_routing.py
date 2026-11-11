@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.graph_validator._types import ValidationResult
+from farna.core.pipeline_engine.graph_cache import (
     _make_llm_router,
     build_graph_from_json,
 )
@@ -208,7 +208,7 @@ async def test_llm_routing_works_with_normal_edges_as_fallback():
 
 
 def _make_validator():
-    from modulo.core.graph_validator import GraphValidator
+    from farna.core.graph_validator import GraphValidator
 
     return GraphValidator()
 

@@ -1,4 +1,4 @@
-"""Unit tests for the Fernet key-rotation service (modulo.core.fernet_rotation).
+"""Unit tests for the Fernet key-rotation service (farna.core.fernet_rotation).
 
 Applies QA lenses (correctness, bugs, maintainability) to the rotation module,
 which re-encrypts every Fernet-encrypted data store with a new key while
@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from modulo.core import fernet_rotation
-from modulo.core.fernet_rotation import (
+from farna.core import fernet_rotation
+from farna.core.fernet_rotation import (
     RotationResult,
     _rotate_checkpoint_blobs,
     _rotate_checkpoint_writes,
@@ -36,7 +36,7 @@ from modulo.core.fernet_rotation import (
     re_encrypt_str,
     rotate_all_encrypted_data,
 )
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
 
 def _new_key() -> str:

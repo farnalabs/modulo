@@ -20,9 +20,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.auth.jwt import create_access_token
-from modulo.auth.permissions import PERMISSIONS, resolve_required
-from modulo.core.feature_flags import PlanContext
+from farna.auth.jwt import create_access_token
+from farna.auth.permissions import PERMISSIONS, resolve_required
+from farna.core.feature_flags import PlanContext
 
 pytestmark = pytest.mark.integration
 
@@ -209,9 +209,9 @@ async def _plan_client(
     Shared by the feature-gate tests so each plan variation builds its own
     client without duplicating the override wiring.
     """
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -568,8 +568,8 @@ class TestPredicateStrip:
 
         from sqlalchemy import select
 
-        from modulo.core.analytics.builder import AnalyticsQuery, build_facts_query
-        from modulo.db.models.run_daily_facts import RunDailyFact
+        from farna.core.analytics.builder import AnalyticsQuery, build_facts_query
+        from farna.db.models.run_daily_facts import RunDailyFact
 
         factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
@@ -597,9 +597,9 @@ class TestFeatureAndPermission:
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-        from modulo.api.main import app
-        from modulo.settings import Settings, get_settings
+        from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+        from farna.api.main import app
+        from farna.settings import Settings, get_settings
 
         settings = Settings(
             database_url=db_url,
@@ -745,7 +745,7 @@ class TestStatementTimeout:
     ) -> None:
         from sqlalchemy import func, select
 
-        import modulo.core.analytics.service as analytics_service
+        import farna.core.analytics.service as analytics_service
 
         # PG-only: the endpoint SET LOCALs a tiny statement_timeout and the
         # patched builder emits pg_sleep(5) → QueryCanceled → 503.
@@ -772,7 +772,7 @@ class TestProgrammingError:
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        import modulo.core.analytics.service as analytics_service
+        import farna.core.analytics.service as analytics_service
 
         # A missing table (migrations not applied) raises ProgrammingError. It
         # must map to 501 "run migrations" — NOT be swallowed by the broader
@@ -1477,7 +1477,7 @@ class TestBackfillEnrichment:
             )
             await conn.execute(text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{bypass_role}"'))
 
-        from modulo.core.analytics.maintenance import backfill_facts
+        from farna.core.analytics.maintenance import backfill_facts
 
         engine = create_async_engine(
             db_engine.url.render_as_string(hide_password=False),

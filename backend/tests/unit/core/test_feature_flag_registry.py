@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
+from farna.core.feature_flags import DEFAULT_OFF_FLAGS, RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
 
 
 def _make_session() -> AsyncMock:
@@ -204,8 +204,8 @@ class TestFromDb:
         ]
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="team", has_license_key=True)
 
@@ -250,8 +250,8 @@ class TestFromDb:
         db_tiers = [{"tier_id": "community", "rank": 0}]
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
 
@@ -276,7 +276,7 @@ class TestKnownFlags:
 class TestDbCatalogTeamTierFlags:
     """Flags upserted into the DB catalog (FAR-114) must enable on team tier.
 
-    Regression: the seed ``FLAGS`` in ``modulo.core.seed_data.catalog`` was
+    Regression: the seed ``FLAGS`` in ``farna.core.seed_data.catalog`` was
     missing ``runtime_config`` / ``rate_limits`` / ``error_tracking``, so
     ``load_from_db()`` dropped them from the registry and the pages 402'd even
     on the team tier.
@@ -309,7 +309,7 @@ class TestDbCatalogTeamTierFlags:
         ]
 
     async def test_team_tier_enables_upserted_flags(self) -> None:
-        from modulo.core.feature_flags import DbPlanContext
+        from farna.core.feature_flags import DbPlanContext
 
         session = _make_session()
         db_tiers = [
@@ -318,8 +318,8 @@ class TestDbCatalogTeamTierFlags:
         ]
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
         ):
             ctx = await DbPlanContext.from_db(session, "team", has_license_key=True)
 
@@ -327,7 +327,7 @@ class TestDbCatalogTeamTierFlags:
             assert ctx.feature_enabled(name) is True, f"{name} should be enabled on team tier"
 
     async def test_community_tier_keeps_upserted_flags_locked(self) -> None:
-        from modulo.core.feature_flags import DbPlanContext
+        from farna.core.feature_flags import DbPlanContext
 
         session = _make_session()
         db_tiers = [
@@ -336,8 +336,8 @@ class TestDbCatalogTeamTierFlags:
         ]
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
         ):
             ctx = await DbPlanContext.from_db(session, "community")
 
@@ -429,8 +429,8 @@ class TestDefaultOffFlags:
             {"tier_id": "team", "rank": 1},
         ]
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
         assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
@@ -500,8 +500,8 @@ class TestUserScopedMcpKeysDefaultOn:
             {"tier_id": "team", "rank": 1},
         ]
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
         assert registry.get_flag("user_scoped_mcp_keys").currently_active is False  # type: ignore[union-attr]
@@ -519,38 +519,38 @@ class TestResolveSsoUnrestrictedProvisioning:
     _ORG = uuid.UUID("00000000-0000-0000-0000-000000000555")
 
     async def test_delegates_to_registry(self) -> None:
-        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+        from farna.core.feature_flags import resolve_sso_unrestricted_provisioning
 
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(return_value=True)
-        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+        with patch("farna.core.feature_flags.get_registry", return_value=registry):
             assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is True
 
     async def test_false_when_flag_off(self) -> None:
-        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+        from farna.core.feature_flags import resolve_sso_unrestricted_provisioning
 
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(return_value=False)
-        with patch("modulo.core.feature_flags.get_registry", return_value=registry):
+        with patch("farna.core.feature_flags.get_registry", return_value=registry):
             assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
 
     async def test_fails_closed_when_registry_raises(self, caplog) -> None:
-        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+        from farna.core.feature_flags import resolve_sso_unrestricted_provisioning
 
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
         with (
-            patch("modulo.core.feature_flags.get_registry", return_value=registry),
+            patch("farna.core.feature_flags.get_registry", return_value=registry),
             caplog.at_level("ERROR"),
         ):
             assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
         assert "failing closed" in caplog.text
 
     async def test_fails_closed_when_get_registry_raises(self, caplog) -> None:
-        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+        from farna.core.feature_flags import resolve_sso_unrestricted_provisioning
 
         with (
-            patch("modulo.core.feature_flags.get_registry", side_effect=RuntimeError("no registry")),
+            patch("farna.core.feature_flags.get_registry", side_effect=RuntimeError("no registry")),
             caplog.at_level("ERROR"),
         ):
             assert (await resolve_sso_unrestricted_provisioning(org_id=self._ORG)) is False
@@ -559,12 +559,12 @@ class TestResolveSsoUnrestrictedProvisioning:
     async def test_cancelled_error_propagates(self) -> None:
         import asyncio
 
-        from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
+        from farna.core.feature_flags import resolve_sso_unrestricted_provisioning
 
         registry = AsyncMock()
         registry.resolve_flag = AsyncMock(side_effect=asyncio.CancelledError())
         with (
-            patch("modulo.core.feature_flags.get_registry", return_value=registry),
+            patch("farna.core.feature_flags.get_registry", return_value=registry),
             pytest.raises(asyncio.CancelledError),
         ):
             await resolve_sso_unrestricted_provisioning(org_id=self._ORG)
@@ -581,7 +581,7 @@ class TestSystemMapsFlag:
         assert flag.description == "Beta System Maps authoring (internal operator surface)"
 
     def test_system_maps_in_default_off_flags(self) -> None:
-        from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, INTERNAL_FLAGS
+        from farna.core.feature_flags import DEFAULT_OFF_FLAGS, INTERNAL_FLAGS
 
         assert "system_maps" in DEFAULT_OFF_FLAGS
         assert "system_maps" in INTERNAL_FLAGS
@@ -624,8 +624,8 @@ class TestSystemMapsFlag:
             {"tier_id": "team", "rank": 1},
         ]
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
         assert registry.get_flag("system_maps").currently_active is False  # type: ignore[union-attr]
@@ -644,7 +644,7 @@ class TestSystemMapsFlag:
         read model is a separate community entitlement that is not filtered out
         of customer-facing plan responses.
         """
-        from modulo.core.feature_flags import (
+        from farna.core.feature_flags import (
             DEFAULT_OFF_FLAGS,
             INTERNAL_FLAGS,
             CommunityTier,
@@ -664,7 +664,7 @@ class TestSystemMapsFlag:
 
     def test_system_maps_filtered_from_effective_feature_flags(self) -> None:
         """system_maps must not appear in customer-facing plan responses."""
-        from modulo.core.feature_flags import CommunityTier, effective_feature_flags
+        from farna.core.feature_flags import CommunityTier, effective_feature_flags
 
         plan_ctx = CommunityTier()
         flags = effective_feature_flags(plan_ctx)

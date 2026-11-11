@@ -17,10 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import run_admission as ra
-from modulo.core import saq_worker as sw
-from modulo.core.audit_logger import background
-from modulo.db.models.run import HITL_PARKED_STATUS, TERMINAL_STATUSES
+from farna.core import run_admission as ra
+from farna.core import saq_worker as sw
+from farna.core.audit_logger import background
+from farna.db.models.run import HITL_PARKED_STATUS, TERMINAL_STATUSES
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-0000000000bb")
@@ -65,7 +65,7 @@ class TestAdvanceTerminalisedRunAudit:
         """Both raw terminalising sweeps funnelling through the ONE shared
         orchestrator means one audit call site covers four terminaliser
         branches — proven here by the ``source`` the caller threads through."""
-        from modulo.core import run_terminal_advance as rta
+        from farna.core import run_terminal_advance as rta
 
         engine = MagicMock()
         with (
@@ -82,7 +82,7 @@ class TestAdvanceTerminalisedRunAudit:
         assert kwargs["actor_source"] == "stale_run_recovery"
 
     async def test_slot_reconciliation_passes_its_own_source(self) -> None:
-        from modulo.core import run_terminal_advance as rta
+        from farna.core import run_terminal_advance as rta
 
         engine = MagicMock()
         with (
@@ -95,7 +95,7 @@ class TestAdvanceTerminalisedRunAudit:
         assert record.await_args.kwargs["actor_source"] == "slot_reconciliation"
 
     async def test_audit_failure_never_fails_the_sweep(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.core import run_terminal_advance as rta
+        from farna.core import run_terminal_advance as rta
 
         engine = MagicMock()
         with (
@@ -116,7 +116,7 @@ class TestAdvanceTerminalisedRunAudit:
     async def test_cancellation_is_never_swallowed(self) -> None:
         """CancelledError is the one exception the fail-open helper must NOT
         swallow — a cancelled sweep must actually stop."""
-        from modulo.core import run_terminal_advance as rta
+        from farna.core import run_terminal_advance as rta
 
         engine = MagicMock()
         with (
@@ -284,7 +284,7 @@ class TestHitlParkSweepAudit:
 
 class TestDispatcherTerminalisationAudit:
     async def test_passes_dispatcher_as_the_actor_source(self) -> None:
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         with patch.object(background, "record_run_state_change_audits", new=AsyncMock()) as record:
             await ch._record_terminalisation_audits([(_RUN, _ORG)])
@@ -296,7 +296,7 @@ class TestDispatcherTerminalisationAudit:
         assert kwargs["log_key"] == "cron_helpers.terminalized_audit_failed"
 
     async def test_empty_tick_never_opens_a_session(self) -> None:
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         with patch.object(background, "record_run_state_change_audits", new=AsyncMock()) as record:
             await ch._record_terminalisation_audits([])
@@ -304,7 +304,7 @@ class TestDispatcherTerminalisationAudit:
         record.assert_not_awaited()
 
     async def test_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         with (
             patch.object(
@@ -319,7 +319,7 @@ class TestDispatcherTerminalisationAudit:
         assert any("cron_helpers.terminalized_audits_failed" in entry.message for entry in caplog.records)
 
     async def test_cancellation_is_never_swallowed(self) -> None:
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         with (
             patch.object(
@@ -341,7 +341,7 @@ class TestRunnerMarkerSweepAudit:
     def test_emitter_reports_only_status_changing_outcomes(self) -> None:
         """d1/d3 merely clear a marker; only the d2 transition changes a
         status, and only that is audit-worthy."""
-        from modulo.core import runner_capacity as rc
+        from farna.core import runner_capacity as rc
 
         org = _ORG
         cleared, transitioned, entries = rc._emit_sweep_outcomes(
@@ -357,7 +357,7 @@ class TestRunnerMarkerSweepAudit:
         assert entries == [(_RUN_B, org)]
 
     async def test_transitioned_entries_are_recorded_with_the_sweep_source(self) -> None:
-        from modulo.core import runner_capacity as rc
+        from farna.core import runner_capacity as rc
 
         factory = MagicMock()
         with patch.object(background, "record_run_state_change_audits", new=AsyncMock()) as record:
@@ -371,7 +371,7 @@ class TestRunnerMarkerSweepAudit:
         assert kwargs["actor_source"] == "runner_marker_sweep"
 
     async def test_no_transitions_never_open_a_session(self) -> None:
-        from modulo.core import runner_capacity as rc
+        from farna.core import runner_capacity as rc
 
         with patch.object(background, "record_run_state_change_audits", new=AsyncMock()) as record:
             await rc._record_marker_sweep_terminalisations(MagicMock(), [])
@@ -379,7 +379,7 @@ class TestRunnerMarkerSweepAudit:
         record.assert_not_awaited()
 
     async def test_audit_failure_never_fails_the_sweep(self, caplog: pytest.LogCaptureFixture) -> None:
-        from modulo.core import runner_capacity as rc
+        from farna.core import runner_capacity as rc
 
         with (
             patch.object(
@@ -394,7 +394,7 @@ class TestRunnerMarkerSweepAudit:
         assert any("runner.capacity.marker_sweep_audit_failed" in entry.message for entry in caplog.records)
 
     async def test_cancellation_is_never_swallowed(self) -> None:
-        from modulo.core import runner_capacity as rc
+        from farna.core import runner_capacity as rc
 
         with (
             patch.object(
@@ -423,14 +423,14 @@ def _retention_patches(
         patch.object(sw, "_make_system_session_factory", return_value=system_factory),
         patch.object(sw, "_make_session_factory", return_value=app_factory or system_factory),
         patch.object(sw, "_retention_purge_targets", new=AsyncMock(return_value=targets)),
-        patch("modulo.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=deleted),
+        patch("farna.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=deleted),
         patch(
-            "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+            "farna.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
             new_callable=AsyncMock,
             return_value=0,
         ),
         patch(
-            "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+            "farna.core.artifacts.gc.delete_orphaned_run_artifacts",
             new_callable=AsyncMock,
             return_value={"orphan_runs": [], "files_deleted": 0},
         ),
@@ -497,18 +497,18 @@ class TestRetentionPurgeAudit:
                 patch.object(sw, "_retention_purge_targets", new=AsyncMock(side_effect=RuntimeError("count failed")))
             )
             stack.enter_context(
-                patch("modulo.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=7)
+                patch("farna.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=7)
             )
             stack.enter_context(
                 patch(
-                    "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                    "farna.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
                     new_callable=AsyncMock,
                     return_value=0,
                 )
             )
             stack.enter_context(
                 patch(
-                    "modulo.core.artifacts.gc.delete_orphaned_run_artifacts",
+                    "farna.core.artifacts.gc.delete_orphaned_run_artifacts",
                     new_callable=AsyncMock,
                     return_value={"orphan_runs": [], "files_deleted": 0},
                 )
@@ -814,7 +814,7 @@ class TestSuiteRunAuditCallSites:
     def test_state_constant_partitions_the_lifecycle(self) -> None:
         """The three guards are disjoint and together cover every SuiteRun
         state — a new state cannot fall through all three un-audited."""
-        from modulo.db.models.eval_suite_run import SuiteRunState
+        from farna.db.models.eval_suite_run import SuiteRunState
 
         all_states = {state.value for state in SuiteRunState}
         assert all_states == (background.SUITE_RUN_PENDING_STATES | background.SUITE_RUN_NON_PENDING_STATES)

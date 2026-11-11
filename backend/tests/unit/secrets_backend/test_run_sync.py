@@ -1,4 +1,4 @@
-"""Direct unit tests for the run_sync helper in modulo.core.secrets_backend.
+"""Direct unit tests for the run_sync helper in farna.core.secrets_backend.
 
 The AWS and Vault backends rely on run_sync for every external call, so its
 contract (thread offload, *args/**kwargs forwarding, timeout enforcement,
@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 import pytest
 
-from modulo.core.secrets_backend import DEFAULT_TIMEOUT, run_sync
+from farna.core.secrets_backend import DEFAULT_TIMEOUT, run_sync
 
 
 def _blocking_callable() -> tuple[Callable[[], None], threading.Event, threading.Event]:

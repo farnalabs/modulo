@@ -1,9 +1,9 @@
-"""Unit tests for modulo.util.one_time_token (FAR-461 / MCP setup handoff)."""
+"""Unit tests for farna.util.one_time_token (FAR-461 / MCP setup handoff)."""
 
 import hashlib
 import string
 
-from modulo.util.one_time_token import generate_token, hash_token
+from farna.util.one_time_token import generate_token, hash_token
 
 
 def test_generate_token_is_urlsafe_high_entropy() -> None:

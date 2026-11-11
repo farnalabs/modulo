@@ -26,14 +26,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager import review_expiry
-from modulo.core.hitl_manager.review_expiry import (
+from farna.core.hitl_manager import review_expiry
+from farna.core.hitl_manager.review_expiry import (
     EXPIRY_AUDIT_LOG_KEY,
     EXPIRY_EVENT_TYPE,
     EXPIRY_OUTCOME,
     record_review_expiry_outcomes,
 )
-from modulo.db.models.run import CANCEL_REASON_HITL_REVIEW_EXPIRED
+from farna.db.models.run import CANCEL_REASON_HITL_REVIEW_EXPIRED
 
 _ORG = uuid.uuid4()
 _RUN = uuid.uuid4()

@@ -30,7 +30,7 @@ from tests.unit.db._migration_graph import assert_single_linear_head, script_dir
 
 _MIGRATION_NAME = "0336_drop_analytics_kill_switch_row"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 _DOWN_REVISION = "0335_eval_verdict_contract_stage2"
 _RETIRED_KEY = "product_analytics_license_enforcement_kill_switch"

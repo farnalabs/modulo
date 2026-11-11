@@ -27,8 +27,8 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from modulo.launcher import manifest as manifest_module
-from modulo.launcher.manifest import (
+from farna.launcher import manifest as manifest_module
+from farna.launcher.manifest import (
     _KEY_ID_CURRENT,
     _KEY_ID_NEXT,
     ManifestSecurityError,

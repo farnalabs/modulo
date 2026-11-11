@@ -3,15 +3,15 @@ id: feat-costs
 prd: 8.10, 9.3
 adr: []
 code:
-  - backend/src/modulo/api/routes/costs.py
-  - backend/src/modulo/api/routes/cost_components.py
-  - backend/src/modulo/core/cost_controller
-  - backend/src/modulo/core/cost_settings.py
-  - backend/src/modulo/core/spend_ceiling.py
-  - backend/src/modulo/db/crud/scheduled_report.py
-  - backend/src/modulo/db/crud/spend_anomaly.py
-  - backend/src/modulo/db/models/spend_anomaly.py
-  - backend/src/modulo/db/migrations/versions/0201_spend_anomaly_unique_org_date.py
+  - backend/src/farna/api/routes/costs.py
+  - backend/src/farna/api/routes/cost_components.py
+  - backend/src/farna/core/cost_controller
+  - backend/src/farna/core/cost_settings.py
+  - backend/src/farna/core/spend_ceiling.py
+  - backend/src/farna/db/crud/scheduled_report.py
+  - backend/src/farna/db/crud/spend_anomaly.py
+  - backend/src/farna/db/models/spend_anomaly.py
+  - backend/src/farna/db/migrations/versions/0201_spend_anomaly_unique_org_date.py
 unit-tests:
   - backend/tests/unit/api/test_costs.py
   - backend/tests/unit/api/test_cost_controls_bdd.py

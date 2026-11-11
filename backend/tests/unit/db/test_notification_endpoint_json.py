@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.db.models  # noqa: F401
-from modulo.db.models.base import Base
-from modulo.db.models.notification_endpoint import NotificationEndpoint
+import farna.db.models  # noqa: F401
+from farna.db.models.base import Base
+from farna.db.models.notification_endpoint import NotificationEndpoint
 
 
 @pytest.fixture

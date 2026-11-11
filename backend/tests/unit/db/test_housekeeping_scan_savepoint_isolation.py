@@ -29,7 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.housekeeping import Candidate, Scanner, scan_all
+from farna.core.housekeeping import Candidate, Scanner, scan_all
 
 _PG_URL_ENV = "HOUSEKEEPING_TEST_PG_URL"
 
@@ -125,7 +125,7 @@ class TestSavepointIsolation:
         maker = async_sessionmaker(pg_engine, expire_on_commit=False)
         async with maker() as session, session.begin():
             with pytest.MonkeyPatch.context() as mp:
-                mp.setattr("modulo.core.housekeeping._SCANNERS", scanners)
+                mp.setattr("farna.core.housekeeping._SCANNERS", scanners)
                 results = await scan_all(session, _ORG)
             # The shared transaction is still usable after the rollback-to-
             # savepoint — prove it from the same session.

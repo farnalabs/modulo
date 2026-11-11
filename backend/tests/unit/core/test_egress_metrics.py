@@ -1,7 +1,7 @@
 """FAR-526D: shared egress-layer OTel metrics (pinned / rejected).
 
-Exercises ``modulo.core.egress_metrics`` directly (instrument registration +
-record helpers) and the wiring through ``modulo.core.ssrf``'s pinned-egress
+Exercises ``farna.core.egress_metrics`` directly (instrument registration +
+record helpers) and the wiring through ``farna.core.ssrf``'s pinned-egress
 factory (that a real egress build emits ``modulo_egress_pinned_total`` and a
 rejected build emits ``modulo_egress_rejected_total`` with the correct
 host/connector_type/reason attributes).
@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core import egress_metrics, ssrf
+from farna.core import egress_metrics, ssrf
 
 
 @pytest.fixture(autouse=True)

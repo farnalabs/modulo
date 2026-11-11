@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from modulo.core.pipeline_engine.event_broker import (
+from farna.core.pipeline_engine.event_broker import (
     _RING_BUFFER_SIZE,
     BrokerRegistry,
     RunEvent,
@@ -220,7 +220,7 @@ async def test_redis_publish_failure_is_logged(caplog: pytest.LogCaptureFixture)
         async def close(self) -> None:
             return None
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.event_broker"):
         broker = RunEventBroker(uuid.uuid4(), redis_broker=_FailingRedisBroker())
         broker.publish("node_started", {"node_id": "a"})
         for _ in range(5):  # let the failing task complete and be observed
@@ -235,7 +235,7 @@ def test_publish_with_redis_broker_without_running_loop_skips_broadcast(
     event loop is running — the fire-and-forget broadcast fails open with a log."""
     redis = _FakeRedisBroker()
     broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.event_broker"):
         event = broker.publish("node_started", {"node_id": "a"})
     assert event.seq == 1
     assert not redis.published
@@ -249,7 +249,7 @@ def test_close_with_redis_broker_without_running_loop_skips_close(
     event loop is running."""
     redis = _FakeRedisBroker()
     broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.event_broker"):
         broker.close()
     assert redis.close_count == 0
     assert any("redis_close_skipped" in record.message for record in caplog.records)
@@ -368,7 +368,7 @@ def test_registry_close_unknown_run_is_noop():
 
 
 def test_map_lg_event_node_started():
-    from modulo.core.pipeline_engine.executor import _map_lg_event
+    from farna.core.pipeline_engine.executor import _map_lg_event
 
     result = _map_lg_event(
         {"event": "on_chain_start", "name": "node-a"},
@@ -378,7 +378,7 @@ def test_map_lg_event_node_started():
 
 
 def test_map_lg_event_node_completed():
-    from modulo.core.pipeline_engine.executor import _map_lg_event
+    from farna.core.pipeline_engine.executor import _map_lg_event
 
     result = _map_lg_event(
         {"event": "on_chain_end", "name": "node-a"},
@@ -388,7 +388,7 @@ def test_map_lg_event_node_completed():
 
 
 def test_map_lg_event_node_failed():
-    from modulo.core.pipeline_engine.executor import _map_lg_event
+    from farna.core.pipeline_engine.executor import _map_lg_event
 
     result = _map_lg_event(
         {"event": "on_chain_error", "name": "node-a", "data": {"error": "timeout"}},
@@ -398,7 +398,7 @@ def test_map_lg_event_node_failed():
 
 
 def test_map_lg_event_non_node_name_returns_none():
-    from modulo.core.pipeline_engine.executor import _map_lg_event
+    from farna.core.pipeline_engine.executor import _map_lg_event
 
     result = _map_lg_event(
         {"event": "on_chain_start", "name": "LangGraph"},  # graph-level event
@@ -408,7 +408,7 @@ def test_map_lg_event_non_node_name_returns_none():
 
 
 def test_map_lg_event_unknown_event_kind_returns_none():
-    from modulo.core.pipeline_engine.executor import _map_lg_event
+    from farna.core.pipeline_engine.executor import _map_lg_event
 
     result = _map_lg_event(
         {"event": "on_llm_start", "name": "node-a"},

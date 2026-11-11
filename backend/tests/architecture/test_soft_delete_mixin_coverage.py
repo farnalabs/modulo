@@ -1,15 +1,15 @@
 """Architecture gate: every model with a ``deleted_at`` column must inherit SoftDeleteMixin.
 
 The global soft-delete filter (``do_orm_execute`` listener in
-``modulo.db.soft_delete``) only covers models that inherit
-:class:`~modulo.db.models.base.SoftDeleteMixin`.  A model that declares its own
+``farna.db.soft_delete``) only covers models that inherit
+:class:`~farna.db.models.base.SoftDeleteMixin`.  A model that declares its own
 ``deleted_at`` column *without* the mixin escapes the global filter — the column
 exists in the DB but the ``WHERE deleted_at IS NULL`` injection never fires,
 creating a silent divergence between models that are filtered and those that are
 not.
 
 This test enumerates every mapper registered against the app
-:class:`~modulo.db.models.base.Base` and asserts that any mapped class with a
+:class:`~farna.db.models.base.Base` and asserts that any mapped class with a
 ``deleted_at`` column is also a subclass of ``SoftDeleteMixin``.  If this test
 fails, the offending model must either:
 
@@ -28,7 +28,7 @@ to decide whether to register a mapper.
 
 from __future__ import annotations
 
-from modulo.db.models.base import Base, SoftDeleteMixin
+from farna.db.models.base import Base, SoftDeleteMixin
 
 
 def test_every_deleted_at_model_inherits_soft_delete_mixin() -> None:
@@ -76,8 +76,8 @@ def test_gate_enumerates_known_orgscoped_models() -> None:
     these models disappear from the enumeration and the gate becomes
     vacuous again.  This self-check catches that regression.
     """
-    from modulo.db.models.error_notification_rule import ErrorNotificationRule
-    from modulo.db.models.eval import Eval
+    from farna.db.models.error_notification_rule import ErrorNotificationRule
+    from farna.db.models.eval import Eval
 
     enumerated_classes: set[type] = set()
     for mapper in Base.registry.mappers:

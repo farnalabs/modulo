@@ -49,7 +49,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import CheckConstraint
 
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
@@ -61,7 +61,7 @@ _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: be satisfied by the WRONG table's constraint.
 _REGCLASS = "'public.pipeline_snapshots'::regclass"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 #: Both statements rank the SAME vocabulary through the SAME CASE shape - only

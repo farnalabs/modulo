@@ -33,9 +33,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.db.crud.run_retention import list_retention_candidates
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from farna.db.crud.run_retention import list_retention_candidates
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 
 pytestmark = pytest.mark.integration
 
@@ -114,7 +114,7 @@ async def _seed_run(
     Allocating from the same atomic per-org counter ``create_run`` uses makes
     the fixture order-independent and collision-free by construction.
     """
-    from modulo.db.crud.run import _allocate_run_number
+    from farna.db.crud.run import _allocate_run_number
 
     run = Run(
         id=uuid.uuid4(),

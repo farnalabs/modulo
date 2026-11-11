@@ -1,4 +1,4 @@
-"""Tests for modulo.db.runner_binding_constraints — save-time binding rules.
+"""Tests for farna.db.runner_binding_constraints — save-time binding rules.
 
 Covers the FAR-592 / D6 new code in ``db/runner_binding_constraints.py`` that had
 no unit coverage: reserved-var detection, target/source validation, and the
@@ -7,7 +7,7 @@ canonical pair validator.
 
 import pytest
 
-from modulo.db.runner_binding_constraints import (
+from farna.db.runner_binding_constraints import (
     KNOWN_SOURCE_FIELDS_ALL,
     RESERVED_ENV_VAR_PREFIXES,
     RESERVED_ENV_VARS,

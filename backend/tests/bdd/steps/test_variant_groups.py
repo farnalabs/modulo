@@ -150,7 +150,7 @@ def group_has_coverage_variants(v_a: str, v_b: str, eval_label: str, ctx: dict[s
 def batch_run_triggered(ctx: dict[str, Any]) -> None:
     import asyncio
 
-    from modulo.db.crud.variant_group import run_variant_batch
+    from farna.db.crud.variant_group import run_variant_batch
 
     async def _run():
         session = AsyncMock()
@@ -170,12 +170,12 @@ def batch_run_triggered(ctx: dict[str, Any]) -> None:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.db.crud.variant_group.increment_run_count",
+                "farna.db.crud.variant_group.increment_run_count",
                 new_callable=AsyncMock,
             ),
         ):
@@ -212,7 +212,7 @@ def sequential_run_triggered(ctx: dict[str, Any]) -> None:
     session machinery the batch-run step uses."""
     import asyncio
 
-    from modulo.db.crud.variant_group import run_variant_batch
+    from farna.db.crud.variant_group import run_variant_batch
 
     async def _run():
         session = AsyncMock()
@@ -232,12 +232,12 @@ def sequential_run_triggered(ctx: dict[str, Any]) -> None:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.db.crud.variant_group.increment_run_count",
+                "farna.db.crud.variant_group.increment_run_count",
                 new_callable=AsyncMock,
             ),
         ):
@@ -271,7 +271,7 @@ def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
     and any variant missing an eval id is reported as a gap."""
     import asyncio
 
-    from modulo.db.crud.variant_group import get_coverage_gaps
+    from farna.db.crud.variant_group import get_coverage_gaps
 
     eval_def = MagicMock()
     eval_def.id = uuid.UUID(ctx["coverage_eval_id"])
@@ -291,7 +291,7 @@ def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
 def single_run_triggered(ctx: dict[str, Any]) -> None:
     import asyncio
 
-    from modulo.db.crud.variant_group import run_variant_weighted
+    from farna.db.crud.variant_group import run_variant_weighted
 
     async def _run():
         session = AsyncMock()
@@ -311,12 +311,12 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.db.crud.variant_group.increment_run_count",
+                "farna.db.crud.variant_group.increment_run_count",
                 new_callable=AsyncMock,
             ),
         ):
@@ -354,7 +354,7 @@ def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any])
 
 @then("each batch run merges its variant's run_context_overrides into the input payload")
 def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
-    from modulo.db.crud.variant_group import _CONTROL_OVERRIDE_KEYS
+    from farna.db.crud.variant_group import _CONTROL_OVERRIDE_KEYS
 
     results = ctx.get("run_results")
     assert results is not None, "Expected batch run results"
@@ -481,7 +481,7 @@ def batch_has_frozen_runs(ctx: dict[str, Any]) -> None:
 def batch_comparison_computed(ctx: dict[str, Any]) -> None:
     import asyncio
 
-    from modulo.db.crud.variant_group import get_batch_compare
+    from farna.db.crud.variant_group import get_batch_compare
 
     def _as_run(d: dict[str, Any]) -> Any:
         # get_batch_compare reads ORM-shaped Run attributes off each row; the

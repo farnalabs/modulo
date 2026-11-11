@@ -1795,13 +1795,13 @@ jobs:
             echo "Smoke check: $IMAGE"
             case "$img" in
               all-in-one)
-                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                docker run --rm --entrypoint python "$IMAGE" -c "import farna; print(farna.__file__)"
                 # deploy/nginx/all-in-one.conf proxies to 127.0.0.1:8000, an IP
                 # literal, so this config test resolves no upstream hostname.
                 docker run --rm --entrypoint nginx "$IMAGE" -t
                 ;;
               backend)
-                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                docker run --rm --entrypoint python "$IMAGE" -c "import farna; print(farna.__file__)"
                 ;;
               frontend)
                 # frontend/Dockerfile.prod bakes a config that proxies to
@@ -2350,7 +2350,7 @@ jobs:
           import hashlib, json, os, sys
           from pathlib import Path
           sys.path.insert(0, "backend/src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
           include_windows = os.environ["INCLUDE_WINDOWS"] == "true"
@@ -2517,7 +2517,7 @@ jobs:
           from pathlib import Path
 
           sys.path.insert(0, "src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
 
           root = Path("../release-artefacts")
           signature = m.read_signature_file(root / "RELEASE_MANIFEST.json.sig")
@@ -2552,7 +2552,7 @@ jobs:
           cat > /tmp/gen_openapi.py <<'EOF'
           import os, json, sys
           sys.tracebacklimit = 0
-          from modulo.api.main import app
+          from farna.api.main import app
           with open("../release-artefacts/openapi.json", "w", encoding="utf-8") as f:
               json.dump(app.openapi(), f, ensure_ascii=False)
           print(f"Schema: {os.path.getsize('../release-artefacts/openapi.json')} bytes")
@@ -2930,7 +2930,7 @@ jobs:
           import hashlib, json, os, sys
           from pathlib import Path
           sys.path.insert(0, "backend/src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
 
           root = Path("release-artefacts")
           version = os.environ["VERSION"]
@@ -2995,7 +2995,7 @@ jobs:
   # wrapper and must never gain a second publisher.
   # ---------------------------------------------------------------------------
   publish-pypi:
-    name: Publish farnalabs-modulo to PyPI
+    name: Publish farna-control to PyPI
     needs: release
     if: inputs.mode == 'promote'
     runs-on: ubicloud-standard-2
@@ -3038,11 +3038,11 @@ jobs:
           with zipfile.ZipFile(wheel[0]) as archive:
               metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
               metadata = email.message_from_bytes(archive.read(metadata_name))
-          assert metadata["Name"] == "farnalabs-modulo"
+          assert metadata["Name"] == "farna-control"
           assert metadata["License-Expression"] == "BUSL-1.1"
           assert metadata["License-File"] == "LICENSE"
           assert "License :: Other/Proprietary License" in metadata.get_all("Classifier", [])
-          print("Package metadata: name=farnalabs-modulo license=BUSL-1.1")
+          print("Package metadata: name=farna-control license=BUSL-1.1")
           PY
 
       - name: Smoke-test the wheel in a clean virtual environment
@@ -3053,7 +3053,7 @@ jobs:
           /tmp/modulo-pypi-smoke/bin/python -m pip install --disable-pip-version-check --no-cache-dir dist/*.whl
           /tmp/modulo-pypi-smoke/bin/modulo apply --help
 
-      - name: Publish farnalabs-modulo via Trusted Publishing
+      - name: Publish farna-control via Trusted Publishing
         # PyPI Trusted Publisher must be registered by a human for this
         # repository, workflow and `pypi` environment before promote can upload.
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

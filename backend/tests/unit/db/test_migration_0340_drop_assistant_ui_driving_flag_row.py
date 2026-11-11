@@ -32,7 +32,7 @@ from tests.unit.db._migration_graph import assert_single_linear_head, script_dir
 
 _MIGRATION_NAME = "0340_drop_assistant_ui_driving_flag_row"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 _DOWN_REVISION = "0339_triggers_name_not_null"
 _RETIRED_NAME = "assistant_ui_driving"

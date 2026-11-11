@@ -1,6 +1,6 @@
 """Unit tests for the shared safe-cursor coercion helper.
 
-``modulo.connectors._safe_cursor.safe_cursor`` guards cursor-paginated
+``farna.connectors._safe_cursor.safe_cursor`` guards cursor-paginated
 connectors (n8n, Notion, CircleCI, Linear) against corrupt or hostile
 ``next_*`` response fields. A non-string cursor flowing into the next
 request's query params or JSON body makes httpx raise on dict/list values and
@@ -18,7 +18,7 @@ that falls back to ``None``.
 
 import pytest
 
-from modulo.connectors._safe_cursor import safe_cursor
+from farna.connectors._safe_cursor import safe_cursor
 
 
 @pytest.mark.parametrize(

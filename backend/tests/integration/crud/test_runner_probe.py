@@ -17,17 +17,17 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
-from modulo.db.crud.environment_profile import apply_bundled_runner_template
-from modulo.db.crud.runner_probe import (
+from farna.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
+from farna.db.crud.environment_profile import apply_bundled_runner_template
+from farna.db.crud.runner_probe import (
     PROBE_RETENTION_SECONDS,
     list_runner_probe_cache,
     prune_stale_runner_probe_rows,
     upsert_runner_probe_cache,
 )
-from modulo.db.models.environment_profile import EnvironmentProfile
-from modulo.db.models.runner_probe_cache import RunnerProbeCache
-from modulo.db.rls import set_rls_org
+from farna.db.models.environment_profile import EnvironmentProfile
+from farna.db.models.runner_probe_cache import RunnerProbeCache
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

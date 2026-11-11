@@ -12,14 +12,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.routes.system_maps import router
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
-from modulo.core.system_maps_discovery import DiscoveryDraft
-from modulo.settings import Settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.routes.system_maps import router
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
+from farna.core.system_maps_discovery import DiscoveryDraft
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -423,7 +423,7 @@ def test_discovery_tenant_scoping_queries_filter_and_set_rls(
 
 
 def test_discovery_route_fingerprint_is_stable() -> None:
-    from modulo.api.routes.system_maps import _fingerprint
+    from farna.api.routes.system_maps import _fingerprint
 
     draft = DiscoveryDraft(nodes=(), relationships=(), warnings=(), skipped=())
     assert _fingerprint(draft) == _fingerprint(draft)

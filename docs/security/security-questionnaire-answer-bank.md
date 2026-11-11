@@ -138,7 +138,7 @@ Evidence: `docs/product-map/auth/oidc-integration.md`;
 `docs/product-map/auth/saml-integration.md`;
 `docs/product-map/auth/scim-provisioning.md`; `docs/architecture.md`
 ("Authentication & Authorization"); the `sso` and `scim` feature flags in
-`backend/src/modulo/core/feature_flags.py`; `backend/src/modulo/auth/scim_auth.py`.
+`backend/src/farna/core/feature_flags.py`; `backend/src/farna/auth/scim_auth.py`.
 
 **Q: How is authorization enforced?**
 
@@ -157,7 +157,7 @@ read no other party's data. Second, team RBAC is a **Team-tier** feature
 (`team_rbac`); the four-level organization role hierarchy and row-level security
 themselves are always active.
 
-Evidence: `backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
+Evidence: `backend/src/farna/auth/permissions.py`; `docs/architecture.md`
 ("Row-Level Security").
 
 **Q: Who can change a feature flag?**
@@ -176,10 +176,10 @@ admins by omission, and the org surface never offers a team-tier flag. A future
 sensitive org-scoped flag (community-library access, telemetry/metrics export)
 must default to system-administrator-only.
 
-Evidence: `backend/src/modulo/core/feature_flags.py`
+Evidence: `backend/src/farna/core/feature_flags.py`
 (`FeatureFlag.org_admin_settable`, `ORG_ADMIN_SETTABLE_FLAGS`);
-`backend/src/modulo/api/routes/admin_org_feature_flags.py`;
-`backend/src/modulo/auth/permissions.py`; `docs/architecture.md`
+`backend/src/farna/api/routes/admin_org_feature_flags.py`;
+`backend/src/farna/auth/permissions.py`; `docs/architecture.md`
 ("Feature Flags").
 
 **Q: Do you support least-privilege API keys?**
@@ -196,9 +196,9 @@ tier; if the customer has not enabled it, answer with the role-scoped answer,
 not the grant-set one.
 
 Evidence: `docs/architecture.md` ("API keys"); `modulo_create_api_key` /
-`GET /api/v1/api-keys`; `backend/src/modulo/auth/permissions.py`; the
+`GET /api/v1/api-keys`; `backend/src/farna/auth/permissions.py`; the
 `api_key_grants` entry in `DEFAULT_OFF_FLAGS` in
-`backend/src/modulo/core/feature_flags.py`.
+`backend/src/farna/core/feature_flags.py`.
 
 **Q: What happens if an administrator account is lost?**
 
@@ -282,7 +282,7 @@ them.
 Evidence: `docs/offline-verifiable-evidence.md`;
 `GET /api/v1/admin/audit`; `GET /api/v1/admin/audit/verify`;
 `GET /api/v1/admin/audit/evidence-pack`;
-`backend/src/modulo/api/routes/audit.py`.
+`backend/src/farna/api/routes/audit.py`.
 
 **Q: How does this map to our compliance framework?**
 
@@ -292,7 +292,7 @@ with per-row coverage and provenance. `GET /api/v1/compliance/evidence-index`
 generates the per-instance evidence index for an auditor.
 
 Evidence: `docs/security/compliance-control-mapping.md`;
-`backend/src/modulo/compliance/mappings/`.
+`backend/src/farna/compliance/mappings/`.
 
 **Q: Do you have a documented SDLC for the product itself?**
 
@@ -410,9 +410,9 @@ retention to the period their own policy (or the EU AI Act's six-month minimum
 for logs) requires.
 
 Evidence: `docs/deployment-security.md` (�6.3 Log Retention);
-`backend/src/modulo/api/routes/admin_run_retention.py` (the
+`backend/src/farna/api/routes/admin_run_retention.py` (the
 `admin_run_retention` feature dependency);
-`backend/src/modulo/api/routes/admin_evidence_retention.py`.
+`backend/src/farna/api/routes/admin_evidence_retention.py`.
 
 **Q: Can we delete our data?**
 
@@ -426,7 +426,7 @@ needs a documented exception rather than a silent purge.
 Evidence: `docs/architecture.md` ("Audit Logger");
 `POST /api/v1/admin/run-retention/purge` and
 `POST /api/v1/admin/evidence-retention/purge` (the admin routes, not a CI job);
-`backend/src/modulo/core/audit_logger/append_only.py`.
+`backend/src/farna/core/audit_logger/append_only.py`.
 
 ## 10. Backup and restore
 
@@ -470,7 +470,7 @@ That mapping ships in the product and the per-instance evidence index is
 generated from it.
 
 Evidence: `docs/security/compliance-control-mapping.md`;
-`backend/src/modulo/compliance/mappings/`.
+`backend/src/farna/compliance/mappings/`.
 
 **Q: Can you complete our security questionnaire?**
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.connectors.base import ConnectorResult
-from modulo.connectors.shell import _ERR_RUNTIME_NOT_CONFIGURED, ShellConnector
+from farna.connectors.base import ConnectorResult
+from farna.connectors.shell import _ERR_RUNTIME_NOT_CONFIGURED, ShellConnector
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 

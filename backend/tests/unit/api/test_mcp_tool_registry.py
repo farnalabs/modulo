@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.mcp_tool_registry — MCP tool-definition cache.
+"""Unit tests for farna.api.mcp_tool_registry — MCP tool-definition cache.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the module that is
 the single source of truth for OpenAI-compatible tool definitions. The assistant
@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 
-import modulo.api.mcp_tool_registry as registry
-from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
+import farna.api.mcp_tool_registry as registry
+from farna.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
 
 
 def _make_tool(
@@ -48,14 +48,14 @@ def fake_mcp(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Inject a fake ``mcp_server`` module whose ``mcp`` mimics the FastMCP tool manager.
 
     ``build_tool_registry`` imports ``mcp`` lazily via
-    ``from modulo.api.mcp_server import mcp``, so seeding ``sys.modules`` with a
+    ``from farna.api.mcp_server import mcp``, so seeding ``sys.modules`` with a
     stub keeps the test hermetic (no real FastMCP server, tools, or DB deps).
     """
-    fake_server = ModuleType("modulo.api.mcp_server")
+    fake_server = ModuleType("farna.api.mcp_server")
     fake_mcp = SimpleNamespace()
     fake_mcp._tool_manager = SimpleNamespace(_tools={})
     fake_server.mcp = fake_mcp
-    monkeypatch.setitem(sys.modules, "modulo.api.mcp_server", fake_server)
+    monkeypatch.setitem(sys.modules, "farna.api.mcp_server", fake_server)
     return fake_mcp
 
 

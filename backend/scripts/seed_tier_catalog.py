@@ -5,7 +5,7 @@ Usage:
 
 Requires DATABASE_URL env var or a running modulo instance with settings loaded.
 
-The tier/flag definitions are imported from ``modulo.core.seed_data.catalog``
+The tier/flag definitions are imported from ``farna.core.seed_data.catalog``
 — the same source the application boot seed (``main._seed_tier_catalog``) uses
 — so this standalone script can never drift from the runtime catalog. Seeding
 is idempotent: re-running on an already seeded database is a no-op
@@ -19,8 +19,8 @@ import sys
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from modulo.core.seed_data.catalog import FLAGS, TIERS
-from modulo.settings import get_settings
+from farna.core.seed_data.catalog import FLAGS, TIERS
+from farna.settings import get_settings
 
 
 async def seed() -> None:

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.trigger_secrets (FAR-1735 bounded resolver).
+"""Unit tests for farna.core.trigger_secrets (FAR-1735 bounded resolver).
 
 The shared resolution policy for the five delivery-time trigger-secret
 readers: non-token values are legacy plaintext accepted with a LOUD dated
@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.auth.secret_storage import DecryptionError
-from modulo.core.trigger_secrets import (
+from farna.auth.secret_storage import DecryptionError
+from farna.core.trigger_secrets import (
     LEGACY_PLAINTEXT_SHIM_SINCE,
     resolve_trigger_secret_scoped,
 )
@@ -36,7 +36,7 @@ async def test_legacy_plaintext_accepted_with_dated_warning(caplog: pytest.LogCa
     context and the shim's date so a future plaintext write is surfaced."""
     import logging as _logging
 
-    with caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"):
+    with caplog.at_level(_logging.WARNING, logger="farna.core.trigger_secrets"):
         result = await resolve_trigger_secret_scoped(
             _session_mock(),
             stored_raw="legacy-plaintext-secret",
@@ -85,7 +85,7 @@ async def test_gaaaa_prefixed_legacy_plaintext_accepted_with_dated_warning(
 
     tricky_plaintext = "gAAAA-not-actually-a-fernet-token"
 
-    with caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"):
+    with caplog.at_level(_logging.WARNING, logger="farna.core.trigger_secrets"):
         result = await resolve_trigger_secret_scoped(
             _session_mock(),
             stored_raw=tricky_plaintext,
@@ -114,7 +114,7 @@ async def test_undecryptable_token_fails_closed(caplog: pytest.LogCaptureFixture
     alien_token = Fernet(other_key.encode()).encrypt(b"alien").decode()
 
     with (
-        caplog.at_level(_logging.ERROR, logger="modulo.core.trigger_secrets"),
+        caplog.at_level(_logging.ERROR, logger="farna.core.trigger_secrets"),
         pytest.raises(DecryptionError),
     ):
         await resolve_trigger_secret_scoped(

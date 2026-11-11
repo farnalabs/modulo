@@ -71,10 +71,10 @@ def create_agent(name: str, prompt: str, client, request):
     request.node._agent_prompt = prompt
     with (
         patch(
-            "modulo.api.routes.agents.create_agent",
+            "farna.api.routes.agents.create_agent",
             return_value=_make_mock_agent(name=name, prompt_template=prompt),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/agents",
@@ -107,7 +107,7 @@ def org_has_agent(org: str, name: str, request):
 def get_agents(client, request):
     with (
         patch(
-            "modulo.api.routes.agents.list_agents",
+            "farna.api.routes.agents.list_agents",
             return_value=_page_result(
                 [
                     _make_mock_agent(
@@ -117,7 +117,7 @@ def get_agents(client, request):
                 ]
             ),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get("/api/v1/agents")
     request.node._resp = resp
@@ -143,9 +143,9 @@ def check_agent_prompt(prompt: str, request):
 def patch_agent_prompt(name: str, prompt: str, client, request):
     agent_id = _agent_id_for(name)
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=_make_mock_agent(name=name)),
+        patch("farna.api.routes.agents.get_agent", return_value=_make_mock_agent(name=name)),
         patch(
-            "modulo.api.routes.agents.update_agent",
+            "farna.api.routes.agents.update_agent",
             return_value=_make_mock_agent(
                 name=name,
                 id=agent_id,
@@ -153,7 +153,7 @@ def patch_agent_prompt(name: str, prompt: str, client, request):
                 prompt_version_history=[{"version": "2", "template": prompt}],
             ),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(
             f"/api/v1/agents/{agent_id}",
@@ -186,10 +186,10 @@ def assign_schema_to_agent(schema: str, agent: str, client, request):
     schema_id = _schema_id_for(schema)
     with (
         patch(
-            "modulo.api.routes.agents.create_agent",
+            "farna.api.routes.agents.create_agent",
             return_value=_make_mock_agent(name=agent, input_schema_id=schema_id),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/agents",
@@ -217,8 +217,8 @@ def check_agent_schema(schema: str, request):
 def delete_agent(name: str, client, request):
     agent_id = _agent_id_for(name)
     with (
-        patch("modulo.api.routes.agents.delete_agent", return_value=True),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.delete_agent", return_value=True),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/agents/{agent_id}")
     request.node._resp = resp
@@ -244,9 +244,9 @@ def update_agent_prompt(prompt: str, client, request):
     name = getattr(request.node, "_agent_name", "agent")
     agent_id = _agent_id_for(name)
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=_make_mock_agent(name=name)),
+        patch("farna.api.routes.agents.get_agent", return_value=_make_mock_agent(name=name)),
         patch(
-            "modulo.api.routes.agents.update_agent",
+            "farna.api.routes.agents.update_agent",
             return_value=_make_mock_agent(
                 name=name,
                 id=agent_id,
@@ -254,7 +254,7 @@ def update_agent_prompt(prompt: str, client, request):
                 prompt_version_history=[{"version": "2", "template": prompt}],
             ),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(
             f"/api/v1/agents/{agent_id}",
@@ -325,8 +325,8 @@ def get_agent_versions(name: str, client, request):
         },
     ]
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/agents/{agent_id}/prompts")
     request.node._resp = resp
@@ -359,10 +359,10 @@ def assign_output_schema(schema: str, agent: str, client, request):
     schema_id = _schema_id_for(schema)
     with (
         patch(
-            "modulo.api.routes.agents.create_agent",
+            "farna.api.routes.agents.create_agent",
             return_value=_make_mock_agent(name=agent, output_schema_id=schema_id),
         ),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/agents",
@@ -431,8 +431,8 @@ def save_reload_pipeline(client, request):
     schema = getattr(request.node, "_agent_input_schema", None)
     agent = _make_mock_agent(name=name, input_schema_id=_schema_id_for(schema) if schema else None)
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=agent),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=agent),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/agents/{_agent_id_for(name)}")
     request.node._resp = resp
@@ -451,9 +451,9 @@ def remove_input_schema(agent: str, client, request):
     before = _make_mock_agent(name=agent, input_schema_id=_schema_id_for("review-input"), input_schema_version="latest")
     after = _make_mock_agent(name=agent, input_schema_id=None, input_schema_version=None)
     with (
-        patch("modulo.api.routes.agents.get_agent", return_value=before),
-        patch("modulo.api.routes.agents.update_agent", return_value=after),
-        patch("modulo.api.routes.agents.set_rls_org"),
+        patch("farna.api.routes.agents.get_agent", return_value=before),
+        patch("farna.api.routes.agents.update_agent", return_value=after),
+        patch("farna.api.routes.agents.set_rls_org"),
     ):
         resp = client.patch(
             f"/api/v1/agents/{agent_id}",

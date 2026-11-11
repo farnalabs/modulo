@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0346_org_api_keys_role_scope"
 
@@ -142,7 +142,7 @@ class TestDowngradeNarrows:
 
 class TestModelParity:
     def test_model_check_matches_the_migration_predicate(self) -> None:
-        from modulo.db.models.api_key import OrgApiKey
+        from farna.db.models.api_key import OrgApiKey
 
         checks = {c.name: str(c.sqltext) for c in OrgApiKey.__table__.constraints if hasattr(c, "sqltext")}
         role_check = " ".join(checks["ck_org_api_keys_role"].split())

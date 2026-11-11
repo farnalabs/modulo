@@ -10,11 +10,11 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
-from modulo.core.library.agents import definitions as _agent_defs
-from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
-from modulo.core.library.integrations import definitions as _integration_defs
-from modulo.core.library.workflows import definitions as _workflow_defs
-from modulo.core.seed_data.library_schemas import SCHEMAS
+from farna.core.library.agents import definitions as _agent_defs
+from farna.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
+from farna.core.library.integrations import definitions as _integration_defs
+from farna.core.library.workflows import definitions as _workflow_defs
+from farna.core.seed_data.library_schemas import SCHEMAS
 
 
 def kebab(name: str) -> str:

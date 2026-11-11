@@ -35,10 +35,10 @@ import sqlalchemy as sa
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.pipeline_engine import recovery as recovery_module
-from modulo.db.models.run import Run
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.pipeline_engine import recovery as recovery_module
+from farna.db.models.run import Run
 from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
@@ -348,7 +348,7 @@ async def _run_reconcile(
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
         stack.enter_context(
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
         )
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session

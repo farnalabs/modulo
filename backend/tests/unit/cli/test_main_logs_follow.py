@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.cli.main import _echo_log_contents, _follow_log
+from farna.cli.main import _echo_log_contents, _follow_log
 
 
 def test_echo_log_contents_with_follow_tails_new_bytes(

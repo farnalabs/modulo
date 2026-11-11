@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.error_notification_rule.
+"""Unit tests for farna.api.models.error_notification_rule.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the notification-rule
 schemas. Basic create/update validation is exercised by
@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from modulo.api.models.error_notification_rule import (
+from farna.api.models.error_notification_rule import (
     ErrorNotificationRuleCreate,
     ErrorNotificationRuleListResponse,
     ErrorNotificationRuleResponse,

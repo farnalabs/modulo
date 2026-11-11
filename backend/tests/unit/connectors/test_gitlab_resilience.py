@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.gitlab import GitLabConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.gitlab import GitLabConnector
 
 TOKEN = "glpat_test_token"
 _API = "https://gitlab.com/api/v4"
@@ -202,7 +202,7 @@ async def test_query_429_uses_rate_limit_reset_time(connector, monkeypatch):
     # own processing time would otherwise push reset_epoch - time.time() <= 0 and
     # fall back to exponential backoff, making the test timing-flaky).
     fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
+    monkeypatch.setattr("farna.connectors.gitlab.time.time", lambda: fake_now)
     reset_epoch = fake_now + 5.0  # 5s reset window, comfortably in the future
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(
@@ -225,7 +225,7 @@ async def test_query_429_uses_rate_limit_reset_fallback(connector, monkeypatch):
     """RateLimit-Reset (epoch) should drive the retry delay when ResetTime is absent."""
 
     fake_now = 1_000_000.0
-    monkeypatch.setattr("modulo.connectors.gitlab.time.time", lambda: fake_now)
+    monkeypatch.setattr("farna.connectors.gitlab.time.time", lambda: fake_now)
     reset_epoch = fake_now + 5.0
     route = respx.get(f"{_API}/projects/group%2Fproject/issues")
     route.mock(
@@ -477,7 +477,7 @@ async def test_hosted_health_check_does_not_probe_version(connector):
 
 def test_validate_path_helpers():
     """Module-level path validation rejects traversal and absolute paths."""
-    from modulo.connectors.gitlab import _validate_path
+    from farna.connectors.gitlab import _validate_path
 
     _validate_path("src/main.py", "file")
     _validate_path("a/b/c.txt", "file")
@@ -515,7 +515,7 @@ async def test_health_check_token_info_string_scopes(connector):
 
 def test_instance_root_derivation():
     """_instance_root strips a versioned API path and keeps reverse-proxy mounts."""
-    from modulo.connectors.gitlab import _instance_root
+    from farna.connectors.gitlab import _instance_root
 
     assert _instance_root("https://gitlab.com/api/v4") == "https://gitlab.com"
     assert _instance_root("https://gitlab.com/api/v4/") == "https://gitlab.com"
@@ -526,7 +526,7 @@ def test_instance_root_derivation():
 
 def test_effective_scopes_api_superset():
     """api scope expands to cover read_api and write_repository."""
-    from modulo.connectors.gitlab import REQUIRED_SCOPES, _effective_scopes
+    from farna.connectors.gitlab import REQUIRED_SCOPES, _effective_scopes
 
     assert REQUIRED_SCOPES - _effective_scopes(frozenset({"api"})) == frozenset()
     assert REQUIRED_SCOPES - _effective_scopes(frozenset({"read_api"})) == frozenset({"api", "write_repository"})

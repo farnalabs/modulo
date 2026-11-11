@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 
 def _scalar_result(value: object) -> MagicMock:
@@ -52,7 +52,7 @@ def _bind_lock_connection(session: AsyncMock) -> Any:
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
+    return patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _template_mock(template_id: uuid.UUID, sub_graph: dict[str, Any]) -> MagicMock:

@@ -11,12 +11,12 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.notifications import NotificationEndpointUpdate
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.notifications import NotificationEndpointUpdate
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -82,8 +82,8 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     with (
-        patch("modulo.api.routes.admin_notifications.validate_outbound_url"),
-        patch("modulo.api.routes.notifications.validate_outbound_url_async", new=AsyncMock()),
+        patch("farna.api.routes.admin_notifications.validate_outbound_url"),
+        patch("farna.api.routes.notifications.validate_outbound_url_async", new=AsyncMock()),
     ):
         yield TestClient(app)
     app.dependency_overrides.clear()
@@ -114,7 +114,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
 def test_list_endpoints_returns_200(client: TestClient) -> None:
     ep = _make_mock_endpoint()
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         result_mock = MagicMock()
@@ -138,7 +138,7 @@ def test_list_endpoints_returns_200(client: TestClient) -> None:
 
 def test_list_endpoints_empty_returns_200(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         result_mock = MagicMock()
@@ -158,7 +158,7 @@ def test_list_endpoints_empty_returns_200(client: TestClient) -> None:
 
 def test_create_endpoint_returns_201(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
 
@@ -212,7 +212,7 @@ def test_list_endpoints_normalizes_stored_events(
         yield session
 
     client.app.dependency_overrides[get_db_session] = override_session
-    with patch("modulo.api.routes.notifications.set_rls_org"):
+    with patch("farna.api.routes.notifications.set_rls_org"):
         resp = client.get("/api/v1/notifications")
 
     assert resp.status_code == 200
@@ -233,7 +233,7 @@ def test_create_endpoint_with_secret_encrypts_it(client: TestClient) -> None:
 
     with (
         patch.object(cryptography.fernet.Fernet, "encrypt", tracking_encrypt),
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
 
@@ -275,7 +275,7 @@ def test_create_endpoint_invalid_url_returns_422(client: TestClient) -> None:
 def test_get_endpoint_returns_200(client: TestClient) -> None:
     ep = _make_mock_endpoint()
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -295,7 +295,7 @@ def test_get_endpoint_returns_200(client: TestClient) -> None:
 
 def test_get_endpoint_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -314,7 +314,7 @@ def test_get_endpoint_not_found_returns_404(client: TestClient) -> None:
 
 def test_get_endpoint_wrong_org_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -334,7 +334,7 @@ def test_get_endpoint_wrong_org_returns_404(client: TestClient) -> None:
 def test_update_endpoint_returns_200(client: TestClient) -> None:
     ep = _make_mock_endpoint()
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -361,7 +361,7 @@ def test_update_endpoint_accepts_explicit_null_events(client: TestClient) -> Non
     """An explicit JSON null means "leave unchanged" and must not be rejected."""
     ep = _make_mock_endpoint()
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -384,7 +384,7 @@ def test_update_endpoint_accepts_explicit_null_events(client: TestClient) -> Non
 
 def test_update_endpoint_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -427,7 +427,7 @@ def test_update_endpoint_optional_events_accept_null() -> None:
 
 def test_delete_endpoint_returns_204(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -446,7 +446,7 @@ def test_delete_endpoint_returns_204(client: TestClient) -> None:
 
 def test_delete_endpoint_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -466,7 +466,7 @@ def test_delete_endpoint_not_found_returns_404(client: TestClient) -> None:
 def test_restore_endpoint_returns_200(client: TestClient) -> None:
     ep = _make_mock_endpoint()
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()
@@ -488,7 +488,7 @@ def test_restore_endpoint_returns_200(client: TestClient) -> None:
 
 def test_restore_endpoint_not_found_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.notifications.set_rls_org"),
+        patch("farna.api.routes.notifications.set_rls_org"),
     ):
         session = _make_mock_session()
         execute_result = MagicMock()

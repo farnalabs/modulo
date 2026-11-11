@@ -136,7 +136,7 @@ def org_has_audit_events(org: str, count: int, request) -> None:
 
 @when("I GET /api/v1/admin/audit")
 def get_audit_list(request) -> None:
-    from modulo.api.dependencies import get_plan_context
+    from farna.api.dependencies import get_plan_context
 
     client = request.getfixturevalue("alt_org_client" if getattr(request.node, "_alt_org", None) else "client")
     events = getattr(request.node, "_audit_events", [])
@@ -150,8 +150,8 @@ def get_audit_list(request) -> None:
             ctx.feature_enabled.return_value = False
             return ctx
 
-        from modulo.api.dependencies import get_plan_context
-        from modulo.api.main import app
+        from farna.api.dependencies import get_plan_context
+        from farna.api.main import app
 
         app.dependency_overrides[get_plan_context] = _disabled_ctx
         resp = client.get("/api/v1/admin/audit")
@@ -162,7 +162,7 @@ def get_audit_list(request) -> None:
     if getattr(request.node, "_alt_org", None) == "other-corp":
         with (
             patch(
-                "modulo.api.routes.audit.list_audit_events",
+                "farna.api.routes.audit.list_audit_events",
                 return_value={
                     "items": [],
                     "total": 0,
@@ -171,7 +171,7 @@ def get_audit_list(request) -> None:
                     "limit": 50,
                 },
             ),
-            patch("modulo.api.routes.audit.set_rls_org"),
+            patch("farna.api.routes.audit.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/audit")
         request.node._resp = resp
@@ -179,7 +179,7 @@ def get_audit_list(request) -> None:
 
     with (
         patch(
-            "modulo.api.routes.audit.list_audit_events",
+            "farna.api.routes.audit.list_audit_events",
             return_value={
                 "items": events,
                 "total": len(events),
@@ -188,7 +188,7 @@ def get_audit_list(request) -> None:
                 "limit": 50,
             },
         ),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/audit")
     request.node._resp = resp
@@ -214,7 +214,7 @@ def get_audit_list_with_params(client, request, query: str) -> None:
 
     with (
         patch(
-            "modulo.api.routes.audit.list_audit_events",
+            "farna.api.routes.audit.list_audit_events",
             return_value={
                 "items": filtered,
                 "total": len(filtered),
@@ -223,7 +223,7 @@ def get_audit_list_with_params(client, request, query: str) -> None:
                 "limit": 50,
             },
         ),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/admin/audit?{query}")
     request.node._resp = resp
@@ -236,8 +236,8 @@ def post_batch_detail(client, request, ids: str) -> None:
     matched = [e for e in events if e["id"] in id_list]
 
     with (
-        patch("modulo.api.routes.audit.get_audit_events_batch", return_value=matched),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.get_audit_events_batch", return_value=matched),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/admin/audit/batch-detail",
@@ -254,10 +254,10 @@ def get_verify_chain(client, request) -> None:
 
     with (
         patch(
-            "modulo.api.routes.audit.verify_chain",
+            "farna.api.routes.audit.verify_chain",
             return_value={"valid": valid, "events_checked": len(events), "chain_break": None},
         ),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/audit/verify")
     request.node._resp = resp
@@ -275,7 +275,7 @@ def get_export(client, request, query: str) -> None:
 
     with (
         patch(
-            "modulo.api.routes.audit.export_chain",
+            "farna.api.routes.audit.export_chain",
             return_value={
                 "items": page_events,
                 "total": len(events),
@@ -283,7 +283,7 @@ def get_export(client, request, query: str) -> None:
                 "page_size": page_size,
             },
         ),
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/admin/audit/export?{query}")
     request.node._resp = resp

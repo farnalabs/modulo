@@ -2,7 +2,7 @@
 
 Covers three layers:
 
-1. The shared ``modulo.connectors.security`` helpers — ``credential_values``,
+1. The shared ``farna.connectors.security`` helpers — ``credential_values``,
    ``redact_text``, ``redact_exc``, ``CredentialRedactor`` and the ``redacting``
    decorator (value-based redaction mirroring ``RestConnector._redact``).
 2. Defense-in-depth: ``sanitize_error_text``'s vendor credential patterns.
@@ -21,16 +21,16 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors import security
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.datadog import DatadogConnector
-from modulo.connectors.github import GitHubConnector, GitHubError
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.linear import LinearConnector
-from modulo.connectors.n8n import N8NConnector
-from modulo.connectors.pagerduty import PagerDutyConnector
-from modulo.connectors.security import (
+from farna.connectors import security
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.datadog import DatadogConnector
+from farna.connectors.github import GitHubConnector, GitHubError
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.jira import JiraConnector
+from farna.connectors.linear import LinearConnector
+from farna.connectors.n8n import N8NConnector
+from farna.connectors.pagerduty import PagerDutyConnector
+from farna.connectors.security import (
     CredentialRedactionError,
     CredentialRedactor,
     credential_values,
@@ -38,12 +38,12 @@ from modulo.connectors.security import (
     redact_text,
     redacting,
 )
-from modulo.connectors.sentry import SentryConnector
-from modulo.connectors.slack import SlackConnector
-from modulo.connectors.sonarqube import SonarQubeConnector
-from modulo.connectors.ticket_tracker.trello import TrelloTicketTracker
-from modulo.connectors.trello import TrelloConnector
-from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from farna.connectors.sentry import SentryConnector
+from farna.connectors.slack import SlackConnector
+from farna.connectors.sonarqube import SonarQubeConnector
+from farna.connectors.ticket_tracker.trello import TrelloTicketTracker
+from farna.connectors.trello import TrelloConnector
+from farna.core.pipeline_engine.error_codes import sanitize_error_text
 
 # ---------------------------------------------------------------------------
 # Shared module helpers

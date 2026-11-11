@@ -2,7 +2,7 @@
 
 Wires the scenarios in ``feedback_inbox.feature`` to the real
 ``/api/v1/feedback/inbox``, ``/api/v1/feedback/proposals``, review,
-detect-gap and publish routes (``modulo/api/routes/feedback.py``) through the
+detect-gap and publish routes (``farna/api/routes/feedback.py``) through the
 shared TestClient + mock-session pattern used by the nearby feedback /
 dashboard step modules. The FeedbackManager CRUD seams are patched at their
 route use-site while the routing, permission gating (``require_permission``
@@ -21,11 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.bdd.conftest import harden_session_double
 
 scenarios("../features/eval/feedback_inbox.feature")
@@ -172,9 +172,9 @@ def _body(request: Any) -> dict[str, Any]:
 def _standard_patches() -> list[patch]:
     """RLS + audit seams every covered endpoint touches."""
     return [
-        patch("modulo.api.routes.feedback.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.feedback.set_rls_user_context", new=AsyncMock()),
-        patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.api.routes.feedback.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.feedback.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
     ]
 
 
@@ -252,7 +252,7 @@ def _when_get_inbox(request: Any, query: str = "") -> None:
     ctx["session"] = _make_session()
     ctx["patchers"] = [
         *_standard_patches(),
-        patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_records_inbox", new=inbox),
+        patch("farna.api.routes.feedback.FeedbackManager.get_feedback_records_inbox", new=inbox),
     ]
     ctx["inbox_mock"] = inbox
     _dispatch(request, "GET", "/api/v1/feedback/inbox" + query)
@@ -265,7 +265,7 @@ def _when_get_inbox_item(request: Any, record_id: str) -> None:
     ctx["session"] = _make_session()
     ctx["patchers"] = [
         *_standard_patches(),
-        patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=record)),
+        patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=record)),
     ]
     _dispatch(request, "GET", f"/api/v1/feedback/inbox/{_record_uuid(record_id)}")
 
@@ -276,35 +276,35 @@ def _when_review(request: Any, record_id: str, action: str) -> None:
     ctx["session"] = _make_session()
     if ctx.get("state") == "missing":
         ctx["patchers"] = [
-            patch("modulo.api.routes.feedback.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.feedback.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=None)),
         ]
     else:
         record = ctx.get("record")
         patches = [
             *_standard_patches(),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 new=AsyncMock(return_value=record),
             ),
         ]
         if action == "mark_reviewed":
             patches.append(
                 patch(
-                    "modulo.api.routes.feedback.FeedbackManager.update_status",
+                    "farna.api.routes.feedback.FeedbackManager.update_status",
                     new=AsyncMock(return_value=_make_record(id=record.id, feedback_status="resolved")),
                 )
             )
         elif action == "dismiss":
             patches.append(
                 patch(
-                    "modulo.api.routes.feedback.FeedbackManager.update_status",
+                    "farna.api.routes.feedback.FeedbackManager.update_status",
                     new=AsyncMock(return_value=_make_record(id=record.id, feedback_status="dismissed")),
                 )
             )
         elif action == "create_correction_run":
             spawn = AsyncMock(return_value=uuid.uuid4())
-            patches.append(patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run", new=spawn))
+            patches.append(patch("farna.api.routes.feedback.FeedbackManager.spawn_correction_run", new=spawn))
             ctx["spawn_mock"] = spawn
         ctx["patchers"] = patches
     _dispatch(request, "POST", f"/api/v1/feedback/inbox/{_record_uuid(record_id)}/review", json={"action": action})
@@ -318,10 +318,10 @@ def _when_detect_gap(request: Any, record_id: str) -> None:
     ctx["patchers"] = [
         *_standard_patches(),
         patch(
-            "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+            "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
             new=AsyncMock(return_value=record),
         ),
-        patch("modulo.api.routes.feedback.FeedbackManager.detect_eval_gap", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.feedback.FeedbackManager.detect_eval_gap", new=AsyncMock(return_value=True)),
     ]
     _dispatch(request, "POST", f"/api/v1/feedback/{_record_uuid(record_id)}/detect-gap")
 
@@ -342,7 +342,7 @@ def _when_get_proposals(request: Any) -> None:
     ctx["session"] = _make_session()
     ctx["patchers"] = [
         *_standard_patches(),
-        patch("modulo.api.routes.feedback.FeedbackManager.get_eval_proposals", new=proposals),
+        patch("farna.api.routes.feedback.FeedbackManager.get_eval_proposals", new=proposals),
     ]
     _dispatch(request, "GET", "/api/v1/feedback/proposals")
 
@@ -356,8 +356,8 @@ def _when_publish(request: Any, record_id: str, name: str) -> None:
     if state == "missing":
         ctx["session"] = _make_session()
         ctx["patchers"] = [
-            patch("modulo.api.routes.feedback.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=None)),
+            patch("farna.api.routes.feedback.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", new=AsyncMock(return_value=None)),
         ]
     elif state == "proposal-gap":
         run_row = MagicMock()
@@ -366,11 +366,11 @@ def _when_publish(request: Any, record_id: str, name: str) -> None:
         ctx["patchers"] = [
             *_standard_patches(),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 new=AsyncMock(return_value=record),
             ),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.update_status",
+                "farna.api.routes.feedback.FeedbackManager.update_status",
                 new=AsyncMock(return_value=_make_record(id=record.id, feedback_status="resolved")),
             ),
         ]
@@ -379,7 +379,7 @@ def _when_publish(request: Any, record_id: str, name: str) -> None:
         ctx["patchers"] = [
             *_standard_patches(),
             patch(
-                "modulo.api.routes.feedback.FeedbackManager.get_feedback_record",
+                "farna.api.routes.feedback.FeedbackManager.get_feedback_record",
                 new=AsyncMock(return_value=record),
             ),
         ]

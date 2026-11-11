@@ -48,7 +48,7 @@ from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.auth.api_key import generate_api_key
+from farna.auth.api_key import generate_api_key
 
 pytestmark = pytest.mark.integration
 
@@ -79,7 +79,7 @@ _MCP_ACCEPT = "application/json, text/event-stream"
 @pytest.fixture(scope="module")
 def mcp_asgi_app() -> Any:
     """The real FastAPI app, whose ``/mcp`` mount is ``build_mcp_asgi_app()``."""
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return app
 
@@ -102,7 +102,7 @@ async def mcp_session_manager_task_group(mcp_asgi_app: Any) -> AsyncIterator[Non
     the CALLER's context (``loop.create_task`` with no explicit context), so a
     request's auth contextvars still reach the per-request server task.
     """
-    from modulo.api.mcp_server import mcp
+    from farna.api.mcp_server import mcp
 
     session_manager = mcp.session_manager
     started = asyncio.Event()

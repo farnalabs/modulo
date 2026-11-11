@@ -2,8 +2,8 @@
 
 from sqlalchemy import CheckConstraint, UniqueConstraint
 
-from modulo.db.models import Account, Base, OrgMembership, OrgScoped
-from modulo.db.models.account import ACCOUNT_KINDS, KIND_HUMAN, KIND_SERVICE
+from farna.db.models import Account, Base, OrgMembership, OrgScoped
+from farna.db.models.account import ACCOUNT_KINDS, KIND_HUMAN, KIND_SERVICE
 
 
 def test_account_table_exists() -> None:
@@ -103,7 +103,7 @@ def test_account_kind_vocabulary_constant_matches_check() -> None:
 
 
 def test_account_kind_is_classified_by_the_shared_helpers() -> None:
-    from modulo.core.principals import is_human_account, is_service_account
+    from farna.core.principals import is_human_account, is_service_account
 
     human = Account(email="a@example.com", display_name="A", kind=KIND_HUMAN)
     service = Account(display_name="svc", kind=KIND_SERVICE)

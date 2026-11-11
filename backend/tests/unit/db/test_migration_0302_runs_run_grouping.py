@@ -37,10 +37,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import String, UniqueConstraint, Uuid
 
-from modulo.db.models.run import RUN_GROUP_KIND_RESUME, RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_VALUES, Run
+from farna.db.models.run import RUN_GROUP_KIND_RESUME, RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_VALUES, Run
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0302_runs_run_grouping"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0301_oauth_consent_state_preauth_rls"

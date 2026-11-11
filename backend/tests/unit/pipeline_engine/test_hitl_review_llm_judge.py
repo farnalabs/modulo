@@ -21,9 +21,9 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 
-import modulo.core.pipeline_engine.llm_judge as llm_judge
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError, JudgeOutcome
+import farna.core.pipeline_engine.llm_judge as llm_judge
+from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+from farna.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError, JudgeOutcome
 
 
 class _FakeBackend:
@@ -78,7 +78,7 @@ def _run_gate_fn(
     eval_defs: list[EvalDefinition] | None,
 ) -> bool:
     """Run the HITL gate node fn synchronously; return True if it interrupts."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+    from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     node_fn = make_hitl_review_fn(gate_config, eval_definitions=eval_defs)
 
@@ -90,7 +90,7 @@ def _run_gate_fn(
 
     try:
         with patch(
-            "modulo.core.pipeline_engine.node_runner.interrupt",
+            "farna.core.pipeline_engine.node_runner.interrupt",
             _raise_interrupt,
         ):
             asyncio.run(_run())
@@ -161,7 +161,7 @@ def test_high_score_does_not_fire_gate() -> None:
     hub = _FakeHub(_judge_payload(0.9))
 
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
         interrupted = _run_gate_fn(
@@ -182,7 +182,7 @@ def test_low_score_fires_gate() -> None:
     hub = _FakeHub(_judge_payload(0.2))
 
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
         interrupted = _run_gate_fn(
@@ -381,7 +381,7 @@ def test_hung_judge_records_error_outcome_and_fires_gate(monkeypatch: pytest.Mon
     hub = _HangingHub()
 
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=hub,
     ):
         interrupted, captured = _run_gate_fn_capturing_results(

@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.rating import (
+from farna.db.crud.base import PageResult
+from farna.db.crud.rating import (
     get_rating_aggregate,
     list_abuse_reports,
     list_ratings_for_primitive,

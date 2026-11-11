@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.error_tracking import (
+from farna.core.error_tracking import (
     SAQ_MISSED_FIRE_GRACE_SECONDS,
     _row_missed_period,
     _trigger_period_seconds,

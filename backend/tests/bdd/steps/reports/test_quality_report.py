@@ -35,8 +35,8 @@ def _map_url(url: str) -> str:
 
 def _patch_set_rls(patches: list[Any]) -> None:
     for mod_path in (
-        "modulo.api.routes.pipelines.set_rls_org",
-        "modulo.api.routes.pipelines.set_rls_user_context",
+        "farna.api.routes.pipelines.set_rls_org",
+        "farna.api.routes.pipelines.set_rls_user_context",
     ):
         patcher = patch(mod_path, new_callable=AsyncMock)
         patcher.start()
@@ -117,7 +117,7 @@ def trigger_quality_report(name: str, client, request, patches, mock_session: Ma
 
     _patch_set_rls(patches)
     p = patch(
-        "modulo.api.routes.pipelines.get_pipeline",
+        "farna.api.routes.pipelines.get_pipeline",
         new_callable=AsyncMock,
         return_value=pipeline,
     )
@@ -125,7 +125,7 @@ def trigger_quality_report(name: str, client, request, patches, mock_session: Ma
     patches.append(p)
 
     p2 = patch(
-        "modulo.api.routes.pipelines.generate_quality_report",
+        "farna.api.routes.pipelines.generate_quality_report",
         new_callable=AsyncMock,
         return_value={
             "period": {"start": "2026-06-25", "end": "2026-07-01"},
@@ -149,7 +149,7 @@ def trigger_quality_report(name: str, client, request, patches, mock_session: Ma
     patches.append(p2)
 
     p3 = patch(
-        "modulo.api.routes.pipelines.deliver_quality_report",
+        "farna.api.routes.pipelines.deliver_quality_report",
         new_callable=AsyncMock,
         return_value=[{"url": "https://hooks.slack.com/xxx", "status": "delivered", "status_code": 200, "error": None}],
     )

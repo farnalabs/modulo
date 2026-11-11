@@ -1,7 +1,7 @@
 """BDD step definitions: Slack ``app_mention`` triggers.
 
 Covers the Slack Events API ``app_mention`` trigger surface
-(``modulo/core/trigger_engine/slack_app_mention.py``): Slack signed-request
+(``farna/core/trigger_engine/slack_app_mention.py``): Slack signed-request
 verification (``X-Slack-Signature`` HMAC-SHA256 over ``v0:<timestamp>:<body>``
 plus the ±300s ``X-Slack-Request-Timestamp`` replay window), the
 ``url_verification`` challenge handshake, envelope parsing and payload
@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.trigger_engine import DuplicateWebhookError, PipelineRateLimitError, TriggerBusyError
-from modulo.core.trigger_engine.slack_app_mention import (
+from farna.core.trigger_engine import DuplicateWebhookError, PipelineRateLimitError, TriggerBusyError
+from farna.core.trigger_engine.slack_app_mention import (
     SlackAppMentionParseError,
     SlackEventTypeError,
     SlackSignatureError,
@@ -185,8 +185,8 @@ def _deliver(ctx: dict[str, Any]) -> None:
     run_mock = MagicMock(id=uuid.uuid4())
 
     with (
-        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
-        patch("modulo.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock) as mock_create_run,
+        patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("farna.core.trigger_engine.slack_app_mention.create_run", return_value=run_mock) as mock_create_run,
     ):
         try:
             run, trigger_event, input_payload = asyncio.run(
@@ -389,7 +389,7 @@ def _then_slack_input_payload_equals(payload: str, request: Any) -> None:
 
 @then(parsers.parse('the challenge "{challenge}" is echoed back'))
 def _then_slack_challenge_echoed(challenge: str, request: Any) -> None:
-    from modulo.core.trigger_engine.slack_app_mention import extract_challenge
+    from farna.core.trigger_engine.slack_app_mention import extract_challenge
 
     assert _ctx(request)["challenge"] == challenge
     assert extract_challenge({"type": "url_verification", "challenge": challenge}) == challenge

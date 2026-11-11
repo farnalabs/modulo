@@ -24,9 +24,9 @@ import pytest
 from fastapi import FastAPI, status
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
-from modulo.settings import Settings
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.core.rate_limiter import RateLimiterRegistry, RateLimitRule
+from farna.settings import Settings
 
 HITL_ENDPOINTS = [
     "/api/v1/runs/run-123/hitl/gate-abc/approve",

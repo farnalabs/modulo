@@ -32,8 +32,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core import trigger_streak as ts
-from modulo.db.models.run import TERMINAL_STATUSES
+from farna.core import trigger_streak as ts
+from farna.db.models.run import TERMINAL_STATUSES
 
 pytestmark = pytest.mark.integration
 
@@ -613,8 +613,8 @@ async def test_get_trigger_streak_status_is_tenant_isolated(
     has a no-delivery run and a deactivation audit record for its own trigger."""
     from sqlalchemy import select
 
-    from modulo.core import cron_helpers as ch
-    from modulo.db.models.trigger import Trigger
+    from farna.core import cron_helpers as ch
+    from farna.db.models.trigger import Trigger
 
     org_b = await _seed_org(db_engine, "StreakEngineB")
     user_b = await _seed_user(db_engine, org_b, "streak-b@test.local")
@@ -675,8 +675,8 @@ async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
     that was dead."""
     from sqlalchemy import select
 
-    from modulo.core import cron_helpers as ch
-    from modulo.db.models.trigger import Trigger
+    from farna.core import cron_helpers as ch
+    from farna.db.models.trigger import Trigger
 
     # Org A's own ongoing trigger with a real past streak_epoch, and its OWN
     # no-delivery run inside the boundary (now - 2h vs epoch now - 1 day).
@@ -738,7 +738,7 @@ async def _seed_reasoned_runs(
 
 
 async def _read_count(app_factory: async_sessionmaker[AsyncSession], org: uuid.UUID, trigger_id: uuid.UUID) -> int:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     async with app_factory() as session, session.begin():
         await ch._set_rls_org(session, org)
@@ -838,7 +838,7 @@ async def test_newest_reason_skips_no_work(
 ) -> None:
     """FAR-2276 — the audit/notify reason is the newest COUNTED run's reason, so
     a trailing idle run never masks the real failure reason."""
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     trigger_id = await _seed_ongoing_trigger(
         db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)

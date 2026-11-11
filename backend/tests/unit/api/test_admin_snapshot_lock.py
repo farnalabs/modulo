@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.pipeline_snapshot import SnapshotLockTerminateDeniedError
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.pipeline_snapshot import SnapshotLockTerminateDeniedError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.route_introspection import get_all_apiroutes
 
@@ -116,7 +116,7 @@ def _held_payload() -> dict[str, object]:
 
 
 def test_diagnostic_reports_held_lock_for_a_system_admin(admin_client: TestClient) -> None:
-    with patch("modulo.api.routes.admin.inspect_snapshot_lock", new=AsyncMock(return_value=_held_payload())) as probe:
+    with patch("farna.api.routes.admin.inspect_snapshot_lock", new=AsyncMock(return_value=_held_payload())) as probe:
         resp = admin_client.get(_DIAGNOSTIC_PATH)
 
     assert resp.status_code == 200
@@ -131,7 +131,7 @@ def test_diagnostic_reports_held_lock_for_a_system_admin(admin_client: TestClien
 
 def test_diagnostic_reports_a_free_lock(admin_client: TestClient) -> None:
     free = {"held": False, "holders": []}
-    with patch("modulo.api.routes.admin.inspect_snapshot_lock", new=AsyncMock(return_value=free)):
+    with patch("farna.api.routes.admin.inspect_snapshot_lock", new=AsyncMock(return_value=free)):
         resp = admin_client.get(_DIAGNOSTIC_PATH)
 
     assert resp.status_code == 200
@@ -141,7 +141,7 @@ def test_diagnostic_reports_a_free_lock(admin_client: TestClient) -> None:
 
 
 def test_diagnostic_requires_system_admin(viewer_client: TestClient) -> None:
-    with patch("modulo.api.routes.admin.inspect_snapshot_lock", new=AsyncMock()) as probe:
+    with patch("farna.api.routes.admin.inspect_snapshot_lock", new=AsyncMock()) as probe:
         resp = viewer_client.get(_DIAGNOSTIC_PATH)
 
     assert resp.status_code == 403
@@ -158,8 +158,8 @@ def test_release_terminates_holders_and_emits_the_audit_event(admin_client: Test
     terminate = AsyncMock(return_value={"released": 1, "pids": [4242]})
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
-        patch("modulo.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
+        patch("farna.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
+        patch("farna.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
     ):
         resp = admin_client.post(_RELEASE_PATH)
 
@@ -180,8 +180,8 @@ def test_release_with_no_holders_is_an_idempotent_success(admin_client: TestClie
     terminate = AsyncMock(return_value={"released": 0, "pids": []})
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
-        patch("modulo.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
+        patch("farna.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
+        patch("farna.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
     ):
         resp = admin_client.post(_RELEASE_PATH)
 
@@ -198,8 +198,8 @@ def test_release_maps_a_privilege_refusal_to_a_typed_403(admin_client: TestClien
     terminate = AsyncMock(side_effect=SnapshotLockTerminateDeniedError("42501"))
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
-        patch("modulo.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
+        patch("farna.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
+        patch("farna.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
     ):
         resp = admin_client.post(_RELEASE_PATH)
 
@@ -213,7 +213,7 @@ def test_release_maps_a_privilege_refusal_to_a_typed_403(admin_client: TestClien
 
 def test_release_requires_system_admin(viewer_client: TestClient) -> None:
     terminate = AsyncMock()
-    with patch("modulo.api.routes.admin.terminate_snapshot_lock_holders", new=terminate):
+    with patch("farna.api.routes.admin.terminate_snapshot_lock_holders", new=terminate):
         resp = viewer_client.post(_RELEASE_PATH)
 
     assert resp.status_code == 403
@@ -227,8 +227,8 @@ def test_release_without_an_organisation_context_is_refused(orgless_admin_client
     terminate = AsyncMock()
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
-        patch("modulo.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
+        patch("farna.api.routes.admin.terminate_snapshot_lock_holders", new=terminate),
+        patch("farna.api.routes.admin._audit_logger.append_audit_event_isolated", new=audit),
     ):
         resp = orgless_admin_client.post(_RELEASE_PATH)
 

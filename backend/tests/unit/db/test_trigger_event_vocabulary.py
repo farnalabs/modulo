@@ -34,13 +34,13 @@ from types import ModuleType
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES, TriggerEvent
+from farna.db.models.base import Base
+from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES, TriggerEvent
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_NAME = "0319_trigger_event_parse_failed"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
 # (_MIGRATION_NAME above is pinned to the migration that owns the widened
@@ -96,7 +96,7 @@ class TestModelVocabulary:
     def test_orm_check_constraint_includes_auto_deactivated(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.trigger_event import TriggerEvent
+        from farna.db.models.trigger_event import TriggerEvent
 
         checks = [c for c in TriggerEvent.__table_args__ if isinstance(c, CheckConstraint)]
         check = next(c for c in checks if c.name == _CHECK_CONSTRAINT_NAME)

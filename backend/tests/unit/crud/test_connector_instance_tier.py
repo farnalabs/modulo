@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.db.crud.connector_instance import list_connector_instances
-from modulo.db.models.connector_instance import ConnectorInstance
+from farna.db.crud.connector_instance import list_connector_instances
+from farna.db.models.connector_instance import ConnectorInstance
 from tests.unit.crud.helpers import (
     compile_sql,
     executed_sql,
@@ -129,7 +129,7 @@ async def test_cursor_pagination_applies_filter() -> None:
         )
     )
 
-    with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator) as paginator_cls:
+    with patch("farna.db.crud.connector_instance.CursorPaginator", return_value=paginator) as paginator_cls:
         result = await list_connector_instances(session, organisation_id=_ORG, cursor="abc", excluded_tiers=["preview"])
 
     paginator_cls.assert_called_once()

@@ -22,8 +22,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from modulo.db.crud import run as run_crud
-from modulo.db.crud.run import _allocate_run_number
+from farna.db.crud import run as run_crud
+from farna.db.crud.run import _allocate_run_number
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ORG2 = uuid.UUID("00000000-0000-0000-0000-000000000002")

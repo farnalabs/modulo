@@ -32,9 +32,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.admin import UpdateUserRequest, admin_update_user
-from modulo.api.routes.api_keys import ApiKeyUpdate, update_api_key_endpoint
-from modulo.api.routes.service_accounts import (
+from farna.api.routes.admin import UpdateUserRequest, admin_update_user
+from farna.api.routes.api_keys import ApiKeyUpdate, update_api_key_endpoint
+from farna.api.routes.service_accounts import (
     ServiceAccountCreate,
     ServiceAccountKeyCreate,
     ServiceAccountUpdate,
@@ -43,10 +43,10 @@ from modulo.api.routes.service_accounts import (
     decommission_service_account_endpoint,
     update_service_account_endpoint,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.db.crud.team import create_team
-from modulo.db.crud.team_membership import add_team_member
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.auth.jwt import TenantPrincipal
+from farna.db.crud.team import create_team
+from farna.db.crud.team_membership import add_team_member
+from farna.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 
@@ -304,7 +304,7 @@ class TestServiceAccountLifecycle:
         org-membership check on deactivate/reactivate/reset, so a foreign
         service account returned 422 while a foreign human returned 404.
         """
-        from modulo.api.routes.admin import admin_deactivate_user, admin_reactivate_user, admin_reset_password
+        from farna.api.routes.admin import admin_deactivate_user, admin_reactivate_user, admin_reset_password
 
         principal = _admin_principal(test_org, test_user)
         created = await create_service_account_endpoint(

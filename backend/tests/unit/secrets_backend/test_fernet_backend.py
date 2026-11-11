@@ -9,9 +9,9 @@ import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-from modulo.db.models.secret import Secret
-from modulo.db.rls import _TENANT_KEY
+from farna.core.secrets_backend.fernet import FernetSecretsBackend
+from farna.db.models.secret import Secret
+from farna.db.rls import _TENANT_KEY
 
 _KEY = Fernet.generate_key().decode()
 _SECRET_VALUE = "my-secret-value"

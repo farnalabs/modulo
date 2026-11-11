@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.core.exceptions import SnapshotLockNotAvailableError
-from modulo.db.crud import pipeline_snapshot as snapshots
+from farna.core.exceptions import SnapshotLockNotAvailableError
+from farna.db.crud import pipeline_snapshot as snapshots
 
 
 def _result(*, scalar: object | None = None, rows: list[object] | None = None) -> MagicMock:

@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.saq_worker`` (PR #97).
+``farna.core.saq_worker`` (PR #97).
 """
 
 from __future__ import annotations
@@ -7,8 +7,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import pipeline_execution as pe
-from modulo.core import saq_worker as sw
+from farna.core import pipeline_execution as pe
+from farna.core import saq_worker as sw
 
 
 async def test_execute_run_job_kwargs_stamp_failure() -> None:

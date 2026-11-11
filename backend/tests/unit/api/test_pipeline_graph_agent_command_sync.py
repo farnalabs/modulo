@@ -30,21 +30,21 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from modulo.api import mcp_server as ms
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.routes.pipelines import (
+from farna.api import mcp_server as ms
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.routes.pipelines import (
     _extract_agent_command_sync_updates,
     _finalize_locked_graph_save,
     _sync_agent_row_commands,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.pipeline_engine.git_content import GitContentRefError
-from modulo.db.crud.pipeline import GraphWriteRecording
-from modulo.db.crud.pipeline_snapshot import _apply_agent_fields
-from modulo.db.models.agent import Agent
-from modulo.settings import Settings
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.pipeline_engine.git_content import GitContentRefError
+from farna.db.crud.pipeline import GraphWriteRecording
+from farna.db.crud.pipeline_snapshot import _apply_agent_fields
+from farna.db.models.agent import Agent
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -312,7 +312,7 @@ async def test_sync_log_line_carries_pipeline_attribution(caplog: pytest.LogCapt
     the caller knows it) the pipeline whose graph was written — a shared Agent
     row may be bound by many pipelines, so agent alone does not attribute the
     mutation."""
-    caplog.set_level(logging.INFO, logger="modulo.core.agent_command_sync")
+    caplog.set_level(logging.INFO, logger="farna.core.agent_command_sync")
     agent_id = uuid.uuid4()
     agent = SimpleNamespace(id=agent_id, agent_commands=["old-command"])
     session = _session_returning([agent])
@@ -449,13 +449,13 @@ def test_put_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> N
     validation.issues = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=1)) as sync_mock,
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=(schema_pins, backend_pins)),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=1)) as sync_mock,
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=(schema_pins, backend_pins)),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -486,14 +486,14 @@ def test_put_graph_endpoint_preserves_connector_binding_inputs(client: TestClien
     validation.issues = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -528,14 +528,14 @@ def test_put_graph_endpoint_omits_unset_connector_binding_inputs(client: TestCli
     validation.issues = []
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -573,13 +573,13 @@ def test_put_graph_endpoint_syncs_agent_rows_before_the_graph_write(client: Test
         return (nodes, [])
 
     with (
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -594,7 +594,7 @@ async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
     """Ordering (FAR-1810 review) for the node-conversion save path: the shared
     ``_save_graph`` helper must sync the bound Agent rows BEFORE the write that
     mints the edit snapshot. Same defect class as the PUT /graph endpoint."""
-    from modulo.api.routes.pipelines import _save_graph
+    from farna.api.routes.pipelines import _save_graph
 
     order: list[str] = []
 
@@ -607,8 +607,8 @@ async def test_save_graph_syncs_agent_rows_before_the_graph_write() -> None:
         return ([], [])
 
     with (
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", new=_record_replace),
     ):
         await _save_graph(
             AsyncMock(),
@@ -691,13 +691,13 @@ def test_put_graph_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) ->
     sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
 
     with (
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
-        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=(schema_pins, backend_pins)),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+        patch("farna.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("farna.api.routes.pipelines._resolve_graph_references", return_value=(schema_pins, backend_pins)),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.put(
             f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
@@ -721,17 +721,17 @@ def test_update_endpoint_maps_unpinned_ref_sync_to_422(client: TestClient) -> No
     sync_error = GitContentRefError("agent_commands[0] git content ref ... is not pinned to a commit SHA")
 
     with (
-        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines._maybe_audit_autonomy_change", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
-        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
-        patch("modulo.api.routes.pipelines.update_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines._get_pipeline_or_404", new=AsyncMock(return_value=pipeline)),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines._maybe_audit_autonomy_change", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.pipelines._resolve_graph_references", new=AsyncMock(return_value=([], []))),
+        patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=([node], [])),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+        patch("farna.api.routes.pipelines.update_pipeline", return_value=pipeline),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.patch(
             f"/api/v1/pipelines/{_PIPELINE_ID}",
@@ -842,10 +842,10 @@ async def test_rollback_endpoint_syncs_agent_rows_from_the_restored_snapshot(cli
         order.append("connector_gate")
 
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=_record_gate),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new=_record_gate),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -879,10 +879,10 @@ async def test_rollback_endpoint_syncs_even_without_connector_bindings(client: T
 
     gate_mock = AsyncMock()
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
-        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=gate_mock),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=_record_sync),
+        patch("farna.api.routes.pipelines._enforce_connector_team_bindings", new=gate_mock),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -915,9 +915,9 @@ async def test_rollback_endpoint_audits_agent_command_sync(client: TestClient) -
 
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[agent_id])),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[agent_id])),
+        patch("farna.api.routes.pipelines.append_audit_event", new=audit),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -947,9 +947,9 @@ async def test_rollback_endpoint_does_not_audit_a_noop_sync(client: TestClient) 
 
     audit = AsyncMock()
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=audit),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.pipelines.append_audit_event", new=audit),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -974,8 +974,8 @@ async def test_rollback_endpoint_maps_unpinned_ref_sync_to_422(client: TestClien
         return _snapshot_for_response()
 
     with (
-        patch("modulo.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
-        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
+        patch("farna.api.routes.pipelines.rollback_to_snapshot", new=_fake_rollback),
+        patch("farna.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(side_effect=sync_error)),
     ):
         resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}/rollback")
 
@@ -1043,11 +1043,11 @@ async def test_mcp_graph_writer_syncs_agent_rows_before_the_graph_write() -> Non
         patch.object(ms, "_reject_invalid_connector_bindings", new=AsyncMock(return_value=None)),
         patch.object(ms, "_team_scoped_key_mismatch", return_value=False),
         patch.object(ms, "merge_masked_graph_nodes", new=lambda incoming, _stored: incoming),
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
-        patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-        patch("modulo.db.crud.pipeline.replace_pipeline_graph", new=_record_replace),
-        patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
-        patch("modulo.core.agent_command_sync.sync_agent_row_commands", new=_record_sync),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+        patch("farna.db.crud.pipeline.replace_pipeline_graph", new=_record_replace),
+        patch("farna.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("farna.core.agent_command_sync.sync_agent_row_commands", new=_record_sync),
     ):
         result = await ms._replace_pipeline_graph_txn(
             _ORG_ID,

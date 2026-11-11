@@ -19,11 +19,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -138,12 +138,12 @@ class _Harness:
     def __init__(self) -> None:
         self.session = _make_session()
         self.patches = [
-            patch("modulo.api.routes.lifecycle_maps.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", new_callable=AsyncMock),
-            patch("modulo.api.routes.lifecycle_maps.append_audit_event", new_callable=AsyncMock),
+            patch("farna.api.routes.lifecycle_maps.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.lifecycle_maps.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.lifecycle_maps.append_audit_event", new_callable=AsyncMock),
         ]
         for name in _SERVICE_FUNCS:
-            self.patches.append(patch(f"modulo.api.routes.lifecycle_maps.{name}", new_callable=AsyncMock))
+            self.patches.append(patch(f"farna.api.routes.lifecycle_maps.{name}", new_callable=AsyncMock))
 
     def __enter__(self) -> Self:
         for p in self.patches:
@@ -155,7 +155,7 @@ class _Harness:
             p.stop()
 
     def stub(self, name: str, value: object) -> None:
-        import modulo.api.routes.lifecycle_maps as route
+        import farna.api.routes.lifecycle_maps as route
 
         setattr(route, name, value)
 
@@ -246,7 +246,7 @@ def test_create_map_returns_201(client: tuple[TestClient, _Harness]) -> None:
 
 
 def test_create_map_content_error_maps_to_422(client: tuple[TestClient, _Harness]) -> None:
-    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+    from farna.core.lifecycle_map.validation import LifecycleMapContentError
 
     http, harness = client
     harness.stub("create_lifecycle_map", AsyncMock(side_effect=LifecycleMapContentError("bad graph")))
@@ -258,7 +258,7 @@ def test_create_map_content_error_maps_to_422(client: tuple[TestClient, _Harness
 
 
 def test_create_map_pipeline_conflict_maps_to_409(client: tuple[TestClient, _Harness]) -> None:
-    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+    from farna.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
 
     http, harness = client
     harness.stub(
@@ -328,7 +328,7 @@ def test_import_map_returns_201(client: tuple[TestClient, _Harness]) -> None:
 
 
 def test_import_bundle_error_maps_to_422(client: tuple[TestClient, _Harness]) -> None:
-    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+    from farna.core.lifecycle_map.import_export import LifecycleMapBundleError
 
     http, harness = client
     harness.stub("import_lifecycle_map_envelope", AsyncMock(side_effect=LifecycleMapBundleError("bad bundle")))
@@ -564,7 +564,7 @@ def test_save_version_missing_map_returns_404(client: tuple[TestClient, _Harness
 
 
 def test_save_version_content_error_maps_to_422(client: tuple[TestClient, _Harness]) -> None:
-    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+    from farna.core.lifecycle_map.validation import LifecycleMapContentError
 
     http, harness = client
     harness.stub("save_map_version", AsyncMock(side_effect=LifecycleMapContentError("bad stages")))
@@ -576,7 +576,7 @@ def test_save_version_content_error_maps_to_422(client: tuple[TestClient, _Harne
 
 
 def test_save_version_pipeline_conflict_maps_to_409(client: tuple[TestClient, _Harness]) -> None:
-    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+    from farna.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
 
     http, harness = client
     harness.stub(
@@ -840,7 +840,7 @@ def test_get_journey_missing_map_returns_404(client: tuple[TestClient, _Harness]
 
 
 def test_viewer_account_scope_id_is_the_account_for_a_viewer() -> None:
-    from modulo.api.routes.lifecycle_maps import _viewer_account_scope_id
+    from farna.api.routes.lifecycle_maps import _viewer_account_scope_id
 
     principal = TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
 
@@ -848,7 +848,7 @@ def test_viewer_account_scope_id_is_the_account_for_a_viewer() -> None:
 
 
 def test_viewer_account_scope_id_is_none_for_an_admin() -> None:
-    from modulo.api.routes.lifecycle_maps import _viewer_account_scope_id
+    from farna.api.routes.lifecycle_maps import _viewer_account_scope_id
 
     principal = TenantPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
 
@@ -861,7 +861,7 @@ def test_list_journeys_passes_the_account_team_scope_id(client: tuple[TestClient
     harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
     harness.stub("list_map_journeys", stub)
 
-    with patch("modulo.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
+    with patch("farna.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
         resp = http.get(f"{_BASE}/{_MAP_ID}/journeys")
 
     assert resp.status_code == 200, resp.text
@@ -888,7 +888,7 @@ def test_get_journey_passes_the_account_team_scope_id(client: tuple[TestClient, 
     harness.stub("get_map_journey", journey_stub)
     harness.stub("list_journey_runs", runs_stub)
 
-    with patch("modulo.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
+    with patch("farna.api.routes.lifecycle_maps._viewer_account_scope_id", return_value=_USER_ID):
         resp = http.get(f"{_BASE}/{_MAP_ID}/journeys/issue/FAR-100")
 
     assert resp.status_code == 200, resp.text
@@ -1474,8 +1474,8 @@ async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> N
     ``include_deleted`` execution option the listener reads to skip its
     injection.
     """
-    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
-    from modulo.api.team_scope import resolve_lifecycle_map_team_scope
+    from farna.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+    from farna.api.team_scope import resolve_lifecycle_map_team_scope
 
     request = MagicMock()
     request.path_params = {"lifecycle_map_id": str(_MAP_ID)}
@@ -1511,7 +1511,7 @@ async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> N
 
 async def test_restore_resolver_missing_row_returns_none() -> None:
     """Fail-closed parity with the stock resolver: no row -> None -> 404."""
-    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+    from farna.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {"lifecycle_map_id": str(_MAP_ID)}
@@ -1522,7 +1522,7 @@ async def test_restore_resolver_missing_row_returns_none() -> None:
 
 
 async def test_restore_resolver_missing_path_param_returns_none() -> None:
-    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+    from farna.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {}
@@ -1536,7 +1536,7 @@ async def test_restore_resolver_rejects_a_non_uuid_path_param() -> None:
     """A malformed path param is a 400, never an unscoped read."""
     from fastapi import HTTPException
 
-    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+    from farna.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
 
     request = MagicMock()
     request.path_params = {"lifecycle_map_id": "not-a-uuid"}

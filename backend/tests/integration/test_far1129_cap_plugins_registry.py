@@ -27,8 +27,8 @@ import sys
 
 import pytest
 
-from modulo.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.core.plugin_registry import PluginNotFoundError, PluginRegistry
+from farna.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.core.plugin_registry import PluginNotFoundError, PluginRegistry
 
 pytestmark = pytest.mark.integration
 
@@ -36,8 +36,8 @@ _PLUGIN_NAME = "modulo-demo-plugin"
 _CONNECTOR_TYPE = "demo_connector"
 
 _CONNECTOR_PLUGIN_SRC = """\
-from modulo.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType
-from modulo.model_backends.base import HealthResult
+from farna.connectors.base import ConnectorBase, ConnectorPayload, ConnectorQuery, ConnectorResult, ConnectorType
+from farna.model_backends.base import HealthResult
 
 
 class DemoConnector(ConnectorBase):
@@ -107,25 +107,25 @@ def plugin_site(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     _write_plugin(
         site,
         _PLUGIN_NAME,
-        f"[modulo.connectors]\n{_CONNECTOR_TYPE} = {_PLUGIN_NAME.replace('-', '_')}:build_connector\n",
+        f"[farna.connectors]\n{_CONNECTOR_TYPE} = {_PLUGIN_NAME.replace('-', '_')}:build_connector\n",
         _CONNECTOR_PLUGIN_SRC,
     )
     _write_plugin(
         site,
         "modulo-broken-plugin",
-        "[modulo.connectors]\nbroken_connector = modulo_broken_plugin:build_connector\n",
+        "[farna.connectors]\nbroken_connector = modulo_broken_plugin:build_connector\n",
         _BROKEN_PLUGIN_SRC,
     )
     _write_plugin(
         site,
         "modulo-raising-plugin",
-        "[modulo.connectors]\nraising_connector = modulo_raising_plugin:build_connector\n",
+        "[farna.connectors]\nraising_connector = modulo_raising_plugin:build_connector\n",
         "def build_connector(config, creds):\n    raise RuntimeError('builder misbehaving')\n",
     )
     _write_plugin(
         site,
         "modulo-callable-object-plugin",
-        "[modulo.connectors]\ncallable_object_connector = modulo_callable_object_plugin:build_connector\n",
+        "[farna.connectors]\ncallable_object_connector = modulo_callable_object_plugin:build_connector\n",
         _CALLABLE_OBJECT_PLUGIN_SRC,
     )
 
@@ -223,7 +223,7 @@ def test_plugin_site_is_genuinely_metadata_backed(plugin_site: pathlib.Path) -> 
     # must be visible to real importlib.metadata over sys.path.
     found = [d.metadata["Name"] for d in importlib.metadata.distributions()]
     assert _PLUGIN_NAME in found
-    ep = importlib.metadata.entry_points(group="modulo.connectors", name=_CONNECTOR_TYPE)
+    ep = importlib.metadata.entry_points(group="farna.connectors", name=_CONNECTOR_TYPE)
     assert ep
     builder = next(iter(ep)).load()
     assert callable(builder)

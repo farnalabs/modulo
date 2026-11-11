@@ -18,11 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     make_sandbox_agent_fn,
 )
-from modulo.core.pipeline_engine.workspace_input_orchestration import (
+from farna.core.pipeline_engine.workspace_input_orchestration import (
     DriftResult,
     ProvisioningError,
     ResolvedInput,
@@ -40,7 +40,7 @@ def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     # gated behind the MODULO_WORKSPACE_INPUTS_ENABLED kill-switch (OFF by
     # default). Enable it so the happy/failure paths actually run.
     monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "true")
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
 
@@ -133,17 +133,17 @@ async def test_workspace_inputs_resolved_provisioned_and_drift_checked() -> None
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ) as resolve_mock,
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
             new=AsyncMock(),
         ) as provision_mock,
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+            "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
             new=AsyncMock(return_value=_drift_results()),
         ) as drift_mock,
     ):
@@ -170,9 +170,9 @@ async def test_workspace_resolution_failure_raises_sandbox_node_failed() -> None
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(
                 side_effect=ProvisioningError(
                     "ref not found",
@@ -196,13 +196,13 @@ async def test_workspace_provisioning_failure_raises_sandbox_node_failed() -> No
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
             new=AsyncMock(
                 side_effect=ProvisioningError(
                     "clone failed",
@@ -224,17 +224,17 @@ async def test_workspace_drift_detection_error_is_best_effort() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+            "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
             new=AsyncMock(side_effect=RuntimeError("drift detect boom")),
         ),
     ):
@@ -258,17 +258,17 @@ async def test_workspace_drift_detected_sets_run_flag() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+            "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
             new=AsyncMock(return_value=drifted),
         ),
     ):
@@ -292,7 +292,7 @@ async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
     """
     # Override the autouse fixture's enabled state.
     monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "false")
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
 
@@ -301,9 +301,9 @@ async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)) as create_mock,
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ) as resolve_mock,
     ):
@@ -323,7 +323,7 @@ async def test_killswitch_enabled_allows_workspace_inputs() -> None:
     raised and host-side resolution actually runs (proving the gate is conditional,
     not always-on). Mirrors the autouse fixture's enabled state.
     """
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     assert get_settings().modulo_workspace_inputs_enabled is True
 
@@ -332,17 +332,17 @@ async def test_killswitch_enabled_allows_workspace_inputs() -> None:
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+        patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+            "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
             new=AsyncMock(return_value=_resolved_inputs()),
         ) as resolve_mock,
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+            "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
             new=AsyncMock(),
         ),
         patch(
-            "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+            "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
             new=AsyncMock(return_value=_drift_results()),
         ),
     ):

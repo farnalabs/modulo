@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from modulo.core.eval_engine import EvalResult as EngineEvalResult
-from modulo.core.eval_engine.policy_gate import (
+from farna.core.eval_engine import EvalResult as EngineEvalResult
+from farna.core.eval_engine.policy_gate import (
     EvalPolicySnapshot,
     EvalResultView,
     EvalView,
@@ -31,8 +31,8 @@ from modulo.core.eval_engine.policy_gate import (
     PolicyGateView,
     resolve_policy_gate,
 )
-from modulo.core.pipeline_engine import eval_persist_order
-from modulo.core.pipeline_engine.eval_persist_order import (
+from farna.core.pipeline_engine import eval_persist_order
+from farna.core.pipeline_engine.eval_persist_order import (
     EvalDefDTO,
     _classify_persistence_failure,
     _persist_decision_row,
@@ -44,7 +44,7 @@ run_id = uuid.uuid4()
 org_id = uuid.uuid4()
 review_id = uuid.uuid4()
 
-_MODULE_LOGGER = "modulo.core.pipeline_engine.eval_persist_order"
+_MODULE_LOGGER = "farna.core.pipeline_engine.eval_persist_order"
 
 
 def _snapshot(with_result: bool = True, *, matching_node: bool = True) -> EvalPolicySnapshot:
@@ -185,11 +185,11 @@ class TestDecisionRecordPersistSuccessPath:
         session = _ok_session()
         with (
             patch(
-                "modulo.core.pipeline_engine.eval_persist_order.set_rls_org",
+                "farna.core.pipeline_engine.eval_persist_order.set_rls_org",
                 AsyncMock(),
             ) as set_org,
             patch(
-                "modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
+                "farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
                 AsyncMock(),
             ) as set_ctx,
         ):
@@ -223,11 +223,11 @@ class TestDecisionRecordPersistSuccessPath:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.eval_persist_order.set_rls_org",
+                "farna.core.pipeline_engine.eval_persist_order.set_rls_org",
                 AsyncMock(),
             ),
             patch(
-                "modulo.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
+                "farna.core.pipeline_engine.eval_persist_order.set_rls_execution_context",
                 AsyncMock(),
             ),
             caplog.at_level(logging.WARNING, logger=_MODULE_LOGGER),
@@ -597,7 +597,7 @@ class TestHumanGovernedEvalSkip:
     async def test_skip_via_run_gate_evals_loop(self) -> None:
         """The gate loop (``_run_gate_evals``) honours the skip: returns {}
         and never computes."""
-        from modulo.core.pipeline_engine.node_runner import _run_gate_evals
+        from farna.core.pipeline_engine.node_runner import _run_gate_evals
 
         eval_def = _human_eval_def()
 
@@ -618,7 +618,7 @@ class TestHumanGovernedEvalSkip:
     async def test_skip_via_post_node_evals_loop(self) -> None:
         """The post-node loop (``_run_post_node_evals``) honours the same
         skip — it must NOT quietly evaluate a human-mode gate automatically."""
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         eval_def = _human_eval_def()
         executor = PipelineExecutor(MagicMock())

@@ -1,0 +1,333 @@
+"""Demo-org seed framework (FAR-450 foundation ticket).
+
+GATED behind ``MODULO_SEED_DEMO_ORGS`` (see ``modulo.settings``). Each demo
+organisation carries its OWN signed ``license_key`` in
+``Organisation.settings_json`` so it resolves the intended tier (community or
+team) via ``core.feature_flags.resolve_plan_context`` — a bare ``plan_id``
+without a valid signed license silently downgrades to community, so the
+per-org license is mandatory.
+
+This is the FOUNDATION ticket: it builds the framework only. The module-level
+``DEMO_ORGS`` list is empty by default; follow-up tickets populate it with
+concrete organisations and seed their entities (the ``full`` flag gates which
+entities get seeded — ignored for now).
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any, TypedDict
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from farna.core.license import parse_and_verify
+from farna.core.license_signing import (
+    LicenseSigningError,
+    encode_license_key,
+    generate_team_license,
+)
+from farna.db.crud.organisation import update_org_settings_patch
+from farna.db.models.account import Account
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
+from farna.settings import get_settings
+
+_log = logging.getLogger(__name__)
+
+
+# Demo organisations to seed at boot. Empty by default (FAR-450 foundation) —
+# follow-up tickets append dicts of the form:
+#   {"slug": str, "tier": "community" | "team", "full": bool,
+#    "email": str, "password": str}
+#
+# Demo emails MUST be dedicated addresses — never reuse an existing real
+# account's email, or the seed refuses to attach it (see seed_demo_org).
+class DemoOrgSpec(TypedDict, total=False):
+    slug: str
+    tier: str
+    full: bool
+    email: str
+    password: str
+
+
+DEMO_ORGS: list[DemoOrgSpec] = []
+
+# Far-future expiry (~10y) for community demo licenses so they never expire
+# mid-eval.
+_COMMUNITY_LICENSE_YEARS = 10
+
+
+def _community_license_key(private_key_hex: str, org_id: str) -> str:
+    """Sign a community-tier license key bound to *org_id*."""
+    expires_at = (datetime.now(UTC) + timedelta(days=365 * _COMMUNITY_LICENSE_YEARS)).isoformat()
+    payload: dict[str, Any] = {
+        "tier": "community",
+        "features": [],
+        "expires_at": expires_at,
+        "org_id": org_id,
+    }
+    return encode_license_key(payload, private_key_hex)
+
+
+async def _seed_demo_org_entity(session: AsyncSession, slug: str) -> Organisation:
+    """Step 1 — organisation (idempotent by slug, with concurrency safety)."""
+    org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
+    org = org_result.scalar_one_or_none()
+    if org is None:
+        org = Organisation(name=slug, slug=slug, settings_json={})
+        try:
+            # Insert inside a savepoint so a concurrent boot that already
+            # committed this slug (unique violation) only rolls back the failed
+            # insert — NOT the whole transaction, which session.rollback() would
+            # do (discarding unrelated in-flight writes from concurrent work).
+            async with session.begin_nested():
+                session.add(org)
+                await session.flush()
+        except IntegrityError:
+            # Another boot won the race; use the row it committed. The failed
+            # pending insert is discarded automatically by the savepoint.
+            org_result = await session.execute(select(Organisation).where(Organisation.slug == slug))
+            org = org_result.scalar_one_or_none()
+            if org is None:
+                raise
+            _log.info("demo_org.recovered_after_conflict", extra={"slug": slug})
+        else:
+            _log.info("demo_org.created", extra={"slug": slug})
+    else:
+        _log.info("demo_org.exists", extra={"slug": slug})
+    return org
+
+
+async def _seed_demo_admin_account(
+    session: AsyncSession,
+    *,
+    admin_email: str,
+    admin_password: str,
+    org: Organisation,
+) -> Account:
+    """Step 2 — admin account (idempotent by email, with collision guard)."""
+    account_result = await session.execute(select(Account).where(Account.email == admin_email))
+    account = account_result.scalar_one_or_none()
+    if account is None:
+        from farna.auth.passwords import hash_password
+
+        account = Account(
+            email=admin_email,
+            display_name=admin_email.split("@", 1)[0],
+            password_hash=hash_password(admin_password),
+            auth_provider="local",
+        )
+        session.add(account)
+        await session.flush()
+        _log.info("demo_account.created", extra={"email": admin_email})
+        return account
+    # Refuse to attach a pre-existing account unless it is already the
+    # admin member we created on a prior boot. A real account (e.g. a
+    # superuser) must never be silently bound to a demo org.
+    member_result = await session.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_id == account.id,
+            OrgMembership.organisation_id == org.id,
+            OrgMembership.role == "admin",
+        )
+    )
+    if member_result.scalar_one_or_none() is None:
+        raise ValueError(
+            f"demo org email {admin_email!r} collides with an existing account "
+            f"— refusing to attach (use a dedicated demo email)"
+        )
+    _log.info("demo_account.exists", extra={"email": admin_email})
+    return account
+
+
+async def _seed_demo_membership(
+    session: AsyncSession,
+    *,
+    account: Account,
+    org: Organisation,
+    admin_email: str,
+    slug: str,
+) -> OrgMembership:
+    """Step 3 — membership (idempotent by account + org)."""
+    mem_result = await session.execute(
+        select(OrgMembership).where(
+            OrgMembership.account_id == account.id,
+            OrgMembership.organisation_id == org.id,
+        )
+    )
+    membership = mem_result.scalar_one_or_none()
+    if membership is None:
+        membership = OrgMembership(
+            account_id=account.id,
+            organisation_id=org.id,
+            role="admin",
+        )
+        session.add(membership)
+        _log.info("demo_membership.created", extra={"email": admin_email, "slug": slug})
+    else:
+        _log.info("demo_membership.exists", extra={"email": admin_email, "slug": slug})
+    return membership
+
+
+def _demo_org_license_key(
+    org: Organisation,
+    *,
+    tier: str,
+    slug: str,
+    private_key: str,
+) -> str:
+    """Compute the org's signed license key (community | team).
+
+    Idempotent: reuse an existing valid key whose tier matches, otherwise
+    (re)compute.
+    """
+    org_id = str(org.id)
+    existing_key: str | None = org.settings_json.get("license_key") if org.settings_json else None
+    if existing_key:
+        parsed = parse_and_verify(existing_key)
+        if parsed.valid and parsed.license_data is not None and parsed.license_data.tier == tier:
+            return existing_key  # still valid for this tier — keep it
+    if tier == "team":
+        return generate_team_license(org_name=slug, org_id=org_id, private_key_hex=private_key)
+    return _community_license_key(private_key, org_id)
+
+
+def _demo_org_settings(org: Organisation, *, license_key: str, tier: str, full: bool) -> dict[str, Any]:
+    """Stamp the license + demo flags onto a copy of the org settings."""
+    base = dict(org.settings_json or {})
+    new_settings: dict[str, Any] = dict(base)
+    new_settings["license_key"] = license_key
+    demo = dict(base.get("demo") or {})
+    demo["tier"] = tier
+    demo["full"] = bool(full)
+    new_settings["demo"] = demo
+    return new_settings
+
+
+async def seed_demo_org(
+    session: AsyncSession,
+    *,
+    slug: str,
+    tier: str,
+    full: bool,
+    admin_email: str,
+    admin_password: str,
+) -> None:
+    """Idempotently create a demo organisation + admin account + membership.
+
+    All three entities are created only if absent (slug / email / account+org
+    existence guards), so the function is safe to call on every boot. The org is
+    stamped with a per-org signed ``license_key`` (community or team) bound to
+    the actual ``org.id``, so the tier resolves correctly through
+    ``resolve_plan_context``.
+
+    ``full`` is accepted but IGNORED for now — demo entities are seeded in
+    follow-up tickets. It is persisted under ``settings_json["demo"]["full"]``
+    for future use.
+
+    Fails closed: when no signing private key is configured the function raises
+    BEFORE any DB write (for both tiers). When the admin email collides with a
+    pre-existing account that is not already an admin member of this org, it
+    raises to avoid cross-tenant escalation (attaching a real account — e.g. a
+    superuser — to the demo org).
+    """
+    private_key = get_settings().modulo_license_private_key or ""
+    if not private_key:
+        raise LicenseSigningError(
+            f"No license signing private key configured for demo org {slug!r} (set MODULO_LICENSE_PRIVATE_KEY)."
+        )
+
+    org = await _seed_demo_org_entity(session, slug)
+    account = await _seed_demo_admin_account(session, admin_email=admin_email, admin_password=admin_password, org=org)
+    await _seed_demo_membership(session, account=account, org=org, admin_email=admin_email, slug=slug)
+
+    # 4. Per-org signed license (community | team), bound to the real org id.
+    #    Only write back when something actually changed.
+    new_key = _demo_org_license_key(org, tier=tier, slug=slug, private_key=private_key)
+    new_settings = _demo_org_settings(org, license_key=new_key, tier=tier, full=full)
+    if new_settings != (org.settings_json or {}):
+        # FAR-1830: emit ONLY this seeder's top-level keys via the atomic patch.
+        # A whole-column write from the read above would drop every key another
+        # settings_json writer committed between this read and the write.
+        # ``allow_unbound_context=True``: this is the boot seeder — it runs
+        # outside any request/RLS-bound session (``seed_demo_orgs`` opens a bare
+        # factory transaction), so there is no org context to bind and no
+        # cross-tenant boundary the write could violate.
+        await update_org_settings_patch(
+            session,
+            org.id,
+            {"license_key": new_key, "demo": new_settings["demo"]},
+            allow_unbound_context=True,
+        )
+
+
+async def _resolve_demo_org_id(factory: async_sessionmaker[AsyncSession], slug: str | None) -> uuid.UUID | None:
+    """Resolve *slug*'s org id AFTER the failed per-spec transaction rolled back.
+
+    FAR-1539: ``seed_demo_orgs`` logs its per-org ERROR once the spec's
+    transaction has already unwound, so the id held inside ``seed_demo_org`` is
+    gone. Re-read it by slug: an idempotent re-run finds the row an earlier
+    boot committed (the caller then binds and attributes), while a first-run
+    failure has rolled back its own insert and returns ``None`` — the caller
+    keeps the announced ``no_org_context`` drop instead of binding an id the
+    ``error_events.organisation_id`` FK would reject. A failure to resolve
+    degrades to ``None`` with a log: resolving must never mask the original
+    seed failure.
+    """
+    if not slug:
+        return None
+    try:
+        async with factory() as session, session.begin():
+            result = await session.execute(select(Organisation.id).where(Organisation.slug == slug))
+            return result.scalar_one_or_none()
+    except Exception:
+        _log.warning("demo_org.failure_org_resolution_failed", extra={"slug": slug}, exc_info=True)
+        return None
+
+
+async def seed_demo_orgs(factory: async_sessionmaker[AsyncSession]) -> None:
+    """Seed every demo org listed in ``DEMO_ORGS`` (gated by the caller).
+
+    Each spec is seeded in its own transaction for isolation: a failure on one
+    org (bad spec, missing key, email collision) is logged and skipped without
+    aborting the remaining orgs. Idempotent — re-running never duplicates.
+    """
+    if not DEMO_ORGS:
+        _log.info("demo_orgs.empty")
+        return
+
+    # FAR-1539: lazy import — ``cron_helpers`` is a heavyweight module and this
+    # seeder runs at API boot; the same seam the FAR-1501 call sites outside
+    # the cron family use (``cost_controller.probe``, ``auth.api_key``).
+    from farna.core.cron_helpers import _bound_org
+
+    for spec in DEMO_ORGS:
+        slug = spec.get("slug")
+        try:
+            async with factory() as session, session.begin():
+                await seed_demo_org(
+                    session,
+                    slug=spec["slug"],
+                    tier=spec["tier"],
+                    full=spec.get("full", False),
+                    admin_email=spec["email"],
+                    admin_password=spec["password"],
+                )
+        except (ValueError, IntegrityError):
+            # FAR-1539: attribute ``demo_org.seed_failed`` to the demo org when
+            # a row survives the rollback (idempotent re-run), so
+            # ErrorTrackingLogHandler persists it instead of dropping it as
+            # no_org_context. ``_bound_org`` resets in finally, so the next
+            # spec's tick and the caller's context never inherit the binding.
+            org_id = await _resolve_demo_org_id(factory, slug)
+            if org_id is None:
+                # No surviving organisation to attribute — keep the announced
+                # drop rather than fabricate a binding the FK would reject.
+                _log.exception("demo_org.seed_failed", extra={"slug": slug})
+                continue
+            async with _bound_org(org_id):
+                _log.exception("demo_org.seed_failed", extra={"slug": slug})

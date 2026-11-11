@@ -9,7 +9,7 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     Given a modulo apply test context
 
   # -- Config format & loading -------------------------------------------
-  # (backend/src/modulo/cli/apply/loader.py + models.py)
+  # (backend/src/farna/cli/apply/loader.py + models.py)
 
   Scenario: A single-document config loads its declared entities
     Given an apply config declaring the schema "alpha"
@@ -46,7 +46,7 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     Then the load fails with an error mentioning "forward-references pipeline"
 
   # -- Secrets are refs-only ---------------------------------------------
-  # (backend/src/modulo/cli/apply/models.py + executor.py resolve_secret_refs)
+  # (backend/src/farna/cli/apply/models.py + executor.py resolve_secret_refs)
 
   Scenario: An inline api_key literal is rejected at validation
     Given an apply config declaring the model backend "openai" with the raw api_key "sk-live-123"
@@ -72,7 +72,7 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     And nothing is blocked
 
   # -- Planning ------------------------------------------------------------
-  # (backend/src/modulo/cli/apply/plan.py)
+  # (backend/src/farna/cli/apply/plan.py)
 
   Scenario: An absent entity plans as created
     Given a schema entity "alpha" with description "Brand new"
@@ -106,7 +106,7 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     And the decision reason mentions "immutable"
 
   # -- Apply & verification -------------------------------------------------
-  # (backend/src/modulo/cli/apply/executor.py — backend writes are verified)
+  # (backend/src/farna/cli/apply/executor.py — backend writes are verified)
 
   Scenario: A stored-but-broken backend credential is never reported as plain success
     Given an apply config declaring the model backend "openai" with the env api_key "${env:SK}"
@@ -145,7 +145,7 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     And a report with only "unchanged" entries has no blockers
 
   # -- Drift mode (--diff) ----------------------------------------------------
-  # (backend/src/modulo/cli/apply/drift.py — read-only, no write path)
+  # (backend/src/farna/cli/apply/drift.py — read-only, no write path)
 
   Scenario: Drift mode is a read-only report labelled drift
     Given an apply config declaring the schema "alpha"

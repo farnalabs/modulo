@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.typed_judge import (
     JudgeConfidenceKind,
     JudgeErrorCode,
     JudgeExecutionError,
@@ -65,7 +65,7 @@ class TestVerdictInvariants:
 
 class TestErrorProvenance:
     def test_an_error_verdict_keeps_the_resolved_judge_identity(self) -> None:
-        from modulo.core.eval_engine.typed_judge import JudgeIdentity
+        from farna.core.eval_engine.typed_judge import JudgeIdentity
 
         exc = JudgeExecutionError(
             JudgeErrorCode.JUDGE_TIMEOUT,
@@ -352,7 +352,7 @@ class TestDialectCoercionEdges:
     """Every malformed envelope field is a coded error, never an inferred verdict."""
 
     def test_an_explicit_judge_identity_wins_over_the_payload(self) -> None:
-        from modulo.core.eval_engine.typed_judge import JudgeIdentity
+        from farna.core.eval_engine.typed_judge import JudgeIdentity
 
         verdict = from_judge_callable_dict(
             {"passed": True, "judge": {"judge_backend_id": "payload"}},
@@ -424,7 +424,7 @@ class TestQuestionScoringEdges:
         answers: dict[str, Any],
         threshold: float = 0.5,
     ) -> tuple[list[QuestionVerdict], float | None, bool]:
-        from modulo.core.eval_engine.typed_judge import aggregate_typed_answers
+        from farna.core.eval_engine.typed_judge import aggregate_typed_answers
 
         return aggregate_typed_answers(
             questions,
@@ -677,7 +677,7 @@ class TestTypedResponseParsing:
 
 class TestPromptBuilder:
     def test_the_prompt_embeds_every_question_and_the_pass_rule(self) -> None:
-        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+        from farna.core.eval_engine.typed_judge import build_typed_judge_prompt
 
         prompt = build_typed_judge_prompt(
             [{"id": "tone", "type": "noul", "instructions": "neutral?", "criteria": ["calm"]}],
@@ -690,7 +690,7 @@ class TestPromptBuilder:
         assert "the output" in prompt
 
     def test_a_choice_question_embeds_its_option_keys_and_passing_keys(self) -> None:
-        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+        from farna.core.eval_engine.typed_judge import build_typed_judge_prompt
 
         prompt = build_typed_judge_prompt(
             [
@@ -717,7 +717,7 @@ class TestPromptBuilder:
         assert "not-an-option" not in prompt
 
     def test_a_choice_question_without_a_declared_answer_space_still_renders(self) -> None:
-        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+        from farna.core.eval_engine.typed_judge import build_typed_judge_prompt
 
         prompt = build_typed_judge_prompt([{"id": "verdict", "type": "choice"}], None, "the output")
 
@@ -726,7 +726,7 @@ class TestPromptBuilder:
         assert '"passing_keys"' not in prompt
 
     def test_a_score_question_embeds_its_level_scores_and_pass_from(self) -> None:
-        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+        from farna.core.eval_engine.typed_judge import build_typed_judge_prompt
 
         prompt = build_typed_judge_prompt(
             [
@@ -753,7 +753,7 @@ class TestPromptBuilder:
         assert "not-a-level" not in prompt
 
     def test_a_score_question_without_declared_levels_still_renders(self) -> None:
-        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+        from farna.core.eval_engine.typed_judge import build_typed_judge_prompt
 
         prompt = build_typed_judge_prompt(
             [{"id": "quality", "type": "score", "pass_from": 1}],

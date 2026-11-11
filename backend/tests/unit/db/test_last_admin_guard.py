@@ -1,4 +1,4 @@
-"""Unit tests for the shared last-admin guard (modulo.db.crud.last_admin_guard).
+"""Unit tests for the shared last-admin guard (farna.db.crud.last_admin_guard).
 
 Covers the counting semantics with a fake session, the two-int4 MD5 advisory
 lock key parity with the SQL expression used by the SECURITY DEFINER, and the
@@ -12,12 +12,12 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.admin import _extract_bg_pgcode, _raise_bg_pgcode
-from modulo.db.crud.last_admin_guard import (
+from farna.api.routes.admin import _extract_bg_pgcode, _raise_bg_pgcode
+from farna.db.crud.last_admin_guard import (
     LastAdminLockoutError,
     assert_not_last_admin,
 )
-from modulo.db.repositories.locks import _str_to_lock_keys
+from farna.db.repositories.locks import _str_to_lock_keys
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TARGET_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

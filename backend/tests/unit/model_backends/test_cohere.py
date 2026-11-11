@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock, patch
 
-from modulo.model_backends.base import HealthResult
-from modulo.model_backends.cohere import COHERE_BASE_URL, CohereBackend
+from farna.model_backends.base import HealthResult
+from farna.model_backends.cohere import COHERE_BASE_URL, CohereBackend
 
 
 def test_cohere_base_url_constant():
@@ -11,7 +11,7 @@ def test_cohere_base_url_constant():
 
 
 def test_chat_cohere_uses_cohere_base_url():
-    with patch("modulo.model_backends.cohere.ChatCohere") as mock_chat_cohere:
+    with patch("farna.model_backends.cohere.ChatCohere") as mock_chat_cohere:
         CohereBackend(api_key="test-key", model_id="command-r")
         mock_chat_cohere.assert_called_once_with(
             model="command-r",
@@ -20,10 +20,10 @@ def test_chat_cohere_uses_cohere_base_url():
 
 
 async def test_health_check_uses_cohere_base_url():
-    with patch("modulo.model_backends.cohere.ChatCohere"):
+    with patch("farna.model_backends.cohere.ChatCohere"):
         backend = CohereBackend(api_key="test-key", model_id="command-r")
     with patch(
-        "modulo.model_backends.cohere.openai_compatible_health_check",
+        "farna.model_backends.cohere.openai_compatible_health_check",
         new=AsyncMock(return_value=HealthResult(ok=True)),
     ) as mock_health:
         result = await backend.health_check()

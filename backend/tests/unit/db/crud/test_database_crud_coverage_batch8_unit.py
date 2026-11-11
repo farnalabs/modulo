@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud import parameter_schema, pipeline_folder, schema_folder, tier_catalog
-from modulo.db.crud.base import PageResult
-from modulo.db.models.parameter_schema import ParameterSchema
-from modulo.db.models.pipeline_folder import PipelineFolder
-from modulo.db.models.schema import SchemaFolder
-from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
+from farna.db.crud import parameter_schema, pipeline_folder, schema_folder, tier_catalog
+from farna.db.crud.base import PageResult
+from farna.db.models.parameter_schema import ParameterSchema
+from farna.db.models.pipeline_folder import PipelineFolder
+from farna.db.models.schema import SchemaFolder
+from farna.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 
 ORG = uuid.uuid4()
 ACCOUNT = uuid.uuid4()
@@ -139,7 +139,7 @@ async def test_parameter_schema_crud_all_paths() -> None:
     assert page.has_more is True
 
     cursor_page = MagicMock(items=[schema], next_cursor="next", has_more=True)
-    with patch("modulo.db.crud.parameter_schema.CursorPaginator") as paginator:
+    with patch("farna.db.crud.parameter_schema.CursorPaginator") as paginator:
         paginator.return_value.paginate = AsyncMock(return_value=cursor_page)
         page = await parameter_schema.list_schemas(session(result(scalar=1)), org_id=ORG, cursor="old", limit=1)
     assert page.next_cursor == "next"
@@ -147,7 +147,7 @@ async def test_parameter_schema_crud_all_paths() -> None:
 
     current = ParameterSchema(organisation_id=ORG, name="old", account_id=ACCOUNT, parameters=[])
     current.version = 1
-    with patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()) as lock:
+    with patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()) as lock:
         updated = await parameter_schema.update_schema(
             session(result(one=current)),
             current.id,
@@ -159,7 +159,7 @@ async def test_parameter_schema_crud_all_paths() -> None:
     lock.assert_awaited_once()
     assert updated is current
     assert current.version == 2
-    with patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()):
+    with patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=AsyncMock()):
         assert await parameter_schema.update_schema(session(result(one=None)), uuid.uuid4(), version=1) is None
 
     active = ParameterSchema(organisation_id=ORG, name="active", account_id=ACCOUNT, parameters=[])
@@ -202,6 +202,6 @@ async def test_tier_catalog_reads_payloads_and_missing_flag() -> None:
 
 
 def test_evidence_repository_module_is_importable() -> None:
-    import modulo.db.repositories.evidence as evidence_repository
+    import farna.db.repositories.evidence as evidence_repository
 
     assert evidence_repository.__doc__ is not None

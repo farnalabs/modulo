@@ -1,7 +1,7 @@
 """Unit tests for the SAQ cron wrappers around the trigger_events cleanup jobs.
 
 ``webhook_dedup_cleanup`` and ``trigger_events_cleanup`` in
-``modulo.core.saq_worker`` each wrap one cleanup pass in a drain loop and
+``farna.core.saq_worker`` each wrap one cleanup pass in a drain loop and
 report the total deleted count, and both must pick the session factory by
 dialect: on PostgreSQL the purge is cross-org by design and must drain on the
 SYSTEM session factory (``_cleanup_session_factory`` →
@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
-import modulo.core.saq_worker as sw
-from modulo.db.models.trigger_event import TriggerEvent
+import farna.core.saq_worker as sw
+from farna.db.models.trigger_event import TriggerEvent
 from tests.unit.cleanup_jobs.helpers import (
     JOB_CASES,
     JobCase,

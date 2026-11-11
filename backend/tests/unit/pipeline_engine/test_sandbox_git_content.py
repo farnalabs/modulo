@@ -14,12 +14,12 @@ import uuid
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.pipeline_engine.git_content import (
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.pipeline_engine.git_content import (
     GitContentFetchError,
     GitContentRefError,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _build_sandbox_node_config,
     _resolve_sandbox_git_content_config,
 )
@@ -70,7 +70,7 @@ async def test_resolve_config_replaces_pinned_prompt(monkeypatch: pytest.MonkeyP
         seen["path"] = path
         return "PROMPT CONTENT FROM GIT"
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     config = _llm_config(agent_prompt=_PINNED_PROMPT)
     resolved = await _resolve_sandbox_git_content_config(config)
     assert resolved.agent_prompt_template == "PROMPT CONTENT FROM GIT"
@@ -82,7 +82,7 @@ async def test_resolve_config_replaces_pinned_script_command(monkeypatch: pytest
     async def _fetch(*_args: object, **_kwargs: object) -> str:
         return "echo from-git-driver"
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     config = _script_config(script_command=_PINNED_PROMPT.replace("prompts/x.md", "drivers/run.py"))
     resolved = await _resolve_sandbox_git_content_config(config)
     assert resolved.agent_command == "echo from-git-driver"
@@ -98,7 +98,7 @@ async def test_resolve_config_unpinned_ref_is_typed_error(monkeypatch: pytest.Mo
         fetched = True
         return "unused"
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     config = _llm_config(agent_prompt=f"git+{_REPO}@main#prompts/x.md")
     with pytest.raises(GitContentRefError, match="unpinned"):
         await _resolve_sandbox_git_content_config(config)
@@ -109,7 +109,7 @@ async def test_resolve_config_fetch_failure_propagates(monkeypatch: pytest.Monke
     async def _fetch(*_args: object, **_kwargs: object) -> str:
         raise GitContentFetchError("clone failed: repository unreachable")
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     config = _llm_config(agent_prompt=_PINNED_PROMPT)
     with pytest.raises(GitContentFetchError, match="clone failed"):
         await _resolve_sandbox_git_content_config(config)

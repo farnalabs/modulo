@@ -6,14 +6,14 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager import (
+from farna.core.hitl_manager import (
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
 )
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 
 from .conftest import _session_decide
 
@@ -74,7 +74,7 @@ async def test_approve_logs_output_delivered_audit_event():
     )
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         result = await mgr.approve(
             session,
@@ -109,7 +109,7 @@ async def test_approve_without_actor_id_omits_actor_in_audit():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         await mgr.approve(
             session,
@@ -137,7 +137,7 @@ async def test_approve_team_id_none_in_audit_payload():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
@@ -157,7 +157,7 @@ async def test_reject_logs_reason_in_audit_payload():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         await mgr.reject(
             session,
@@ -185,7 +185,7 @@ async def test_reject_without_reason_omits_key():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="rejected")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         await mgr.reject(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
 
@@ -205,7 +205,7 @@ async def test_approve_sets_delivered_at():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
         mgr = HITLManager()
         result = await mgr.approve(
             session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER
@@ -222,7 +222,7 @@ async def test_delivered_at_is_recent():
     gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
     session = _session_decide(update_returns_id=gate.id, session_get_gate=gate_decided)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
         mgr = HITLManager()
         before = datetime.now(UTC)
         result = await mgr.approve(
@@ -244,7 +244,7 @@ async def test_approve_wrong_token_raises_and_no_audit():
     gate = _gate(account_id=_USER, claim_token="correct", expires_at=future)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(ClaimTokenInvalidError):
             await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="wrong", actor_id=_USER)
@@ -257,7 +257,7 @@ async def test_approve_expired_token_raises_and_no_audit():
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=past)
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(ClaimTokenExpiredError):
             await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
@@ -268,7 +268,7 @@ async def test_approve_expired_token_raises_and_no_audit():
 async def test_approve_gate_not_found_raises_and_no_audit():
     session = _session_decide(update_returns_id=None, diagnosis_gate=None)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(GateNotFoundError):
             await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
@@ -280,7 +280,7 @@ async def test_approve_already_decided_raises_and_no_audit():
     gate = _gate(decision="approved")
     session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
 
-    with patch("modulo.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
+    with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock) as mock_audit:
         mgr = HITLManager()
         with pytest.raises(GateAlreadyDecidedError):
             await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
@@ -307,7 +307,7 @@ async def test_delivery_failure_propagates():
 
     with (
         patch(
-            "modulo.core.hitl_manager.append_audit_event",
+            "farna.core.hitl_manager.append_audit_event",
             new_callable=AsyncMock,
             side_effect=[RuntimeError("audit db down")],
         ) as mock_audit,
@@ -341,7 +341,7 @@ async def test_delivery_failure_does_not_set_delivered_at():
 
     with (
         patch(
-            "modulo.core.hitl_manager.append_audit_event",
+            "farna.core.hitl_manager.append_audit_event",
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit db down"),
         ),
@@ -363,7 +363,7 @@ async def test_delivery_failure_propagates_original_error():
 
     with (
         patch(
-            "modulo.core.hitl_manager.append_audit_event",
+            "farna.core.hitl_manager.append_audit_event",
             new_callable=AsyncMock,
             side_effect=ConnectionError("database connection lost"),
         ),
@@ -383,7 +383,7 @@ async def test_delivery_failure_logged_even_when_failed_event_also_fails():
 
     with (
         patch(
-            "modulo.core.hitl_manager.append_audit_event",
+            "farna.core.hitl_manager.append_audit_event",
             new_callable=AsyncMock,
             side_effect=[RuntimeError("first fail"), RuntimeError("second fail too")],
         ),

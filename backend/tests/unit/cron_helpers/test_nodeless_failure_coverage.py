@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 FAILURE_POLICY = {"on": ["failure"], "max_retries": 2}
 
@@ -157,7 +157,7 @@ class TestPreservedBehaviour:
         (F3): a matcher that answers with a DIFFERENT budget moves the
         decision with it — under the hand-rolled validation the policy's own
         ``max_retries=2`` would have bound (execution 2 still True)."""
-        import modulo.core.pipeline_engine.executor as executor_module
+        import farna.core.pipeline_engine.executor as executor_module
 
         real = executor_module._retry_after_policy
 

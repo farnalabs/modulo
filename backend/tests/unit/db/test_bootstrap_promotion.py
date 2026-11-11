@@ -1,4 +1,4 @@
-"""Promotion tests for modulo.db.bootstrap (FAR-671).
+"""Promotion tests for farna.db.bootstrap (FAR-671).
 
 Locks that the promoted module behaves identically to the pre-promotion
 deploy/fly/bootstrap_db.py: the deploy file is now a thin importing shim and
@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-import modulo.db.bootstrap as bootstrap_module
-from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
+import farna.db.bootstrap as bootstrap_module
+from farna.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
 from tests.unit._source_scan import iter_source_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -182,8 +182,8 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
     """FAR-1469: the interim bootstrap copy is folded into url_utils.
 
     Grep-audit guard: ``def split_postgres_sslmode`` must appear exactly once
-    under ``backend/src`` (in ``modulo/db/url_utils.py``), and the name
-    reachable via ``modulo.db.bootstrap`` must BE that shared helper — not a
+    under ``backend/src`` (in ``farna/db/url_utils.py``), and the name
+    reachable via ``farna.db.bootstrap`` must BE that shared helper — not a
     private reimplementation.
     """
     src_root = _REPO_ROOT / "backend" / "src"
@@ -192,7 +192,7 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
         for path, source in iter_source_text(src_root)
         if "def split_postgres_sslmode" in source
     )
-    assert hits == ["modulo/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
+    assert hits == ["farna/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
     assert bootstrap_module.split_postgres_sslmode is split_postgres_sslmode
 
 
@@ -281,11 +281,11 @@ def test_promoted_main_fails_closed_on_downgrading_sslmode(
 
 _IMPORT_LIGHT_SCRIPT = (
     "import sys\n"
-    "import modulo.db.bootstrap\n"
-    "import modulo.db.url_utils\n"
-    "import modulo.db.health_checks\n"
-    "banned = [m for m in sys.modules if m.startswith(('sqlalchemy', 'modulo.api', 'modulo.db.models', "
-    "'modulo.core', 'modulo.auth'))]\n"
+    "import farna.db.bootstrap\n"
+    "import farna.db.url_utils\n"
+    "import farna.db.health_checks\n"
+    "banned = [m for m in sys.modules if m.startswith(('sqlalchemy', 'farna.api', 'farna.db.models', "
+    "'farna.core', 'farna.auth'))]\n"
     "assert not banned, f'promotion modules must stay dependency-light: {banned}'\n"
     "print('OK')\n"
 )

@@ -49,7 +49,7 @@ def _enforce_token_budget(tokens: int, ctx: dict[str, Any]) -> None:
     """
     import asyncio
 
-    from modulo.core.cost_controller.finalize import _enforce_agent_token_budgets
+    from farna.core.cost_controller.finalize import _enforce_agent_token_budgets
 
     agent_id = ctx["agent_id"]
     node_id = ctx["node_id"]
@@ -130,9 +130,9 @@ def error_message_is(message: str, ctx: dict[str, Any]) -> None:
 
 def _use_admin_auth(request: Any) -> None:
     """Set the dependency override for admin auth (overrides client fixture)."""
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user as _get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal as _Principal
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_user as _get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal as _Principal
 
     _app.dependency_overrides[_get_current_user] = lambda: _Principal(
         username="admin",
@@ -144,9 +144,9 @@ def _use_admin_auth(request: Any) -> None:
 
 def _use_viewer_auth() -> None:
     """Set the dependency override for viewer auth (overrides client fixture)."""
-    from modulo.api.main import app as _app
-    from modulo.auth.dependencies import get_current_user as _get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal as _Principal
+    from farna.api.main import app as _app
+    from farna.auth.dependencies import get_current_user as _get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal as _Principal
 
     _app.dependency_overrides[_get_current_user] = lambda: _Principal(
         username="viewer",
@@ -252,11 +252,11 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
 
     with (
         patch(
-            "modulo.core.cost_controller.get_or_create_daily_count",
+            "farna.core.cost_controller.get_or_create_daily_count",
             side_effect=[mock_org_count, mock_team_count] if team_id else [mock_org_count],
         ),
         patch(
-            "modulo.core.cost_controller.select",
+            "farna.core.cost_controller.select",
         ),
         patch.object(mock_session, "execute") as mock_execute,
     ):
@@ -281,7 +281,7 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
 
         import asyncio
 
-        from modulo.core.cost_controller import check_and_record_spend
+        from farna.core.cost_controller import check_and_record_spend
 
         loop = asyncio.new_event_loop()
         try:
@@ -354,7 +354,7 @@ def _check_circuit_breaker(amount: str, ctx: dict[str, Any]) -> None:
     Mirrors ``_check_spend``: the session's ``execute`` returns the pipeline
     row, the monthly SUM, then the trip's update statements (in that order).
     """
-    from modulo.core.cost_controller import check_pipeline_circuit_breaker
+    from farna.core.cost_controller import check_pipeline_circuit_breaker
 
     cost_usd = Decimal(str(amount).replace(",", ""))
     pipeline = _make_cb_pipeline(ctx)
@@ -383,9 +383,9 @@ def _check_circuit_breaker(amount: str, ctx: dict[str, Any]) -> None:
         mock_execute = AsyncMock(side_effect=[pipeline_result, monthly_result, MagicMock()])
 
     with (
-        patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock),
-        patch("modulo.core.cost_controller.select"),
-        patch("modulo.core.cost_controller.update", new=update_mock),
+        patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock),
+        patch("farna.core.cost_controller.select"),
+        patch("farna.core.cost_controller.update", new=update_mock),
         patch.object(mock_session, "execute", new=mock_execute),
     ):
         import asyncio
@@ -442,7 +442,7 @@ def circuit_breaker_trips(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse("the pipeline trigger is permanently paused"))
 def pipeline_trigger_paused(ctx: dict[str, Any]) -> None:
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.trigger import Trigger
 
     update_mock = ctx.get("cb_update")
     assert update_mock is not None, "No trigger-pause update observed"
@@ -473,7 +473,7 @@ def pipeline_tripped_circuit_breaker(pipeline_name: str, ctx: dict[str, Any]) ->
     parsers.parse('an admin re-enables pipeline "{pipeline_name}"'),
 )
 def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
-    from modulo.core.cost_controller import reset_pipeline_circuit_breaker
+    from farna.core.cost_controller import reset_pipeline_circuit_breaker
 
     pipeline = _make_cb_pipeline(ctx, tripped=True)
     pipeline_result = MagicMock()
@@ -489,8 +489,8 @@ def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
     update_mock = MagicMock()
 
     with (
-        patch("modulo.core.cost_controller.select"),
-        patch("modulo.core.cost_controller.update", new=update_mock),
+        patch("farna.core.cost_controller.select"),
+        patch("farna.core.cost_controller.update", new=update_mock),
         patch.object(mock_session, "execute", new=AsyncMock(side_effect=[pipeline_result, MagicMock()])),
     ):
         import asyncio
@@ -516,7 +516,7 @@ def circuit_breaker_reset(ctx: dict[str, Any]) -> None:
     assert reset is not None, "reset_pipeline_circuit_breaker returned None (pipeline not found)"
     assert reset == 0, f"expected 0 re-activated trigger ids from the mock UPDATE result, got {reset!r}"
     assert ctx.get("cb_pipeline").circuit_breaker_tripped is False
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.trigger import Trigger
 
     update_mock = ctx.get("cb_update")
     assert update_mock is not None, "No trigger re-activation update observed"
@@ -551,8 +551,8 @@ def admin_put_org_limit(limit: str, request: Any, ctx: dict[str, Any], client: A
     org.daily_spend_limit = None
 
     with (
-        patch("modulo.api.routes.costs.get_organisation", return_value=org),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_organisation", return_value=org),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.put(
             "/api/v1/admin/costs/limits/org",
@@ -571,8 +571,8 @@ def admin_put_team_limit(team_id: str, limit: str, request: Any, ctx: dict[str, 
     team.daily_spend_limit = None
 
     with (
-        patch("modulo.api.routes.costs.get_team", return_value=team),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_team", return_value=team),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.put(
             f"/api/v1/admin/costs/limits/teams/{team_id}",
@@ -591,8 +591,8 @@ def admin_get_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
         {"entity_id": str(_TEAM_ID), "entity_name": "Alpha Team", "total_spend_usd": 150.0, "total_runs": 12},
     ]
     with (
-        patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_cost_report", return_value=rows),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs")
         _store_response(request, ctx, resp)
@@ -606,8 +606,8 @@ def admin_get_costs_with_params(group_by: str, period: str, request: Any, ctx: d
         {"entity_id": str(_ORG_ID), "entity_name": "Acme Corp", "total_spend_usd": 500.0, "total_runs": 25},
     ]
     with (
-        patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_cost_report", return_value=rows),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/admin/costs?group_by={group_by}&period={period}")
         _store_response(request, ctx, resp)
@@ -697,11 +697,11 @@ def _get_ceiling_route(request: Any, ctx: dict[str, Any], client: Any, *, body: 
         store.update(provided)
 
     with (
-        patch("modulo.api.routes.costs.get_organisation", new=AsyncMock(return_value=org)),
-        patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)),
-        patch("modulo.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)),
-        patch("modulo.api.routes.costs.lock_org_cost_state", new=AsyncMock()),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.get_organisation", new=AsyncMock(return_value=org)),
+        patch("farna.api.routes.costs.get_org_cost_state", new=AsyncMock(side_effect=_get)),
+        patch("farna.api.routes.costs.upsert_org_cost_state", new=AsyncMock(side_effect=_upsert)),
+        patch("farna.api.routes.costs.lock_org_cost_state", new=AsyncMock()),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         if body is None:
             resp = client.get("/api/v1/admin/costs/ceiling")
@@ -806,10 +806,10 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
     import asyncio
     from datetime import date
 
-    from modulo.core.cost_controller.finalize import _ledger_block
-    from modulo.db.models.organisation import Organisation
-    from modulo.db.models.organisation_cost_state import OrganisationCostState
-    from modulo.db.models.run import Run
+    from farna.core.cost_controller.finalize import _ledger_block
+    from farna.db.models.organisation import Organisation
+    from farna.db.models.organisation_cost_state import OrganisationCostState
+    from farna.db.models.run import Run
 
     run = MagicMock(spec=Run)
     run.id = uuid.uuid4()
@@ -864,15 +864,15 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
         # stubbed (it is out of scope here).
         with (
             patch(
-                "modulo.core.cost_controller.finalize.get_org_cost_state",
+                "farna.core.cost_controller.finalize.get_org_cost_state",
                 new=AsyncMock(return_value=state),
             ),
-            patch("modulo.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
+            patch("farna.core.cost_controller.finalize.increment_org_cumulative_spend", new=accrual),
             patch(
-                "modulo.core.cost_controller.finalize.check_and_record_spend",
+                "farna.core.cost_controller.finalize.check_and_record_spend",
                 new=AsyncMock(return_value=(True, None)),
             ),
-            patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+            patch("farna.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
         ):
             loop.run_until_complete(
                 _ledger_block(
@@ -983,8 +983,8 @@ def org_has_scheduled_report_with_id(org_name: str, report_id: str, ctx: dict[st
 @when("I POST /api/v1/admin/costs/reports with a weekly team CSV report")
 def admin_create_report(request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
-        patch("modulo.api.routes.costs.create_scheduled_report", new=AsyncMock(return_value=_make_report())),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.create_scheduled_report", new=AsyncMock(return_value=_make_report())),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/admin/costs/reports",
@@ -1013,8 +1013,8 @@ def admin_create_report_missing_recipients(request: Any, ctx: dict[str, Any], cl
 @when("I GET /api/v1/admin/costs/reports")
 def admin_list_reports(request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
-        patch("modulo.api.routes.costs.list_scheduled_reports", new=AsyncMock(return_value=[_make_report()])),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.list_scheduled_reports", new=AsyncMock(return_value=[_make_report()])),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs/reports")
         _store_response(request, ctx, resp)
@@ -1024,8 +1024,8 @@ def admin_list_reports(request: Any, ctx: dict[str, Any], client: Any) -> None:
 def admin_delete_report(report_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     exists = str(ctx.get("report_id")) == report_id
     with (
-        patch("modulo.api.routes.costs.delete_scheduled_report", new=AsyncMock(return_value=exists)),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.delete_scheduled_report", new=AsyncMock(return_value=exists)),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/admin/costs/reports/{report_id}")
         _store_response(request, ctx, resp)
@@ -1088,9 +1088,9 @@ def admin_get_anomalies(request: Any, ctx: dict[str, Any], client: Any, mock_ses
     result.all.return_value = rows
     with (
         patch.object(mock_session, "execute", new=AsyncMock(return_value=result)),
-        patch("modulo.api.routes.costs.list_anomalies", new=AsyncMock(return_value=[])),
-        patch("modulo.api.routes.costs.record_or_get_anomaly", new=AsyncMock(return_value=_make_persisted_anomaly())),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.list_anomalies", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.costs.record_or_get_anomaly", new=AsyncMock(return_value=_make_persisted_anomaly())),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs/anomalies")
         _store_response(request, ctx, resp)
@@ -1099,8 +1099,8 @@ def admin_get_anomalies(request: Any, ctx: dict[str, Any], client: Any, mock_ses
 @when("I dismiss the reported anomaly")
 def dismiss_reported_anomaly(request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
-        patch("modulo.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=True)),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/admin/costs/anomalies/dismiss/{_ANOMALY_ID}")
         _store_response(request, ctx, resp)
@@ -1109,8 +1109,8 @@ def dismiss_reported_anomaly(request: Any, ctx: dict[str, Any], client: Any) -> 
 @when(parsers.parse("I POST /api/v1/admin/costs/anomalies/dismiss/{anomaly_id}"))
 def admin_dismiss_anomaly_by_id(anomaly_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
-        patch("modulo.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=False)),
-        patch("modulo.api.routes.costs.set_rls_org"),
+        patch("farna.api.routes.costs.dismiss_anomaly", new=AsyncMock(return_value=False)),
+        patch("farna.api.routes.costs.set_rls_org"),
     ):
         resp = client.post(f"/api/v1/admin/costs/anomalies/dismiss/{anomaly_id}")
         _store_response(request, ctx, resp)
@@ -1139,7 +1139,7 @@ _COMPONENT_ID = uuid.UUID("50000000-0000-0000-0000-000000000001")
 
 
 def _make_component(**overrides: Any) -> MagicMock:
-    from modulo.db.models.cost_component import CostComponentKind
+    from farna.db.models.cost_component import CostComponentKind
 
     component = MagicMock()
     component.id = overrides.get("id", _COMPONENT_ID)
@@ -1174,11 +1174,11 @@ def org_has_cost_components(org_name: str) -> None:
 def _post_component(request: Any, ctx: dict[str, Any], client: Any, payload: dict) -> None:
     with (
         patch(
-            "modulo.api.routes.cost_components.create_cost_component",
+            "farna.api.routes.cost_components.create_cost_component",
             new=AsyncMock(return_value=_make_component()),
         ),
-        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.cost_components.set_rls_org"),
+        patch("farna.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.cost_components.set_rls_org"),
     ):
         resp = client.post("/api/v1/admin/costs/components", json=payload)
         _store_response(request, ctx, resp)
@@ -1203,11 +1203,11 @@ def admin_create_component(request: Any, ctx: dict[str, Any], client: Any) -> No
 def admin_create_component_duplicate(name: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
         patch(
-            "modulo.api.routes.cost_components.create_cost_component",
+            "farna.api.routes.cost_components.create_cost_component",
             new=AsyncMock(side_effect=ValueError("duplicate_component")),
         ),
-        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.cost_components.set_rls_org"),
+        patch("farna.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.cost_components.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/admin/costs/components",
@@ -1237,10 +1237,10 @@ def admin_create_component_with_formula(request: Any, ctx: dict[str, Any], clien
 def admin_list_components(request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
         patch(
-            "modulo.api.routes.cost_components.list_cost_components",
+            "farna.api.routes.cost_components.list_cost_components",
             new=AsyncMock(return_value=[_make_component(name="llm_tokens", report_key=None)]),
         ),
-        patch("modulo.api.routes.cost_components.set_rls_org"),
+        patch("farna.api.routes.cost_components.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs/components")
         _store_response(request, ctx, resp)
@@ -1250,11 +1250,11 @@ def admin_list_components(request: Any, ctx: dict[str, Any], client: Any) -> Non
 def admin_delete_component(component_id: str, request: Any, ctx: dict[str, Any], client: Any) -> None:
     with (
         patch(
-            "modulo.api.routes.cost_components.soft_delete_cost_component",
+            "farna.api.routes.cost_components.soft_delete_cost_component",
             new=AsyncMock(return_value=_make_component()),
         ),
-        patch("modulo.api.routes.cost_components.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.cost_components.set_rls_org"),
+        patch("farna.api.routes.cost_components.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.cost_components.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/admin/costs/components/{component_id}")
         _store_response(request, ctx, resp)
@@ -1312,18 +1312,18 @@ def patch_pipeline_threshold(value: str, pipeline_id: str, request: Any, ctx: di
     update_mock = AsyncMock(return_value=updated)
     denial_audit = AsyncMock()
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
-        patch("modulo.api.routes.pipelines.update_pipeline", new=update_mock),
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("farna.api.routes.pipelines.update_pipeline", new=update_mock),
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
         patch(
-            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
             new=AsyncMock(return_value=current),
         ),
-        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
-        patch("modulo.api.routes.pipelines.append_audit_event_isolated", new=denial_audit),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
+        patch("farna.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("farna.api.routes.pipelines.append_audit_event_isolated", new=denial_audit),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
     ):
         resp = _active_client(request).patch(
             f"/api/v1/pipelines/{pipeline_id}",

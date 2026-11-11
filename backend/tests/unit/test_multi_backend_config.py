@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
@@ -33,7 +33,7 @@ class TestMultiBackendCustomValidators:
     def test_sqlite_mode_auto_sets_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="sqlite")
         settings = Settings()
-        assert settings.database_url == "sqlite+aiosqlite:///./modulo.db"
+        assert settings.database_url == "sqlite+aiosqlite:///./farna.db"
 
     def test_mariadb_mode_auto_sets_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="mariadb")

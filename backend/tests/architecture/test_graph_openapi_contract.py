@@ -27,7 +27,7 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 
 @pytest.fixture(scope="module")
 def document() -> dict[str, Any]:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     return app.openapi()
 

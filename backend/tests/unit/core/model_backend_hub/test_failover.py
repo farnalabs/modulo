@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.model_backend_hub import BackendUnavailableError, ModelBackendHub
-from modulo.model_backends.stub import StubModelBackend
+from farna.core.model_backend_hub import BackendUnavailableError, ModelBackendHub
+from farna.model_backends.stub import StubModelBackend
 
 
 @pytest.fixture

@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.api.mcp_server as ms
-from modulo.api.mcp_server import get_hitl_email_alerts, set_hitl_email_alerts
+import farna.api.mcp_server as ms
+from farna.api.mcp_server import get_hitl_email_alerts, set_hitl_email_alerts
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -56,7 +56,7 @@ def _set_credential(*, key_scope: str | None, auth_type: str | None, role: str =
 
 @pytest.fixture(autouse=True)
 def _ctx() -> Any:
-    from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
+    from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
 
     _set_credential(key_scope=None, auth_type=None)
     ms._ctx_user_keys_enabled.set(False)
@@ -118,7 +118,7 @@ class TestCallerScopeGate:
         """The caller-scope leg is kill-switch-INELIGIBLE — with the org's
         authz-enforce kill switch OFF (only the role leg is bypassed) the
         denial still applies."""
-        from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
+        from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
 
         _set_credential(key_scope="org", auth_type="api_key")
         token = set_authz_enforce(False)
@@ -140,7 +140,7 @@ class TestCallerScopeGate:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
         ):
             result = await get_hitl_email_alerts()
         assert result == {"default": True, "pipeline_overrides": {}}
@@ -154,7 +154,7 @@ class TestCallerScopeGate:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(return_value=merged),
             ) as helper,
         ):
@@ -186,7 +186,7 @@ class TestGetHitlEmailAlerts:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
         ):
             result = await get_hitl_email_alerts()
         assert result == {"default": False, "pipeline_overrides": {}}
@@ -200,7 +200,7 @@ class TestGetHitlEmailAlerts:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(return_value=account)),
         ):
             result = await get_hitl_email_alerts()
         assert result == {"default": False, "pipeline_overrides": {}}
@@ -212,7 +212,7 @@ class TestGetHitlEmailAlerts:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(return_value=None)),
         ):
             result = await get_hitl_email_alerts()
         assert result["error"] == "account_not_found"
@@ -225,7 +225,7 @@ class TestGetHitlEmailAlerts:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
-            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.db.crud.account.get_account_by_id", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await get_hitl_email_alerts()
         assert result["error"] == "server_error"
@@ -241,7 +241,7 @@ class TestSetHitlEmailAlerts:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(return_value=merged),
             ) as helper,
         ):
@@ -259,7 +259,7 @@ class TestSetHitlEmailAlerts:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ),
         ):
@@ -277,7 +277,7 @@ class TestSetHitlEmailAlerts:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(return_value=merged),
             ) as helper,
         ):
@@ -304,7 +304,7 @@ class TestSetHitlEmailAlerts:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session_clear)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(return_value=cleared),
             ) as helper,
         ):
@@ -320,7 +320,7 @@ class TestSetHitlEmailAlerts:
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", return_value=_make_session_context(session_keep)),
             patch(
-                "modulo.db.crud.account.set_hitl_email_preference",
+                "farna.db.crud.account.set_hitl_email_preference",
                 new=AsyncMock(return_value=preserved),
             ) as helper,
         ):
@@ -357,7 +357,7 @@ class TestRegistryIntrospection:
     including the no-target-param invariant — are asserted below."""
 
     def _params(self, tool: str) -> dict[str, Any]:
-        from modulo.api.mcp_server import mcp
+        from farna.api.mcp_server import mcp
 
         return dict(mcp._tool_manager._tools[tool].parameters)  # type: ignore[attr-defined]
 

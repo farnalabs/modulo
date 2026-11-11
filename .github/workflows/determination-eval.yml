@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "backend/src/modulo/determination/**"
+      - "backend/src/farna/determination/**"
       - "backend/tests/determination/fixtures/**"
       - "backend/scripts/score_determination_fixtures.py"
       - ".github/workflows/determination-eval.yml"

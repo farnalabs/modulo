@@ -12,8 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.audit_logger.append_only import register_append_only_guard
-from modulo.db.models.audit_event import AuditEvent
+from farna.core.audit_logger.append_only import register_append_only_guard
+from farna.db.models.audit_event import AuditEvent
 
 pytestmark = pytest.mark.integration
 

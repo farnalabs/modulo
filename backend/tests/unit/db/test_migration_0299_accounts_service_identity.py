@@ -25,8 +25,8 @@ from sqlalchemy import StaticPool, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models import Account, Base
-from modulo.db.models.account import KIND_HUMAN, KIND_SERVICE
+from farna.db.models import Account, Base
+from farna.db.models.account import KIND_HUMAN, KIND_SERVICE
 
 _PATH = (
     Path(__file__).resolve().parents[3]

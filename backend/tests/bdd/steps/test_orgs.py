@@ -93,7 +93,7 @@ def add_user_to_team(request, username: str, team_name: str, role: str, client, 
         return
 
     with patch(
-        "modulo.api.routes.teams.add_team_member",
+        "farna.api.routes.teams.add_team_member",
         new_callable=AsyncMock,
     ) as mock_add:
         mock_membership = MagicMock()
@@ -106,12 +106,12 @@ def add_user_to_team(request, username: str, team_name: str, role: str, client, 
 
         with (
             patch(
-                "modulo.db.crud.account.get_account_by_id",
+                "farna.db.crud.account.get_account_by_id",
                 new_callable=AsyncMock,
                 return_value=MagicMock(id=uuid.UUID(target_user_id)),
             ),
             patch(
-                "modulo.api.routes.teams.get_membership_by_account_and_org",
+                "farna.api.routes.teams.get_membership_by_account_and_org",
                 new_callable=AsyncMock,
                 return_value=MagicMock(role=ctx.get("target_user_role", "operator")),
             ),
@@ -131,11 +131,11 @@ def remove_user_from_team(request, username: str, team_name: str, client, ctx):
 
     with (
         patch(
-            "modulo.api.routes.teams.remove_team_member",
+            "farna.api.routes.teams.remove_team_member",
             new_callable=AsyncMock,
         ),
         patch(
-            "modulo.api.routes.teams.get_membership",
+            "farna.api.routes.teams.get_membership",
             new_callable=AsyncMock,
             return_value=MagicMock(team_id=uuid.UUID(team_id)),
         ),
@@ -163,34 +163,34 @@ def deactivate_user(request, username: str, client, ctx):
 
     with (
         patch(
-            "modulo.api.routes.admin.get_account_by_id",
+            "farna.api.routes.admin.get_account_by_id",
             new_callable=AsyncMock,
             return_value=mock_account,
         ),
         patch(
-            "modulo.api.routes.admin.get_membership_by_account_and_org",
+            "farna.api.routes.admin.get_membership_by_account_and_org",
             new_callable=AsyncMock,
             return_value=mock_org_membership,
         ),
         patch(
-            "modulo.api.routes.admin.assert_not_last_admin",
+            "farna.api.routes.admin.assert_not_last_admin",
             new_callable=AsyncMock,
         ),
         patch(
-            "modulo.api.routes.admin.list_team_memberships_for_account",
+            "farna.api.routes.admin.list_team_memberships_for_account",
             new_callable=AsyncMock,
             return_value=[],
         ),
         patch(
-            "modulo.api.routes.admin.remove_team_member",
+            "farna.api.routes.admin.remove_team_member",
             new_callable=AsyncMock,
         ),
         patch(
-            "modulo.core.audit_logger.append_audit_event",
+            "farna.core.audit_logger.append_audit_event",
             new_callable=AsyncMock,
         ),
         patch(
-            "modulo.api.routes.admin._get_org_role",
+            "farna.api.routes.admin._get_org_role",
             new_callable=AsyncMock,
             return_value="operator",
         ),
@@ -243,8 +243,8 @@ def _onboarding_seams():
         return {"login"}
 
     return (
-        patch("modulo.api.routes.onboarding._get_or_create_progress", new=fake_get_or_create),
-        patch("modulo.api.routes.onboarding._check_auto_completion", new=fake_check_auto_completion),
+        patch("farna.api.routes.onboarding._get_or_create_progress", new=fake_get_or_create),
+        patch("farna.api.routes.onboarding._check_auto_completion", new=fake_check_auto_completion),
     )
 
 

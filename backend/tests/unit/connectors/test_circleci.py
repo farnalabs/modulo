@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
-from modulo.connectors.circleci import CircleCIConnector, _CircleCITestDouble
+from farna.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
+from farna.connectors.circleci import CircleCIConnector, _CircleCITestDouble
 
 
 @pytest.fixture

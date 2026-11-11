@@ -3,14 +3,14 @@ id: feat-teams
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/teams.py
-  - backend/src/modulo/auth/team_rbac.py
-  - backend/src/modulo/core/team_visibility.py
-  - backend/src/modulo/core/capability_scope.py
-  - backend/src/modulo/api/routes/viewmodel.py
-  - backend/src/modulo/db/crud/team_scope.py
-  - backend/src/modulo/db/models/team.py
-  - backend/src/modulo/db/migrations/versions/0287_team_rls_lifecycle_evals.py
+  - backend/src/farna/api/routes/teams.py
+  - backend/src/farna/auth/team_rbac.py
+  - backend/src/farna/core/team_visibility.py
+  - backend/src/farna/core/capability_scope.py
+  - backend/src/farna/api/routes/viewmodel.py
+  - backend/src/farna/db/crud/team_scope.py
+  - backend/src/farna/db/models/team.py
+  - backend/src/farna/db/migrations/versions/0287_team_rls_lifecycle_evals.py
 unit-tests:
   - backend/tests/unit/api/test_teams.py
   - backend/tests/unit/api/test_teams_routes_coverage.py

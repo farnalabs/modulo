@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.onepassword import OnePasswordConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.onepassword import OnePasswordConnector
 
 TOKEN = "op_test_token"
 _BASE = "http://localhost:8080"

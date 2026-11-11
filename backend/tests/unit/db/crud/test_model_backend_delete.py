@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from modulo.db.crud.model_backend import delete_model_backend
+from farna.db.crud.model_backend import delete_model_backend
 
 
 async def test_delete_model_backend_not_found_returns_false() -> None:
@@ -16,7 +16,7 @@ async def test_delete_model_backend_not_found_returns_false() -> None:
     session = AsyncMock()
 
     with patch(
-        "modulo.db.crud.model_backend.get_model_backend",
+        "farna.db.crud.model_backend.get_model_backend",
         AsyncMock(return_value=None),
     ):
         result = await delete_model_backend(session, model_backend_id)
@@ -34,11 +34,11 @@ async def test_delete_model_backend_blocked_in_use_raises_409() -> None:
 
     with (
         patch(
-            "modulo.db.crud.model_backend.get_model_backend",
+            "farna.db.crud.model_backend.get_model_backend",
             AsyncMock(return_value=MagicMock(organisation_id=uuid.uuid4())),
         ),
         patch(
-            "modulo.db.crud.agent_runner_binding.count_bindings_for_backend",
+            "farna.db.crud.agent_runner_binding.count_bindings_for_backend",
             AsyncMock(return_value=0),
         ),
         pytest.raises(HTTPException) as excinfo,

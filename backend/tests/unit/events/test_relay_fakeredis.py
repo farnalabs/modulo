@@ -21,10 +21,10 @@ from typing import Any
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 
-from modulo.core.events import event_bus as eb
-from modulo.core.events.event_bus import LOCAL_PRODUCER_ID, EventBus
-from modulo.core.events.redis_broker import RedisEventBroker
-from modulo.core.events.relay import EventRelay, reset_relay_for_tests
+from farna.core.events import event_bus as eb
+from farna.core.events.event_bus import LOCAL_PRODUCER_ID, EventBus
+from farna.core.events.redis_broker import RedisEventBroker
+from farna.core.events.relay import EventRelay, reset_relay_for_tests
 from tests.unit.events._helpers import drain_background_tasks
 
 _ORG = "org-fakeredis"
@@ -176,7 +176,7 @@ async def test_notification_event_payload_through_relay_has_no_content(broker: R
     bus = EventBus(redis_broker=broker)
     relay, q = await _establish_relay(bus, broker)
     try:
-        from modulo.core.events.notification_events import build_notification_event
+        from farna.core.events.notification_events import build_notification_event
 
         event = build_notification_event(
             org_id=_ORG,

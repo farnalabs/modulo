@@ -26,7 +26,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine.schema_repair import SchemaValidationOutcome
+from farna.core.pipeline_engine.schema_repair import SchemaValidationOutcome
 
 # ---------------------------------------------------------------------------
 # Helper: in-memory SQLite async session for CRUD tests
@@ -59,7 +59,7 @@ class TestFinalizeNodeResultEnforcement:
     def test_enforcement_record_returned_on_valid_output(self) -> None:
         """When a schema is assigned and the output passes, the enforcement
         record is present in the result dict with a non-NO_SCHEMA outcome."""
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "node-1",
@@ -76,7 +76,7 @@ class TestFinalizeNodeResultEnforcement:
     def test_enforcement_record_returned_on_validation_failure(self) -> None:
         """When validation fails in lenient mode (non-required constraint),
         the enforcement record carries the errors."""
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "node-1",
@@ -92,7 +92,7 @@ class TestFinalizeNodeResultEnforcement:
 
     def test_no_enforcement_record_without_schema(self) -> None:
         """When no schema is assigned, no enforcement record is returned."""
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "node-1",
@@ -109,7 +109,7 @@ class TestFinalizeNodeResultEnforcement:
         dict that the caller returns — it is extracted and persisted by
         ``_node()``, and the caller returns a clean dict.
         """
-        from modulo.core.pipeline_engine.node_runner import _finalize_node_result
+        from farna.core.pipeline_engine.node_runner import _finalize_node_result
 
         result = _finalize_node_result(
             "node-1",
@@ -146,7 +146,7 @@ class TestPersistEnforcementRecord:
         exists and is writable — the full CRUD function is tested by the
         standalone verification script (see commit message).
         """
-        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from farna.db.models.run_node_outputs import RunNodeOutput
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as conn:
@@ -184,7 +184,7 @@ class TestPersistEnforcementRecord:
         This proves the storage contract: enforcement records live on
         attempt-keyed rows, never __final__.
         """
-        from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
+        from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as conn:
@@ -286,7 +286,7 @@ class TestEnforcementWriteOrdering:
         """
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from farna.db.models.run_node_outputs import RunNodeOutput
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as conn:
@@ -342,8 +342,8 @@ class TestPersistSchemaEnforcementRecordCrud:
         """
         from sqlalchemy import select
 
-        from modulo.db.crud.run_node_outputs import persist_schema_enforcement_record
-        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from farna.db.crud.run_node_outputs import persist_schema_enforcement_record
+        from farna.db.models.run_node_outputs import RunNodeOutput
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as conn:
@@ -410,7 +410,7 @@ class TestTerminalFailureEnforcementRecord:
 
     def test_lenient_required_violation_carries_record(self) -> None:
         """Lenient required-field violation: raises, but carries the record."""
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             OutputSchemaValidationError,
             _finalize_node_result,
         )
@@ -436,7 +436,7 @@ class TestTerminalFailureEnforcementRecord:
 
     def test_strict_terminal_failure_carries_record(self) -> None:
         """Strict repair exhaustion: raises, but carries the record + stats."""
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             OutputSchemaValidationError,
             _finalize_node_result,
         )
@@ -463,7 +463,7 @@ class TestTerminalFailureEnforcementRecord:
 
     def test_error_builder_returns_none_without_outcome(self) -> None:
         """A plain ``ValueError`` (no FAR-902 context) builds no record."""
-        from modulo.core.pipeline_engine.node_runner import _build_error_enforcement_record
+        from farna.core.pipeline_engine.node_runner import _build_error_enforcement_record
 
         assert (
             _build_error_enforcement_record(ValueError("unrelated"), resolved_profile=None, native_output=False) is None
@@ -474,12 +474,12 @@ class TestTerminalFailureEnforcementRecord:
         """A ``None`` record (or missing identifiers) is a silent no-op."""
         from unittest.mock import AsyncMock, patch
 
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             _persist_enforcement_record_best_effort,
         )
 
         persist = AsyncMock()
-        with patch("modulo.db.crud.run_node_outputs.persist_schema_enforcement_record", persist):
+        with patch("farna.db.crud.run_node_outputs.persist_schema_enforcement_record", persist):
             await _persist_enforcement_record_best_effort(
                 None,
                 session_factory=lambda: None,
@@ -495,12 +495,12 @@ class TestTerminalFailureEnforcementRecord:
         """The terminal-failure record actually lands in run_node_outputs."""
         from sqlalchemy import select
 
-        from modulo.core.pipeline_engine.node_runner import (
+        from farna.core.pipeline_engine.node_runner import (
             OutputSchemaValidationError,
             _finalize_node_result,
             _persist_enforcement_record_best_effort,
         )
-        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from farna.db.models.run_node_outputs import RunNodeOutput
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         async with engine.begin() as conn:

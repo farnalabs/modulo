@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.variant_batches import (
+from farna.api.routes.variant_batches import (
     _compute_batch_status,
     _run_to_variant_run,
 )
 
 # Re-export for type-checked mocks in list_batches tests
-from modulo.db.crud.variant_group import (  # noqa: F401
+from farna.db.crud.variant_group import (  # noqa: F401
     get_all_state_batch_ids,
     list_batch_states,
 )
@@ -200,7 +200,7 @@ class TestCrossTenantIsolation:
         """Another org's batch_id returns 404, not the other org's data."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.variant_batches import get_batch
+        from farna.api.routes.variant_batches import get_batch
 
         principal = make_mock_principal()
         mock_session = make_session_mock()
@@ -208,12 +208,12 @@ class TestCrossTenantIsolation:
         # Mock: no state row found + no runs found = 404.
         with (
             patch(
-                "modulo.api.routes.variant_batches.get_batch_state",
+                "farna.api.routes.variant_batches.get_batch_state",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
             patch(
-                "modulo.api.routes.variant_batches.get_batch_runs",
+                "farna.api.routes.variant_batches.get_batch_runs",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -226,13 +226,13 @@ class TestCrossTenantIsolation:
         """Soft-delete another org's batch_id returns 404."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.variant_batches import delete_batch
+        from farna.api.routes.variant_batches import delete_batch
 
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variant_batches.soft_delete_batch_state",
+            "farna.api.routes.variant_batches.soft_delete_batch_state",
             new_callable=AsyncMock,
             return_value=False,
         ):
@@ -244,13 +244,13 @@ class TestCrossTenantIsolation:
         """Re-fire another org's batch_id returns 404."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.variant_batches import re_fire_batch
+        from farna.api.routes.variant_batches import re_fire_batch
 
         principal = make_mock_principal()
         mock_session = make_session_mock()
 
         with patch(
-            "modulo.api.routes.variant_batches.get_batch_state",
+            "farna.api.routes.variant_batches.get_batch_state",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -270,7 +270,7 @@ class TestListBatchesTotalCount:
         so 30 state-row batches leaked into the legacy count → total 90.
         With the fix: legacy scan excludes all 50 state IDs → total 60.
         """
-        from modulo.api.routes.variant_batches import list_batches
+        from farna.api.routes.variant_batches import list_batches
 
         org_id = uuid.uuid4()
         principal = make_mock_principal(org_id=org_id)
@@ -316,25 +316,25 @@ class TestListBatchesTotalCount:
 
         with (
             patch(
-                "modulo.api.routes.variant_batches.set_rls_org",
+                "farna.api.routes.variant_batches.set_rls_org",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.api.routes.variant_batches.set_rls_user_context",
+                "farna.api.routes.variant_batches.set_rls_user_context",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.api.routes.variant_batches.list_batch_states",
+                "farna.api.routes.variant_batches.list_batch_states",
                 new_callable=AsyncMock,
                 return_value=(state_items, 50),
             ),
             patch(
-                "modulo.api.routes.variant_batches.get_all_state_batch_ids",
+                "farna.api.routes.variant_batches.get_all_state_batch_ids",
                 new_callable=AsyncMock,
                 return_value=set(all_state_batch_ids),
             ),
             patch(
-                "modulo.api.routes.variant_batches.list_batch_runs_for_batch_ids",
+                "farna.api.routes.variant_batches.list_batch_runs_for_batch_ids",
                 new_callable=AsyncMock,
                 return_value={},
             ),

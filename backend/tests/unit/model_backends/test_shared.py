@@ -10,9 +10,8 @@ from unittest.mock import ANY, AsyncMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-import modulo.model_backends
-from modulo.model_backends.base import HealthResult, ModelBackendBase
-from modulo.model_backends.module import OpenAICompatibleBackend
+from farna.model_backends.base import HealthResult, ModelBackendBase
+from farna.model_backends.module import OpenAICompatibleBackend
 
 
 def _build(module_path, class_name, patch_target, kwargs):
@@ -26,185 +25,185 @@ def _build(module_path, class_name, patch_target, kwargs):
 
 BACKENDS = [
     pytest.param(
-        "modulo.model_backends.ollama",
+        "farna.model_backends.ollama",
         "OllamaBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "llama3"},
         "ollama/llama3",
         id="ollama",
     ),
     pytest.param(
-        "modulo.model_backends.vllm",
+        "farna.model_backends.vllm",
         "VllmBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "vllm-model"},
         "vllm/vllm-model",
         id="vllm",
     ),
     pytest.param(
-        "modulo.model_backends.llamacpp",
+        "farna.model_backends.llamacpp",
         "LLamaCppBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "llama-model"},
         "llamacpp/llama-model",
         id="llamacpp",
     ),
     pytest.param(
-        "modulo.model_backends.jan",
+        "farna.model_backends.jan",
         "JanBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "jan-model"},
         "jan/jan-model",
         id="jan",
     ),
     pytest.param(
-        "modulo.model_backends.lm_studio",
+        "farna.model_backends.lm_studio",
         "LmStudioBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "lm-studio-model"},
         "lm_studio/lm-studio-model",
         id="lm_studio",
     ),
     pytest.param(
-        "modulo.model_backends.localai",
+        "farna.model_backends.localai",
         "LocalAIBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "localai-model"},
         "localai/localai-model",
         id="localai",
     ),
     pytest.param(
-        "modulo.model_backends.tgi",
+        "farna.model_backends.tgi",
         "TgiBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": None, "model_id": "tgi-model"},
         "tgi/tgi-model",
         id="tgi",
     ),
     pytest.param(
-        "modulo.model_backends.openai",
+        "farna.model_backends.openai",
         "OpenAIBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "gpt-4o"},
         "openai/gpt-4o",
         id="openai",
     ),
     pytest.param(
-        "modulo.model_backends.anthropic",
+        "farna.model_backends.anthropic",
         "AnthropicBackend",
-        "modulo.model_backends.anthropic.ChatAnthropic",
+        "farna.model_backends.anthropic.ChatAnthropic",
         {"api_key": "sk-ant-test", "model_id": "claude-haiku-4-5"},
         "anthropic/claude-haiku-4-5",
         id="anthropic",
     ),
     pytest.param(
-        "modulo.model_backends.gemini",
+        "farna.model_backends.gemini",
         "GeminiBackend",
-        "modulo.model_backends.gemini.ChatGoogleGenerativeAI",
+        "farna.model_backends.gemini.ChatGoogleGenerativeAI",
         {"api_key": "test-key", "model_id": "gemini-2.0-flash"},
         "gemini/gemini-2.0-flash",
         id="gemini",
     ),
     pytest.param(
-        "modulo.model_backends.cohere",
+        "farna.model_backends.cohere",
         "CohereBackend",
-        "modulo.model_backends.cohere.ChatCohere",
+        "farna.model_backends.cohere.ChatCohere",
         {"api_key": "test-key", "model_id": "command-r"},
         "cohere/command-r",
         id="cohere",
     ),
     pytest.param(
-        "modulo.model_backends.mistral",
+        "farna.model_backends.mistral",
         "MistralBackend",
-        "modulo.model_backends.mistral.ChatMistralAI",
+        "farna.model_backends.mistral.ChatMistralAI",
         {"api_key": "sk-test", "model_id": "mistral-large"},
         "mistral/mistral-large",
         id="mistral",
     ),
     pytest.param(
-        "modulo.model_backends.deepseek",
+        "farna.model_backends.deepseek",
         "DeepSeekBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "deepseek-chat"},
         "deepseek/deepseek-chat",
         id="deepseek",
     ),
     pytest.param(
-        "modulo.model_backends.grok",
+        "farna.model_backends.grok",
         "GrokBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "grok-2"},
         "grok/grok-2",
         id="grok",
     ),
     pytest.param(
-        "modulo.model_backends.groq",
+        "farna.model_backends.groq",
         "GroqBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-3.1-70b"},
         "groq/llama-3.1-70b",
         id="groq",
     ),
     pytest.param(
-        "modulo.model_backends.qwen",
+        "farna.model_backends.qwen",
         "QwenBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "qwen-max"},
         "qwen/qwen-max",
         id="qwen",
     ),
     pytest.param(
-        "modulo.model_backends.togetherai",
+        "farna.model_backends.togetherai",
         "TogetherAIBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "mistral-7b"},
         "togetherai/mistral-7b",
         id="togetherai",
     ),
     pytest.param(
-        "modulo.model_backends.openrouter",
+        "farna.model_backends.openrouter",
         "OpenRouterBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "gpt-4o"},
         "openrouter/gpt-4o",
         id="openrouter",
     ),
     pytest.param(
-        "modulo.model_backends.perplexity",
+        "farna.model_backends.perplexity",
         "PerplexityBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-3-sonar"},
         "perplexity/llama-3-sonar",
         id="perplexity",
     ),
     pytest.param(
-        "modulo.model_backends.fireworks",
+        "farna.model_backends.fireworks",
         "FireworksBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "llama-v3"},
         "fireworks/llama-v3",
         id="fireworks",
     ),
     pytest.param(
-        "modulo.model_backends.ai21",
+        "farna.model_backends.ai21",
         "Ai21Backend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "jamba-1.5"},
         "ai21/jamba-1.5",
         id="ai21",
     ),
     pytest.param(
-        "modulo.model_backends.opencode",
+        "farna.model_backends.opencode",
         "OpenCodeBackend",
-        "modulo.model_backends.module.ChatOpenAI",
+        "farna.model_backends.module.ChatOpenAI",
         {"api_key": "sk-test", "model_id": "deepseek-chat"},
         "opencode/deepseek-chat",
         id="opencode",
     ),
     pytest.param(
-        "modulo.model_backends.bedrock",
+        "farna.model_backends.bedrock",
         "BedrockBackend",
-        "modulo.model_backends.bedrock.ChatBedrock",
+        "farna.model_backends.bedrock.ChatBedrock",
         {
             "aws_access_key_id": "AKIA123",
             "aws_secret_access_key": "secret123",
@@ -215,25 +214,25 @@ BACKENDS = [
         id="bedrock",
     ),
     pytest.param(
-        "modulo.model_backends.vertexai",
+        "farna.model_backends.vertexai",
         "VertexAIBackend",
-        "modulo.model_backends.vertexai.ChatVertexAI",
+        "farna.model_backends.vertexai.ChatVertexAI",
         {"project": "my-project", "model_id": "gemini-2.0-flash-001"},
         "vertexai/gemini-2.0-flash-001",
         id="vertexai",
     ),
     pytest.param(
-        "modulo.model_backends.watsonx",
+        "farna.model_backends.watsonx",
         "WatsonXBackend",
-        "modulo.model_backends.watsonx.ChatWatsonx",
+        "farna.model_backends.watsonx.ChatWatsonx",
         {"api_key": "test-api-key", "model_id": "meta-llama/llama-3-70b-instruct", "project_id": "test-project-id"},
         "watsonx/meta-llama/llama-3-70b-instruct",
         id="watsonx",
     ),
     pytest.param(
-        "modulo.model_backends.azure_openai",
+        "farna.model_backends.azure_openai",
         "AzureOpenAIBackend",
-        "modulo.model_backends.azure_openai.ChatOpenAI",
+        "farna.model_backends.azure_openai.ChatOpenAI",
         {
             "api_key": "test-key",
             "model_id": "gpt-4-deployment",
@@ -359,7 +358,7 @@ class TestOpenAICompatibleHealthCheck:
     async def test_defaults_to_openai_url_when_no_base_url(self):
         backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
         with patch(
-            "modulo.model_backends.module.openai_compatible_health_check",
+            "farna.model_backends.module.openai_compatible_health_check",
             new=AsyncMock(return_value=HealthResult(ok=True)),
         ) as mock_health:
             result = await backend.health_check()
@@ -376,7 +375,7 @@ class TestOpenAICompatibleHealthCheck:
             base_url="https://api.example.com/v1/",
         )
         with patch(
-            "modulo.model_backends.module.openai_compatible_health_check",
+            "farna.model_backends.module.openai_compatible_health_check",
             new=AsyncMock(return_value=HealthResult(ok=False, detail="down")),
         ) as mock_health:
             result = await backend.health_check()
@@ -390,17 +389,23 @@ class TestOpenAICompatibleHealthCheck:
 
 class TestPackageLazyLoading:
     def test_lazy_getattr_resolves_registered_backend(self):
+        import farna.model_backends
+
         name = "AnthropicBackend"
-        cls = getattr(modulo.model_backends, name)
+        cls = getattr(farna.model_backends, name)
         assert cls.__name__ == "AnthropicBackend"
 
     def test_lazy_getattr_unknown_name_raises_attribute_error(self):
+        import farna.model_backends
+
         missing = "NoSuchBackend"
         with pytest.raises(AttributeError, match="has no attribute"):
-            getattr(modulo.model_backends, missing)
+            getattr(farna.model_backends, missing)
 
     def test_dir_includes_all_registered_backend_names(self):
-        names = dir(modulo.model_backends)
+        import farna.model_backends
+
+        names = dir(farna.model_backends)
         assert "AnthropicBackend" in names
         assert "StubModelBackend" in names
         assert "OpenAIBackend" in names
@@ -412,7 +417,7 @@ class TestPackageLazyLoading:
 # ``constant_name`` is None for adapters that inline their base URL.
 OPENAI_COMPATIBLE_ADAPTERS = [
     pytest.param(
-        "modulo.model_backends.ai21",
+        "farna.model_backends.ai21",
         "Ai21Backend",
         "AI21_BASE_URL",
         "https://api.ai21.com/studio/v1",
@@ -421,7 +426,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="ai21",
     ),
     pytest.param(
-        "modulo.model_backends.fireworks",
+        "farna.model_backends.fireworks",
         "FireworksBackend",
         "FIREWORKS_BASE_URL",
         "https://api.fireworks.ai/inference/v1",
@@ -430,7 +435,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="fireworks",
     ),
     pytest.param(
-        "modulo.model_backends.groq",
+        "farna.model_backends.groq",
         "GroqBackend",
         "GROQ_BASE_URL",
         "https://api.groq.com/openai/v1",
@@ -439,7 +444,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="groq",
     ),
     pytest.param(
-        "modulo.model_backends.perplexity",
+        "farna.model_backends.perplexity",
         "PerplexityBackend",
         "PERPLEXITY_BASE_URL",
         "https://api.perplexity.ai",
@@ -448,7 +453,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="perplexity",
     ),
     pytest.param(
-        "modulo.model_backends.togetherai",
+        "farna.model_backends.togetherai",
         "TogetherAIBackend",
         "TOGETHERAI_BASE_URL",
         "https://api.together.xyz/v1",
@@ -457,7 +462,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="togetherai",
     ),
     pytest.param(
-        "modulo.model_backends.deepseek",
+        "farna.model_backends.deepseek",
         "DeepSeekBackend",
         None,
         "https://api.deepseek.com/v1",
@@ -466,7 +471,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="deepseek",
     ),
     pytest.param(
-        "modulo.model_backends.grok",
+        "farna.model_backends.grok",
         "GrokBackend",
         None,
         "https://api.x.ai/v1",
@@ -475,7 +480,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="grok",
     ),
     pytest.param(
-        "modulo.model_backends.openrouter",
+        "farna.model_backends.openrouter",
         "OpenRouterBackend",
         None,
         "https://openrouter.ai/api/v1",
@@ -484,7 +489,7 @@ OPENAI_COMPATIBLE_ADAPTERS = [
         id="openrouter",
     ),
     pytest.param(
-        "modulo.model_backends.qwen",
+        "farna.model_backends.qwen",
         "QwenBackend",
         None,
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -512,7 +517,7 @@ class TestOpenAICompatibleAdapters:
         module = importlib.import_module(module_path)
         if constant_name is not None:
             assert getattr(module, constant_name) == base_url
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat:
             getattr(module, class_name)(api_key="sk-test", model_id=model_id)
         mock_chat.assert_called_once_with(
             model=model_id,
@@ -535,6 +540,6 @@ class TestOpenAICompatibleAdapters:
         model_id,
     ):
         module = importlib.import_module(module_path)
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock_chat:
             getattr(module, class_name)(api_key=None, model_id=model_id)
         assert mock_chat.call_args.kwargs["api_key"] == provider

@@ -58,12 +58,12 @@ class _EdgeRow:
 @pytest.fixture(autouse=True)
 def _patch_auth() -> Generator[None, None, None]:
     """Set tenant context + mock validate_current_auth so the tool handler runs."""
-    import modulo.api.mcp_server as _ms
+    import farna.api.mcp_server as _ms
 
     org_token = _ms._ctx_org_id.set(uuid.UUID(_ORG))
     user_token = _ms._ctx_user_id.set(uuid.UUID(_USER))
     try:
-        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+        with patch("farna.api.mcp_server.validate_current_auth", return_value=True):
             yield
     finally:
         _ms._ctx_user_id.reset(user_token)
@@ -81,9 +81,9 @@ def _statement_entity(stmt: object) -> object | None:
 def _patch_session_and_audit(
     monkeypatch: pytest.MonkeyPatch, *, old_edge: _EdgeRow | None
 ) -> tuple[AsyncMock, AsyncMock]:
-    import modulo.api.mcp_server as _ms
-    from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.pipeline_edge import PipelineEdge
+    import farna.api.mcp_server as _ms
+    from farna.db.models.pipeline import Pipeline
+    from farna.db.models.pipeline_edge import PipelineEdge
 
     session = AsyncMock()
     pipeline = _PipelineRow()
@@ -115,7 +115,7 @@ def _patch_session_and_audit(
     factory.return_value.__aenter__.return_value = session
 
     audit = AsyncMock()
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", audit)
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", audit)
     # FAR-1471: ``replace_pipeline_graph`` binds ``append_audit_event`` at
     # MODULE import time, so patching only ``core.audit_logger`` leaves its
     # ``pipeline.graph_updated`` append running for real against this
@@ -123,7 +123,7 @@ def _patch_session_and_audit(
     # manager). Both call sites feed the SAME mock: the denial audit imports
     # the symbol lazily (core.audit_logger), the graph-write audit uses
     # pipeline.py's bound reference.
-    monkeypatch.setattr("modulo.db.crud.pipeline.append_audit_event", audit)
+    monkeypatch.setattr("farna.db.crud.pipeline.append_audit_event", audit)
     monkeypatch.setattr(_ms, "_session", factory)
     return session, audit
 
@@ -143,7 +143,7 @@ def _weakening_edge_payload() -> list[dict]:
 
 async def test_mcp_update_pipeline_graph_weakening_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     """MCP gate-weakening is denied even for an admin-scoped MCP principal."""
-    from modulo.api.mcp_server import _ctx_role, update_pipeline_graph
+    from farna.api.mcp_server import _ctx_role, update_pipeline_graph
 
     _ctx_role.set("admin")  # privileged MCP scope — the structural exclusion still denies
     _session, audit = _patch_session_and_audit(monkeypatch, old_edge=_EdgeRow())
@@ -160,7 +160,7 @@ async def test_mcp_update_pipeline_graph_weakening_denied(monkeypatch: pytest.Mo
 
 
 async def test_mcp_structural_edge_deletion_denied(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.api.mcp_server import _ctx_role, update_pipeline_graph
+    from farna.api.mcp_server import _ctx_role, update_pipeline_graph
 
     _ctx_role.set("admin")
     _session, _audit = _patch_session_and_audit(monkeypatch, old_edge=_EdgeRow())
@@ -173,7 +173,7 @@ async def test_mcp_structural_edge_deletion_denied(monkeypatch: pytest.MonkeyPat
 
 async def test_mcp_non_weakening_graph_write_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """MCP can still write a graph that does not weaken an existing gate."""
-    from modulo.api.mcp_server import _ctx_role, update_pipeline_graph
+    from farna.api.mcp_server import _ctx_role, update_pipeline_graph
 
     _ctx_role.set("operator")
     # Old edge has no gate -> nothing to weaken.
@@ -213,7 +213,7 @@ async def test_mcp_non_weakening_graph_write_allowed(monkeypatch: pytest.MonkeyP
 
 async def test_mcp_denial_audit_never_masked_by_audit_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Even if the audit append fails, the denial is still surfaced to the caller."""
-    from modulo.api.mcp_server import _ctx_role, update_pipeline_graph
+    from farna.api.mcp_server import _ctx_role, update_pipeline_graph
 
     _ctx_role.set("admin")
     _session, audit = _patch_session_and_audit(monkeypatch, old_edge=_EdgeRow())

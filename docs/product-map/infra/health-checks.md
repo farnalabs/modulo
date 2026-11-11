@@ -4,11 +4,11 @@ prd: N/A
 adr: [ADR 021 (worker-resilience)]
 delivery-tasks: []
 code:
-  - backend/src/modulo/api/routes/health.py
-  - backend/src/modulo/core/health_alerts.py
-  - backend/src/modulo/core/alert_context.py
-  - backend/src/modulo/core/watchdog/worker_liveness.py
-  - backend/src/modulo/core/saq_worker.py
+  - backend/src/farna/api/routes/health.py
+  - backend/src/farna/core/health_alerts.py
+  - backend/src/farna/core/alert_context.py
+  - backend/src/farna/core/watchdog/worker_liveness.py
+  - backend/src/farna/core/saq_worker.py
   - deploy/watchdog/config.yaml
   - fly.toml
 unit-tests:
@@ -301,6 +301,6 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   rebuilding the `docs/product-map/` feature graph that was lost from the public tree.
   Registered the dangling `feat-infra-health` reference: `backend/tests/unit/api/test_health.py`
   documented the per-check-timeout feature with a `feat-infra-health` tag that resolved
-  nowhere. Re-verified all 19 behaviors against `backend/src/modulo/api/routes/health.py`
+  nowhere. Re-verified all 19 behaviors against `backend/src/farna/api/routes/health.py`
   and `fly.toml`; status: covered at the time (the `.github/workflows/uptime-monitor.yml`
   also cited then was removed on 2026-10-07, see above).

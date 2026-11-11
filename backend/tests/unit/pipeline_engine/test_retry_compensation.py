@@ -24,12 +24,12 @@ import importlib
 
 import pytest
 
-from modulo.core.cost_controller.probe import PROBE_TERMINAL_STATUSES
-from modulo.core.graph_validator import GraphValidator
-from modulo.core.graph_validator._types import ValidationResult
-from modulo.core.pipeline_engine import retry_compensation as rc
-from modulo.db.crud.run import RUN_STATUS_WHITELIST
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from farna.core.cost_controller.probe import PROBE_TERMINAL_STATUSES
+from farna.core.graph_validator import GraphValidator
+from farna.core.graph_validator._types import ValidationResult
+from farna.core.pipeline_engine import retry_compensation as rc
+from farna.db.crud.run import RUN_STATUS_WHITELIST
+from farna.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 
 # ---------------------------------------------------------------------------
 # Per-node retry
@@ -257,7 +257,7 @@ _UNKNOWN = "unknown"
 
 
 def _migration_0158():
-    return importlib.import_module("modulo.db.migrations.versions.0159_pipeline_retry_compensation")
+    return importlib.import_module("farna.db.migrations.versions.0159_pipeline_retry_compensation")
 
 
 def test_compensation_failed_registered_in_vocabularies() -> None:
@@ -564,8 +564,8 @@ def test_resolve_backoff_schedule_accepted_resolves_cross_check() -> None:
     INTEGRAL delay values only (2, 45, 300): the validator rejects
     non-integral in-range delays, and the resolver now fail-opens on them —
     the accepted surface is integral-valued."""
-    from modulo.core.graph_validator import GraphValidator
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core.graph_validator import GraphValidator
+    from farna.core.graph_validator._types import ValidationResult
 
     for delay in (1, 45, 300, 300.0):
         for mult in (1, 2, 10, 10.0):
@@ -579,7 +579,7 @@ def test_resolve_backoff_schedule_accepted_resolves_cross_check() -> None:
 
 
 def test_sanitize_retry_policy_snippet_bounded_and_redacted() -> None:
-    from modulo.core.pipeline_engine.retry_compensation import sanitize_retry_policy_snippet
+    from farna.core.pipeline_engine.retry_compensation import sanitize_retry_policy_snippet
 
     snippet = sanitize_retry_policy_snippet({"delay_seconds": 1000, "api_key": "sk-super-secret", "nested": {"a": 1}})
     assert len(snippet) <= 120
@@ -595,7 +595,7 @@ def test_resolve_backoff_schedule_default_schedule_value_matches_executor_defaul
     """The fail-open defaults ARE the hardcoded executor schedule: pinning the
     jitter seam, the resolved deterministic component reproduces the legacy
     exponential exactly."""
-    from modulo.core.pipeline_engine import retry_policy as retry_policy_module
+    from farna.core.pipeline_engine import retry_policy as retry_policy_module
 
     monkeypatch.setattr(retry_policy_module.random, "uniform", lambda a, b: 0.0)
     for attempt in (1, 2, 3, 4, 5):
@@ -646,8 +646,8 @@ def test_write_sites_produce_identical_canonical_stored_output() -> None:
     """FAR-525 qa gate: BOTH write sites (API _validate_retry_policy and the
     import sanitiser) produce IDENTICAL stored output for the same inputs —
     the canonicalisation invariant has ONE implementation."""
-    from modulo.api.routes.pipelines import _validate_retry_policy
-    from modulo.core.workflow_import_export import _sanitize_retry_policy
+    from farna.api.routes.pipelines import _validate_retry_policy
+    from farna.core.workflow_import_export import _sanitize_retry_policy
 
     for schedule in (
         {"delay_seconds": 300.0, "multiplier": 2},

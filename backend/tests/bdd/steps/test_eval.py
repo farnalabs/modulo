@@ -75,7 +75,7 @@ def trigger_eval_run(ctx):
     """
     import asyncio
 
-    from modulo.core.eval_engine.execute_suite_run import build_suite_run
+    from farna.core.eval_engine.execute_suite_run import build_suite_run
     from tests.bdd.conftest import make_mock_session
 
     def _definition() -> MagicMock:
@@ -221,7 +221,7 @@ def eval_run_case_scored(score: float, ctx):
     evaluation against a pinned model: the judge applies the suite's
     pass threshold to its rubric score.
     """
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
@@ -266,9 +266,9 @@ def eval_run_completes(ctx):
     """
     import asyncio
 
-    from modulo.core.eval_engine.execute_suite_run import _suite_run_transition as suite_run_transition
-    from modulo.core.eval_engine.suite_run import record_completion
-    from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
+    from farna.core.eval_engine.execute_suite_run import _suite_run_transition as suite_run_transition
+    from farna.core.eval_engine.suite_run import record_completion
+    from farna.db.models.eval_suite_run import SuiteRun, SuiteRunState
     from tests.bdd.conftest import make_mock_session
 
     run = SuiteRun(
@@ -325,7 +325,7 @@ def eval_run_status_is(expected_status: str, ctx):
 
 @then("no case passed the eval")
 def no_case_passed(ctx):
-    from modulo.core.eval_engine.suite_run import suite_pass_rate
+    from farna.core.eval_engine.suite_run import suite_pass_rate
 
     result = ctx["case_result"]
     assert not result.passed, f"Case scored {ctx['score']} below threshold must not pass"
@@ -346,7 +346,7 @@ def no_case_passed(ctx):
 
 @given("a completed eval run with scores")
 def completed_eval_run_with_scores(ctx):
-    from modulo.db.models.eval_result import EvalResult
+    from farna.db.models.eval_result import EvalResult
 
     eval_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -396,8 +396,8 @@ def navigate_to_eval_results(request, ctx):
 
     with (
         session_client(role=_eval_role(request), shaper=shaper) as client,
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/runs/{ctx['run_id']}/evals")
     request.node._resp = resp
@@ -405,7 +405,7 @@ def navigate_to_eval_results(request, ctx):
 
 @then("I see per-case scores and the aggregate")
 def see_per_case_scores_and_aggregate(request, ctx):
-    from modulo.core.eval_engine.suite_run import suite_pass_rate
+    from farna.core.eval_engine.suite_run import suite_pass_rate
 
     resp = request.node._resp
     assert resp.status_code == 200, f"Expected 200 for run eval results, got {resp.status_code}"
@@ -489,7 +489,7 @@ def step_scorer_regex_with_type(eval_type, pattern, type_val, ctx):
 
 @when("the eval engine scores using each scorer")
 def step_eval_engine_scores(ctx):
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     output = ctx.get("eval_output", {})
@@ -530,7 +530,7 @@ def step_unknown_eval_type_error(ctx):
 @then(parsers.parse('the output "{output}" passes the regex scorer'))
 def step_output_passes_regex(output, ctx):
     ctx["eval_output"] = {"text": output}
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     eval_def = EvalDefinition(
@@ -547,7 +547,7 @@ def step_output_passes_regex(output, ctx):
 @then(parsers.parse('the output "{output}" fails the regex scorer'))
 def step_output_fails_regex(output, ctx):
     ctx["eval_output"] = {"text": output}
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     eval_def = EvalDefinition(
@@ -564,7 +564,7 @@ def step_output_fails_regex(output, ctx):
 @then("valid data passes the json_schema scorer")
 def step_valid_data_passes_json_schema(ctx):
     ctx["eval_output"] = {"valid": True}
-    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+    from farna.core.eval_engine import EvalDefinition, EvalEngine
 
     engine = EvalEngine()
     config = ctx.get("eval_config", {})
@@ -593,7 +593,7 @@ def _eval_row(
     eval_type: str,
     pipeline_id: uuid.UUID,
 ):
-    from modulo.db.models.eval import Eval
+    from farna.db.models.eval import Eval
 
     row = Eval(
         organisation_id=ORG_ID,
@@ -657,7 +657,7 @@ def step_create_eval_def(name, eval_type, request, ctx):
     and writes through the session) is stubbed, returning the row the route
     maps into the legacy response shape.
     """
-    from modulo.db.models.eval import Eval
+    from farna.db.models.eval import Eval
     from tests.bdd.conftest import session_client
 
     created = Eval(
@@ -683,9 +683,9 @@ def step_create_eval_def(name, eval_type, request, ctx):
 
     with (
         session_client(role=_eval_role(request), shaper=shaper) as client,
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as create_eval_mock,
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as create_eval_mock,
     ):
         create_eval_mock.return_value = created
         request.node._resp = client.post(
@@ -738,9 +738,9 @@ def step_update_eval_def(name, eval_id, request, ctx):
 
     with (
         session_client(role=_eval_role(request), shaper=shaper) as client,
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as update_eval_mock,
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as update_eval_mock,
     ):
         update_eval_mock.return_value = updated
         request.node._resp = client.put(f"/api/v1/evals/{eval_uuid}", json={"name": name})
@@ -774,8 +774,8 @@ def step_delete_eval_def(eval_id, request, ctx):
 
     with (
         session_client(role=_eval_role(request), shaper=shaper) as client,
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
     ):
         request.node._resp = client.delete(f"/api/v1/evals/{eval_uuid}")
 
@@ -803,8 +803,8 @@ def step_list_evals(request, ctx):
 
     with (
         session_client(role=_eval_role(request), shaper=shaper) as client,
-        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
     ):
         request.node._resp = client.get("/api/v1/evals")
 
@@ -856,7 +856,7 @@ def step_feedback_human_provides(ctx, request):
     """Simulate creating a feedback record via FeedbackManager."""
     from unittest.mock import AsyncMock
 
-    from modulo.core.feedback_manager import FeedbackManager
+    from farna.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     harden_session_double(mock_session)
@@ -890,7 +890,7 @@ def step_feedback_human_provides(ctx, request):
 def step_feedback_change_status(new_status, ctx, request):
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.feedback_manager import FeedbackManager, InvalidTransitionError
+    from farna.core.feedback_manager import FeedbackManager, InvalidTransitionError
 
     mock_session = AsyncMock()
     harden_session_double(mock_session)
@@ -899,7 +899,7 @@ def step_feedback_change_status(new_status, ctx, request):
     mgr = FeedbackManager(mock_session, ORG_ID)
     record_id = ctx.get("feedback_record_id", uuid.uuid4())
 
-    from modulo.db.models.feedback_record import FeedbackRecord
+    from farna.db.models.feedback_record import FeedbackRecord
 
     mock_record = MagicMock(spec=FeedbackRecord)
     mock_record.id = record_id
@@ -931,7 +931,7 @@ def step_feedback_change_status(new_status, ctx, request):
 def step_feedback_detect_eval_gap(ctx, request):
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.core.feedback_manager import FeedbackManager
+    from farna.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     # A SQLAlchemy result object is SYNC; an AsyncMock session's default
@@ -953,7 +953,7 @@ def step_feedback_detect_eval_gap(ctx, request):
 
     import asyncio
 
-    from modulo.core.eval_engine import EvalDefinition
+    from farna.core.eval_engine import EvalDefinition
 
     # Provide an eval suite that passes on the output text "This is incorrect"
     # → no eval catches the rejection → this IS an eval gap
@@ -977,7 +977,7 @@ def step_feedback_detect_eval_gap(ctx, request):
 def step_feedback_spawn_correction(ctx, request):
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from modulo.core.feedback_manager import FeedbackManager
+    from farna.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
     harden_session_double(mock_session)
@@ -1007,8 +1007,8 @@ def step_feedback_spawn_correction(ctx, request):
     loop = asyncio.new_event_loop()
     try:
         with (
-            patch("modulo.core.feedback_manager.get_run", mock_get_run),
-            patch("modulo.core.feedback_manager.create_run", mock_create_run),
+            patch("farna.core.feedback_manager.get_run", mock_get_run),
+            patch("farna.core.feedback_manager.create_run", mock_create_run),
         ):
             mock_record = MagicMock()
             mock_record.id = record_id

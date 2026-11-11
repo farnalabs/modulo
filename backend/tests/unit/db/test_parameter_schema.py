@@ -7,8 +7,8 @@ import pytest
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import JSON, Integer, String, Uuid
 
-from modulo.db.models import Base
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models import Base
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 # ---------------------------------------------------------------------------
 # Schema metadata tests
@@ -123,7 +123,7 @@ class TestParameterSchemaCRUD:
 
     @pytest.mark.asyncio
     async def test_create_schema(self, mock_session) -> None:
-        from modulo.db.crud.parameter_schema import create_schema
+        from farna.db.crud.parameter_schema import create_schema
 
         org_id = uuid.uuid4()
         account_id = uuid.uuid4()
@@ -143,14 +143,14 @@ class TestParameterSchemaCRUD:
 
     @pytest.mark.asyncio
     async def test_get_schema_none(self, mock_session) -> None:
-        from modulo.db.crud.parameter_schema import get_schema
+        from farna.db.crud.parameter_schema import get_schema
 
         result = await get_schema(mock_session, uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio
     async def test_list_schemas(self, mock_session) -> None:
-        from modulo.db.crud.parameter_schema import list_schemas
+        from farna.db.crud.parameter_schema import list_schemas
 
         org_id = uuid.uuid4()
         result = await list_schemas(mock_session, org_id=org_id)
@@ -159,7 +159,7 @@ class TestParameterSchemaCRUD:
 
     @pytest.mark.asyncio
     async def test_delete_schema_not_found(self) -> None:
-        from modulo.db.crud.parameter_schema import delete_schema
+        from farna.db.crud.parameter_schema import delete_schema
 
         session = MagicMock()
         session.flush = AsyncMock()
@@ -173,7 +173,7 @@ class TestParameterSchemaCRUD:
 
     @pytest.mark.asyncio
     async def test_update_schema_version_mismatch(self, mock_session) -> None:
-        from modulo.db.crud.parameter_schema import update_schema
+        from farna.db.crud.parameter_schema import update_schema
 
         result = await update_schema(mock_session, uuid.uuid4(), version=999)
         assert result is None
@@ -194,7 +194,7 @@ class TestParameterSetCRUD:
 
     @pytest.mark.asyncio
     async def test_create_set(self, mock_session) -> None:
-        from modulo.db.crud.parameter_set import create_set
+        from farna.db.crud.parameter_set import create_set
 
         schema_id = uuid.uuid4()
         org_id = uuid.uuid4()
@@ -217,14 +217,14 @@ class TestParameterSetCRUD:
 
     @pytest.mark.asyncio
     async def test_get_set_none(self, mock_session) -> None:
-        from modulo.db.crud.parameter_set import get_set
+        from farna.db.crud.parameter_set import get_set
 
         result = await get_set(mock_session, uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio
     async def test_list_sets(self, mock_session) -> None:
-        from modulo.db.crud.parameter_set import list_sets
+        from farna.db.crud.parameter_set import list_sets
 
         result = await list_sets(
             mock_session,
@@ -235,7 +235,7 @@ class TestParameterSetCRUD:
 
     @pytest.mark.asyncio
     async def test_delete_set_not_found(self, mock_session) -> None:
-        from modulo.db.crud.parameter_set import delete_set
+        from farna.db.crud.parameter_set import delete_set
 
         mock_session.execute.return_value.scalar_one_or_none.return_value = None
         result = await delete_set(mock_session, uuid.uuid4())
@@ -422,7 +422,7 @@ def test_parameter_empty_dict_renders() -> None:
 
 def test_parameter_references_valid() -> None:
     """Valid parameter schema and set references produce no errors."""
-    from modulo.core.graph_validator._types import try_parse_uuid
+    from farna.core.graph_validator._types import try_parse_uuid
 
     graph_json = {
         "nodes": [
@@ -456,8 +456,8 @@ def test_parameter_references_valid() -> None:
 @pytest.mark.asyncio
 async def test_parameter_schema_not_found() -> None:
     """Missing ParameterSchema produces an error."""
-    from modulo.core.graph_validator import GraphValidator
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core.graph_validator import GraphValidator
+    from farna.core.graph_validator._types import ValidationResult
 
     schema_id = uuid.uuid4()
     set_id = uuid.uuid4()
@@ -484,8 +484,8 @@ async def test_parameter_schema_not_found() -> None:
 @pytest.mark.asyncio
 async def test_parameter_set_schema_mismatch() -> None:
     """ParameterSet belonging to a different schema produces an error."""
-    from modulo.core.graph_validator import GraphValidator
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core.graph_validator import GraphValidator
+    from farna.core.graph_validator._types import ValidationResult
 
     schema_id = uuid.uuid4()
     wrong_schema_id = uuid.uuid4()
@@ -540,8 +540,8 @@ async def test_parameter_set_schema_mismatch() -> None:
 @pytest.mark.asyncio
 async def test_parameter_schema_drift_warning() -> None:
     """Schema version drift produces a warning."""
-    from modulo.core.graph_validator import GraphValidator
-    from modulo.core.graph_validator._types import ValidationResult
+    from farna.core.graph_validator import GraphValidator
+    from farna.core.graph_validator._types import ValidationResult
 
     schema_id = uuid.uuid4()
     set_id = uuid.uuid4()

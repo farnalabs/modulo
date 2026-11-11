@@ -38,7 +38,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes import product_analytics_identity as pa
+from farna.api.routes import product_analytics_identity as pa
 from tests.unit.api.mock_session import configure_rls_preamble
 
 

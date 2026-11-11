@@ -5,8 +5,8 @@ Contract split (per-node telemetry alongside outputs) was originally pinned
 against the legacy ``runs.outputs_json`` / ``runs.node_telemetry_json`` ORM
 columns. B1 (FAR-583) cut those columns' ORM mapping — the ``run_node_outputs``
 per-node store is now the ONLY store, written by the REPLACE write
-(:func:`modulo.db.crud.run_node_outputs.replace_run_node_outputs`) that
-:func:`modulo.db.crud.run.update_run_status` performs INSIDE the status-write
+(:func:`farna.db.crud.run_node_outputs.replace_run_node_outputs`) that
+:func:`farna.db.crud.run.update_run_status` performs INSIDE the status-write
 transaction. The invariants this file pins survived the cut:
 
 * a blobs-carrying status write persists BOTH sides (outputs + telemetry)
@@ -35,13 +35,13 @@ import pytest_asyncio
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import update_run_status, write_run_outputs_from_run
-from modulo.db.crud.run_node_outputs import read_run_blobs
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
-from modulo.db.rls import set_rls_org
+from farna.db.crud.run import update_run_status, write_run_outputs_from_run
+from farna.db.crud.run_node_outputs import read_run_blobs
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import Run
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, RunNodeOutput
+from farna.db.rls import set_rls_org
 
 _ORG = uuid.uuid4()
 _PIPELINE = uuid.uuid4()
@@ -394,6 +394,6 @@ class TestStatusWriteJsonbSanitisation:
     def test_fenced_branch_reuses_the_shared_store_write_helper(self) -> None:
         import inspect
 
-        from modulo.db.crud.run import _update_run_status_fenced
+        from farna.db.crud.run import _update_run_status_fenced
 
         assert "write_run_outputs_from_run(" in inspect.getsource(_update_run_status_fenced)

@@ -9,7 +9,7 @@ Upgrade-in-place drift, reproduced against a real Postgres:
    fast-path BEFORE ``_run_bootstrap``, so the warm boot reconciled nothing —
    every system cron failed with ``password authentication failed for user
    "modulo_system"`` until an operator ran ``python -m
-   modulo.db.bootstrap_role`` by hand.
+   farna.db.bootstrap_role`` by hand.
 
 Each "boot" here is the real startup step under fix (``main._run_migrations``)
 against a DB that is ALREADY at the alembic head — i.e. the warm path, with no
@@ -66,8 +66,8 @@ async def _dispose_shared_engines() -> None:
     """Dispose and forget the process-global engines (hygiene: this test is
     the first caller of ``get_or_create_engine`` in a focused run, and the
     suite treats stray ResourceWarnings as errors)."""
-    from modulo.api import dependencies as api_dependencies
-    from modulo.db import session as db_session
+    from farna.api import dependencies as api_dependencies
+    from farna.db import session as db_session
 
     for module, attr in ((api_dependencies, "_engine"), (db_session, "_shared_engine")):
         engine = getattr(module, attr)
@@ -91,8 +91,8 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
     monkeypatch.delenv("MODULO_BREAK_GLASS_DATABASE_URL", raising=False)
     monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
 
-    from modulo.api import main as api_main
-    from modulo.settings import get_settings
+    from farna.api import main as api_main
+    from farna.settings import get_settings
 
     settings = get_settings().model_copy(update={"database_url": app_url})
 
@@ -135,7 +135,7 @@ async def test_warm_boot_reconciles_system_role_password_without_manual_step(
         # same bootstrap the ticket says an operator used to run by hand —
         # here only as cleanup, never as part of the assertions above).
         monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
-        from modulo.db.bootstrap_role import bootstrap_roles
+        from farna.db.bootstrap_role import bootstrap_roles
 
         await bootstrap_roles(migrated_db_url, app_url)
         await _dispose_shared_engines()

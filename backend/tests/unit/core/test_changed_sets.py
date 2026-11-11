@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from modulo.core.eval_engine.changed_sets import (
+from farna.core.eval_engine.changed_sets import (
     AGENT_CONFIG_RISK_PATTERNS,
     CHANGED_SET_EVIDENCE_PREFIX,
     ChangedSet,
@@ -26,11 +26,11 @@ from modulo.core.eval_engine.changed_sets import (
     record_changed_set_evidence,
     resolve_changed_set,
 )
-from modulo.core.eval_engine.evidence_layer import (
+from farna.core.eval_engine.evidence_layer import (
     EvidenceWriteAuthorisationError,
     assert_write_authorisation,
 )
-from modulo.core.provenance import PROVENANCE_OBSERVED, PROVENANCE_REPORTED
+from farna.core.provenance import PROVENANCE_OBSERVED, PROVENANCE_REPORTED
 
 
 class _RecordingSession:

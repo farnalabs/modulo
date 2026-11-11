@@ -30,10 +30,10 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.connector_hub import ConnectorHub
-from modulo.core.library.integrations import __all__ as integration_exports
-from modulo.core.library.integrations import definitions as integration_defs
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.core.connector_hub import ConnectorHub
+from farna.core.library.integrations import __all__ as integration_exports
+from farna.core.library.integrations import definitions as integration_defs
+from farna.core.secrets_backend import create_secrets_backend
 
 from .secrets_helpers import SHARED_FERNET_KEY as _KEY
 from .secrets_helpers import encrypt_credentials, encrypt_raw_str
@@ -220,7 +220,7 @@ async def test_bare_scalar_ciphertext_heals_under_definition_key(connector_type:
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         get_settings.return_value.fernet_key = _KEY
         hub = ConnectorHub(secrets_backend=backend)

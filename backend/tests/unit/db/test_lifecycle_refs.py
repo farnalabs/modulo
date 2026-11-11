@@ -1,6 +1,6 @@
 """Hermetic unit tests for db/lifecycle_refs.py (FAR-142).
 
-Covers the canonical work-item ref rules owned by ``modulo.db.lifecycle_refs``:
+Covers the canonical work-item ref rules owned by ``farna.db.lifecycle_refs``:
 
   * the reserved input-payload key contract (``_work_item_id``,
     ``_modulo.work_item``, ``_feedback_correction``) — the exact set the
@@ -26,7 +26,7 @@ import uuid
 
 import pytest
 
-from modulo.db.lifecycle_refs import (
+from farna.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
     canonicalise_kind,

@@ -14,8 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal
-from modulo.settings import Settings, get_settings
+from farna.auth.scim_auth import ScimPrincipal, get_scim_principal
+from farna.settings import Settings, get_settings
 from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
@@ -247,13 +247,13 @@ def scim_client() -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.api.routes.scim import get_scim_audit_principal
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.auth.scim_auth import get_scim_plan_context
-    from modulo.core.audit_coverage import audit_session
-    from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry, LicenseData, LicenseKeyTier, PlanContext
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.api.routes.scim import get_scim_audit_principal
+    from farna.auth.jwt import TenantPrincipal
+    from farna.auth.scim_auth import get_scim_plan_context
+    from farna.core.audit_coverage import audit_session
+    from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry, LicenseData, LicenseKeyTier, PlanContext
 
     _plan: PlanContext = LicenseKeyTier(
         LicenseData(
@@ -358,9 +358,9 @@ def _when_post_user(email: str, scim_client: Any, request: Any, ctx: dict[str, A
     mock_user.password_hash = None
 
     with (
-        patch("modulo.db.crud.account.get_account_by_email", return_value=None),
-        patch("modulo.api.routes.scim.scim_create_user", return_value=mock_user) as mock_create,
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.db.crud.account.get_account_by_email", return_value=None),
+        patch("farna.api.routes.scim.scim_create_user", return_value=mock_user) as mock_create,
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.post("/scim/v2/Users", json=body, headers=headers)
@@ -380,8 +380,8 @@ def _when_post_user_no_auth(email: str, request: Any, ctx: dict[str, Any]) -> No
     body = dict(_USER_CREATE_BODY)
     body["userName"] = email
 
-    from modulo.api.dependencies import _get_engine, get_db_session
-    from modulo.api.main import app
+    from farna.api.dependencies import _get_engine, get_db_session
+    from farna.api.main import app
 
     app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_scim_settings
@@ -406,8 +406,8 @@ def _when_get_user(user_id: str, scim_client: Any, request: Any, ctx: dict[str, 
     mock_user = getattr(request.node, "scim_users", {}).get(user_id, _MOCK_USER)
 
     with (
-        patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.scim_get_user", return_value=mock_user),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.get(f"/scim/v2/Users/{resolved}", headers=headers)
@@ -434,9 +434,9 @@ def _when_put_user(user_id: str, email: str, scim_client: Any, request: Any, ctx
     mock_user.updated_at = None
 
     with (
-        patch("modulo.api.routes.scim.scim_get_user", return_value=mock_user),
-        patch("modulo.api.routes.scim.scim_update_user", return_value=mock_user),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.scim_get_user", return_value=mock_user),
+        patch("farna.api.routes.scim.scim_update_user", return_value=mock_user),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.put(f"/scim/v2/Users/{resolved}", json=body, headers=headers)
@@ -449,15 +449,15 @@ def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[st
     """DELETE /scim/v2/Users/{user_id} to deprovision a SCIM user."""
     resolved = _resolve_id(user_id)
     with (
-        patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
-        patch("modulo.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
-        patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
+        patch("farna.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+        patch("farna.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
+        patch("farna.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.scim._resolve_scim_admin_caller",
+            "farna.api.routes.scim._resolve_scim_admin_caller",
             new_callable=AsyncMock,
             return_value=_USER_ID,
         ),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.delete(f"/scim/v2/Users/{resolved}", headers=headers)
@@ -480,19 +480,19 @@ def _when_patch_user_deactivate(user_id: str, scim_client: Any, request: Any, ct
     patched_user.updated_at = None
 
     with (
-        patch("modulo.api.routes.scim.scim_get_user", return_value=patched_user),
-        patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
+        patch("farna.api.routes.scim.scim_get_user", return_value=patched_user),
+        patch("farna.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.scim._resolve_scim_admin_caller",
+            "farna.api.routes.scim._resolve_scim_admin_caller",
             new_callable=AsyncMock,
             return_value=_USER_ID,
         ),
         patch(
-            "modulo.api.routes.scim.scim_deactivate_user",
+            "farna.api.routes.scim.scim_deactivate_user",
             new_callable=AsyncMock,
             return_value=patched_user,
         ),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.patch(f"/scim/v2/Users/{resolved}", json=_PATCH_USER_DEACTIVATE, headers=headers)
@@ -517,11 +517,11 @@ def _when_post_group(display_name: str, user_id: str, scim_client: Any, request:
     mock_team.updated_at = None
 
     with (
-        patch("modulo.db.crud.team.get_team_by_name", return_value=None),
-        patch("modulo.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
-        patch("modulo.db.crud.org_membership.list_memberships_for_org", return_value=[]),
-        patch("modulo.api.routes.scim.scim_create_group", return_value=mock_team),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.db.crud.team.get_team_by_name", return_value=None),
+        patch("farna.db.crud.user.list_users_for_org", create=True, return_value=[_MOCK_USER]),
+        patch("farna.db.crud.org_membership.list_memberships_for_org", return_value=[]),
+        patch("farna.api.routes.scim.scim_create_group", return_value=mock_team),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.post("/scim/v2/Groups", json=body, headers=headers)
@@ -543,11 +543,11 @@ def _when_patch_group_add_member(
     mock_team.id = _TEAM_ID
     mock_team.name = "Engineering"
     with (
-        patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
-        patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
-        patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
-        patch("modulo.api.routes.scim.scim_add_group_member", return_value=None),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.scim_get_group", return_value=mock_team),
+        patch("farna.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
+        patch("farna.api.routes.scim.scim_list_group_members", return_value=[]),
+        patch("farna.api.routes.scim.scim_add_group_member", return_value=None),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.patch(f"/scim/v2/Groups/{resolved}", json=_PATCH_GROUP_ADD_MEMBER, headers=headers)
@@ -569,10 +569,10 @@ def _when_patch_group_remove_member(
     mock_team.id = _TEAM_ID
     mock_team.name = "Engineering"
     with (
-        patch("modulo.api.routes.scim.scim_get_group", return_value=mock_team),
-        patch("modulo.api.routes.scim.scim_list_group_members", return_value=[]),
-        patch("modulo.api.routes.scim.scim_remove_group_member", return_value=None),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.scim_get_group", return_value=mock_team),
+        patch("farna.api.routes.scim.scim_list_group_members", return_value=[]),
+        patch("farna.api.routes.scim.scim_remove_group_member", return_value=None),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.patch(f"/scim/v2/Groups/{resolved}", json=_PATCH_GROUP_REMOVE_MEMBER, headers=headers)
@@ -584,10 +584,10 @@ def _when_patch_group_remove_member(
 def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) -> None:
     """GET /scim/v2/Users to list SCIM users."""
     if ctx.get("_no_team_license"):
-        from modulo.api.dependencies import get_plan_context
-        from modulo.api.main import app
-        from modulo.auth.scim_auth import get_scim_plan_context
-        from modulo.core.feature_flags import CommunityTier
+        from farna.api.dependencies import get_plan_context
+        from farna.api.main import app
+        from farna.auth.scim_auth import get_scim_plan_context
+        from farna.core.feature_flags import CommunityTier
 
         app.dependency_overrides[get_plan_context] = lambda: CommunityTier()
         app.dependency_overrides[get_scim_plan_context] = lambda: CommunityTier()
@@ -599,8 +599,8 @@ def _when_get_users_list(scim_client: Any, request: Any, ctx: dict[str, Any]) ->
         return
 
     with (
-        patch("modulo.api.routes.scim.scim_list_users", return_value=_MOCK_USER_LIST),
-        patch("modulo.api.routes.scim.set_rls_org"),
+        patch("farna.api.routes.scim.scim_list_users", return_value=_MOCK_USER_LIST),
+        patch("farna.api.routes.scim.set_rls_org"),
     ):
         headers = {"Authorization": f"Bearer {_SCIM_TOKEN}"}
         resp = scim_client.get("/scim/v2/Users", headers=headers)

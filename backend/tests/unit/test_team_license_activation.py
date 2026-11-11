@@ -13,10 +13,10 @@ from collections.abc import Generator
 
 import pytest
 
-from modulo.core.feature_flags import _KNOWN_FLAGS, LicenseKeyTier
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
-from modulo.core.license_signing import generate_team_license
-from modulo.core.registry.crypto import generate_keypair
+from farna.core.feature_flags import _KNOWN_FLAGS, LicenseKeyTier
+from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
+from farna.core.license_signing import generate_team_license
+from farna.core.registry.crypto import generate_keypair
 
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
 

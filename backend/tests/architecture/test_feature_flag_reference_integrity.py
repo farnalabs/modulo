@@ -18,20 +18,20 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from modulo.core.feature_flags import _KNOWN_FLAGS
-from modulo.core.seed_data.catalog import FLAGS
+from farna.core.feature_flags import _KNOWN_FLAGS
+from farna.core.seed_data.catalog import FLAGS
 from tests.unit._source_scan import iter_source_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_BACKEND_SRC = _REPO_ROOT / "backend" / "src" / "modulo"
+_BACKEND_SRC = _REPO_ROOT / "backend" / "src" / "farna"
 _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 _MANIFEST = _FRONTEND_SRC / "manifest.yaml"
 
 # Registry files — references here don't count as "enforced".
 _REGISTRY_FILES: set[Path] = {
-    _REPO_ROOT / "backend" / "src" / "modulo" / "core" / "feature_flags.py",
-    _REPO_ROOT / "backend" / "src" / "modulo" / "core" / "seed_data" / "catalog.py",
+    _REPO_ROOT / "backend" / "src" / "farna" / "core" / "feature_flags.py",
+    _REPO_ROOT / "backend" / "src" / "farna" / "core" / "seed_data" / "catalog.py",
 }
 
 # Flags registered in _KNOWN_FLAGS but intentionally not yet gated anywhere

@@ -1,7 +1,7 @@
 """Tests for FAR-151 per-signal ingestion, seeded default alert rules, tombstones,
 fire-once retry alerts, and alert_resolved lifecycle events.
 
-Exercise the service layer in ``modulo.core.error_tracking`` with mocked
+Exercise the service layer in ``farna.core.error_tracking`` with mocked
 sessions/DB helpers (unit, no DB). SQLAlchemy objects are built from the real
 models so column wiring (``signal``, ``is_default``) is covered.
 """
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.error_tracking import (
+from farna.core.error_tracking import (
     DEFAULT_ALERT_RULES,
     SEEDED_DEFAULTS_VERSION,
     clear_default_rule_tombstone,
@@ -26,8 +26,8 @@ from modulo.core.error_tracking import (
     signal_fingerprint,
     tombstone_default_rule,
 )
-from modulo.db.models.error_event import ErrorEvent
-from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from farna.db.models.error_event import ErrorEvent
+from farna.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
 from tests.unit.error_tracking._factories import make_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -123,7 +123,7 @@ class TestSignalFingerprint:
 class TestSeedForOrg:
     async def test_adds_all_missing_signal_rules(self) -> None:
         session = _seed_session(existing_rules=[None] * len(DEFAULT_ALERT_RULES))
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules_for_org(session, _ORG_ID)
 
         assert seeded == len(DEFAULT_ALERT_RULES)
@@ -141,7 +141,7 @@ class TestSeedForOrg:
     async def test_idempotent_when_all_present(self) -> None:
         existing = [_rule_mock(signal=spec["signal"]) for spec in DEFAULT_ALERT_RULES]
         session = _seed_session(existing_rules=existing)
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules_for_org(session, _ORG_ID)
         # All rows exist and are is_default=true → force-updated, never duplicated.
         assert seeded == len(DEFAULT_ALERT_RULES)
@@ -150,7 +150,7 @@ class TestSeedForOrg:
     async def test_skips_tombstoned_signals(self) -> None:
         tombstoned = {DEFAULT_ALERT_RULES[0]["signal"]}
         session = _seed_session(tombstoned=tombstoned, existing_rules=[None] * len(DEFAULT_ALERT_RULES))
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules_for_org(session, _ORG_ID)
 
         assert seeded == len(DEFAULT_ALERT_RULES) - 1
@@ -161,7 +161,7 @@ class TestSeedForOrg:
         edited = _rule_mock(signal=DEFAULT_ALERT_RULES[0]["signal"], is_default=False, name="User custom")
         existing = [edited] + [None] * (len(DEFAULT_ALERT_RULES) - 1)
         session = _seed_session(existing_rules=existing)
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules_for_org(session, _ORG_ID)
 
         # The edited row is not force-updated and not duplicated.
@@ -172,7 +172,7 @@ class TestSeedForOrg:
         spec = DEFAULT_ALERT_RULES[0]
         existing_rule = _rule_mock(signal=spec["signal"], is_default=True, name="Stale", action_type="email")
         session = _seed_session(existing_rules=[existing_rule] + [None] * (len(DEFAULT_ALERT_RULES) - 1))
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             await seed_default_alert_rules_for_org(session, _ORG_ID)
 
         assert existing_rule.name == spec["name"]
@@ -210,7 +210,7 @@ class TestSeedAllOrgs:
     async def test_first_seed_seeds_and_writes_marker(self) -> None:
         session = self._marker_session(None)
         factory = self._factory(session)
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules(factory)
 
         assert seeded == len(DEFAULT_ALERT_RULES)
@@ -222,7 +222,7 @@ class TestSeedAllOrgs:
     async def test_second_seed_returns_zero(self) -> None:
         session = self._marker_session(SEEDED_DEFAULTS_VERSION)
         factory = self._factory(session)
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules(factory)
         assert seeded == 0
         assert session.add.call_count == 0
@@ -230,7 +230,7 @@ class TestSeedAllOrgs:
     async def test_version_bump_reseeds(self) -> None:
         session = self._marker_session(SEEDED_DEFAULTS_VERSION - 1)
         factory = self._factory(session)
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await seed_default_alert_rules(factory)
         assert seeded == len(DEFAULT_ALERT_RULES)
 
@@ -239,7 +239,7 @@ class TestTombstones:
     async def test_tombstone_then_seed_skips(self) -> None:
         signal = DEFAULT_ALERT_RULES[0]["signal"]
         session = _seed_session(tombstoned=set(), existing_rules=[None] * len(DEFAULT_ALERT_RULES))
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             await tombstone_default_rule(session, _ORG_ID, signal)
         added = session.add.call_args.args[0]
         assert isinstance(added, DeletedDefault)
@@ -252,7 +252,7 @@ class TestTombstones:
         result = MagicMock(scalar_one_or_none=MagicMock(return_value=row))
         session.execute = AsyncMock(return_value=result)
         session.delete = AsyncMock()
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             cleared = await clear_default_rule_tombstone(session, _ORG_ID, "agent.failed")
         assert cleared is True
         session.delete.assert_called_once_with(row)
@@ -275,7 +275,7 @@ class TestTombstones:
         session.delete = AsyncMock()
         session.add = MagicMock()
         session.flush = AsyncMock()
-        with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
+        with patch("farna.core.error_tracking.set_rls_org", AsyncMock()):
             seeded = await restore_default_alert_rules_for_org(session, _ORG_ID)
         assert seeded == len(DEFAULT_ALERT_RULES)
         session.delete.assert_called_once_with(row)
@@ -290,9 +290,9 @@ class TestEmitSignalEvent:
         engine = MagicMock()
         engine.evaluate = AsyncMock(return_value=[])
         with (
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)) as upsert,
-            patch("modulo.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)) as upsert,
+            patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
             result = await emit_signal_event(
                 session,
@@ -326,9 +326,9 @@ class TestEmitSignalEvent:
         engine.evaluate = AsyncMock(return_value=[alert])
         engine.dispatch_all = AsyncMock()
         with (
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
-            patch("modulo.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
+            patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
             await emit_signal_event(
                 session,
@@ -348,9 +348,9 @@ class TestEmitSignalEvent:
         engine = MagicMock()
         engine.evaluate = AsyncMock(side_effect=RuntimeError("db down"))
         with (
-            patch("modulo.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
-            patch("modulo.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
+            patch("farna.core.error_tracking.get_error_group_by_fingerprint", AsyncMock(return_value=None)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
+            patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
             result = await emit_signal_event(
                 session, _ORG_ID, signal="contract.schema", pipeline_id=None, message="x", level="warning"
@@ -369,8 +369,8 @@ class TestRetryDeferredAlertFireOnce:
         engine.evaluate = AsyncMock(return_value=[])
         run_group_id = uuid.uuid4()
         with (
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
-            patch("modulo.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
+            patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
             first = await emit_retry_deferred_alert(
                 session,
@@ -412,8 +412,8 @@ class TestRetryDeferredAlertFireOnce:
         engine = MagicMock()
         engine.evaluate = AsyncMock(return_value=[])
         with (
-            patch("modulo.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
-            patch("modulo.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
+            patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
+            patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
             await emit_retry_deferred_alert(
                 session,
@@ -449,7 +449,7 @@ class TestEmitAlertResolved:
         group_id = uuid.uuid4()
 
         with patch(
-            "modulo.core.error_tracking.alert_dispatcher.dispatch_alert_resolved", new=AsyncMock()
+            "farna.core.error_tracking.alert_dispatcher.dispatch_alert_resolved", new=AsyncMock()
         ) as resolved_mock:
             await emit_alert_resolved(session, _ORG_ID, signal="agent.failed", group_id=group_id, reason="superseded")
 
@@ -465,7 +465,7 @@ class TestEmitAlertResolved:
         rule_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         session.execute = AsyncMock(return_value=rule_result)
         with patch(
-            "modulo.core.error_tracking.alert_dispatcher.dispatch_alert_resolved",
+            "farna.core.error_tracking.alert_dispatcher.dispatch_alert_resolved",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ):
             await emit_alert_resolved(

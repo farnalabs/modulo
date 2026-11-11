@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.session — the one-engine-per-process async engine factory.
+"""Unit tests for farna.db.session — the one-engine-per-process async engine factory.
 
 QA lens pass (correctness, bugs, edge cases) on the process-global engine
 factory. Every DB consumer gets its engine from here — the API via
@@ -57,7 +57,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 POSTGRES_URL = "postgresql+asyncpg://u:p@localhost/db"
 SQLITE_URL = "sqlite+aiosqlite:///./test.db"
@@ -79,7 +79,7 @@ def session_mod() -> Any:
     they are snapshotted and restored here to avoid leaking fake engines or a
     deregistered-hooks state into the rest of the suite.
     """
-    import modulo.db.session as m
+    import farna.db.session as m
 
     orig_shared = m._shared_engine
     orig_hooks = m._GLOBAL_HOOKS_REGISTERED
@@ -106,9 +106,9 @@ class TestBuildEngine:
         """Postgres gets pool_pre_ping, 20/10/3600/30 pool config, and the asyncpg
         HAProxy connect knobs ({ssl: False, statement_cache_size: 0})."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             engine = session_mod._build_engine()
 
@@ -126,9 +126,9 @@ class TestBuildEngine:
     def test_postgres_sslmode_disabled_explicit_plaintext(self, session_mod: Any) -> None:
         """Absent or `sslmode=disable` → explicit `ssl=False` + unchanged engine URL."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
         kw = mock_create.call_args[1]
@@ -139,9 +139,9 @@ class TestBuildEngine:
         """`sslmode=require` survives in connect_args AND is stripped from the engine URL."""
         url = "postgresql+asyncpg://u:p@localhost/db?sslmode=require"
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
         kw = mock_create.call_args[1]
@@ -152,9 +152,9 @@ class TestBuildEngine:
         """`sslmode=verify-full` → fail-closed SSL mode with CA verification."""
         url = "postgresql+asyncpg://u:p@localhost/db?sslmode=verify-full"
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
         kw = mock_create.call_args[1]
@@ -166,9 +166,9 @@ class TestBuildEngine:
         """prefer/allow/unknown raise at engine build — never a silent plaintext go."""
         url = f"postgresql+asyncpg://u:p@localhost/db?sslmode={unsafe_mode}"
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", url)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", url)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
             pytest.raises(ValueError, match="sslmode"),
         ):
             session_mod._build_engine()
@@ -177,9 +177,9 @@ class TestBuildEngine:
     def test_postgres_pool_overrides_win(self, session_mod: Any) -> None:
         """A caller's pool budget (the SAQ worker's per-worker size) wins."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine(pool_size=5, max_overflow=2)
 
@@ -190,9 +190,9 @@ class TestBuildEngine:
     def test_partial_override_preserves_defaults(self, session_mod: Any) -> None:
         """pool_size=None keeps the 20 default while max_overflow override applies."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine(pool_size=None, max_overflow=3)
 
@@ -203,9 +203,9 @@ class TestBuildEngine:
     def test_sqlite_skips_every_pool_knob(self, session_mod: Any) -> None:
         """SQLite (aiosqlite) has no real pool — no pool_size/max_overflow/recycle/timeout."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine(pool_size=5, max_overflow=2)
 
@@ -217,9 +217,9 @@ class TestBuildEngine:
     def test_sqlite_connect_args_are_timeout_only(self, session_mod: Any) -> None:
         """SQLite keeps the timeout connect arg but not the asyncpg-only knobs."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -232,9 +232,9 @@ class TestBuildEngine:
         The ssl translation must key off the URL's real driver scheme —
         no ValueError, and no ssl connect arg for aiosqlite."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", SQLITE_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", SQLITE_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             engine = session_mod._build_engine()
 
@@ -247,9 +247,9 @@ class TestBuildEngine:
     def test_mariadb_pool_knobs_without_asyncpg_knobs(self, session_mod: Any) -> None:
         """MariaDB gets a real pool but must NOT get the asyncpg-only ssl/statement_cache args."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("mariadb", MARIADB_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("mariadb", MARIADB_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -263,9 +263,9 @@ class TestBuildEngine:
     def test_mysql_alias_matches_mariadb(self, session_mod: Any) -> None:
         """The mysql alias is treated exactly like mariadb."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("mysql", MARIADB_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("mysql", MARIADB_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -278,9 +278,9 @@ class TestBuildEngine:
         """timeout=10 is the one connect arg shared by all backends."""
         for modulo_db, url in (("postgres", POSTGRES_URL), ("sqlite", SQLITE_URL), ("mariadb", MARIADB_URL)):
             with (
-                patch("modulo.db.session.get_settings", return_value=_settings(modulo_db, url)),
-                patch("modulo.db.session.create_async_engine") as mock_create,
-                patch("modulo.db.session.register_rls_reset_hook"),
+                patch("farna.db.session.get_settings", return_value=_settings(modulo_db, url)),
+                patch("farna.db.session.create_async_engine") as mock_create,
+                patch("farna.db.session.register_rls_reset_hook"),
             ):
                 session_mod._build_engine()
             assert mock_create.call_args[1]["connect_args"]["timeout"] == 10
@@ -288,9 +288,9 @@ class TestBuildEngine:
     def test_engine_built_from_settings(self, session_mod: Any) -> None:
         """The URL and backend come from the process settings, not hard-coded."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
         assert mock_create.call_args[1]["url"] == POSTGRES_URL
@@ -311,9 +311,9 @@ class TestPoolRecycleProxyWindowContract:
         SQLAlchemy BEFORE the proxy's 30m inactivity kill can strand it."""
         url = POSTGRES_URL if modulo_db == "postgres" else MARIADB_URL
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings(modulo_db, url)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings(modulo_db, url)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -324,11 +324,11 @@ class TestPoolRecycleProxyWindowContract:
         """An operator's DB_POOL_RECYCLE_SECONDS reaches the engine verbatim."""
         with (
             patch(
-                "modulo.db.session.get_settings",
+                "farna.db.session.get_settings",
                 return_value=_settings("postgres", POSTGRES_URL, pool_recycle=900),
             ),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -339,9 +339,9 @@ class TestPoolRecycleProxyWindowContract:
         the recycle change (it masks idle death; recycle keeps pooled
         connections inside the proxy window)."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine") as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine") as mock_create,
+            patch("farna.db.session.register_rls_reset_hook"),
         ):
             session_mod._build_engine()
 
@@ -385,9 +385,9 @@ class TestRlsResetHookRegistration:
     def test_registered_for_postgres(self, session_mod: Any) -> None:
         """The pool-checkout RLS reset hook is registered on the postgres engine."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
-            patch("modulo.db.session.create_async_engine", return_value=MagicMock()) as mock_create,
-            patch("modulo.db.session.register_rls_reset_hook") as mock_hook,
+            patch("farna.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("farna.db.session.create_async_engine", return_value=MagicMock()) as mock_create,
+            patch("farna.db.session.register_rls_reset_hook") as mock_hook,
         ):
             engine = session_mod._build_engine()
 
@@ -405,9 +405,9 @@ class TestRlsResetHookRegistration:
     def test_skipped_for_non_postgres(self, session_mod: Any, modulo_db: str, url: str) -> None:
         """The RLS reset hook is a Postgres pool concern — never registered elsewhere."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings(modulo_db, url)),
-            patch("modulo.db.session.create_async_engine"),
-            patch("modulo.db.session.register_rls_reset_hook") as mock_hook,
+            patch("farna.db.session.get_settings", return_value=_settings(modulo_db, url)),
+            patch("farna.db.session.create_async_engine"),
+            patch("farna.db.session.register_rls_reset_hook") as mock_hook,
         ):
             session_mod._build_engine()
 
@@ -424,8 +424,8 @@ class TestRegisterGlobalHooksOnce:
         """append-only guard + tenant filter are registered together the first time."""
         session_mod._GLOBAL_HOOKS_REGISTERED = False
         with (
-            patch("modulo.db.session.register_append_only_guard") as guard,
-            patch("modulo.db.session.register_tenant_filter") as tenant,
+            patch("farna.db.session.register_append_only_guard") as guard,
+            patch("farna.db.session.register_tenant_filter") as tenant,
         ):
             session_mod._register_global_hooks_once()
 
@@ -437,8 +437,8 @@ class TestRegisterGlobalHooksOnce:
         """Registering twice (e.g. a second engine build) must not re-fire the listeners."""
         session_mod._GLOBAL_HOOKS_REGISTERED = False
         with (
-            patch("modulo.db.session.register_append_only_guard") as guard,
-            patch("modulo.db.session.register_tenant_filter") as tenant,
+            patch("farna.db.session.register_append_only_guard") as guard,
+            patch("farna.db.session.register_tenant_filter") as tenant,
         ):
             session_mod._register_global_hooks_once()
             session_mod._register_global_hooks_once()
@@ -450,8 +450,8 @@ class TestRegisterGlobalHooksOnce:
         """Resetting the flag re-arms registration (used by tests/reloads)."""
         session_mod._GLOBAL_HOOKS_REGISTERED = False
         with (
-            patch("modulo.db.session.register_append_only_guard") as guard,
-            patch("modulo.db.session.register_tenant_filter") as tenant,
+            patch("farna.db.session.register_append_only_guard") as guard,
+            patch("farna.db.session.register_tenant_filter") as tenant,
         ):
             session_mod._register_global_hooks_once()
             session_mod._GLOBAL_HOOKS_REGISTERED = False
@@ -489,9 +489,9 @@ class TestRegisterGlobalHooksOnce:
     def test_build_engine_invokes_global_hook_registration(self, session_mod: Any) -> None:
         """Every engine build ensures the process-global hooks are registered."""
         with (
-            patch("modulo.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
-            patch("modulo.db.session.create_async_engine"),
-            patch("modulo.db.session.register_rls_reset_hook"),
+            patch("farna.db.session.get_settings", return_value=_settings("sqlite", SQLITE_URL)),
+            patch("farna.db.session.create_async_engine"),
+            patch("farna.db.session.register_rls_reset_hook"),
             patch.object(session_mod, "_register_global_hooks_once") as mock_hooks,
         ):
             session_mod._build_engine()

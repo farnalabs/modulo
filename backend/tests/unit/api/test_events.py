@@ -13,16 +13,16 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette import status
 
-from modulo.api.main import app
-from modulo.api.routes.events import (
+from farna.api.main import app
+from farna.api.routes.events import (
     _active_connections,
     _test_reset_connections,
     _track_connection,
     _untrack_connection,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.events.event_bus import EventBus, get_event_bus
-from modulo.settings import Settings, get_settings
+from farna.auth.jwt import TenantPrincipal
+from farna.core.events.event_bus import EventBus, get_event_bus
+from farna.settings import Settings, get_settings
 
 
 def _make_settings() -> Settings:
@@ -49,7 +49,7 @@ def _make_principal(
 
 @pytest.fixture(autouse=True)
 def _reset_singleton():
-    import modulo.core.events.event_bus as eb
+    import farna.core.events.event_bus as eb
 
     eb._event_bus = None
     yield
@@ -288,7 +288,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_no_org_returns_403(self):
         """A principal with no organisation_id should get 403."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         principal = TenantPrincipal(
             username="noorg",
@@ -312,7 +312,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_org_limit_rejects_and_unsubscribes(self):
         """When _track_connection raises 429, the queue is unsubscribed from the bus."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         bus = get_event_bus()
         principal = _make_principal()
@@ -337,7 +337,7 @@ class TestSSERoute:
         """A valid request returns a StreamingResponse with correct headers."""
         from fastapi.responses import StreamingResponse
 
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         principal = _make_principal()
         mock_settings = _make_settings()
@@ -359,7 +359,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_pump_heartbeat_on_timeout(self):
         """The _pump generator sends heartbeat on timeout (zombie detection)."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         principal = _make_principal()
         mock_settings = _make_settings()
@@ -386,7 +386,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_pump_event_delivery(self):
         """The _pump generator delivers events from the bus."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         bus = get_event_bus()
         principal = _make_principal()
@@ -427,7 +427,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_pump_graceful_disconnect_cleanup(self):
         """On disconnect, the pump unsubscribes the endpoint's queue from the bus."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         bus = get_event_bus()
         principal = _make_principal()
@@ -456,7 +456,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_pump_exception_logs_and_cleans_up(self):
         """An exception in the event loop logs and cleans up."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         bus = get_event_bus()
         principal = _make_principal()
@@ -495,7 +495,7 @@ class TestSSERoute:
     @pytest.mark.asyncio
     async def test_user_limit_rejects_and_unsubscribes(self):
         """When per-user limit is hit, the queue is unsubscribed from the bus."""
-        from modulo.api.routes.events import sse_event_stream
+        from farna.api.routes.events import sse_event_stream
 
         bus = get_event_bus()
         principal = _make_principal()
@@ -524,7 +524,7 @@ class TestSSERoute:
 
 async def test_backfill_loader_reads_recent_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     """_make_backfill_loader() re-reads recent notifications and shapes events."""
-    from modulo.api.routes import events as ev
+    from farna.api.routes import events as ev
 
     org = uuid.uuid4()
     row = MagicMock()
@@ -558,7 +558,7 @@ async def test_backfill_loader_reads_recent_notifications(monkeypatch: pytest.Mo
 
 
 def test_org_has_clients_reflects_tracked_connections() -> None:
-    from modulo.api.routes import events as ev
+    from farna.api.routes import events as ev
 
     assert ev._org_has_clients("org-none") is False
     ev._active_connections["org-has"] = {asyncio.Queue()}
@@ -567,7 +567,7 @@ def test_org_has_clients_reflects_tracked_connections() -> None:
 
 async def test_test_reset_connections_schedules_relay_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     """In a running loop, the test reset schedules relay teardown."""
-    from modulo.api.routes import events as ev
+    from farna.api.routes import events as ev
 
     reset = AsyncMock()
     monkeypatch.setattr(ev.relay_mod, "reset_relay_for_tests", reset)
@@ -587,7 +587,7 @@ async def test_test_reset_connections_schedules_relay_reset(monkeypatch: pytest.
 
 async def test_ensure_relay_returns_configured_relay(monkeypatch: pytest.MonkeyPatch) -> None:
     """_ensure_relay() configures the relay when the bus has a Redis broker."""
-    from modulo.api.routes import events as ev
+    from farna.api.routes import events as ev
 
     bus = MagicMock()
     bus.redis_broker = MagicMock()
@@ -604,7 +604,7 @@ async def test_ensure_relay_returns_configured_relay(monkeypatch: pytest.MonkeyP
 
 async def _run_sse_with_relay(monkeypatch: pytest.MonkeyPatch, fake_relay: MagicMock) -> object:
     """Invoke the SSE route with _ensure_relay stubbed to *fake_relay*."""
-    from modulo.api.routes import events as ev
+    from farna.api.routes import events as ev
 
     monkeypatch.setattr(ev, "_ensure_relay", AsyncMock(return_value=fake_relay))
     principal = _make_principal()

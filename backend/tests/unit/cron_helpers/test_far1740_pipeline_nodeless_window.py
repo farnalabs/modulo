@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import sqlalchemy as sa
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL
 
 
 class TestPipelineNodelessWindowMinutes:
@@ -346,7 +346,7 @@ class TestReconcileOneRowTailGuard:
         assert summary["skipped"] == 0
 
     def test_orm_nodeless_predicate_still_compiles(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         monkeypatch.setattr(ch, "get_settings", lambda: MagicMock())
         compiled = sa.select(Run.id).where(ch._nodeless_zombie_predicate(60)).compile()

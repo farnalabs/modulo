@@ -15,8 +15,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from tests.unit.api.mock_session import configure_mock_session
 
-# Logger of ``modulo.api.routes.community_library`` (the teardown guard's log key).
-_COMMUNITY_LIBRARY_LOGGER = "modulo.api.routes.community_library"
+# Logger of ``farna.api.routes.community_library`` (the teardown guard's log key).
+_COMMUNITY_LIBRARY_LOGGER = "farna.api.routes.community_library"
 
 
 class TestListCommunityExceptionNarrowing:
@@ -24,15 +24,15 @@ class TestListCommunityExceptionNarrowing:
     unexpected errors propagate as 500."""
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock)
+    @patch("farna.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock)
     @patch(
-        "modulo.api.routes.community_library.list_community_entries",
+        "farna.api.routes.community_library.list_community_entries",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError("db down"),
     )
     async def test_db_error_degrades_to_empty(self, mock_entries: AsyncMock, mock_manifest: AsyncMock) -> None:
         """SQLAlchemyError from list_community_entries -> returns empty list (fail-open)."""
-        from modulo.api.routes.community_library import list_community
+        from farna.api.routes.community_library import list_community
 
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
@@ -47,13 +47,13 @@ class TestListCommunityExceptionNarrowing:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library.list_community_entries",
+        "farna.api.routes.community_library.list_community_entries",
         new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected"),
     )
     async def test_unexpected_error_propagates(self, mock_entries: AsyncMock) -> None:
         """RuntimeError from list_community_entries -> propagates (fail-closed)."""
-        from modulo.api.routes.community_library import list_community
+        from farna.api.routes.community_library import list_community
 
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
@@ -68,17 +68,17 @@ class TestListCommunityLifecycleMapVisibility:
     """Internal callers keep lifecycle-map entries the ordinary filter drops."""
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock)
-    @patch("modulo.api.routes.community_library.list_community_entries", new_callable=AsyncMock)
-    @patch("modulo.api.routes.community_library.get_settings")
+    @patch("farna.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock)
+    @patch("farna.api.routes.community_library.list_community_entries", new_callable=AsyncMock)
+    @patch("farna.api.routes.community_library.get_settings")
     async def test_internal_operator_sees_lifecycle_map_entries(
         self,
         mock_settings: MagicMock,
         mock_entries: AsyncMock,
         mock_manifest: AsyncMock,
     ) -> None:
-        from modulo.api.routes.community_library import list_community
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.api.routes.community_library import list_community
+        from farna.auth.jwt import TenantPrincipal
 
         mock_settings.return_value = MagicMock(modulo_dev_mode=True)
         mock_entries.return_value = [
@@ -105,8 +105,8 @@ class TestFetchEntryContentExceptionNarrowing:
     unexpected errors propagate."""
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_settings")
-    @patch("modulo.api.routes.community_library.LibraryClient")
+    @patch("farna.api.routes.community_library.get_settings")
+    @patch("farna.api.routes.community_library.LibraryClient")
     async def test_value_error_returns_none(self, mock_client_cls: MagicMock, mock_settings: MagicMock) -> None:
         """ValueError from blob parsing -> returns None (fail-open)."""
         mock_settings.return_value = MagicMock(
@@ -119,14 +119,14 @@ class TestFetchEntryContentExceptionNarrowing:
         mock_client.close = AsyncMock()
         mock_client_cls.return_value = mock_client
 
-        from modulo.api.routes.community_library import _fetch_entry_content
+        from farna.api.routes.community_library import _fetch_entry_content
 
         result = await _fetch_entry_content("abc123")
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_settings")
-    @patch("modulo.api.routes.community_library.LibraryClient")
+    @patch("farna.api.routes.community_library.get_settings")
+    @patch("farna.api.routes.community_library.LibraryClient")
     async def test_unexpected_error_propagates(self, mock_client_cls: MagicMock, mock_settings: MagicMock) -> None:
         """RuntimeError from blob fetch -> propagates (fail-closed)."""
         mock_settings.return_value = MagicMock(
@@ -139,14 +139,14 @@ class TestFetchEntryContentExceptionNarrowing:
         mock_client.close = AsyncMock()
         mock_client_cls.return_value = mock_client
 
-        from modulo.api.routes.community_library import _fetch_entry_content
+        from farna.api.routes.community_library import _fetch_entry_content
 
         with pytest.raises(RuntimeError, match="unexpected"):
             await _fetch_entry_content("abc123")
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_settings")
-    @patch("modulo.api.routes.community_library.LibraryClient")
+    @patch("farna.api.routes.community_library.get_settings")
+    @patch("farna.api.routes.community_library.LibraryClient")
     async def test_raising_close_logged_and_swallowed(
         self, mock_client_cls: MagicMock, mock_settings: MagicMock, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -168,7 +168,7 @@ class TestFetchEntryContentExceptionNarrowing:
         mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
         mock_client_cls.return_value = mock_client
 
-        from modulo.api.routes.community_library import _fetch_entry_content
+        from farna.api.routes.community_library import _fetch_entry_content
 
         with caplog.at_level(logging.ERROR, logger=_COMMUNITY_LIBRARY_LOGGER):
             result = await _fetch_entry_content("abc123")
@@ -188,8 +188,8 @@ class TestFetchEntryContentExceptionNarrowing:
         assert "community_library.client_close_failed" in caplog.messages
 
     @pytest.mark.asyncio
-    @patch("modulo.api.routes.community_library.get_settings")
-    @patch("modulo.api.routes.community_library.LibraryClient")
+    @patch("farna.api.routes.community_library.get_settings")
+    @patch("farna.api.routes.community_library.LibraryClient")
     async def test_raising_close_does_not_displace_body_exception(
         self, mock_client_cls: MagicMock, mock_settings: MagicMock
     ) -> None:
@@ -209,7 +209,7 @@ class TestFetchEntryContentExceptionNarrowing:
         mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
         mock_client_cls.return_value = mock_client
 
-        from modulo.api.routes.community_library import _fetch_entry_content
+        from farna.api.routes.community_library import _fetch_entry_content
 
         with pytest.raises(RuntimeError, match="blob boom"):
             await _fetch_entry_content("abc123")
@@ -221,7 +221,7 @@ class TestGetEntryExceptionNarrowing:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library.get_community_entry",
+        "farna.api.routes.community_library.get_community_entry",
         new_callable=AsyncMock,
         side_effect=ValueError("bad manifest"),
     )
@@ -229,7 +229,7 @@ class TestGetEntryExceptionNarrowing:
         """ValueError from get_community_entry -> entry is None -> raises 404."""
         from fastapi import HTTPException
 
-        from modulo.api.routes.community_library import get_entry
+        from farna.api.routes.community_library import get_entry
 
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()
@@ -241,13 +241,13 @@ class TestGetEntryExceptionNarrowing:
 
     @pytest.mark.asyncio
     @patch(
-        "modulo.api.routes.community_library.get_community_entry",
+        "farna.api.routes.community_library.get_community_entry",
         new_callable=AsyncMock,
         side_effect=RuntimeError("unexpected"),
     )
     async def test_unexpected_error_propagates(self, mock_entry: AsyncMock) -> None:
         """RuntimeError from get_community_entry -> propagates (fail-closed)."""
-        from modulo.api.routes.community_library import get_entry
+        from farna.api.routes.community_library import get_entry
 
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         principal = MagicMock()

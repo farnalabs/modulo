@@ -21,13 +21,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import get_plan_context, get_settings
-from modulo.api.main import app
-from modulo.api.routes.system_maps import get_repo
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
-from modulo.db.repositories.system_map import SystemMapRepository
+from farna.api.dependencies import get_plan_context, get_settings
+from farna.api.main import app
+from farna.api.routes.system_maps import get_repo
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
+from farna.db.repositories.system_map import SystemMapRepository
 from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):

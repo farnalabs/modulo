@@ -6,8 +6,8 @@ eval definitions with eval_type='guardrail'.
 
 import pytest
 
-from modulo.core.eval import finding_resolver as eval_finding_resolver
-from modulo.core.guardrails import finding_resolver as guardrail_finding_resolver
+from farna.core.eval import finding_resolver as eval_finding_resolver
+from farna.core.guardrails import finding_resolver as guardrail_finding_resolver
 
 EXPECTED_EXPORTS = [
     "RESOLUTION_VALUES",

@@ -16,11 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -106,10 +106,10 @@ DOWNLOAD_URL = "/api/v1/registry/primitives/modulo/prd-input-schema/download"
 class TestVerifyWithPem:
     def test_verify_with_pem_returns_trust_anchor(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True) as mock_pem_verify,
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True) as mock_ta,
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=True) as mock_pem_verify,
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=True) as mock_ta,
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_pem={'ab' * 32}")
 
@@ -122,10 +122,10 @@ class TestVerifyWithPem:
 
     def test_verify_with_pem_and_failed_verify(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="community"),
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=False) as mock_pem_verify,
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=False) as mock_ta,
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="community"),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=False) as mock_pem_verify,
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=False) as mock_ta,
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_pem={'ab' * 32}")
 
@@ -158,13 +158,13 @@ class TestV2Publish:
         entry_2 = _make_entry(slug="testauthor/test-primitive", description="overwritten")
 
         with (
-            patch("modulo.api.routes.registry.crypto_pem_verify", return_value=True),
-            patch("modulo.api.routes.registry.verify_trust_anchor", return_value=True),
+            patch("farna.api.routes.registry.crypto_pem_verify", return_value=True),
+            patch("farna.api.routes.registry.verify_trust_anchor", return_value=True),
             patch(
-                "modulo.core.registry.crypto.generate_keypair",
+                "farna.core.registry.crypto.generate_keypair",
                 return_value={"private_key": "aa" * 32, "public_key": "bb" * 32, "fingerprint": "cc" * 16},
             ),
-            patch("modulo.api.routes.registry.publish_primitive", side_effect=[entry_1, entry_2]) as mock_publish,
+            patch("farna.api.routes.registry.publish_primitive", side_effect=[entry_1, entry_2]) as mock_publish,
         ):
             resp1 = client.post(PUBLISH_URL, json=self.PUBLISH_BODY)
             assert resp1.status_code == 201
@@ -177,7 +177,7 @@ class TestV2Publish:
         assert mock_publish.call_count == 2
 
     def test_publish_signature_failure_returns_403(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.crypto_pem_verify", return_value=False):
+        with patch("farna.api.routes.registry.crypto_pem_verify", return_value=False):
             resp = client.post(PUBLISH_URL, json=self.PUBLISH_BODY)
 
         assert resp.status_code == 403
@@ -188,11 +188,11 @@ class TestDownload:
     def test_bundle_integrity_mismatch_returns_integrity_ok_false(self, client: TestClient) -> None:
         entry = _make_entry(publisher_status="community")
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=False),
-            patch("modulo.api.routes.registry.set_rls_org"),
-            patch("modulo.api.routes.registry.create_library_primitive"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=False),
+            patch("farna.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.create_library_primitive"),
         ):
             resp = client.post(DOWNLOAD_URL)
 
@@ -206,12 +206,12 @@ class TestDownloadErrors:
     def test_download_programming_error_returns_501(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("farna.api.routes.registry.set_rls_org"),
             patch(
-                "modulo.api.routes.registry.create_library_primitive",
+                "farna.api.routes.registry.create_library_primitive",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
         ):
@@ -223,12 +223,12 @@ class TestDownloadErrors:
     def test_download_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         entry = _make_entry()
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=entry),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.verify_bundle_integrity", return_value=True),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=entry),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.verify_bundle_integrity", return_value=True),
+            patch("farna.api.routes.registry.set_rls_org"),
             patch(
-                "modulo.api.routes.registry.create_library_primitive",
+                "farna.api.routes.registry.create_library_primitive",
                 side_effect=SQLAlchemyError("connection lost"),
             ),
         ):
@@ -240,14 +240,14 @@ class TestDownloadErrors:
 class TestVerifyErrors:
     def test_verify_hex_programming_error_returns_501(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.crypto_verify_signature", return_value=True),
             patch(
-                "modulo.api.routes.registry.db_get_publisher_by_key",
+                "farna.api.routes.registry.db_get_publisher_by_key",
                 side_effect=ProgrammingError("stmt", {}, "table not found"),
             ),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
 
@@ -256,14 +256,14 @@ class TestVerifyErrors:
 
     def test_verify_hex_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.crypto_verify_signature", return_value=True),
             patch(
-                "modulo.api.routes.registry.db_get_publisher_by_key",
+                "farna.api.routes.registry.db_get_publisher_by_key",
                 side_effect=SQLAlchemyError("connection lost"),
             ),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
 

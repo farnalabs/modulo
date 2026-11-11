@@ -19,13 +19,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
-from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.models.webhook import WebhookPayload
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context, get_system_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
+from farna.db.models.trigger_event import TriggerEvent
+from farna.db.models.webhook import WebhookPayload
+from farna.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
@@ -54,7 +54,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:
@@ -143,7 +143,7 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
     mock_snapshot = MagicMock()
     mock_snapshot.id = uuid.uuid4()
     with patch(
-        "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+        "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
         new_callable=AsyncMock,
         return_value=mock_snapshot,
     ):
@@ -183,10 +183,10 @@ def test_replay_webhook_returns_202(client: TestClient) -> None:
     event_id = uuid.uuid4()
     run_mock = _make_mock_run()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run"),
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks.dispatch_run"),
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         m.return_value = (run_mock, None, {})
         resp = client.post(
@@ -205,10 +205,10 @@ def test_replay_webhook_runner_role_allowed(client: TestClient) -> None:
     event_id = uuid.uuid4()
     run_mock = _make_mock_run()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run"),
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks.dispatch_run"),
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         m.return_value = (run_mock, None, {})
         resp = client.post(
@@ -232,13 +232,13 @@ def test_replay_webhook_viewer_denied(client: TestClient) -> None:
 
 
 def test_replay_webhook_not_found_returns_404(client: TestClient) -> None:
-    from modulo.core.trigger_engine import ReplayNotFoundError
+    from farna.core.trigger_engine import ReplayNotFoundError
 
     event_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         m.side_effect = ReplayNotFoundError(event_id)
         resp = client.post(
@@ -282,10 +282,10 @@ def test_replay_webhook_unauthenticated_with_valid_hmac_returns_202(client: Test
         event_id = uuid.uuid4()
         run_mock = _make_mock_run()
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.dispatch_run"),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.dispatch_run"),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.return_value = (run_mock, None, {})
             resp = client.post(
@@ -335,10 +335,10 @@ def _replay_unauthenticated(client: TestClient, headers: dict[str, str]) -> tupl
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.dispatch_run"),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.dispatch_run"),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.return_value = (_make_mock_run(), None, {})
             resp = client.post(
@@ -422,10 +422,10 @@ def test_replay_webhook_bootstrap_reads_trigger_via_system_session(client: TestC
     run_mock = _make_mock_run()
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.dispatch_run"),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.dispatch_run"),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.return_value = (run_mock, None, {})
             resp = client.post(
@@ -526,9 +526,9 @@ def test_replay_other_org_event_unauthenticated_returns_404_no_disclosure(client
     event_id = uuid.uuid4()
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{event_id}",
@@ -547,7 +547,7 @@ def test_replay_other_org_event_unauthenticated_returns_404_no_disclosure(client
 def test_replay_webhook_degraded_system_engine_returns_503(client: TestClient) -> None:
     """Replay shares receive_webhook's degraded-system-engine contract: 503
     with the distinct bootstrap-degraded failure, never a silent 404."""
-    with patch("modulo.api.routes.webhooks.system_engine_is_fallback", return_value=True):
+    with patch("farna.api.routes.webhooks.system_engine_is_fallback", return_value=True):
         resp = client.post(
             f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
             headers=_auth_headers("admin"),
@@ -563,16 +563,16 @@ def test_replay_webhook_trigger_busy_records_delivery_then_acks(client: TestClie
     and the main transaction rolls back) — the route must RECORD the busy
     replay (a ``concurrency_limit_reached`` event carrying the original
     event's payload hash) and only then ack 202, never a false ack or 500."""
-    from modulo.api.trigger_busy import BUSY_ACK_DETAIL
-    from modulo.core.trigger_engine import TriggerBusyError
+    from farna.api.trigger_busy import BUSY_ACK_DETAIL
+    from farna.core.trigger_engine import TriggerBusyError
 
     event_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
-        patch("modulo.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("farna.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
         resp = client.post(
@@ -607,7 +607,7 @@ def test_replay_webhook_invalid_config_json_returns_400(client: TestClient) -> N
 
     app.dependency_overrides[get_system_db_session] = override_system
     try:
-        with patch("modulo.api.routes.webhooks.set_rls_org"):
+        with patch("farna.api.routes.webhooks.set_rls_org"):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
                 headers={"X-Modulo-Timestamp": str(int(time.time()))},
@@ -632,7 +632,7 @@ def test_replay_webhook_authenticated_invalid_config_json_returns_400(client: Te
 
     app.dependency_overrides[get_system_db_session] = override_system
     try:
-        with patch("modulo.api.routes.webhooks.set_rls_org"):
+        with patch("farna.api.routes.webhooks.set_rls_org"):
             resp = client.post(
                 f"/api/v1/triggers/{uuid.uuid4()}/webhook/replay/{uuid.uuid4()}",
                 headers=_auth_headers("admin"),
@@ -654,7 +654,7 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
     event is committed — the 400 is reject-and-retry, not an invisible
     rollback. The fixed detail string does NOT leak the trigger UUID or config.
     """
-    from modulo.core.trigger_engine import EventNotAcceptedError
+    from farna.core.trigger_engine import EventNotAcceptedError
 
     event_id = uuid.uuid4()
     session = _make_mock_session()
@@ -666,9 +666,9 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
         ):
             # Simulate the real engine: write the audit event BEFORE raising,
             # just as _enforce_event_acceptance does. The in-transaction catch
@@ -734,7 +734,7 @@ async def test_replay_busy_path_without_org_returns_none() -> None:
     """Defensive guard: without a resolved org the busy re-record has nothing to
     write against, so ``_replay_busy_path`` returns None and the route refuses
     loudly rather than sending a false 2xx queued ack."""
-    from modulo.api.routes.webhooks import _replay_busy_path
+    from farna.api.routes.webhooks import _replay_busy_path
 
     result = await _replay_busy_path(
         trigger_id=_TRIGGER_ID,
@@ -750,18 +750,18 @@ def test_replay_webhook_trigger_busy_unresolvable_returns_429(client: TestClient
     """Defensive replay mirror of the receive path: when the busy re-record
     yields no ack (org unresolvable), refuse with 429 (+ Retry-After) rather
     than emit a false 2xx queued ack."""
-    from modulo.core.trigger_engine import TriggerBusyError
+    from farna.core.trigger_engine import TriggerBusyError
 
     event_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
         patch(
-            "modulo.api.routes.webhooks._replay_busy_path",
+            "farna.api.routes.webhooks._replay_busy_path",
             new_callable=AsyncMock,
             return_value=None,
         ),
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
         resp = client.post(
@@ -810,9 +810,9 @@ def test_replay_webhook_paused_org_missing_row_returns_202_without_event(client:
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
@@ -866,9 +866,9 @@ def test_replay_webhook_paused_org_missing_event_returns_404(client: TestClient)
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
+            patch("farna.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.set_rls_org"),
         ):
             resp = client.post(
                 f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
@@ -895,11 +895,11 @@ def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     event_id = uuid.uuid4()
     run_mock = _make_mock_run()
     with (
-        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run"),
-        patch("modulo.api.routes.webhooks.set_rls_org"),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
-        caplog.at_level(_logging.WARNING, logger="modulo.core.trigger_secrets"),
+        patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.webhooks.dispatch_run"),
+        patch("farna.api.routes.webhooks.set_rls_org"),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        caplog.at_level(_logging.WARNING, logger="farna.core.trigger_secrets"),
     ):
         m.return_value = (run_mock, None, {})
         resp = client.post(
@@ -920,7 +920,7 @@ def test_replay_webhook_undecryptable_token_secret_fails_closed(
     hmac_secret that CANNOT be decrypted under the configured key is refused
     (500) — the ciphertext is NEVER used as the HMAC key. The REAL decode
     helper raises ``DecryptionError``; the settings patch targets
-    ``modulo.api.routes.webhooks.get_settings``, the name the route binds."""
+    ``farna.api.routes.webhooks.get_settings``, the name the route binds."""
     import base64
     import logging as _logging
 
@@ -941,11 +941,11 @@ def test_replay_webhook_undecryptable_token_secret_fails_closed(
     fake_settings.fernet_key = valid_key
     try:
         with (
-            patch("modulo.api.routes.webhooks.get_settings", return_value=fake_settings),
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
-            caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"),
+            patch("farna.api.routes.webhooks.get_settings", return_value=fake_settings),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            caplog.at_level(_logging.ERROR, logger="farna.api.routes.webhooks"),
         ):
             resp = client.post(
                 f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
@@ -973,7 +973,7 @@ def test_replay_webhook_concurrent_limit_refusal_persists_event_after_unwind(cli
     a fake fresh session and asserts the event row it adds is a
     ``concurrency_limit_reached`` TriggerEvent (i.e. it survived the unwind),
     not merely that a helper was called."""
-    from modulo.core.trigger_engine import ConcurrentRunLimitError
+    from farna.core.trigger_engine import ConcurrentRunLimitError
 
     event_id = uuid.uuid4()
     original_hash = "d" * 64
@@ -1004,13 +1004,13 @@ def test_replay_webhook_concurrent_limit_refusal_persists_event_after_unwind(cli
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
-            patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
-            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock) as rls_mock,
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+            patch("farna.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.trigger_busy.get_settings", return_value=_make_settings()),
+            patch("farna.api.trigger_busy.set_rls_org", new_callable=AsyncMock) as rls_mock,
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.side_effect = ConcurrentRunLimitError(_TRIGGER_ID, 3)
             resp = client.post(
@@ -1085,10 +1085,10 @@ async def test_record_rejected_delivery_rejects_invalid_payload_source(
     the recorder WOULD be awaited for both shapes and this test fails on
     ``assert_not_awaited``.
     """
-    from modulo.api.routes.webhooks import _record_rejected_delivery
+    from farna.api.routes.webhooks import _record_rejected_delivery
 
     with patch(
-        "modulo.api.routes.webhooks._record_refused_delivery",
+        "farna.api.routes.webhooks._record_refused_delivery",
         new_callable=AsyncMock,
     ) as record:
         result = await _record_rejected_delivery(
@@ -1117,7 +1117,7 @@ def test_replay_webhook_rate_limited_persists_event_and_returns_429(client: Test
     duplicate payload row. This test runs the REAL post-unwind recorder against a
     fake fresh session and asserts the event row it adds survives the unwind —
     not merely that a helper was called."""
-    from modulo.core.trigger_engine import PipelineRateLimitError
+    from farna.core.trigger_engine import PipelineRateLimitError
 
     event_id = uuid.uuid4()
     original_hash = "e" * 64
@@ -1145,13 +1145,13 @@ def test_replay_webhook_rate_limited_persists_event_and_returns_429(client: Test
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
-            patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
-            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+            patch("farna.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.trigger_busy.get_settings", return_value=_make_settings()),
+            patch("farna.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.side_effect = PipelineRateLimitError(uuid.uuid4(), "k", 3, 60)
             resp = client.post(
@@ -1202,7 +1202,7 @@ def test_replay_webhook_required_refs_missing_persists_event_after_unwind(client
     storing no duplicate payload row. Before the fix the unwind discarded it and
     the 422 was silent. This test runs the REAL post-unwind recorder against a
     fake fresh session and asserts the persisted event row."""
-    from modulo.core.trigger_engine import WorkItemRefsRequiredHTTPError
+    from farna.core.trigger_engine import WorkItemRefsRequiredHTTPError
 
     event_id = uuid.uuid4()
     pipeline_id = uuid.uuid4()
@@ -1231,13 +1231,13 @@ def test_replay_webhook_required_refs_missing_persists_event_after_unwind(client
     app.dependency_overrides[get_db_session] = override_session
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-            patch("modulo.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
-            patch("modulo.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
-            patch("modulo.api.trigger_busy.get_settings", return_value=_make_settings()),
-            patch("modulo.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("farna.api.trigger_busy.async_sessionmaker", return_value=_fresh_factory),
+            patch("farna.api.trigger_busy.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.trigger_busy.get_settings", return_value=_make_settings()),
+            patch("farna.api.trigger_busy.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
         ):
             m.side_effect = WorkItemRefsRequiredHTTPError(pipeline_id)
             resp = client.post(
@@ -1281,11 +1281,11 @@ def test_replay_webhook_snapshot_creation_failure_returns_500(client: TestClient
     """A None snapshot is a hard 500: the replay cannot proceed without one."""
     with (
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=None,
         ),
-        patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{uuid.uuid4()}",
@@ -1322,10 +1322,10 @@ def test_replay_webhook_inactive_trigger_skips_pause_precheck() -> None:
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     try:
         with (
-            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as engine,
-            patch("modulo.api.routes.webhooks.dispatch_run"),
-            patch("modulo.api.routes.webhooks.set_rls_org"),
-            patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock) as resume,
+            patch("farna.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as engine,
+            patch("farna.api.routes.webhooks.dispatch_run"),
+            patch("farna.api.routes.webhooks.set_rls_org"),
+            patch("farna.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock) as resume,
         ):
             engine.return_value = (_make_mock_run(), None, {})
             resp = TestClient(app).post(

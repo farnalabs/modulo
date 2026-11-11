@@ -62,7 +62,7 @@ pytestmark = [
 # per-item, so the suite always collects at least one (skipped) item and exits 0.
 _import_error: Exception | None = None
 try:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 except RuntimeError as exc:

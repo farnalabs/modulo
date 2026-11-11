@@ -61,7 +61,7 @@ class _RecordingSink:
         self.orgs: list[str | None] = []
 
     async def __call__(self, record: logging.LogRecord) -> None:
-        from modulo.core.logging_config import org_id_var
+        from farna.core.logging_config import org_id_var
 
         self.records.append(record)
         self.orgs.append(org_id_var.get())
@@ -74,7 +74,7 @@ class _RecordingSink:
 @pytest.fixture(autouse=True)
 def _clean_rate_limit_state() -> Any:
     """The handler forwards at most one record per org per 5s window."""
-    from modulo.core.logging_config import ErrorTrackingLogHandler
+    from farna.core.logging_config import ErrorTrackingLogHandler
 
     ErrorTrackingLogHandler._last_write_time.clear()
     yield
@@ -89,7 +89,7 @@ def sink() -> Any:
 @pytest.fixture
 def capture(sink: _RecordingSink) -> Any:
     """Attach a REAL ``ErrorTrackingLogHandler`` (with a recording sink) to the root logger."""
-    from modulo.core.logging_config import ErrorTrackingLogHandler
+    from farna.core.logging_config import ErrorTrackingLogHandler
 
     handler = ErrorTrackingLogHandler()
     root = logging.getLogger()
@@ -111,11 +111,11 @@ def app() -> FastAPI:
     outside. That ordering is what makes the unhandled-exception test a real
     test of the cross-context carrier.
     """
-    from modulo.api.middleware.catch_all import CatchAllMiddleware
-    from modulo.api.middleware.correlation_id import CorrelationIdMiddleware
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.core.logging_config import org_id_var
+    from farna.api.middleware.catch_all import CatchAllMiddleware
+    from farna.api.middleware.correlation_id import CorrelationIdMiddleware
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.core.logging_config import org_id_var
 
     seen: dict[str, Any] = {}
     app = FastAPI()
@@ -145,8 +145,8 @@ def app() -> FastAPI:
 
 def _auth_headers() -> dict[str, str]:
     """A real signed access token for the org under test (same secret the app uses)."""
-    from modulo.auth.jwt import CLIENT_KIND_BROWSER, create_access_token
-    from modulo.settings import get_settings
+    from farna.auth.jwt import CLIENT_KIND_BROWSER, create_access_token
+    from farna.settings import get_settings
 
     token = create_access_token(
         "wiring-tester",
@@ -177,7 +177,7 @@ async def test_route_error_is_forwarded_with_the_org_the_request_resolved(
     sink: _RecordingSink,
 ) -> None:
     """The wiring itself: the real dependency binds, the real handler forwards."""
-    from modulo.core.logging_config import org_id_var
+    from farna.core.logging_config import org_id_var
 
     async with _client(app) as client:
         resp = await client.get("/protected", headers=_auth_headers())
@@ -204,7 +204,7 @@ async def test_unhandled_exception_is_forwarded_and_ingest_gets_a_real_org(
     This is the unhandled-500 path — the one case where persisted evidence was
     missing entirely during FAR-1408.
     """
-    with patch("modulo.api.middleware.catch_all._ingest_unhandled_error", new_callable=AsyncMock) as ingest:
+    with patch("farna.api.middleware.catch_all._ingest_unhandled_error", new_callable=AsyncMock) as ingest:
         async with _client(app) as client:
             resp = await client.get("/crash", headers=_auth_headers())
         await _drain()
@@ -227,7 +227,7 @@ async def test_unauthenticated_request_inherits_nothing_and_the_drop_is_visible(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A prior authenticated request must not attribute this request's ERROR to it."""
-    from modulo.core.logging_config import org_id_var
+    from farna.core.logging_config import org_id_var
 
     async with _client(app) as client:
         await client.get("/protected", headers=_auth_headers())
@@ -250,9 +250,9 @@ def test_principal_without_an_org_is_returned_unchanged_and_binds_nothing() -> N
     dependency already bound on the same request — a system-admin surface
     reached after an org-scoped one keeps the earlier org for its ERRORs.
     """
-    from modulo.auth.dependencies import bind_principal_context
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.core.logging_config import org_id_var
+    from farna.auth.dependencies import bind_principal_context
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.core.logging_config import org_id_var
 
     request = SimpleNamespace(state=SimpleNamespace())
     principal = AuthenticatedPrincipal(
@@ -308,8 +308,8 @@ class TestMcpAuthSurface:
         capture: object,
         sink: _RecordingSink,
     ) -> None:
-        from modulo.api.mcp_server import McpAuthMiddleware
-        from modulo.core.logging_config import org_id_var
+        from farna.api.mcp_server import McpAuthMiddleware
+        from farna.core.logging_config import org_id_var
 
         # --- seams for the real _authenticate_api_key (API-key flavour) ---
         key = MagicMock(role="operator", id=_USER_MCP, grants=None)
@@ -359,22 +359,22 @@ class TestMcpAuthSurface:
         previous = org_id_var.get()
         try:
             with (
-                patch("modulo.api.mcp_server._get_session_factory", return_value=factory),
-                patch("modulo.api.mcp_server._session", return_value=_async_cm(auth_session)),
-                patch("modulo.api.mcp_server.validate_api_key", new=AsyncMock(return_value=key)),
+                patch("farna.api.mcp_server._get_session_factory", return_value=factory),
+                patch("farna.api.mcp_server._session", return_value=_async_cm(auth_session)),
+                patch("farna.api.mcp_server.validate_api_key", new=AsyncMock(return_value=key)),
                 patch(
-                    "modulo.api.mcp_server.resolve_role_from_membership",
+                    "farna.api.mcp_server.resolve_role_from_membership",
                     new=AsyncMock(return_value="operator"),
                 ),
                 patch(
-                    "modulo.api.mcp_server.resolve_live_role_and_kind",
+                    "farna.api.mcp_server.resolve_live_role_and_kind",
                     new=AsyncMock(return_value=("operator", "human")),
                 ),
-                patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+                patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
                 # The plan/flag gate is unrelated to org resolution (and needs a
                 # real plan store); the bind happens BEFORE it, so pass it
                 # straight through rather than faking the auth path.
-                patch("modulo.api.mcp_server._mcp_server_feature_gate", new=AsyncMock(return_value=None)),
+                patch("farna.api.mcp_server._mcp_server_feature_gate", new=AsyncMock(return_value=None)),
             ):
                 response = await McpAuthMiddleware(MagicMock()).dispatch(request, downstream)
                 await _drain()
@@ -443,8 +443,8 @@ class TestRunWebSocketSurface:
     ) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.routes.run_ws import run_websocket
-        from modulo.core.logging_config import org_id_var
+        from farna.api.routes.run_ws import run_websocket
+        from farna.core.logging_config import org_id_var
 
         ws = _FakeWebSocket()
         seen: dict[str, Any] = {}
@@ -455,10 +455,10 @@ class TestRunWebSocketSurface:
 
         with (
             patch(
-                "modulo.api.routes.run_ws._consume_run_ws_token",
+                "farna.api.routes.run_ws._consume_run_ws_token",
                 new=AsyncMock(return_value=_ws_payload()),
             ),
-            patch("modulo.api.routes.run_ws._load_run_with_rls", new=_loader),
+            patch("farna.api.routes.run_ws._load_run_with_rls", new=_loader),
         ):
             await asyncio.create_task(run_websocket(ws, uuid.uuid4(), token="tok"))
             await _drain()
@@ -484,8 +484,8 @@ class TestRunWebSocketSurface:
         """
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.routes.run_ws import run_websocket
-        from modulo.core.logging_config import org_id_var
+        from farna.api.routes.run_ws import run_websocket
+        from farna.core.logging_config import org_id_var
 
         ws = _FakeWebSocket()
         broker = MagicMock()
@@ -496,18 +496,18 @@ class TestRunWebSocketSurface:
 
         with (
             patch(
-                "modulo.api.routes.run_ws._consume_run_ws_token",
+                "farna.api.routes.run_ws._consume_run_ws_token",
                 new=AsyncMock(return_value=_ws_payload()),
             ),
             patch(
-                "modulo.api.routes.run_ws._load_run_with_rls",
+                "farna.api.routes.run_ws._load_run_with_rls",
                 new=AsyncMock(return_value=_FakeRun("running")),
             ),
             patch(
-                "modulo.api.routes.run_ws.get_registry",
+                "farna.api.routes.run_ws.get_registry",
                 return_value=MagicMock(get_or_create=MagicMock(return_value=broker)),
             ),
-            patch("modulo.api.routes.run_ws._forward_run_events", new=_forward_boom),
+            patch("farna.api.routes.run_ws._forward_run_events", new=_forward_boom),
         ):
             task = asyncio.create_task(run_websocket(ws, uuid.uuid4(), token="tok"))
             with pytest.raises(HTTPException) as excinfo:
@@ -591,13 +591,13 @@ class TestMcpAuthFailureArms:
         """
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.mcp_server import _authenticate_api_key
+        from farna.api.mcp_server import _authenticate_api_key
 
         request = _mcp_request()
         with (
-            patch("modulo.api.mcp_server._get_session_factory", return_value=_org_resolving_factory()),
-            patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
-            patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
+            patch("farna.api.mcp_server._get_session_factory", return_value=_org_resolving_factory()),
+            patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+            patch("farna.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
         ):
             handled, err = await _authenticate_api_key(request, _MCP_API_KEY)
             await _drain()
@@ -623,8 +623,8 @@ class TestMcpAuthFailureArms:
         """
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.mcp_server import _authenticate_api_key
-        from modulo.core.logging_config import org_id_var
+        from farna.api.mcp_server import _authenticate_api_key
+        from farna.core.logging_config import org_id_var
 
         request = _mcp_request()
         session = MagicMock()
@@ -634,8 +634,8 @@ class TestMcpAuthFailureArms:
         factory = MagicMock(return_value=_async_cm(session))
 
         with (
-            patch("modulo.api.mcp_server._get_session_factory", return_value=factory),
-            patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+            patch("farna.api.mcp_server._get_session_factory", return_value=factory),
+            patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
         ):
             handled, err = await _authenticate_api_key(request, _MCP_API_KEY)
             await _drain()
@@ -662,7 +662,7 @@ class TestMcpAuthFailureArms:
         from jwt import InvalidTokenError as JWTError
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.mcp_server import _authenticate_oauth_jwt
+        from farna.api.mcp_server import _authenticate_oauth_jwt
 
         request = _mcp_request()
         principal = SimpleNamespace(
@@ -673,9 +673,9 @@ class TestMcpAuthFailureArms:
             is_system_admin=False,
         )
         with (
-            patch("modulo.api.mcp_server.decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", return_value=principal),
-            patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
+            patch("farna.api.mcp_server.decode_oauth_access_token", side_effect=JWTError("not oauth")),
+            patch("farna.auth.jwt.decode_principal", return_value=principal),
+            patch("farna.api.mcp_server._session", side_effect=SQLAlchemyError("db down")),
         ):
             handled, err, claims = await _authenticate_oauth_jwt(request, "tok", MagicMock(secret_key="k"))
             await _drain()
@@ -700,10 +700,10 @@ class TestMcpAuthFailureArms:
         """
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.mcp_server import _verify_oauth_token_family
-        from modulo.core.logging_config import org_id_var
+        from farna.api.mcp_server import _verify_oauth_token_family
+        from farna.core.logging_config import org_id_var
 
-        with patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
+        with patch("farna.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
             resp = await _verify_oauth_token_family("tok", _oauth_claims())
             await _drain()
 
@@ -721,10 +721,10 @@ class TestMcpAuthFailureArms:
         """Arm 4 (``_finalize_oauth_principal``) — org is on the decoded claims."""
         from sqlalchemy.exc import SQLAlchemyError
 
-        from modulo.api.mcp_server import _finalize_oauth_principal
+        from farna.api.mcp_server import _finalize_oauth_principal
 
         request = _mcp_request()
-        with patch("modulo.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
+        with patch("farna.api.mcp_server._session", side_effect=SQLAlchemyError("db down")):
             resp = await _finalize_oauth_principal(request, "tok", _oauth_claims(), AsyncMock())
             await _drain()
 

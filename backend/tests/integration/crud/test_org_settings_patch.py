@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.db.crud.organisation import (
+from farna.db.crud.organisation import (
     OrgSettingsPatchContextAbsentError,
     OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
@@ -26,8 +26,8 @@ from modulo.db.crud.organisation import (
     get_organisation,
     update_org_settings_patch,
 )
-from modulo.db.rls import read_rls_org, set_rls_org, set_rls_user_context
-from modulo.db.soft_delete import register_soft_delete_filter
+from farna.db.rls import read_rls_org, set_rls_org, set_rls_user_context
+from farna.db.soft_delete import register_soft_delete_filter
 
 # FAR-1830: the generic patch path relies on the global soft-delete filter,
 # which is installed by an import side effect. Register it explicitly so this
@@ -415,11 +415,11 @@ async def test_config_patch_wait_bounds_against_an_inflight_deletion(
 
     from sqlalchemy.exc import DBAPIError
 
-    from modulo.db.crud.org_deletion import request_org_deletion
+    from farna.db.crud.org_deletion import request_org_deletion
 
     # Bound the wait at 300 ms so the test proves "wait, then bound" quickly.
     monkeypatch.setattr(
-        "modulo.db.crud.row_lock.get_settings",
+        "farna.db.crud.row_lock.get_settings",
         lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
     )
 
@@ -461,8 +461,8 @@ async def test_child_fk_insert_queues_behind_an_inflight_deletion(db_engine: Asy
     deliberately kept)."""
     import asyncio
 
-    from modulo.db.crud.org_deletion import request_org_deletion
-    from modulo.db.models.audit_event import AuditEvent
+    from farna.db.crud.org_deletion import request_org_deletion
+    from farna.db.models.audit_event import AuditEvent
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -499,10 +499,10 @@ async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
     is ABSENT afterwards while sibling settings survive."""
     from unittest.mock import AsyncMock
 
-    from modulo.api.routes import admin_orgs
-    from modulo.api.routes.admin_orgs import admin_remove_org_license
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.routes import admin_orgs
+    from farna.api.routes.admin_orgs import admin_remove_org_license
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -517,14 +517,14 @@ async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
     recorded: dict[str, Any] = {}
     # Capture the REAL CRUD helper before the spy replaces the module
     # attribute the shared route wrapper (QA F7) resolves through.
-    from modulo.api.routes._org_settings import update_org_settings_patch as real_patch
+    from farna.api.routes._org_settings import update_org_settings_patch as real_patch
 
     async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
         recorded["patch"] = patch
         recorded["delete_keys"] = delete_keys
         return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
 
-    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", _spy)
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", _spy)
     monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
 
     principal = AuthenticatedPrincipal(
@@ -555,10 +555,10 @@ async def test_licence_set_path_patches_only_license_key(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.api.routes import admin_orgs
-    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.routes import admin_orgs
+    from farna.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -571,7 +571,7 @@ async def test_licence_set_path_patches_only_license_key(
     await seed.close()
 
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(
             return_value=SimpleNamespace(
                 valid=True,
@@ -585,14 +585,14 @@ async def test_licence_set_path_patches_only_license_key(
     recorded: dict[str, Any] = {}
     # Capture the REAL CRUD helper before the spy replaces the module
     # attribute the shared route wrapper (QA F7) resolves through.
-    from modulo.api.routes._org_settings import update_org_settings_patch as real_patch
+    from farna.api.routes._org_settings import update_org_settings_patch as real_patch
 
     async def _spy(session_arg: Any, oid: Any, patch: Any = None, delete_keys: Any = None, **kwargs: Any) -> Any:
         recorded["patch"] = patch
         recorded["delete_keys"] = delete_keys
         return await real_patch(session_arg, oid, patch, delete_keys=delete_keys, **kwargs)
 
-    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", _spy)
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", _spy)
 
     principal = AuthenticatedPrincipal(
         username="admin",
@@ -635,7 +635,7 @@ async def _read_otel(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str, Any
 async def test_otel_postgres_round_trip_merges_and_keeps_sibling_keys(db_engine: AsyncEngine) -> None:
     """The OTel Postgres branch (now the shared machinery) merges atomically:
     a second write composes with the first, and unrelated keys survive."""
-    from modulo.db.crud.observability import update_otel_config
+    from farna.db.crud.observability import update_otel_config
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -662,7 +662,7 @@ async def test_otel_postgres_round_trip_merges_and_keeps_sibling_keys(db_engine:
 async def test_otel_soft_deleted_org_stays_writable(db_engine: AsyncEngine) -> None:
     """FAR-1025 divergence preserved: unlike settings_json, the OTel column
     remains writable during the pending-deletion window (require_live_row=False)."""
-    from modulo.db.crud.observability import update_otel_config
+    from farna.db.crud.observability import update_otel_config
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     await _soft_delete_org(db_engine, org_id)
@@ -682,7 +682,7 @@ async def test_otel_soft_deleted_org_stays_writable(db_engine: AsyncEngine) -> N
 async def test_otel_cross_org_patch_is_refused(db_engine: AsyncEngine) -> None:
     """QA F3: the OTel writer gains the same fail-closed tenant guard — a
     session bound to org B cannot write org A's OTel config."""
-    from modulo.db.crud.observability import update_otel_config
+    from farna.db.crud.observability import update_otel_config
 
     org_a = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     org_b = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
@@ -703,7 +703,7 @@ async def test_otel_cross_org_patch_is_refused(db_engine: AsyncEngine) -> None:
 async def test_otel_unbound_context_is_refused(db_engine: AsyncEngine) -> None:
     """QA F3: an unbound session is refused — the OTel path trusts no raw
     org_id without a bound RLS context."""
-    from modulo.db.crud.observability import update_otel_config
+    from farna.db.crud.observability import update_otel_config
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -722,7 +722,7 @@ async def test_otel_missing_org_keeps_the_valueerror_contract(db_engine: AsyncEn
     """A missing org still surfaces as ``ValueError("Organisation not found")``
     from the OTel writer (the CRUD ``LookupError`` is translated at the
     boundary; every existing caller and test relies on this shape)."""
-    from modulo.db.crud.observability import update_otel_config
+    from farna.db.crud.observability import update_otel_config
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     missing_id = uuid.uuid4()
@@ -750,14 +750,14 @@ async def test_otel_missing_org_keeps_the_valueerror_contract(db_engine: AsyncEn
 async def test_product_analytics_concurrent_subfield_writers_both_survive(
     db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from modulo.api.routes import product_analytics as pa_module
-    from modulo.api.routes.product_analytics import (
+    from farna.api.routes import product_analytics as pa_module
+    from farna.api.routes.product_analytics import (
         ConsentRequest,
         LevelUpdateRequest,
         post_consent,
         update_product_analytics_level,
     )
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.auth.jwt import TenantPrincipal
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -852,9 +852,9 @@ async def test_consent_decline_purges_seeded_staged_rows_end_to_end(
     pins, skip the purge. The existing unit coverage only asserts a ``Delete``
     was issued against a mocked session; this proves the delete actually lands.
     """
-    from modulo.api.routes import product_analytics as pa_module
-    from modulo.api.routes.product_analytics import ConsentRequest, post_consent
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.api.routes import product_analytics as pa_module
+    from farna.api.routes.product_analytics import ConsentRequest, post_consent
+    from farna.auth.jwt import TenantPrincipal
 
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -1119,11 +1119,11 @@ async def test_post_consent_lock_timeout_is_409_not_500(
 
     from fastapi import HTTPException
 
-    from modulo.api.routes.product_analytics import ConsentRequest, post_consent
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.api.routes.product_analytics import ConsentRequest, post_consent
+    from farna.auth.jwt import TenantPrincipal
 
     monkeypatch.setattr(
-        "modulo.db.crud.row_lock.get_settings",
+        "farna.db.crud.row_lock.get_settings",
         lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
     )
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
@@ -1153,16 +1153,16 @@ async def test_admin_set_org_license_lock_timeout_is_409_not_503(
 
     from fastapi import HTTPException
 
-    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     monkeypatch.setattr(
-        "modulo.db.crud.row_lock.get_settings",
+        "farna.db.crud.row_lock.get_settings",
         lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
     )
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(
             return_value=SimpleNamespace(
                 valid=True,
@@ -1204,14 +1204,14 @@ async def test_admin_sandbox_concurrency_lock_timeout_is_409(
 
     from fastapi import HTTPException
 
-    from modulo.api.routes.admin import (
+    from farna.api.routes.admin import (
         UpdateSandboxConcurrencyRequest,
         admin_update_sandbox_concurrency,
     )
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.auth.jwt import TenantPrincipal
 
     monkeypatch.setattr(
-        "modulo.db.crud.row_lock.get_settings",
+        "farna.db.crud.row_lock.get_settings",
         lambda: SimpleNamespace(mutation_row_lock_timeout_ms=300),
     )
     org_id = await _create_org(db_engine, f"org-{uuid.uuid4().hex[:8]}")
@@ -1243,12 +1243,12 @@ async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
     from fastapi import HTTPException
     from sqlalchemy.exc import OperationalError
 
-    from modulo.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
-    from modulo.auth.jwt import AuthenticatedPrincipal
-    from modulo.settings import get_settings
+    from farna.api.routes.admin_orgs import SetOrgLicenseRequest, admin_set_org_license
+    from farna.auth.jwt import AuthenticatedPrincipal
+    from farna.settings import get_settings
 
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(
             return_value=SimpleNamespace(
                 valid=True,
@@ -1296,7 +1296,7 @@ async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
 async def test_otel_rotation_preserves_a_concurrent_writer_other_keys(db_engine: AsyncEngine) -> None:
     from cryptography.fernet import Fernet
 
-    from modulo.core.fernet_rotation import _rotate_otel_config
+    from farna.core.fernet_rotation import _rotate_otel_config
 
     new_fernet = Fernet(Fernet.generate_key())
     # Store a genuine token encrypted under new_fernet so the rotation's

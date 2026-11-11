@@ -164,7 +164,7 @@ jobs:
           Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_SERVER_EXE }}')
           Copy-Item (Join-Path $valkeyExtract '${{ steps.pins.outputs.VALKEY_ARCHIVE_ROOT }}/bin/${{ steps.pins.outputs.VALKEY_CLI_EXE }}') (Join-Path $stage 'redis/${{ steps.pins.outputs.VALKEY_CLI_EXE }}')
           Copy-Item (Join-Path $pgBin '*') (Join-Path $stage 'pg/bin') -Recurse -Force
-          if (-not (Test-Path -LiteralPath (Join-Path $stage 'backend/src/modulo') -PathType Container)) { throw 'Backend payload contract missing: backend/src/modulo' }
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'backend/src/farna') -PathType Container)) { throw 'Backend payload contract missing: backend/src/farna' }
           if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/python/Lib/site-packages') -PathType Container)) { throw 'Backend payload contract missing: runtime/python/Lib/site-packages' }
           if (-not (Test-Path -LiteralPath (Join-Path $stage 'frontend-dist/index.html') -PathType Leaf)) { throw 'Frontend payload contract missing: frontend-dist/index.html' }
           if (-not (Test-Path -LiteralPath (Join-Path $stage 'runtime/bin/python3.exe') -PathType Leaf)) { throw 'PBS runtime contract missing: runtime/bin/python3.exe' }

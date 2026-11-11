@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.jira import JiraConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.jira import JiraConnector
 
 _INSTANCE = "test-domain.atlassian.net"
 _BASE = f"https://{_INSTANCE}/rest/api/3"

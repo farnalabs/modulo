@@ -27,31 +27,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langgraph.graph import END
 
-from modulo.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
-from modulo.core.pipeline_engine import executor as executor_mod
-from modulo.core.pipeline_engine.classify import (
+from farna.core.hitl_manager.gate_coalescing import SUPERSEDE_REASON
+from farna.core.pipeline_engine import executor as executor_mod
+from farna.core.pipeline_engine.classify import (
     REASON_HITL_REJECTED,
     REASON_HITL_SUPERSEDED,
     REASON_QUEUE_EXPIRED,
     RunClassificationValue,
     classify_run,
 )
-from modulo.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
+from farna.core.pipeline_engine.graph_cache import (
     _add_hitl_review_edge,
     _make_gate_terminate_router,
     build_graph_from_json,
 )
-from modulo.core.pipeline_engine.hitl_context import (
+from farna.core.pipeline_engine.hitl_context import (
     REJECT_DISPOSITION_PROCEED,
     REJECT_DISPOSITION_ROUTE,
     REJECT_DISPOSITION_TERMINATE,
     _resolve_consequences,
     resolve_reject_disposition,
 )
-from modulo.core.pipeline_engine.node_runner import _hitl_review_approve_reject_result
-from modulo.db.crud.run import RUN_STATUS_WHITELIST
-from modulo.db.models.run import TERMINAL_STATUSES
+from farna.core.pipeline_engine.node_runner import _hitl_review_approve_reject_result
+from farna.db.crud.run import RUN_STATUS_WHITELIST
+from farna.db.models.run import TERMINAL_STATUSES
 
 _REVIEW_ID = "hitl_review_src_tgt"
 

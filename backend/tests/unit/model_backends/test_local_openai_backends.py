@@ -11,17 +11,17 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.model_backends.jan import DEFAULT_JAN_BASE_URL, JanBackend
-from modulo.model_backends.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LLamaCppBackend
-from modulo.model_backends.lm_studio import DEFAULT_LM_STUDIO_BASE_URL, LmStudioBackend
-from modulo.model_backends.localai import DEFAULT_LOCALAI_BASE_URL, LocalAIBackend
-from modulo.model_backends.ollama import DEFAULT_OLLAMA_BASE_URL, OllamaBackend
-from modulo.model_backends.tgi import DEFAULT_TGI_BASE_URL, TgiBackend
-from modulo.model_backends.vllm import DEFAULT_VLLM_BASE_URL, VllmBackend
+from farna.model_backends.jan import DEFAULT_JAN_BASE_URL, JanBackend
+from farna.model_backends.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LLamaCppBackend
+from farna.model_backends.lm_studio import DEFAULT_LM_STUDIO_BASE_URL, LmStudioBackend
+from farna.model_backends.localai import DEFAULT_LOCALAI_BASE_URL, LocalAIBackend
+from farna.model_backends.ollama import DEFAULT_OLLAMA_BASE_URL, OllamaBackend
+from farna.model_backends.tgi import DEFAULT_TGI_BASE_URL, TgiBackend
+from farna.model_backends.vllm import DEFAULT_VLLM_BASE_URL, VllmBackend
 
 
 def _build(backend_cls, model_id, **kwargs):
-    with patch("modulo.model_backends.module.ChatOpenAI"):
+    with patch("farna.model_backends.module.ChatOpenAI"):
         return backend_cls(api_key=None, model_id=model_id, **kwargs)
 
 
@@ -130,7 +130,7 @@ class TestLocalOpenAICompatibleBackends:
         model_id,
         explicit_key,
     ):
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock:
             backend_cls(api_key=None, model_id=model_id)
         assert mock.call_args[1]["api_key"] == provider
 
@@ -143,7 +143,7 @@ class TestLocalOpenAICompatibleBackends:
         model_id,
         explicit_key,
     ):
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock:
             backend_cls(api_key="", model_id=model_id)
         assert mock.call_args[1]["api_key"] == provider
 
@@ -156,7 +156,7 @@ class TestLocalOpenAICompatibleBackends:
         model_id,
         explicit_key,
     ):
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock:
             backend_cls(api_key=explicit_key, model_id=model_id)
         assert mock.call_args[1]["api_key"] == explicit_key
 
@@ -169,6 +169,6 @@ class TestLocalOpenAICompatibleBackends:
         model_id,
         explicit_key,
     ):
-        with patch("modulo.model_backends.module.ChatOpenAI") as mock:
+        with patch("farna.model_backends.module.ChatOpenAI") as mock:
             backend_cls(api_key=None, model_id=model_id, base_url=f"{custom_base_url}/")
         assert mock.call_args[1]["base_url"] == custom_base_url

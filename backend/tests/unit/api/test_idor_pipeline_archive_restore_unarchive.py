@@ -29,16 +29,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     deny_break_glass_mint,
     get_db_session,
     get_plan_context,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -142,12 +142,12 @@ def client() -> Generator[TestClient, None, None]:
     )
 
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", mock_get_pipeline),
-        patch("modulo.api.routes.pipelines.restore_pipeline", mock_restore),
-        patch("modulo.api.routes.pipelines.archive_pipeline", mock_archive),
-        patch("modulo.api.routes.pipelines.unarchive_pipeline", mock_unarchive),
-        patch("modulo.api.routes.pipelines.set_rls_org", AsyncMock()),
-        patch("modulo.api.routes.pipelines.set_rls_user_context", AsyncMock()),
+        patch("farna.api.routes.pipelines.get_pipeline", mock_get_pipeline),
+        patch("farna.api.routes.pipelines.restore_pipeline", mock_restore),
+        patch("farna.api.routes.pipelines.archive_pipeline", mock_archive),
+        patch("farna.api.routes.pipelines.unarchive_pipeline", mock_unarchive),
+        patch("farna.api.routes.pipelines.set_rls_org", AsyncMock()),
+        patch("farna.api.routes.pipelines.set_rls_user_context", AsyncMock()),
     ):
         yield TestClient(app)
 

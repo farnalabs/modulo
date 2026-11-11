@@ -35,7 +35,7 @@ from tests.unit.db._migration_graph import assert_single_linear_head, script_dir
 _MIGRATION_0008 = "0110_schema_pipeline_runtime"
 _MIGRATION_0113 = "0113_guardrail_summary"
 _MIGRATION_UNDER_TEST = "0213_runs_rerun_trigger_type"
-_VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _SPEND_PARTIAL = "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)"
 _TARGET_PARTIAL = "trigger_type <> 'ongoing' OR (max_concurrent_runs BETWEEN 1 AND 20)"
@@ -162,7 +162,7 @@ class TestOrmCheckDriftGuard:
     def test_trigger_orm_check_includes_ongoing(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.trigger import Trigger
+        from farna.db.models.trigger import Trigger
 
         checks = [c for c in Trigger.__table_args__ if isinstance(c, CheckConstraint)]
         names = {c.name for c in checks}
@@ -173,7 +173,7 @@ class TestOrmCheckDriftGuard:
     def test_run_orm_check_includes_ongoing(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         checks = [c for c in Run.__table_args__ if isinstance(c, CheckConstraint)]
         names = {c.name for c in checks}
@@ -184,7 +184,7 @@ class TestOrmCheckDriftGuard:
     def test_run_orm_check_includes_rerun(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.run import Run
+        from farna.db.models.run import Run
 
         runs_check = next(
             c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_trigger_type"
@@ -194,7 +194,7 @@ class TestOrmCheckDriftGuard:
     def test_orm_partial_ongoing_checks_present(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.trigger import Trigger
+        from farna.db.models.trigger import Trigger
 
         checks = {c.name: c.sqltext.text for c in Trigger.__table_args__ if isinstance(c, CheckConstraint)}
         assert "ck_triggers_ongoing_spend_limit" in checks
@@ -206,7 +206,7 @@ class TestOrmCheckDriftGuard:
     def test_ongoing_status_set_matches_run_check(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models.run import ONGOING_ACTIVE_STATUSES, Run
+        from farna.db.models.run import ONGOING_ACTIVE_STATUSES, Run
 
         status_check = next(
             c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_status"

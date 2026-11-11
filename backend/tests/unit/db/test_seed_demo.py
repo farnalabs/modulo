@@ -1,4 +1,4 @@
-"""Unit tests for the FAR-535 demo auto-login seed (modulo.db.seed_demo).
+"""Unit tests for the FAR-535 demo auto-login seed (farna.db.seed_demo).
 
 Hermetic in-memory SQLite (mirrors tests/unit/db/test_seed.py — no Postgres
 required). Locks the seed contract: env-gated no-op when the demo trio is not
@@ -31,50 +31,50 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.db.seed_demo as seed_demo_module
-from modulo.api.routes.pipelines import PipelineGraphNode, PipelineGraphUpdate, _graph_response
-from modulo.auth.passwords import hash_password, verify_password
-from modulo.core.demo import DEMO_ORG_SLUG
-from modulo.core.graph_validator import GraphValidator
-from modulo.db.crud import pipeline as pipeline_crud
-from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_run_node_outputs
-from modulo.db.models.account import Account
-from modulo.db.models.agent import Agent
-from modulo.db.models.base import Base
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.evidence import Evidence
-from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.model_backend import ModelBackend
-from modulo.db.models.notification import Notification
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import RunDailyFact
-from modulo.db.models.schema import Schema, SchemaVersion
-from modulo.db.models.system_map import (
+import farna.db.seed_demo as seed_demo_module
+from farna.api.routes.pipelines import PipelineGraphNode, PipelineGraphUpdate, _graph_response
+from farna.auth.passwords import hash_password, verify_password
+from farna.core.demo import DEMO_ORG_SLUG
+from farna.core.graph_validator import GraphValidator
+from farna.db.crud import pipeline as pipeline_crud
+from farna.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_run_node_outputs
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.base import Base
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.evidence import Evidence
+from farna.db.models.feedback_record import FeedbackRecord
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.lifecycle_map import LifecycleMap
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.notification import Notification
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.models.system_map import (
     SystemMap,
     SystemMapLoopConfig,
     SystemMapNode,
     SystemMapRelationship,
     SystemMapRevision,
 )
-from modulo.db.models.team import Team
-from modulo.db.models.team_membership import TeamMembership
-from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.models.variant_group import VariantGroup
-from modulo.db.rls import set_rls_org
-from modulo.db.seed_demo import _demo_eval_result_cutoff, seed_demo, seed_demo_runtime
-from modulo.db.soft_delete import include_soft_deleted
-from modulo.settings import Settings
+from farna.db.models.team import Team
+from farna.db.models.team_membership import TeamMembership
+from farna.db.models.trigger import Trigger
+from farna.db.models.trigger_event import TriggerEvent
+from farna.db.models.variant_group import VariantGroup
+from farna.db.rls import set_rls_org
+from farna.db.seed_demo import _demo_eval_result_cutoff, seed_demo, seed_demo_runtime
+from farna.db.soft_delete import include_soft_deleted
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _DEMO_EMAIL = "demo@modulo.run"
@@ -517,7 +517,7 @@ async def test_seed_fixture_primary_key_conflict_adopts_existing_row(
     hide.install()
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
         flaky.uninstall()
@@ -544,7 +544,7 @@ async def test_seed_hitl_claim_recovers_after_conflict(
     hide.install()
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             caplog.clear()
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
@@ -601,7 +601,7 @@ async def test_seed_trigger_event_recovers_after_conflict(
     flaky = _FlakyFlush(session, TriggerEvent)
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             caplog.clear()
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
@@ -729,7 +729,7 @@ async def test_seed_logs_previous_role_on_drift_reset(
     membership.role = "operator"
     await session.commit()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         await _run_seed(session, monkeypatch, _demo_settings())
 
     reset_records = [record for record in caplog.records if record.getMessage() == "demo_seed.membership_role_reset"]
@@ -1126,7 +1126,7 @@ async def test_seed_run_spec_unknown_pipeline_is_skipped(
     extra_spec = (999, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
     monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
@@ -1148,7 +1148,7 @@ async def test_seed_run_spec_unknown_pipeline_with_existing_run_skips_silently(
     extra_spec = (1, "complete", "manual", "Nonexistent Pipeline", 100, 0.001, 0, 1)
     monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", [*seed_demo_module._DEMO_RUN_SPECS, extra_spec])
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         caplog.clear()
         summary = await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1167,9 +1167,9 @@ async def test_seed_run_node_output_failure_is_swallowed(
         calls.append("called")
         raise RuntimeError("simulated node-output write failure")
 
-    monkeypatch.setattr("modulo.db.crud.run_node_outputs.replace_run_node_outputs", _explode)
+    monkeypatch.setattr("farna.db.crud.run_node_outputs.replace_run_node_outputs", _explode)
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert calls, "seed must attempt to write node outputs"
@@ -1185,7 +1185,7 @@ async def test_seed_daily_fact_integrity_conflict_is_swallowed(
     flaky = _FlakyFlush(session, RunDailyFact)
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
         flaky.uninstall()
@@ -1203,7 +1203,7 @@ async def test_seed_daily_fact_generic_failure_is_swallowed(
     exploding = _ExplodingFlush(session, RunDailyFact)
     exploding.install()
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
         exploding.uninstall()
@@ -1226,7 +1226,7 @@ async def test_seed_cron_trigger_recovers_after_conflict(
     flaky = _FlakyFlush(session, Trigger)
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
         flaky.uninstall()
@@ -1256,7 +1256,7 @@ async def test_seed_ticket_ready_trigger_recovers_after_conflict(
     flaky = _FlakyFlush(session, Trigger)
     flaky.install()
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             caplog.clear()
             summary = await _run_seed(session, monkeypatch, _demo_settings())
     finally:
@@ -1301,7 +1301,7 @@ async def test_seed_stray_membership_warning_ignores_soft_deleted_orgs(
     doomed_org.deleted_at = datetime.now(UTC)
     await session.commit()
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         await _run_seed(session, monkeypatch, _demo_settings())
 
     warnings = [
@@ -1412,7 +1412,7 @@ def test_seed_failure_log_and_print_never_leak_bind_parameters(
 
     monkeypatch.setattr(seed_demo_module, "seed_demo_runtime", _failing_runtime)
 
-    with caplog.at_level(logging.ERROR, logger="modulo.db.seed_demo"), pytest.raises(SystemExit) as excinfo:
+    with caplog.at_level(logging.ERROR, logger="farna.db.seed_demo"), pytest.raises(SystemExit) as excinfo:
         seed_demo_module.main()
 
     assert excinfo.value.code == 1
@@ -1624,7 +1624,7 @@ async def test_seed_converges_ticket_ready_trigger(
     trigger.active = False
     await session.commit()
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
         caplog.clear()
         await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1796,7 +1796,7 @@ async def test_seed_converges_daily_fact(
     fact.completed_at = fact.completed_at - timedelta(days=7)
     await session.commit()
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
         caplog.clear()
         await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -1870,7 +1870,7 @@ async def test_seed_logs_convergence(
     pipeline.description = "stale"
     await session.commit()
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
         await _run_seed(session, monkeypatch, _demo_settings())
 
     converged_msgs = [r for r in caplog.records if "converged" in r.getMessage()]
@@ -1914,7 +1914,7 @@ async def test_seed_converges_pipeline_idempotent_on_second_run(
     """Second seed with no mutations only logs time-dependent run convergence, not entity convergence."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
         await _run_seed(session, monkeypatch, _demo_settings())
 
     # Only run_converged (timestamps drift) should appear — no pipeline/snapshot/schema/agent/trigger convergence.
@@ -1941,11 +1941,11 @@ async def test_seed_run_outputs_write_failure_is_swallowed(
         raise RuntimeError("node outputs write exploded")
 
     monkeypatch.setattr(
-        "modulo.db.crud.run_node_outputs.replace_run_node_outputs",
+        "farna.db.crud.run_node_outputs.replace_run_node_outputs",
         _explode,
     )
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         # Delete a run to force fresh creation through the node-outputs path.
         run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
         await session.delete(run)
@@ -1975,7 +1975,7 @@ async def test_seed_daily_fact_integrity_error_is_swallowed(
 
     session.flush = _fact_integrity_flush  # type: ignore[method-assign]
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             # Delete all daily facts so the seed tries to re-create them.
             facts = list((await session.execute(select(RunDailyFact))).scalars())
             for f in facts:
@@ -2006,7 +2006,7 @@ async def test_seed_daily_fact_generic_exception_is_swallowed(
 
     session.flush = _fact_generic_flush  # type: ignore[method-assign]
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
             facts = list((await session.execute(select(RunDailyFact))).scalars())
             for f in facts:
                 await session.delete(f)
@@ -2038,7 +2038,7 @@ async def test_seed_skips_run_for_unknown_pipeline(
     ]
     monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", augmented)
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
             await _run_seed(session, monkeypatch, _demo_settings())
     finally:
         monkeypatch.setattr(seed_demo_module, "_DEMO_RUN_SPECS", original_specs)
@@ -2072,7 +2072,7 @@ async def test_seed_new_run_daily_fact_integrity_error_is_swallowed(
 
     session.flush = _fact_integrity_flush  # type: ignore[method-assign]
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
             await session.delete(run)
             await session.commit()
@@ -2101,7 +2101,7 @@ async def test_seed_new_run_daily_fact_generic_exception_is_swallowed(
 
     session.flush = _fact_generic_flush  # type: ignore[method-assign]
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
             run = (await session.execute(select(Run).where(Run.run_number == 1))).scalar_one()
             await session.delete(run)
             await session.commit()
@@ -2135,7 +2135,7 @@ async def test_seed_team_membership_integrity_error_is_swallowed(
 
     session.flush = _membership_integrity_flush  # type: ignore[method-assign]
     try:
-        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+        with caplog.at_level(logging.INFO, logger="farna.db.seed_demo"):
             # Delete the team membership so the seed tries to re-create it.
             membership = (
                 (await session.execute(select(TeamMembership).order_by(TeamMembership.team_id))).scalars().first()
@@ -2310,7 +2310,7 @@ async def test_seed_converges_legacy_string_node_id_graph(
     # advisory lock is ``pg_try_advisory_lock``). This test's subject is graph
     # + run-trace convergence, not snapshot minting, so the mint is stubbed.
     monkeypatch.setattr(
-        "modulo.db.crud.pipeline.create_snapshot_edit",
+        "farna.db.crud.pipeline.create_snapshot_edit",
         AsyncMock(return_value=AsyncMock(snapshot_version=2)),
     )
 
@@ -2422,8 +2422,8 @@ async def test_second_seed_rewrites_no_run_trace(session: AsyncSession, monkeypa
 
     trace_writes = AsyncMock(wraps=replace_run_node_outputs)
     edge_writes = AsyncMock(wraps=pipeline_crud.replace_pipeline_graph)
-    monkeypatch.setattr("modulo.db.crud.run_node_outputs.replace_run_node_outputs", trace_writes)
-    monkeypatch.setattr("modulo.db.crud.pipeline.replace_pipeline_graph", edge_writes)
+    monkeypatch.setattr("farna.db.crud.run_node_outputs.replace_run_node_outputs", trace_writes)
+    monkeypatch.setattr("farna.db.crud.pipeline.replace_pipeline_graph", edge_writes)
 
     await _run_seed(session, monkeypatch, _demo_settings())
 
@@ -2496,8 +2496,8 @@ async def test_seed_edge_convergence_records_an_edit_snapshot(
     """
     graph_spy = AsyncMock(wraps=pipeline_crud.replace_pipeline_graph)
     snap_spy = AsyncMock(return_value=AsyncMock(snapshot_version=2))
-    monkeypatch.setattr("modulo.db.crud.pipeline.replace_pipeline_graph", graph_spy)
-    monkeypatch.setattr("modulo.db.crud.pipeline.create_snapshot_edit", snap_spy)
+    monkeypatch.setattr("farna.db.crud.pipeline.replace_pipeline_graph", graph_spy)
+    monkeypatch.setattr("farna.db.crud.pipeline.create_snapshot_edit", snap_spy)
 
     # --- genesis: the first boot builds the demo graph --------------------
     await _run_seed(session, monkeypatch, _demo_settings())
@@ -2609,7 +2609,7 @@ async def test_seed_system_map_failure_is_best_effort(
 
     monkeypatch.setattr(seed_demo_module, "_seed_demo_system_map_elements", _explode)
 
-    with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
+    with caplog.at_level(logging.WARNING, logger="farna.db.seed_demo"):
         summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"

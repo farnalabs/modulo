@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.connector_hub.locking import AdvisoryLockService, ConnectorLockError
+from farna.core.connector_hub.locking import AdvisoryLockService, ConnectorLockError
 
 
 @pytest.fixture
@@ -114,7 +114,7 @@ async def test_advisory_lock_acquire_contention_then_release(lock_service):
 
 def test_uuid_to_lock_keys_round_trip():
     """_uuid_to_lock_keys produces stable int4 keys for the same UUID."""
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from farna.core.connector_hub.locking import _uuid_to_lock_keys
 
     rid = uuid.UUID("12345678-1234-5678-1234-567812345678")
     key1, key2 = _uuid_to_lock_keys(rid)
@@ -128,7 +128,7 @@ def test_uuid_to_lock_keys_round_trip():
 
 def test_uuid_to_lock_keys_different_uuids_differ():
     """Different UUIDs produce different lock key pairs."""
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from farna.core.connector_hub.locking import _uuid_to_lock_keys
 
     rid1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
     rid2 = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -140,7 +140,7 @@ def test_uuid_to_lock_keys_different_uuids_differ():
 
 def test_uuid_to_lock_keys_rejects_non_uuid():
     """_uuid_to_lock_keys raises TypeError for non-UUID input."""
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from farna.core.connector_hub.locking import _uuid_to_lock_keys
 
     with pytest.raises(TypeError, match=r"Expected uuid\.UUID"):
         _uuid_to_lock_keys("not-a-uuid")  # type: ignore[arg-type]
@@ -148,7 +148,7 @@ def test_uuid_to_lock_keys_rejects_non_uuid():
 
 def test_uuid_to_lock_keys_within_int4_range():
     """_uuid_to_lock_keys produces signed 32-bit keys accepted by pg_try_advisory_lock."""
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from farna.core.connector_hub.locking import _uuid_to_lock_keys
 
     for _ in range(64):
         key1, key2 = _uuid_to_lock_keys(uuid.uuid4())
@@ -229,7 +229,7 @@ async def test_try_acquire_polls_until_timeout(lock_service):
     result_mock.scalar_one.return_value = False
     session.execute = AsyncMock(return_value=result_mock)
 
-    with patch("modulo.core.connector_hub.locking.asyncio.sleep", AsyncMock()):
+    with patch("farna.core.connector_hub.locking.asyncio.sleep", AsyncMock()):
         assert await lock_service.try_acquire(session, uuid.uuid4(), lock_timeout=0.01) is False
 
 
@@ -260,7 +260,7 @@ async def test_try_acquire_retries_then_succeeds(lock_service):
 
     session.execute = AsyncMock(side_effect=_side_effect)
 
-    with patch("modulo.core.connector_hub.locking.asyncio.sleep", AsyncMock()):
+    with patch("farna.core.connector_hub.locking.asyncio.sleep", AsyncMock()):
         assert await lock_service.try_acquire(session, uuid.uuid4(), lock_timeout=5.0) is True
     assert calls["count"] == 2
 
@@ -298,7 +298,7 @@ async def test_release_ownership_mismatch_warns(lock_service, caplog):
     holder_task: asyncio.Task[None] | None = asyncio.create_task(lock_service.acquire(session, rid))
     await holder_task
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub.locking"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.connector_hub.locking"):
         await lock_service.release(session, rid)
     # The holder task is only released from our reference after the release has
     # run, so its task id cannot be recycled mid-test.
@@ -318,7 +318,7 @@ async def test_release_not_held_warns(lock_service, caplog):
     result_mock.scalar_one.return_value = False
     session.execute = AsyncMock(return_value=result_mock)
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub.locking"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.connector_hub.locking"):
         await lock_service.release(session, uuid.uuid4())
 
     assert any("double-release" in rec.message for rec in caplog.records)
@@ -353,7 +353,7 @@ async def test_context_manager_aexit_warns_on_held_lock(lock_service, caplog):
     rid = uuid.uuid4()
     async with lock_service:
         await lock_service.acquire(session, rid)
-        with caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub.locking"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.connector_hub.locking"):
             await lock_service.__aexit__(None, None, None)
     assert any("exiting context with held lock" in rec.message for rec in caplog.records)
 
@@ -362,7 +362,7 @@ async def test_context_manager_aexit_no_held_lock_no_warning(lock_service, caplo
     """Exiting the context manager without holding a lock logs nothing."""
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub.locking"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.connector_hub.locking"):
         await lock_service.__aexit__(None, None, None)
 
     assert not caplog.records

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from modulo.auth.log_redaction import truncate_token_family
+from farna.auth.log_redaction import truncate_token_family
 
 
 def test_truncate_token_family_keeps_first_eight_chars() -> None:

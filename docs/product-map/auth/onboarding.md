@@ -3,7 +3,7 @@ id: feat-onboarding
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/onboarding.py
+  - backend/src/farna/api/routes/onboarding.py
 unit-tests:
   - backend/tests/unit/api/test_onboarding.py
 bdd:

@@ -13,14 +13,14 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from modulo.determination.comparison import (
+from farna.determination.comparison import (
     ComparisonEdge,
     ComparisonNode,
     ProposalComparison,
     ProposalComparisonSide,
     compare_proposals,
 )
-from modulo.determination.models import (
+from farna.determination.models import (
     DeterminationAttempt,
     EvidenceReference,
     ProposalConfidence,

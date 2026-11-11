@@ -18,17 +18,17 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     _get_engine,
     deny_break_glass_mint_any_credential,
     get_current_tenant_user_optional,
     get_db_session,
     get_plan_context,
 )
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_access_token
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -200,10 +200,10 @@ def test_normal_account_create_api_key_returns_201(client: TestClient) -> None:
     )
     key = _make_key()
     with (
-        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
-        patch("modulo.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.api_keys.create_api_key", return_value=(key, "mk_test_key")),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
     ):
         resp = client.post("/api/v1/api-keys", json={"name": "Test Key", "role": "operator"})
     assert resp.status_code == 201
@@ -216,9 +216,9 @@ def test_normal_account_list_api_keys_is_unaffected_by_marker(client: TestClient
         principal=_make_principal(is_break_glass=False),
     )
     with (
-        patch("modulo.api.routes.api_keys.list_api_keys", return_value=[]),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.list_api_keys", return_value=[]),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/api-keys")
     assert resp.status_code == 200
@@ -232,9 +232,9 @@ def test_read_routes_are_not_mint_marked_for_break_glass(client: TestClient) -> 
         principal=_make_principal(is_break_glass=True),
     )
     with (
-        patch("modulo.api.routes.api_keys.list_api_keys", return_value=[]),
-        patch("modulo.api.routes.api_keys.set_rls_org"),
-        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+        patch("farna.api.routes.api_keys.list_api_keys", return_value=[]),
+        patch("farna.api.routes.api_keys.set_rls_org"),
+        patch("farna.api.routes.api_keys.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/api-keys")
     assert resp.status_code == 200

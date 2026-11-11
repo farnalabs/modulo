@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from langgraph.errors import GraphInterrupt
 
-from modulo.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
-from modulo.core.pipeline_engine.node_runner import make_manual_node_fn
+from farna.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
+from farna.core.pipeline_engine.node_runner import make_manual_node_fn
 
 
 @pytest.fixture(autouse=True)

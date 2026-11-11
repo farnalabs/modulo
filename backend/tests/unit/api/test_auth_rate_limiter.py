@@ -6,9 +6,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-from modulo.core.rate_limiter import AuthRateLimiter
-from modulo.settings import Settings
+from farna.api.middleware.rate_limiter import AuthRateLimitMiddleware
+from farna.core.rate_limiter import AuthRateLimiter
+from farna.settings import Settings
 
 
 def _make_settings() -> Settings:
@@ -332,7 +332,7 @@ class TestAuthRateLimitMiddleware:
         """Bypass header must be routed through the constant-time comparison helper."""
         import hmac
 
-        from modulo.api.middleware import rate_limiter as rate_limiter_module
+        from farna.api.middleware import rate_limiter as rate_limiter_module
 
         seen: list[tuple[str, str]] = []
 

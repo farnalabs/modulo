@@ -7,7 +7,7 @@ type's own credential key. These tests pin the ``_bare_credential_key`` mapping;
 the read-side heal path itself is exercised in ``test_connector_hub.py``.
 """
 
-from modulo.core.connector_hub import (
+from farna.core.connector_hub import (
     _BARE_CRED_KEY_OVERRIDES,
     _TOKEN_CRED_TYPES,
     _bare_credential_key,

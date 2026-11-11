@@ -31,7 +31,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.eval_engine.evidence_layer import fetch
+from farna.core.eval_engine.evidence_layer import fetch
 
 pytestmark = pytest.mark.integration
 
@@ -442,7 +442,7 @@ class TestPolicyGateKeyNamespace:
     exactly the ``gate_`` prefix (the human-decision grounding rows)."""
 
     def test_gate_decision_keys_are_authorised(self) -> None:
-        from modulo.core.eval_engine.evidence_layer import assert_write_authorisation
+        from farna.core.eval_engine.evidence_layer import assert_write_authorisation
 
         gate_id = uuid.uuid4()
         assert_write_authorisation("policy_gate", f"gate_decision_{gate_id}")
@@ -450,7 +450,7 @@ class TestPolicyGateKeyNamespace:
     def test_non_prefixed_keys_are_refused(self) -> None:
         """A policy_gate producer writing outside the ``gate_`` namespace
         fails CLOSED (EvidenceWriteAuthorisationError)."""
-        from modulo.core.eval_engine.evidence_layer import (
+        from farna.core.eval_engine.evidence_layer import (
             EvidenceWriteAuthorisationError,
             assert_write_authorisation,
         )
@@ -459,7 +459,7 @@ class TestPolicyGateKeyNamespace:
             assert_write_authorisation("policy_gate", f"eval_guardrail_{uuid.uuid4()}")
 
     def test_owned_prefixes_are_exactly_gate(self) -> None:
-        from modulo.core.eval_engine.evidence_layer import KEY_NAMESPACE_OWNERSHIP
+        from farna.core.eval_engine.evidence_layer import KEY_NAMESPACE_OWNERSHIP
 
         assert KEY_NAMESPACE_OWNERSHIP["policy_gate"] == {"gate_"}
 

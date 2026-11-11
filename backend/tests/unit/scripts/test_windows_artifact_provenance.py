@@ -261,11 +261,11 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
     site_packages = fixture / "site-packages"
     frontend_dist = fixture / "frontend-dist"
     launcher = fixture / "modulo.exe"
-    for directory in (python_root, backend_source / "modulo", site_packages / "modulo_dep", frontend_dist):
+    for directory in (python_root, backend_source / "farna", site_packages / "modulo_dep", frontend_dist):
         directory.mkdir(parents=True)
     (python_root / "python.exe").write_bytes(b"python")
     (python_root / "python312.dll").write_bytes(b"dll")
-    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
+    (backend_source / "farna" / "__init__.py").write_text("", encoding="utf-8")
     (site_packages / "modulo_dep" / "__init__.py").write_text("", encoding="utf-8")
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     launcher.write_bytes(b"launcher")
@@ -277,7 +277,7 @@ def test_offline_staged_payload_contract(tmp_path: Path, repo_root: Path) -> Non
         stage / "runtime/python/python312.dll",
         stage / "runtime/bin/python3.exe",
         stage / "runtime/bin/python312.dll",
-        stage / "backend/src/modulo/__init__.py",
+        stage / "backend/src/farna/__init__.py",
         stage / "runtime/python/Lib/site-packages/modulo_dep/__init__.py",
         stage / "frontend-dist/index.html",
         stage / "bin/modulo.exe",
@@ -297,11 +297,11 @@ def test_staged_bundle_writes_the_runtime_marker_the_installer_requires(tmp_path
     site_packages = fixture / "site-packages"
     frontend_dist = fixture / "frontend-dist"
     launcher = fixture / "modulo.exe"
-    for directory in (python_root, backend_source / "modulo", site_packages, frontend_dist):
+    for directory in (python_root, backend_source / "farna", site_packages, frontend_dist):
         directory.mkdir(parents=True)
     (python_root / "python.exe").write_bytes(b"python")
     (python_root / "python312.dll").write_bytes(b"dll")
-    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
+    (backend_source / "farna" / "__init__.py").write_text("", encoding="utf-8")
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     launcher.write_bytes(b"launcher")
     stage = tmp_path / "stage"
@@ -332,7 +332,7 @@ def test_staging_twice_is_byte_identical_and_never_nests(tmp_path: Path, repo_ro
     for directory in (
         python_root / "DLLs",
         python_root / "Lib" / "encodings",
-        backend_source / "modulo" / "core",
+        backend_source / "farna" / "core",
         site_packages / "modulo_dep",
         frontend_dist / "assets",
     ):
@@ -341,8 +341,8 @@ def test_staging_twice_is_byte_identical_and_never_nests(tmp_path: Path, repo_ro
     (python_root / "python312.dll").write_bytes(b"dll")
     (python_root / "DLLs" / "vcruntime140.dll").write_bytes(b"runtime")
     (python_root / "Lib" / "encodings" / "utf_8.py").write_bytes(b"codec")
-    (backend_source / "modulo" / "__init__.py").write_text("", encoding="utf-8")
-    (backend_source / "modulo" / "core" / "engine.py").write_text("engine", encoding="utf-8")
+    (backend_source / "farna" / "__init__.py").write_text("", encoding="utf-8")
+    (backend_source / "farna" / "core" / "engine.py").write_text("engine", encoding="utf-8")
     (site_packages / "modulo_dep" / "__init__.py").write_text("", encoding="utf-8")
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     (frontend_dist / "assets" / "app.js").write_text("app", encoding="utf-8")
@@ -353,7 +353,7 @@ def test_staging_twice_is_byte_identical_and_never_nests(tmp_path: Path, repo_ro
     assert first.returncode == 0, first.stderr
     initial = snapshot_tree(stage)
     assert initial
-    assert (stage / "backend/src/modulo/core/engine.py").is_file()
+    assert (stage / "backend/src/farna/core/engine.py").is_file()
 
     second = stage_bundle(
         script,
@@ -392,7 +392,7 @@ def test_launcher_clean_environment_contract(launcher_source: str) -> None:
 
 def test_launcher_contract(launcher_source: str) -> None:
     assert 'L"python3.exe"' in launcher_source
-    assert "modulo.cli.main" in launcher_source
+    assert "farna.cli.main" in launcher_source
     assert "CreateProcessW(python_exe" in launcher_source
     assert "CreateProcessW" in launcher_source
     assert 'L"python"' in launcher_source
@@ -404,7 +404,7 @@ def test_launcher_command_line_size_includes_fixed_invocation(launcher_source: s
     build_end = launcher_source.index("static BOOL build_pythonpath", build_start)
     builder = launcher_source[build_start:build_end]
 
-    assert 'static const wchar_t module_invocation[] = L" -m modulo.cli.main";' in builder
+    assert 'static const wchar_t module_invocation[] = L" -m farna.cli.main";' in builder
     assert "checked_add_size(&total, wcslen(module_invocation))" in builder
     assert "if (total > SIZE_MAX / sizeof(wchar_t)) return NULL;" in builder
     assert "malloc(total * sizeof(wchar_t))" in builder

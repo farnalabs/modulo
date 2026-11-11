@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from modulo.api.routes.admin_notifications import AVAILABLE_EVENTS
-from modulo.core.notifier.event_mapper import (
+from farna.api.routes.admin_notifications import AVAILABLE_EVENTS
+from farna.core.notifier.event_mapper import (
     _ACTION_URL_TEMPLATES,
     _BODY_TEMPLATES,
     _EVENT_CONFIG,

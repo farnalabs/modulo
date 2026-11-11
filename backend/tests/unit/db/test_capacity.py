@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.capacity_providers.fly import FlyVolumeCapacityProbe
-from modulo.db import capacity
-from modulo.db.capacity import (
+from farna.core.capacity_providers.fly import FlyVolumeCapacityProbe
+from farna.db import capacity
+from farna.db.capacity import (
     ALERT_CRITICAL_PCT,
     ALERT_FULL_PCT,
     ALERT_WARN_PCT,
@@ -136,7 +136,7 @@ def test_alert_constants_match_spec(threshold: float) -> None:
 
 async def test_status_reports_used_and_percent_for_fixed_mode() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
         status = await db_capacity_status(engine)
 
     assert status["mode"] == "fixed"
@@ -155,8 +155,8 @@ async def test_status_percent_clamped_to_100() -> None:
     engine = _fake_engine(used_bytes=150_000_000)
     resolved = capacity._ResolvedCapacity(100_000_000, 150_000_000, "env")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)),
-        patch("modulo.db.capacity._resolve_capacity", new=AsyncMock(return_value=resolved)),
+        patch("farna.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)),
+        patch("farna.db.capacity._resolve_capacity", new=AsyncMock(return_value=resolved)),
     ):
         status = await db_capacity_status(engine)
     assert status["capacity_percent"] == 100.0
@@ -165,7 +165,7 @@ async def test_status_percent_clamped_to_100() -> None:
 
 async def test_status_percent_none_when_no_capacity_configured() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=None)):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=None)):
         status = await db_capacity_status(engine)
     assert status["capacity_percent"] is None
     assert status["capacity_bytes"] is None
@@ -175,7 +175,7 @@ async def test_status_percent_none_when_no_capacity_configured() -> None:
 
 async def test_status_elastic_reports_used_but_no_capacity() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(mode="elastic")):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(mode="elastic")):
         status = await db_capacity_status(engine)
     assert status["mode"] == "elastic"
     assert status["used_bytes"] == 50_000_000
@@ -187,7 +187,7 @@ async def test_status_elastic_reports_used_but_no_capacity() -> None:
 
 async def test_status_disabled_skips_the_query() -> None:
     engine = _fake_engine()
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(mode="disabled")):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(mode="disabled")):
         status = await db_capacity_status(engine)
     assert status["mode"] == "disabled"
     assert status["used_bytes"] == 0
@@ -197,7 +197,7 @@ async def test_status_disabled_skips_the_query() -> None:
 
 async def test_status_resilient_when_query_fails() -> None:
     engine = _fake_engine(raise_on_connect=True)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings()):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings()):
         status = await db_capacity_status(engine)
     assert status["capacity_percent"] is None
     assert status["alert_level"] == "ok"
@@ -205,7 +205,7 @@ async def test_status_resilient_when_query_fails() -> None:
 
 async def test_status_treats_unknown_mode_as_disabled() -> None:
     engine = _fake_engine()
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(mode="bogus")):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(mode="bogus")):
         status = await db_capacity_status(engine)
     assert status["mode"] == "disabled"
 
@@ -215,7 +215,7 @@ async def test_status_treats_unknown_mode_as_disabled() -> None:
 
 async def test_source_env_when_the_override_is_configured() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
     assert status["capacity_bytes"] == 100_000_000
@@ -229,8 +229,8 @@ async def test_source_env_override_wins_over_filesystem() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=10_000_000_000, free=1_000_000_000))
     settings = _fake_settings(capacity_bytes=100_000_000, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
@@ -244,8 +244,8 @@ async def test_source_filesystem_when_the_override_is_unset() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=20_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     disk_usage.assert_called_once_with("/vol")
@@ -263,8 +263,8 @@ async def test_source_none_when_no_source_resolves() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -276,7 +276,7 @@ async def test_source_none_when_no_source_resolves() -> None:
 async def test_source_disabled_resolves_nothing_even_with_the_override_set() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
     settings = _fake_settings(capacity_bytes=100_000_000, source="disabled")
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
     assert status["capacity_bytes"] is None
@@ -289,8 +289,8 @@ async def test_source_env_pins_the_override_only() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=20_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol", source="env")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -302,8 +302,8 @@ async def test_source_filesystem_ignores_the_override() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=80_000_000))
     settings = _fake_settings(capacity_bytes=999_000_000, capacity_path="/vol", source="filesystem")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "filesystem"
@@ -314,7 +314,7 @@ async def test_source_filesystem_ignores_the_override() -> None:
 async def test_unrecognised_source_falls_back_to_auto() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
     settings = _fake_settings(capacity_bytes=100_000_000, source="bogus")
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
 
@@ -322,7 +322,7 @@ async def test_unrecognised_source_falls_back_to_auto() -> None:
 async def test_elastic_mode_never_resolves_a_source() -> None:
     engine = _fake_engine(used_bytes=50_000_000)
     settings = _fake_settings(mode="elastic", capacity_bytes=100_000_000)
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
     assert status["capacity_bytes"] is None
@@ -337,7 +337,7 @@ async def test_env_override_is_never_second_guessed() -> None:
     # from a source the operator does not consider the volume).
     engine = _fake_engine(used_bytes=200_000_000)
     settings = _fake_settings(capacity_bytes=100_000_000, source="env")
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
     assert status["capacity_bytes"] == 100_000_000
@@ -352,13 +352,13 @@ async def test_env_override_at_98_percent_refuses_a_new_run() -> None:
     # threshold must still refuse a new run.
     engine = _fake_engine(used_bytes=98_000_000)
     settings = _fake_settings(capacity_bytes=100_000_000, source="env")
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
     assert status["capacity_percent"] == 98.0
     assert capacity_hard_stop(settings, status) is True
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity.get_settings", return_value=settings),
         pytest.raises(StorageExhaustedError),
     ):
         await enforce_capacity_gate(settings=settings, engine=engine)
@@ -373,8 +373,8 @@ async def test_filesystem_reading_smaller_than_the_database_is_discarded() -> No
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=60_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -393,8 +393,8 @@ async def test_filesystem_reading_just_above_the_database_still_arms_the_gate() 
     disk_usage = MagicMock(return_value=SimpleNamespace(total=101_000_000, free=1_010_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "filesystem"
@@ -402,8 +402,8 @@ async def test_filesystem_reading_just_above_the_database_still_arms_the_gate() 
     assert status["capacity_percent"] == 99.0
     assert capacity_hard_stop(settings, status) is True
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
         pytest.raises(StorageExhaustedError),
     ):
         await enforce_capacity_gate(settings=settings, engine=engine)
@@ -412,7 +412,7 @@ async def test_filesystem_reading_just_above_the_database_still_arms_the_gate() 
 async def test_env_override_resolves_when_the_database_size_is_unknown() -> None:
     # No measurement to compare against: the override still resolves (fail-open).
     engine = _fake_engine(raise_on_connect=True)
-    with patch("modulo.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
+    with patch("farna.db.capacity.get_settings", return_value=_fake_settings(capacity_bytes=100_000_000)):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
     assert status["capacity_bytes"] == 100_000_000
@@ -427,8 +427,8 @@ async def test_filesystem_is_not_discarded_when_the_database_size_is_unknown() -
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=20_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "filesystem"
@@ -442,8 +442,8 @@ async def test_enforce_raises_on_an_auto_detected_full_volume() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000_000, free=2_000_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
         pytest.raises(StorageExhaustedError),
     ):
         await enforce_capacity_gate(settings=settings, engine=engine)
@@ -455,8 +455,8 @@ async def test_enforce_allows_when_auto_detection_resolves_nothing() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         result = await enforce_capacity_gate(settings=settings, engine=engine)
     assert result is None
@@ -475,8 +475,8 @@ async def test_source_platform_resolves_after_filesystem() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "platform"
@@ -496,8 +496,8 @@ async def test_filesystem_wins_over_platform_in_auto_order() -> None:
     disk_usage = MagicMock(return_value=SimpleNamespace(total=100_000_000, free=20_000_000))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "filesystem"
@@ -509,7 +509,7 @@ async def test_env_override_wins_over_platform_and_probe_is_not_consulted() -> N
     probe = _FakePlatformProbe(100_000_000)
     capacity.set_platform_capacity_probe(probe)
     settings = _fake_settings(capacity_bytes=200_000_000, capacity_path=_ABSENT_PATH)
-    with patch("modulo.db.capacity.get_settings", return_value=settings):
+    with patch("farna.db.capacity.get_settings", return_value=settings):
         status = await db_capacity_status(engine)
     assert status["source"] == "env"
     assert status["capacity_bytes"] == 200_000_000
@@ -524,8 +524,8 @@ async def test_platform_probe_absent_stays_inert() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -533,8 +533,8 @@ async def test_platform_probe_absent_stays_inert() -> None:
     assert status["alert_level"] == "ok"
     assert capacity_hard_stop(settings, status) is False
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         assert await enforce_capacity_gate(settings=settings, engine=engine) is None
 
@@ -547,8 +547,8 @@ async def test_platform_probe_returning_none_stays_inert() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -563,8 +563,8 @@ async def test_platform_probe_raising_is_swallowed_and_stays_inert() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -580,16 +580,16 @@ async def test_platform_capacity_at_98_percent_refuses_a_new_run() -> None:
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "platform"
     assert status["capacity_percent"] == 98.0
     assert capacity_hard_stop(settings, status) is True
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
         pytest.raises(StorageExhaustedError),
     ):
         await enforce_capacity_gate(settings=settings, engine=engine)
@@ -604,8 +604,8 @@ async def test_platform_reading_smaller_than_the_database_is_discarded() -> None
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "none"
@@ -622,8 +622,8 @@ async def test_platform_is_not_discarded_when_the_database_size_is_unknown() -> 
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         status = await db_capacity_status(engine)
     assert status["source"] == "platform"
@@ -677,8 +677,8 @@ async def test_repeated_resolutions_reuse_one_platform_reading_within_the_ttl() 
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (
-        patch("modulo.db.capacity.get_settings", return_value=settings),
-        patch("modulo.db.capacity._disk_usage", new=disk_usage),
+        patch("farna.db.capacity.get_settings", return_value=settings),
+        patch("farna.db.capacity._disk_usage", new=disk_usage),
     ):
         first = await db_capacity_status(engine)
         now[0] += 10.0
@@ -694,13 +694,13 @@ async def test_repeated_resolutions_reuse_one_platform_reading_within_the_ttl() 
 
 
 def test_filesystem_probe_returns_none_on_a_filesystem_error() -> None:
-    with patch("modulo.db.capacity._disk_usage", new=MagicMock(side_effect=OSError("nope"))):
+    with patch("farna.db.capacity._disk_usage", new=MagicMock(side_effect=OSError("nope"))):
         assert capacity._probe_filesystem_capacity("/vol") is None
 
 
 def test_filesystem_probe_rejects_a_zero_total() -> None:
     with patch(
-        "modulo.db.capacity._disk_usage",
+        "farna.db.capacity._disk_usage",
         new=MagicMock(return_value=SimpleNamespace(total=0, free=0)),
     ):
         assert capacity._probe_filesystem_capacity("/vol") is None
@@ -708,7 +708,7 @@ def test_filesystem_probe_rejects_a_zero_total() -> None:
 
 def test_filesystem_probe_clamps_a_negative_free_to_zero() -> None:
     with patch(
-        "modulo.db.capacity._disk_usage",
+        "farna.db.capacity._disk_usage",
         new=MagicMock(return_value=SimpleNamespace(total=100, free=-5)),
     ):
         assert capacity._probe_filesystem_capacity("/vol") == (100, 0)
@@ -728,7 +728,7 @@ async def test_try_source_returns_none_for_an_unknown_candidate() -> None:
 def test_warn_no_capacity_source_is_warn_once() -> None:
     # The latch is a module-global warn-once: the second call is silent so a
     # repeatedly-polled monitor cannot flood the log.
-    with patch("modulo.db.capacity._log") as log:
+    with patch("farna.db.capacity._log") as log:
         capacity._warn_no_capacity_source("/vol", "auto")
         capacity._warn_no_capacity_source("/vol", "auto")
     assert log.warning.call_count == 1
@@ -769,8 +769,8 @@ def test_hard_stop_bypass_allows() -> None:
 
 
 def _patch_capacity(status: dict, settings) -> tuple[Any, Any]:
-    get_settings = patch("modulo.db.capacity.get_settings", return_value=settings)
-    db_status = patch("modulo.db.capacity.db_capacity_status", new=AsyncMock(return_value=status))
+    get_settings = patch("farna.db.capacity.get_settings", return_value=settings)
+    db_status = patch("farna.db.capacity.db_capacity_status", new=AsyncMock(return_value=status))
     return get_settings, db_status
 
 
@@ -807,9 +807,9 @@ async def test_enforce_allows_bypass() -> None:
 
 async def test_enforce_allows_on_measurement_failure() -> None:
     settings = _fake_settings(mode="fixed")
-    get_settings = patch("modulo.db.capacity.get_settings", return_value=settings)
+    get_settings = patch("farna.db.capacity.get_settings", return_value=settings)
     db_status = patch(
-        "modulo.db.capacity.db_capacity_status",
+        "farna.db.capacity.db_capacity_status",
         new=AsyncMock(side_effect=RuntimeError("measurement broke")),
     )
     with get_settings, db_status:
@@ -821,13 +821,13 @@ async def test_enforce_allows_on_measurement_failure() -> None:
 
 
 async def test_create_run_propagates_storage_exhausted() -> None:
-    from modulo.db.crud import run as run_crud
+    from farna.db.crud import run as run_crud
 
     session = AsyncMock()
     with (
         patch.object(run_crud, "_ensure_org_not_deleted", new=AsyncMock()),
         patch(
-            "modulo.db.capacity.enforce_capacity_gate",
+            "farna.db.capacity.enforce_capacity_gate",
             new=AsyncMock(side_effect=StorageExhaustedError("full")),
         ),
         pytest.raises(StorageExhaustedError),
@@ -845,7 +845,7 @@ async def test_create_run_propagates_storage_exhausted() -> None:
 def test_storage_exhausted_handler_returns_503() -> None:
     # The API-layer handler maps StorageExhaustedError → 503
     # urn:problem:modulo:storage_exhausted (FAR-426 "specific exception → 503").
-    from modulo.api.exception_handlers import storage_exhausted_exception_handler
+    from farna.api.exception_handlers import storage_exhausted_exception_handler
 
     request = MagicMock()
     request.state.request_id = "req-1"

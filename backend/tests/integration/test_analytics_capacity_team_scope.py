@@ -4,7 +4,7 @@ Real Postgres (Testcontainers). The leak this pins lives entirely in the SQL
 ``_team_scope`` applies -- the pure report function never sees a foreign row
 once the query excludes it -- so a pure unit test cannot exercise it.
 
-The global soft-delete filter (``modulo.db.soft_delete``) injects
+The global soft-delete filter (``farna.db.soft_delete``) injects
 ``pipelines.deleted_at IS NULL`` into the ON clause of the capacity query's
 OUTER JOIN, so a soft-deleted pipeline yields NULL pipeline columns. The
 pre-fix predicate (``Pipeline.owner_team_id IS NULL OR IN (caller teams)``)
@@ -35,15 +35,15 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import Session as SASession
 
-from modulo.core.analytics.capacity import (
+from farna.core.analytics.capacity import (
     CapacityParams,
     build_capacity_rows_query,
     run_capacity_query,
 )
-from modulo.db.soft_delete import _apply_soft_delete_filter, register_soft_delete_filter
+from farna.db.soft_delete import _apply_soft_delete_filter, register_soft_delete_filter
 
 # The soft-delete filter is installed by an IMPORT SIDE EFFECT of
-# ``modulo.db.session``; this module asserts its behaviour, so it registers
+# ``farna.db.session``; this module asserts its behaviour, so it registers
 # explicitly and checks the precondition rather than relying on import order
 # (2026-10-14 lesson: an unregistered filter silently asserts the inverse).
 register_soft_delete_filter()
@@ -60,7 +60,7 @@ def test_soft_delete_filter_is_registered() -> None:
 
 
 async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID, label: str) -> uuid.UUID:
-    from modulo.db.crud.team import create_team
+    from farna.db.crud.team import create_team
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -249,7 +249,7 @@ async def test_run_capacity_query_report_never_names_a_foreign_pipeline(
     ``visible_pipeline_ids`` derivation: the assembled report's
     ``pending.by_pipeline`` and every ``series[].by_pipeline`` must not name the
     deleted foreign pipeline, while the caller's own pipeline is reported."""
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     caller_team, foreign_pipeline_id, cleanup_ids = await _seed_foreign_and_caller(db_engine, test_org, test_user)
     caller_pipeline_id = cleanup_ids[1]

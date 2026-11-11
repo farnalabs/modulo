@@ -21,8 +21,8 @@ import inspect
 import io
 import tokenize
 
-from modulo.api.routes import costs as costs_routes
-from modulo.core.cost_controller import finalize
+from farna.api.routes import costs as costs_routes
+from farna.core.cost_controller import finalize
 
 
 def _code_only(src: str) -> str:

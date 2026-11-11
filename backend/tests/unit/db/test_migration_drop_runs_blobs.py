@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from modulo.db.crud.run_node_outputs import _MARKER_KEY_PREFIX_LEN
-from modulo.db.models.run import TERMINAL_STATUSES
+from farna.db.crud.run_node_outputs import _MARKER_KEY_PREFIX_LEN
+from farna.db.models.run import TERMINAL_STATUSES
 
-MIGRATION = Path("src/modulo/db/migrations/versions/0215_drop_runs_blob_columns.py")
+MIGRATION = Path("src/farna/db/migrations/versions/0215_drop_runs_blob_columns.py")
 
 code = MIGRATION.read_text(encoding="utf-8")
 
@@ -234,7 +234,7 @@ class TestTwinParser:
     """The migration's marker-node-id parser twin is the repo module's."""
 
     def test_marker_regex_is_byte_identical_to_the_repo_module(self) -> None:
-        from modulo.db.crud.run_node_outputs import _MARKER_KEY_RE
+        from farna.db.crud.run_node_outputs import _MARKER_KEY_RE
 
         assert _MARKER_RE == _MARKER_KEY_RE
         assert _MARKER_RE in code

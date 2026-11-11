@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.line_diff.
+"""Unit tests for farna.core.line_diff.
 
 The shared diff walk backs the prompt-version and node-output diff endpoints,
 so these tests lock content, ordering, and 1-based line-number accounting per
@@ -6,7 +6,7 @@ opcode kind. They double as the regression guard for multi-line unchanged hunks,
 which previously repeated the first hunk line across the whole run.
 """
 
-from modulo.core.line_diff import iter_line_diffs
+from farna.core.line_diff import iter_line_diffs
 
 
 def materialize(a: str, b: str) -> list[tuple[str, str, int | None, int | None]]:

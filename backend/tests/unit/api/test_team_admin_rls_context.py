@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -105,10 +105,10 @@ class TestAdminTeamRlsUserContext:
         team = _make_team()
 
         with (
-            patch("modulo.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.get_team_by_name", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.admin.create_team", new_callable=AsyncMock, return_value=team),
+            patch("farna.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.get_team_by_name", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.admin.create_team", new_callable=AsyncMock, return_value=team),
         ):
             resp = admin_client.post("/api/v1/admin/teams", json={"name": "New Team"})
 
@@ -127,9 +127,9 @@ class TestAdminTeamRlsUserContext:
         paginated.page_size = 20
 
         with (
-            patch("modulo.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.list_teams", new_callable=AsyncMock, return_value=paginated),
+            patch("farna.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.list_teams", new_callable=AsyncMock, return_value=paginated),
         ):
             resp = admin_client.get("/api/v1/admin/teams")
 
@@ -143,10 +143,10 @@ class TestAdminTeamRlsUserContext:
         team = _make_team()
 
         with (
-            patch("modulo.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.get_team_by_name", new_callable=AsyncMock, return_value=None),
-            patch("modulo.api.routes.admin.crud_update_team", new_callable=AsyncMock, return_value=team),
+            patch("farna.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.get_team_by_name", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.admin.crud_update_team", new_callable=AsyncMock, return_value=team),
         ):
             resp = admin_client.put(f"/api/v1/admin/teams/{_TEAM_ID}", json={"name": "Updated Team"})
 
@@ -159,9 +159,9 @@ class TestAdminTeamRlsUserContext:
         _override_session(session)
 
         with (
-            patch("modulo.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
-            patch("modulo.api.routes.admin.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.admin.delete_team", new_callable=AsyncMock, return_value=True),
+            patch("farna.api.routes.admin.set_rls_user_context", new_callable=AsyncMock) as mock_rls_user,
+            patch("farna.api.routes.admin.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.admin.delete_team", new_callable=AsyncMock, return_value=True),
         ):
             resp = admin_client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.auth.api_key import (
+from farna.auth.api_key import (
     _UNSET,
     ApiKeyInvalidError,
     ApiKeyScopeError,
@@ -26,8 +26,8 @@ from modulo.auth.api_key import (
     update_api_key,
     validate_api_key,
 )
-from modulo.db.models.api_key import OrgApiKey
-from modulo.db.models.run import TERMINAL_STATUSES
+from farna.db.models.api_key import OrgApiKey
+from farna.db.models.run import TERMINAL_STATUSES
 
 # ---------------------------------------------------------------------------
 # generate_api_key
@@ -779,7 +779,7 @@ def _stub_run_workspace_destroy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """
     mock = AsyncMock(return_value={"scanned": 0, "destroyed": 0, "errors": 0})
     monkeypatch.setattr(
-        "modulo.core.bundled_runner.runner_reconciler.destroy_workspaces_for_run",
+        "farna.core.bundled_runner.runner_reconciler.destroy_workspaces_for_run",
         mock,
     )
     return mock
@@ -894,7 +894,7 @@ async def test_revoke_run_api_key_sweep_counts_a_seal_failure_and_continues(
             raise RuntimeError("revoke unconfirmed")
         return MagicMock(keys_revoked=2, workspaces_destroyed=1)
 
-    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", _seal)
+    monkeypatch.setattr("farna.core.run_teardown.seal_run_teardown", _seal)
 
     result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
 
@@ -916,7 +916,7 @@ async def test_revoke_run_api_key_sweep_propagates_a_cancellation(
     async def _seal(*, run_id: uuid.UUID, org_id: uuid.UUID, session_factory: Any) -> Any:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", _seal)
+    monkeypatch.setattr("farna.core.run_teardown.seal_run_teardown", _seal)
 
     with pytest.raises(asyncio.CancelledError):
         await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
@@ -947,9 +947,9 @@ async def test_revoke_run_api_key_sweep_stops_at_the_budget_deadline(
     session = _SweepSession([_sweep_keys_result([(uuid.uuid4(), uuid.uuid4())])])
     session_factory = MagicMock(return_value=session)
     seal = AsyncMock(return_value=MagicMock(keys_revoked=1, workspaces_destroyed=0))
-    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", seal)
+    monkeypatch.setattr("farna.core.run_teardown.seal_run_teardown", seal)
     # start (deadline) -> 10.0, per-org check -> 10.0, per-run check -> 100.0.
-    monkeypatch.setattr("modulo.auth.api_key.time", _FakeClock([10.0, 10.0, 100.0]))
+    monkeypatch.setattr("farna.auth.api_key.time", _FakeClock([10.0, 10.0, 100.0]))
 
     result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id], budget_seconds=30.0)
 

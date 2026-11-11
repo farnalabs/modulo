@@ -16,9 +16,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
-from modulo.settings import Settings
+from farna.api.middleware.rate_limiter import AuthRateLimitMiddleware
+from farna.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
+from farna.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Register feature file

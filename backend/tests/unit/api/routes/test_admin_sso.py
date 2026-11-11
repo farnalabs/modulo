@@ -8,8 +8,8 @@ REAL ``list_providers`` CRUD against an autobegin-aware fake session.
 import uuid
 from unittest.mock import MagicMock
 
-from modulo.api.routes.admin_sso import get_providers
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.routes.admin_sso import get_providers
+from farna.auth.jwt import TenantPrincipal
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

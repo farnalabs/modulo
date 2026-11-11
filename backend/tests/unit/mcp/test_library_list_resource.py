@@ -3,8 +3,8 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import resource_library
-from modulo.db.crud.base import PageResult
+from farna.api.mcp_server import resource_library
+from farna.db.crud.base import PageResult
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -46,7 +46,7 @@ def _make_mock_session() -> AsyncMock:
 
 class TestResourceLibraryAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -54,14 +54,14 @@ class TestResourceLibraryAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await resource_library()
         assert "revoked" in result.lower() or "expired" in result.lower()
@@ -75,7 +75,7 @@ class TestResourceLibraryAuth:
 
 class TestResourceLibrarySuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -83,16 +83,16 @@ class TestResourceLibrarySuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.list_primitives")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.list_primitives")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_all_primitives(
         self,
         mock_session: AsyncMock,
@@ -147,9 +147,9 @@ class TestResourceLibrarySuccess:
         assert "rating=N/A" in result
         mock_list_primitives.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.list_primitives")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.list_primitives")
+    @patch("farna.api.mcp_server._session")
     async def test_returns_empty_when_no_items(
         self,
         mock_session: AsyncMock,
@@ -173,9 +173,9 @@ class TestResourceLibrarySuccess:
         assert result == "Library is empty."
         mock_list_primitives.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.list_primitives")
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.list_primitives")
+    @patch("farna.api.mcp_server._session")
     async def test_error_returns_generic_message(
         self,
         mock_session: AsyncMock,
@@ -193,10 +193,10 @@ class TestResourceLibrarySuccess:
 
         assert "error:" in result.lower()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server.list_primitives")
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.list_primitives")
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
     async def test_internal_operator_lists_every_primitive_type(
         self,
         mock_get_settings: MagicMock,
@@ -204,7 +204,7 @@ class TestResourceLibrarySuccess:
         mock_list_primitives: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+        from farna.api.mcp_server import _ctx_key_grants, _ctx_role
 
         _ctx_role.set("operator")
         mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)

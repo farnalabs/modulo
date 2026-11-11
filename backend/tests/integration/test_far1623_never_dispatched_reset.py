@@ -36,10 +36,10 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.cron_helpers import _build_re_dispatch_predicate
-from modulo.core.pipeline_execution import _sweep_org_stale_runs
-from modulo.core.run_admission import reconcile_pipeline_slots
-from modulo.db.models.run import Run
+from farna.core.cron_helpers import _build_re_dispatch_predicate
+from farna.core.pipeline_execution import _sweep_org_stale_runs
+from farna.core.run_admission import reconcile_pipeline_slots
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
@@ -259,7 +259,7 @@ async def test_heartbeat_stale_reset_run_is_not_never_dispatched(
     # pending. ``_sweep_org_ids`` is scoped to this test's org so the real
     # sweep never touches another test's rows.
     with patch(
-        "modulo.core.run_admission._sweep_org_ids",
+        "farna.core.run_admission._sweep_org_ids",
         new=AsyncMock(return_value=[far1623_env.org_id]),
     ):
         reset = await reconcile_pipeline_slots(db_engine, stale_seconds=_STALE_SECONDS)

@@ -11,12 +11,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.pipeline_engine import (
+from farna.core.pipeline_engine import (
     ContextSetterViolationError,
     cancellable_node,
 )
-from modulo.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
-from modulo.core.pipeline_engine.executor import _seed_state
+from farna.core.pipeline_engine.decorator import _RUN_CONTEXT_WRITE_LOG_KEY
+from farna.core.pipeline_engine.executor import _seed_state
 
 _LIVE_STATE: dict[str, Any] = {"run_context": {"cancelled": False}}
 

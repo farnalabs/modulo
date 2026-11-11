@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from jsonschema import Draft202012Validator
 
-from modulo.core.library_service import _MODULO_PRIMITIVES
-from modulo.core.seed_data.library_schemas import SCHEMAS
+from farna.core.library_service import _MODULO_PRIMITIVES
+from farna.core.seed_data.library_schemas import SCHEMAS
 
 _PRIMITIVE_SLUG = "pr-review-decision"
 _PRIMITIVE_TYPE = "schema"

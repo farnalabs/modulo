@@ -1,4 +1,4 @@
-"""Unit tests for OIDC ID token verification (modulo.auth.oidc_verify)."""
+"""Unit tests for OIDC ID token verification (farna.auth.oidc_verify)."""
 
 import base64
 import json
@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.oidc_verify import (
+from farna.auth.oidc_verify import (
     OidcVerifyError,
     clear_jwks_cache,
     verify_id_token,
@@ -594,7 +594,7 @@ class TestEdgeCases:
                 await verify_id_token(bad, _JWKS_URI, _CLIENT_ID, _ISSUER)
 
     def test_cache_clear_works(self) -> None:
-        from modulo.auth.oidc_verify import _cache_set, _jwks_cache
+        from farna.auth.oidc_verify import _cache_set, _jwks_cache
 
         _cache_set("https://example.com/jwks", [{"kty": "RSA"}])
         assert len(_jwks_cache) == 1
@@ -604,7 +604,7 @@ class TestEdgeCases:
     def test_cache_expires_after_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import time
 
-        from modulo.auth import oidc_verify
+        from farna.auth import oidc_verify
 
         oidc_verify._cache_set("https://example.com/jwks", [{"kty": "RSA"}])
         future = time.time() + oidc_verify._JWKS_CACHE_TTL + 1
@@ -741,8 +741,8 @@ class TestOidcCallbackIntegration:
         self,
         keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
     ) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-        from modulo.settings import Settings
+        from farna.auth.sso import oidc_process_callback, sign_state
+        from farna.settings import Settings
 
         private_key, public_key = keypair
         jwk = _pubkey_to_jwk(public_key)
@@ -778,8 +778,8 @@ class TestOidcCallbackIntegration:
         )
 
         with (
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
+            patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock) as mock_tok,
             patch("httpx.AsyncClient") as cls,
         ):
             cls.return_value.__aenter__.return_value = mock_client
@@ -802,8 +802,8 @@ class TestOidcCallbackIntegration:
         self,
         keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey],
     ) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-        from modulo.settings import Settings
+        from farna.auth.sso import oidc_process_callback, sign_state
+        from farna.settings import Settings
 
         wrong_private, _ = _gen_rsa_keypair()
         _, correct_public = keypair
@@ -840,8 +840,8 @@ class TestOidcCallbackIntegration:
         )
 
         with (
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock),
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock),
+            patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
             patch("httpx.AsyncClient") as cls,
         ):
             cls.return_value.__aenter__.return_value = mock_client
@@ -859,8 +859,8 @@ class TestOidcCallbackIntegration:
                 )
 
     async def test_callback_fails_on_discovery_http_error(self) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-        from modulo.settings import Settings
+        from farna.auth.sso import oidc_process_callback, sign_state
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -901,8 +901,8 @@ class TestOidcCallbackIntegration:
                 )
 
     async def test_callback_fails_on_code_exchange_http_error(self) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-        from modulo.settings import Settings
+        from farna.auth.sso import oidc_process_callback, sign_state
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -946,8 +946,8 @@ class TestOidcCallbackIntegration:
                 )
 
     async def test_callback_fails_on_provisioning_runtime_error(self) -> None:
-        from modulo.auth.sso import oidc_process_callback, sign_state
-        from modulo.settings import Settings
+        from farna.auth.sso import oidc_process_callback, sign_state
+        from farna.settings import Settings
 
         settings = Settings(
             database_url="postgresql+asyncpg://localhost/test",
@@ -977,9 +977,9 @@ class TestOidcCallbackIntegration:
         )
 
         with (
-            patch("modulo.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
-            patch("modulo.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
-            patch("modulo.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
+            patch("farna.auth.sso.verify_id_token", new_callable=AsyncMock) as mock_verify,
+            patch("farna.auth.sso.jit_provision_user", new_callable=AsyncMock) as mock_jit,
+            patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock),
             patch("httpx.AsyncClient") as cls,
         ):
             cls.return_value.__aenter__.return_value = mock_client

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
 _REVISION = "0116_guardrail_trust_pr_b"
 _DOWN_REVISION = "0115_notification_preferences"

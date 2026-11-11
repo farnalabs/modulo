@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator
+from farna.core.graph_validator import GraphValidator
 from tests.unit.graph_validator._helpers import (
     VALID_DESCRIPTION as _VALID_DESCRIPTION,
 )

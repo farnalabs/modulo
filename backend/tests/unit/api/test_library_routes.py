@@ -21,17 +21,17 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.library_service import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
 )
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -129,7 +129,7 @@ def system_admin_client() -> Generator[TestClient, None, None]:
 def _default_lifecycle_map_gate_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep unrelated route tests on the ordinary primitive path."""
     monkeypatch.setattr(
-        "modulo.api.routes.library.get_primitive",
+        "farna.api.routes.library.get_primitive",
         AsyncMock(return_value=_make_listable_primitive()),
     )
 
@@ -191,9 +191,9 @@ def test_ping_returns_pong(client: TestClient) -> None:
 def test_get_primitive_returns_validated_response(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{prim.id}")
     assert resp.status_code == 200, resp.text
@@ -205,9 +205,9 @@ def test_get_primitive_returns_validated_response(client: TestClient) -> None:
 
 def test_get_primitive_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -215,13 +215,13 @@ def test_get_primitive_missing_returns_404(client: TestClient) -> None:
 
 def test_get_primitive_missing_table_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
-    with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, side_effect=err):
+    with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, side_effect=err):
         resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}")
     assert resp.status_code == 501
 
 
 def test_get_primitive_db_error_returns_503(client: TestClient) -> None:
-    with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, side_effect=SQLAlchemyError()):
+    with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, side_effect=SQLAlchemyError()):
         resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}")
     assert resp.status_code == 503
 
@@ -245,10 +245,10 @@ def _create_payload(**overrides: Any) -> dict[str, Any]:
 def test_get_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{prim.id}")
     assert resp.status_code == 404
@@ -256,11 +256,11 @@ def test_get_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestC
 
 def test_create_lifecycle_map_primitive_returns_403_when_dev_mode_off(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
     assert resp.status_code == 403
@@ -269,10 +269,10 @@ def test_create_lifecycle_map_primitive_returns_403_when_dev_mode_off(client: Te
 
 def test_create_lifecycle_map_primitive_rejects_ordinary_operator(operator_client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = operator_client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
     assert resp.status_code == 403
@@ -282,11 +282,11 @@ def test_create_lifecycle_map_primitive_rejects_ordinary_operator(operator_clien
 def test_create_lifecycle_map_primitive_allows_internal_operator(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
     assert resp.status_code == 201, resp.text
@@ -295,10 +295,10 @@ def test_create_lifecycle_map_primitive_allows_internal_operator(client: TestCli
 def test_create_primitive_returns_201(client: TestClient) -> None:
     prim = _make_listable_primitive(name="New Workflow", primitive_type="workflow")
     with (
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries", json=_create_payload())
     assert resp.status_code == 201, resp.text
@@ -307,7 +307,7 @@ def test_create_primitive_returns_201(client: TestClient) -> None:
 
 def test_create_primitive_slug_collision_returns_409(client: TestClient) -> None:
     existing = _make_listable_primitive()
-    with patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=existing):
+    with patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=existing):
         resp = client.post("/api/v1/libraries", json=_create_payload())
     assert resp.status_code == 409
 
@@ -315,10 +315,10 @@ def test_create_primitive_slug_collision_returns_409(client: TestClient) -> None
 def test_create_primitive_integrity_error_returns_409(client: TestClient) -> None:
     err = IntegrityError("INSERT", {}, Exception("unique constraint"))
     with (
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, side_effect=err),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock, side_effect=err),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries", json=_create_payload())
     assert resp.status_code == 409
@@ -356,10 +356,10 @@ def test_create_composite_with_missing_edges_rejected(client: TestClient) -> Non
 def test_create_composite_with_graph_content_json_returns_201(client: TestClient) -> None:
     prim = _make_listable_primitive(name="New Composite", primitive_type="composite")
     with (
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries",
@@ -375,13 +375,13 @@ def test_create_composite_with_graph_content_json_returns_201(client: TestClient
 def test_update_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim
+            "farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim
         ) as update_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"name": "Hidden"})
     assert resp.status_code == 404
@@ -391,10 +391,10 @@ def test_update_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: Te
 def test_update_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive(name="Renamed Workflow")
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"name": "Renamed Workflow"})
     assert resp.status_code == 200, resp.text
@@ -403,10 +403,10 @@ def test_update_primitive_returns_200(client: TestClient) -> None:
 
 def test_update_primitive_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{uuid.uuid4()}", json={"name": "Whatever"})
     assert resp.status_code == 404
@@ -416,10 +416,10 @@ def test_update_composite_with_empty_content_json_rejected(client: TestClient) -
     prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
     prim.content_json = {"nodes": [], "edges": []}
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {}})
     assert resp.status_code == 422
@@ -428,10 +428,10 @@ def test_update_composite_with_empty_content_json_rejected(client: TestClient) -
 def test_update_composite_with_missing_nodes_rejected(client: TestClient) -> None:
     prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {"edges": []}})
     assert resp.status_code == 422
@@ -441,10 +441,10 @@ def test_update_composite_with_graph_content_json_returns_200(client: TestClient
     prim = _make_listable_primitive(name="Existing Composite", primitive_type="composite")
     prim.content_json = {"nodes": [{"id": "n1"}], "edges": []}
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(
             f"/api/v1/libraries/{prim.id}",
@@ -457,10 +457,10 @@ def test_update_composite_with_graph_content_json_returns_200(client: TestClient
 def test_update_non_composite_content_json_skips_graph_validation(client: TestClient) -> None:
     prim = _make_listable_primitive(name="Some Workflow")
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"content_json": {"agents": []}})
     assert resp.status_code == 200, resp.text
@@ -468,10 +468,10 @@ def test_update_non_composite_content_json_skips_graph_validation(client: TestCl
 
 def test_update_content_json_missing_primitive_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.patch(f"/api/v1/libraries/{uuid.uuid4()}", json={"content_json": {}})
     assert resp.status_code == 404
@@ -480,13 +480,13 @@ def test_update_content_json_missing_primitive_returns_404(client: TestClient) -
 def test_delete_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim
+            "farna.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim
         ) as delete_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/libraries/{prim.id}")
     assert resp.status_code == 404
@@ -496,10 +496,10 @@ def test_delete_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: Te
 def test_delete_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/libraries/{prim.id}")
     assert resp.status_code == 200, resp.text
@@ -507,10 +507,10 @@ def test_delete_primitive_returns_200(client: TestClient) -> None:
 
 def test_delete_primitive_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.delete(f"/api/v1/libraries/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -519,11 +519,11 @@ def test_delete_primitive_missing_returns_404(client: TestClient) -> None:
 def test_restore_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock) as restore_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.restore_library_primitive", new_callable=AsyncMock) as restore_mock,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
     assert resp.status_code == 404
@@ -538,11 +538,11 @@ def test_restore_lifecycle_map_gate_reads_through_include_deleted(client: TestCl
     """
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim) as get_mock,
-        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim) as get_mock,
+        patch("farna.api.routes.library.restore_library_primitive", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         client.post(f"/api/v1/libraries/{prim.id}/restore")
 
@@ -553,10 +553,10 @@ def test_restore_lifecycle_map_gate_reads_through_include_deleted(client: TestCl
 def test_restore_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
     assert resp.status_code == 200, resp.text
@@ -564,10 +564,10 @@ def test_restore_primitive_returns_200(client: TestClient) -> None:
 
 def test_restore_primitive_not_deleted_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/restore")
     assert resp.status_code == 404
@@ -577,10 +577,10 @@ def test_restore_primitive_without_existing_row_skips_gate(client: TestClient) -
     """A row the lookup cannot see skips the lifecycle-map gate and restores normally."""
     prim = _make_listable_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
     assert resp.status_code == 200, resp.text
@@ -594,11 +594,11 @@ def test_restore_primitive_without_existing_row_skips_gate(client: TestClient) -
 def test_copy_to_adapt_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim) as copy_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim) as copy_mock,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/adapt", json={})
     assert resp.status_code == 404
@@ -608,10 +608,10 @@ def test_copy_to_adapt_lifecycle_map_primitive_returns_404_when_dev_mode_off(cli
 def test_copy_to_adapt_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/adapt", json={})
     assert resp.status_code == 200, resp.text
@@ -619,14 +619,14 @@ def test_copy_to_adapt_returns_200(client: TestClient) -> None:
 
 def test_copy_to_adapt_community_read_only_returns_403(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch(
-            "modulo.api.routes.library.copy_to_adapt",
+            "farna.api.routes.library.copy_to_adapt",
             new_callable=AsyncMock,
             side_effect=CommunityPrimitiveReadOnlyError("read only"),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/adapt", json={})
     assert resp.status_code == 403
@@ -634,10 +634,10 @@ def test_copy_to_adapt_community_read_only_returns_403(client: TestClient) -> No
 
 def test_copy_to_adapt_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, side_effect=LookupError("nope")),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.copy_to_adapt", new_callable=AsyncMock, side_effect=LookupError("nope")),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/adapt", json={})
     assert resp.status_code == 404
@@ -658,10 +658,10 @@ def _make_pipeline_mock() -> MagicMock:
 def test_export_pipeline_v1_returns_zip(client: TestClient) -> None:
     pipeline = _make_pipeline_mock()
     with (
-        patch("modulo.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-        patch("modulo.api.routes.library.export_pipeline_bundle", new_callable=AsyncMock, return_value=b"zipbytes"),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.library.export_pipeline_bundle", new_callable=AsyncMock, return_value=b"zipbytes"),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/export/{pipeline.id}", params={"format": "v1"})
     assert resp.status_code == 200, resp.text
@@ -672,10 +672,10 @@ def test_export_pipeline_v1_returns_zip(client: TestClient) -> None:
 def test_export_pipeline_v2_returns_yaml(client: TestClient) -> None:
     pipeline = _make_pipeline_mock()
     with (
-        patch("modulo.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-        patch("modulo.api.routes.library.export_pipeline_bundle_v2", new_callable=AsyncMock, return_value="a: 1"),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch("farna.api.routes.library.export_pipeline_bundle_v2", new_callable=AsyncMock, return_value="a: 1"),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/export/{pipeline.id}", params={"format": "v2"})
     assert resp.status_code == 200, resp.text
@@ -684,9 +684,9 @@ def test_export_pipeline_v2_returns_yaml(client: TestClient) -> None:
 
 def test_export_pipeline_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/export/{uuid.uuid4()}")
     assert resp.status_code == 404
@@ -703,7 +703,7 @@ def test_export_pipeline_invalid_format_rejected(client: TestClient) -> None:
 
 
 def _bundle_resolution(**overrides: Any) -> Any:
-    from modulo.api.routes.library import _BundleResolution
+    from farna.api.routes.library import _BundleResolution
 
     defaults: dict[str, Any] = {
         "pipeline_name": "Imported Pipeline",
@@ -721,9 +721,9 @@ def _bundle_resolution(**overrides: Any) -> Any:
 def test_upload_zip_happy_path_returns_analysis(client: TestClient) -> None:
     bundle = {"pipeline": {"name": "Zipped"}}
     with (
-        patch("modulo.api.routes.library.extract_bundle_json_from_zip", return_value=bundle),
+        patch("farna.api.routes.library.extract_bundle_json_from_zip", return_value=bundle),
         patch(
-            "modulo.api.routes.library._resolve_import_bundle",
+            "farna.api.routes.library._resolve_import_bundle",
             new_callable=AsyncMock,
             return_value=_bundle_resolution(pipeline_name="Zipped"),
         ),
@@ -749,7 +749,7 @@ def test_upload_zip_rejects_non_zip_filename(client: TestClient) -> None:
 
 def test_upload_zip_missing_bundle_json_returns_400(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library.extract_bundle_json_from_zip",
+        "farna.api.routes.library.extract_bundle_json_from_zip",
         side_effect=LookupError("bundle.json not found in zip"),
     ):
         resp = client.post(
@@ -760,7 +760,7 @@ def test_upload_zip_missing_bundle_json_returns_400(client: TestClient) -> None:
 
 
 def test_read_zip_upload_enforces_size_limit() -> None:
-    from modulo.api.routes.library import _MAX_UPLOAD_SIZE, _read_zip_upload
+    from farna.api.routes.library import _MAX_UPLOAD_SIZE, _read_zip_upload
 
     oversized = MagicMock()
     oversized.filename = "big.zip"
@@ -772,7 +772,7 @@ def test_read_zip_upload_enforces_size_limit() -> None:
 
 def test_analyse_bundle_returns_resolution(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library._resolve_import_bundle",
+        "farna.api.routes.library._resolve_import_bundle",
         new_callable=AsyncMock,
         return_value=_bundle_resolution(),
     ):
@@ -785,7 +785,7 @@ def test_analyse_bundle_returns_resolution(client: TestClient) -> None:
 
 def test_analyse_bundle_db_error_returns_503(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library._resolve_import_bundle",
+        "farna.api.routes.library._resolve_import_bundle",
         new_callable=AsyncMock,
         side_effect=SQLAlchemyError(),
     ):
@@ -804,9 +804,9 @@ def test_confirm_import_returns_summary(client: TestClient) -> None:
         "warnings": [],
     }
     with (
-        patch("modulo.api.routes.library.materialize_import", new_callable=AsyncMock, return_value=materialized),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.materialize_import", new_callable=AsyncMock, return_value=materialized),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries/import/confirm", json={"bundle_json": json.dumps({"pipeline": {}})})
     assert resp.status_code == 200, resp.text
@@ -823,9 +823,9 @@ def test_confirm_import_invalid_json_returns_400(client: TestClient) -> None:
 def test_confirm_import_missing_table_returns_501(client: TestClient) -> None:
     err = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
     with (
-        patch("modulo.api.routes.library.materialize_import", new_callable=AsyncMock, side_effect=err),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.materialize_import", new_callable=AsyncMock, side_effect=err),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries/import/confirm", json={"bundle_json": "{}"})
     assert resp.status_code == 501
@@ -837,19 +837,19 @@ def test_confirm_import_git_content_ref_returns_422(client: TestClient) -> None:
     The materialize path raises the typed ``GitContentRefError``; without the
     endpoint mapping it would escape as a raw 500 because it is not a DB error.
     """
-    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from farna.core.pipeline_engine.git_content import GitContentRefError
 
     with (
         patch(
-            "modulo.api.routes.library.materialize_import",
+            "farna.api.routes.library.materialize_import",
             new_callable=AsyncMock,
             side_effect=GitContentRefError(
                 "Agent 'Ref Agent' prompt_template git content ref "
                 "'git+https://github.com/org/repo#prompts/ref.md' is not pinned"
             ),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries/import/confirm", json={"bundle_json": "{}"})
     assert resp.status_code == 422
@@ -865,7 +865,7 @@ def test_confirm_import_egress_policy_on_non_sandbox_node_returns_422(client: Te
     ``handle_db_errors`` backstop answered a generic 500, so the caller never
     learned which node/field to repair.
     """
-    from modulo.core.workflow_import_export import BUNDLE_FORMAT_VERSION
+    from farna.core.workflow_import_export import BUNDLE_FORMAT_VERSION
 
     bundle = {
         "format_version": BUNDLE_FORMAT_VERSION,
@@ -885,17 +885,17 @@ def test_confirm_import_egress_policy_on_non_sandbox_node_returns_422(client: Te
         # check) is the real code, so the assertion below proves the engine's
         # own rejection message reaches the caller.
         patch(
-            "modulo.core.workflow_import_export.get_existing_agent_names",
+            "farna.core.workflow_import_export.get_existing_agent_names",
             new_callable=AsyncMock,
             return_value=set(),
         ),
         patch(
-            "modulo.core.workflow_import_export.get_existing_pipeline_names",
+            "farna.core.workflow_import_export.get_existing_pipeline_names",
             new_callable=AsyncMock,
             return_value=set(),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/import/confirm",
@@ -915,8 +915,8 @@ def test_confirm_import_unsupported_bundle_format_returns_422(client: TestClient
     real engine runs here with no internal stubs at all.
     """
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/import/confirm",
@@ -937,12 +937,12 @@ def test_confirm_import_pydantic_validation_error_uses_generic_backstop(client: 
     """
     with (
         patch(
-            "modulo.api.routes.library.materialize_import",
+            "farna.api.routes.library.materialize_import",
             new_callable=AsyncMock,
             side_effect=_validation_error(),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries/import/confirm", json={"bundle_json": "{}"})
     assert resp.status_code == 422, resp.text
@@ -954,7 +954,7 @@ def test_install_collection_egress_policy_on_non_sandbox_node_returns_422(client
     same invalid-bundle ``ValueError`` (FAR-1846 egress rejection) must map to
     422 on the install route rather than the backstop's generic 500.
     """
-    from modulo.core.workflow_import_export import _reject_sandbox_only_fields_off_sandbox
+    from farna.core.workflow_import_export import _reject_sandbox_only_fields_off_sandbox
 
     # Derive the rejection from the REAL engine check so the test pins the
     # engine's message, not a hand-written string.
@@ -966,11 +966,11 @@ def test_install_collection_egress_policy_on_non_sandbox_node_returns_422(client
 
     with (
         patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=rejection,
         ),
-        patch("modulo.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
+        patch("farna.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/install")
     assert resp.status_code == 422, resp.text
@@ -986,11 +986,11 @@ def test_install_collection_pydantic_validation_error_uses_generic_backstop(clie
     """
     with (
         patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=_validation_error(),
         ),
-        patch("modulo.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
+        patch("farna.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/install")
     assert resp.status_code == 422, resp.text
@@ -1007,11 +1007,11 @@ def test_install_collection_malformed_manifest_pipeline_id_returns_500(client: T
 
     with (
         patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             return_value=install,
         ),
-        patch("modulo.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
+        patch("farna.api.routes.library._require_library_collection_flag", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/install")
     assert resp.status_code == 500, resp.text
@@ -1038,10 +1038,10 @@ def test_list_ratings_returns_items(client: TestClient) -> None:
     primitive = _make_listable_primitive(primitive_type="workflow")
     page = PageResult(items=[_make_rating()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=primitive),
-        patch("modulo.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=page),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=primitive),
+        patch("farna.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=page),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}/ratings")
     assert resp.status_code == 200, resp.text
@@ -1053,9 +1053,9 @@ def test_list_ratings_returns_items(client: TestClient) -> None:
 def test_lifecycle_map_ratings_are_hidden_from_ordinary_callers(client: TestClient) -> None:
     lifecycle_map = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
         patch(
-            "modulo.api.routes.library.get_settings",
+            "farna.api.routes.library.get_settings",
             return_value=Settings(
                 database_url="postgresql+asyncpg://localhost/test",
                 secret_key=_VALID_32,
@@ -1071,9 +1071,9 @@ def test_lifecycle_map_ratings_are_hidden_from_ordinary_callers(client: TestClie
 
 def test_rating_aggregate_returns_values(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(4.5, 2)),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(4.5, 2)),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}/ratings/aggregate")
     assert resp.status_code == 200, resp.text
@@ -1084,58 +1084,58 @@ def test_rating_aggregate_returns_values(client: TestClient) -> None:
 
 def test_submit_rating_returns_201(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock, return_value=_make_rating()),
-        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.submit_rating", new_callable=AsyncMock, return_value=_make_rating()),
+        patch("farna.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings", json={"thumbs_up": True})
     assert resp.status_code == 201, resp.text
 
 
 def test_submit_rating_self_rating_forbidden(client: TestClient) -> None:
-    from modulo.db.crud.rating import SelfRatingError
+    from farna.db.crud.rating import SelfRatingError
 
     with (
         patch(
-            "modulo.api.routes.library.submit_rating",
+            "farna.api.routes.library.submit_rating",
             new_callable=AsyncMock,
             side_effect=SelfRatingError("cannot rate own primitive"),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings", json={"thumbs_up": True})
     assert resp.status_code == 403
 
 
 def test_submit_rating_duplicate_returns_409(client: TestClient) -> None:
-    from modulo.db.crud.rating import DuplicateRatingError
+    from farna.db.crud.rating import DuplicateRatingError
 
     with (
         patch(
-            "modulo.api.routes.library.submit_rating",
+            "farna.api.routes.library.submit_rating",
             new_callable=AsyncMock,
             side_effect=DuplicateRatingError("already rated"),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings", json={"thumbs_up": True})
     assert resp.status_code == 409
 
 
 def test_submit_rating_cooldown_returns_429(client: TestClient) -> None:
-    from modulo.db.crud.rating import RatingCooldownError
+    from farna.db.crud.rating import RatingCooldownError
 
     with (
         patch(
-            "modulo.api.routes.library.submit_rating",
+            "farna.api.routes.library.submit_rating",
             new_callable=AsyncMock,
             side_effect=RatingCooldownError("slow down"),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings", json={"thumbs_up": True})
     assert resp.status_code == 429
@@ -1152,9 +1152,9 @@ def test_submit_rating_overlong_comment_rejected(client: TestClient) -> None:
 def test_lifecycle_map_abuse_reports_are_hidden_from_ordinary_callers(client: TestClient) -> None:
     lifecycle_map = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
         patch(
-            "modulo.api.routes.library.get_settings",
+            "farna.api.routes.library.get_settings",
             return_value=Settings(
                 database_url="postgresql+asyncpg://localhost/test",
                 secret_key=_VALID_32,
@@ -1181,9 +1181,9 @@ def test_submit_abuse_report_returns_201(client: TestClient) -> None:
     report.status = "open"
     report.created_at = _NOW
     with (
-        patch("modulo.api.routes.library.submit_abuse_report", new_callable=AsyncMock, return_value=report),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.submit_abuse_report", new_callable=AsyncMock, return_value=report),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             f"/api/v1/libraries/{uuid.uuid4()}/ratings/abuse",
@@ -1211,8 +1211,8 @@ def test_submit_abuse_report_short_reason_rejected(client: TestClient) -> None:
 
 
 def test_abuse_report_response_validates_a_real_orm_row() -> None:
-    from modulo.api.routes.library import AbuseReportResponse
-    from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
+    from farna.api.routes.library import AbuseReportResponse
+    from farna.db.models.primitive_abuse_report import PrimitiveAbuseReport
 
     report = PrimitiveAbuseReport(
         organisation_id=_ORG_ID,
@@ -1233,8 +1233,8 @@ def test_abuse_report_response_validates_a_real_orm_row() -> None:
 
 
 def test_rating_response_validates_a_real_orm_row() -> None:
-    from modulo.api.routes.library import RatingResponse
-    from modulo.db.models.primitive_rating import PrimitiveRating
+    from farna.api.routes.library import RatingResponse
+    from farna.db.models.primitive_rating import PrimitiveRating
 
     rating = PrimitiveRating(
         organisation_id=_ORG_ID,
@@ -1277,14 +1277,14 @@ def test_create_lifecycle_map_returns_201(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map", name="Map Template")
     lifecycle_map = _make_lifecycle_map_mock()
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.api.routes.library.materialize_map_from_primitive",
+            "farna.api.routes.library.materialize_map_from_primitive",
             new_callable=AsyncMock,
             return_value=lifecycle_map,
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
     assert resp.status_code == 201, resp.text
@@ -1294,9 +1294,9 @@ def test_create_lifecycle_map_returns_201(client: TestClient) -> None:
 def test_create_lifecycle_map_wrong_type_returns_422(client: TestClient) -> None:
     prim = _make_listable_primitive(primitive_type="workflow")
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
     assert resp.status_code == 422
@@ -1304,9 +1304,9 @@ def test_create_lifecycle_map_wrong_type_returns_422(client: TestClient) -> None
 
 def test_create_lifecycle_map_missing_returns_404(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/create-lifecycle-map")
     assert resp.status_code == 404
@@ -1319,10 +1319,10 @@ def test_create_lifecycle_map_missing_returns_404(client: TestClient) -> None:
 
 def test_community_contribute_lifecycle_map_returns_403_when_dev_mode_off(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock) as contribute_mock,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("farna.api.routes.library.contribute_primitive", new_callable=AsyncMock) as contribute_mock,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/community/contribute",
@@ -1335,9 +1335,9 @@ def test_community_contribute_lifecycle_map_returns_403_when_dev_mode_off(client
 def test_community_contribute_returns_201(client: TestClient) -> None:
     prim = _make_listable_primitive(source_url="https://example.com/p")
     with (
-        patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.contribute_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/community/contribute",
@@ -1349,9 +1349,9 @@ def test_community_contribute_returns_201(client: TestClient) -> None:
 def test_community_contribute_conflict_returns_409(client: TestClient) -> None:
     err = IntegrityError("INSERT", {}, Exception("unique"))
     with (
-        patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock, side_effect=err),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.contribute_primitive", new_callable=AsyncMock, side_effect=err),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
             "/api/v1/libraries/community/contribute",
@@ -1362,7 +1362,7 @@ def test_community_contribute_conflict_returns_409(client: TestClient) -> None:
 
 def test_list_community_contributions_returns_items(client: TestClient) -> None:
     page = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
-    with patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=page):
+    with patch("farna.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=page):
         resp = client.get("/api/v1/libraries/community/contributions")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1372,7 +1372,7 @@ def test_list_community_contributions_returns_items(client: TestClient) -> None:
 
 def test_admin_publish_contribution_returns_200(system_admin_client: TestClient) -> None:
     prim = _make_listable_primitive(source="registry", verified=True)
-    with patch("modulo.api.routes.library.publish_contribution", new_callable=AsyncMock, return_value=prim):
+    with patch("farna.api.routes.library.publish_contribution", new_callable=AsyncMock, return_value=prim):
         resp = system_admin_client.post(f"/api/v1/libraries/admin/library/community/publish/{prim.id}")
     assert resp.status_code == 200, resp.text
     assert resp.json()["trust_tier"] == "green"
@@ -1380,7 +1380,7 @@ def test_admin_publish_contribution_returns_200(system_admin_client: TestClient)
 
 def test_admin_publish_missing_contribution_returns_404(system_admin_client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library.publish_contribution",
+        "farna.api.routes.library.publish_contribution",
         new_callable=AsyncMock,
         side_effect=ContributionNotFoundError,
     ):
@@ -1390,7 +1390,7 @@ def test_admin_publish_missing_contribution_returns_404(system_admin_client: Tes
 
 def test_admin_publish_invalid_transition_returns_400(system_admin_client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library.publish_contribution",
+        "farna.api.routes.library.publish_contribution",
         new_callable=AsyncMock,
         side_effect=ContributionInvalidTransitionError("cannot publish"),
     ):
@@ -1409,7 +1409,7 @@ def test_admin_publish_requires_system_admin(client: TestClient) -> None:
 
 
 def test_split_primitive_types_variants() -> None:
-    from modulo.api.routes.library import _split_primitive_types
+    from farna.api.routes.library import _split_primitive_types
 
     assert _split_primitive_types("workflow, agent") == ["workflow", "agent"]
     assert _split_primitive_types("workflow,agent,schema") == ["workflow", "agent", "schema"]
@@ -1419,7 +1419,7 @@ def test_split_primitive_types_variants() -> None:
 
 
 def test_trust_tier_for_provenance() -> None:
-    from modulo.api.routes.library import _trust_tier_for
+    from farna.api.routes.library import _trust_tier_for
 
     assert _trust_tier_for("modulo", None) == "modulo"
     assert _trust_tier_for("registry", True) == "green"
@@ -1428,7 +1428,7 @@ def test_trust_tier_for_provenance() -> None:
 
 
 def test_require_organisation_id_rejects_missing_org() -> None:
-    from modulo.api.routes.library import _require_organisation_id
+    from farna.api.routes.library import _require_organisation_id
 
     anon = AuthenticatedPrincipal(username="u", organisation_id=None, account_id=_USER_ID, org_role=None)
     with pytest.raises(HTTPException) as exc_info:
@@ -1437,7 +1437,7 @@ def test_require_organisation_id_rejects_missing_org() -> None:
 
 
 def test_warn_duplicate_agent_names() -> None:
-    from modulo.api.routes.library import _warn_duplicate_agent_names
+    from farna.api.routes.library import _warn_duplicate_agent_names
 
     bundle: dict[str, Any] = {"agents": [{"name": "A"}, {"name": "A"}, {"name": "B"}]}
     warnings: list[str] = []
@@ -1457,8 +1457,8 @@ _INTEGRITY = IntegrityError("INSERT", {}, Exception("unique constraint"))
 
 def _rls_patches() -> tuple[Any, Any]:
     return (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     )
 
 
@@ -1489,16 +1489,16 @@ def _assert_error_mapping(client: TestClient, patch_target: str, call: Any, case
             ):
                 stack.enter_context(
                     patch(
-                        "modulo.api.routes.library.get_library_primitive",
+                        "farna.api.routes.library.get_library_primitive",
                         new_callable=AsyncMock,
                         return_value=_make_listable_primitive(),
                     )
                 )
             stack.enter_context(patch(patch_target, new_callable=AsyncMock, side_effect=exc))
             if "set_rls_org" not in patch_target:
-                stack.enter_context(patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock))
+                stack.enter_context(patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock))
             if "set_rls_user_context" not in patch_target:
-                stack.enter_context(patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock))
+                stack.enter_context(patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock))
             resp = call(client)
         assert resp.status_code == expected, f"{patch_target} with {type(exc).__name__}: got {resp.status_code}"
 
@@ -1511,7 +1511,7 @@ _GET_501_503 = [(_PROGRAMMING, 501), (SQLAlchemyError(), 503)]
 def test_get_library_primitive_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.get_primitive",
+        "farna.api.routes.library.get_primitive",
         _request("get", f"/api/v1/libraries/{uuid.uuid4()}"),
         [(exc, expected)],
     )
@@ -1521,7 +1521,7 @@ def test_get_library_primitive_error_mapping(client: TestClient, exc: Exception,
 def test_list_library_primitives_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.set_rls_org",
+        "farna.api.routes.library.set_rls_org",
         _request("get", "/api/v1/libraries"),
         [(exc, expected)],
     )
@@ -1529,8 +1529,8 @@ def test_list_library_primitives_error_mapping(client: TestClient, exc: Exceptio
 
 def test_list_library_primitives_unexpected_error_returns_500(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock, side_effect=RuntimeError),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/libraries")
     assert resp.status_code == 500
@@ -1539,7 +1539,7 @@ def test_list_library_primitives_unexpected_error_returns_500(client: TestClient
 def test_list_library_primitives_invalid_item_returns_500(client: TestClient) -> None:
     result = PageResult(items=[MagicMock()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result),
         _rls_patches()[0],
         _rls_patches()[1],
     ):
@@ -1549,7 +1549,7 @@ def test_list_library_primitives_invalid_item_returns_500(client: TestClient) ->
 
 
 def test_build_primitive_list_response_invalid_result_returns_500() -> None:
-    from modulo.api.routes.library import _build_primitive_list_response
+    from farna.api.routes.library import _build_primitive_list_response
 
     bogus = SimpleNamespace(total="not-an-int", page="x", page_size="y", next_cursor=None, has_more=False)
     with pytest.raises(HTTPException) as exc_info:
@@ -1559,10 +1559,10 @@ def test_build_primitive_list_response_invalid_result_returns_500() -> None:
 
 @pytest.mark.parametrize(("exc", "expected"), _GET_409_501_503, ids=["409", "501", "503"])
 def test_create_library_primitive_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
-    with_exit = patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, side_effect=exc)
+    with_exit = patch("farna.api.routes.library.create_library_primitive", new_callable=AsyncMock, side_effect=exc)
     with (
         with_exit,
-        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
         _rls_patches()[0],
         _rls_patches()[1],
     ):
@@ -1574,7 +1574,7 @@ def test_create_library_primitive_error_mapping(client: TestClient, exc: Excepti
 def test_update_library_primitive_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.update_library_primitive",
+        "farna.api.routes.library.update_library_primitive",
         _request("patch", f"/api/v1/libraries/{uuid.uuid4()}", json_body={"name": "X"}),
         [(exc, expected)],
     )
@@ -1584,7 +1584,7 @@ def test_update_library_primitive_error_mapping(client: TestClient, exc: Excepti
 def test_delete_library_primitive_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.soft_delete_library_primitive",
+        "farna.api.routes.library.soft_delete_library_primitive",
         _request("delete", f"/api/v1/libraries/{uuid.uuid4()}"),
         [(exc, expected)],
     )
@@ -1594,7 +1594,7 @@ def test_delete_library_primitive_error_mapping(client: TestClient, exc: Excepti
 def test_restore_library_primitive_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.restore_library_primitive",
+        "farna.api.routes.library.restore_library_primitive",
         _request("post", f"/api/v1/libraries/{uuid.uuid4()}/restore"),
         [(exc, expected)],
     )
@@ -1604,7 +1604,7 @@ def test_restore_library_primitive_error_mapping(client: TestClient, exc: Except
 def test_copy_to_adapt_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.copy_to_adapt",
+        "farna.api.routes.library.copy_to_adapt",
         _request("post", f"/api/v1/libraries/{uuid.uuid4()}/adapt", json_body={}),
         [(exc, expected)],
     )
@@ -1614,7 +1614,7 @@ def test_copy_to_adapt_error_mapping(client: TestClient, exc: Exception, expecte
 def test_export_pipeline_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.get_pipeline",
+        "farna.api.routes.library.get_pipeline",
         _request("post", f"/api/v1/libraries/export/{uuid.uuid4()}"),
         [(exc, expected)],
     )
@@ -1624,7 +1624,7 @@ def test_export_pipeline_error_mapping(client: TestClient, exc: Exception, expec
 def test_confirm_import_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.materialize_import",
+        "farna.api.routes.library.materialize_import",
         _request("post", "/api/v1/libraries/import/confirm", json_body={"bundle_json": "{}"}),
         [(exc, expected)],
     )
@@ -1634,7 +1634,7 @@ def test_confirm_import_error_mapping(client: TestClient, exc: Exception, expect
 def test_list_ratings_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.list_ratings_for_primitive",
+        "farna.api.routes.library.list_ratings_for_primitive",
         _request("get", f"/api/v1/libraries/{uuid.uuid4()}/ratings"),
         [(exc, expected)],
     )
@@ -1644,7 +1644,7 @@ def test_list_ratings_error_mapping(client: TestClient, exc: Exception, expected
 def test_rating_aggregate_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.get_rating_aggregate",
+        "farna.api.routes.library.get_rating_aggregate",
         _request("get", f"/api/v1/libraries/{uuid.uuid4()}/ratings/aggregate"),
         [(exc, expected)],
     )
@@ -1654,7 +1654,7 @@ def test_rating_aggregate_error_mapping(client: TestClient, exc: Exception, expe
 def test_submit_rating_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.submit_rating",
+        "farna.api.routes.library.submit_rating",
         _request("post", f"/api/v1/libraries/{uuid.uuid4()}/ratings", json_body={"thumbs_up": True}),
         [(exc, expected)],
     )
@@ -1664,7 +1664,7 @@ def test_submit_rating_error_mapping(client: TestClient, exc: Exception, expecte
 def test_submit_abuse_report_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.submit_abuse_report",
+        "farna.api.routes.library.submit_abuse_report",
         _request("post", f"/api/v1/libraries/{uuid.uuid4()}/ratings/abuse", json_body={"reason": "x" * 20}),
         [(exc, expected)],
     )
@@ -1674,9 +1674,9 @@ def test_submit_abuse_report_error_mapping(client: TestClient, exc: Exception, e
 def test_create_lifecycle_map_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
         patch(
-            "modulo.api.routes.library.materialize_map_from_primitive",
+            "farna.api.routes.library.materialize_map_from_primitive",
             new_callable=AsyncMock,
             side_effect=exc,
         ),
@@ -1691,8 +1691,8 @@ def test_create_lifecycle_map_error_mapping(client: TestClient, exc: Exception, 
 def test_create_pipeline_from_template_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     prim = _make_listable_primitive(primitive_type="pipeline_template")
     with (
-        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
-        patch("modulo.api.routes.library.create_pipeline", new_callable=AsyncMock, side_effect=exc),
+        patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("farna.api.routes.library.create_pipeline", new_callable=AsyncMock, side_effect=exc),
         _rls_patches()[0],
         _rls_patches()[1],
     ):
@@ -1704,7 +1704,7 @@ def test_create_pipeline_from_template_error_mapping(client: TestClient, exc: Ex
 def test_community_contribute_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.contribute_primitive",
+        "farna.api.routes.library.contribute_primitive",
         _request("post", "/api/v1/libraries/community/contribute", json_body=_create_payload()),
         [(exc, expected)],
     )
@@ -1714,36 +1714,36 @@ def test_community_contribute_error_mapping(client: TestClient, exc: Exception, 
 def test_list_community_contributions_error_mapping(client: TestClient, exc: Exception, expected: int) -> None:
     _assert_error_mapping(
         client,
-        "modulo.api.routes.library.list_org_contributions",
+        "farna.api.routes.library.list_org_contributions",
         _request("get", "/api/v1/libraries/community/contributions"),
         [(exc, expected)],
     )
 
 
 def test_list_community_contributions_unexpected_error_returns_500(client: TestClient) -> None:
-    with patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, side_effect=RuntimeError):
+    with patch("farna.api.routes.library.list_org_contributions", new_callable=AsyncMock, side_effect=RuntimeError):
         resp = client.get("/api/v1/libraries/community/contributions")
     assert resp.status_code == 500
 
 
 @pytest.mark.parametrize(("exc", "expected"), _GET_409_501_503, ids=["409", "501", "503"])
 def test_admin_publish_error_mapping(system_admin_client: TestClient, exc: Exception, expected: int) -> None:
-    with patch("modulo.api.routes.library.publish_contribution", new_callable=AsyncMock, side_effect=exc):
+    with patch("farna.api.routes.library.publish_contribution", new_callable=AsyncMock, side_effect=exc):
         resp = system_admin_client.post(f"/api/v1/libraries/admin/library/community/publish/{uuid.uuid4()}")
     assert resp.status_code == expected
 
 
 def test_submit_rating_copy_to_adapt_error_returns_403(client: TestClient) -> None:
-    from modulo.db.crud.rating import CopyToAdaptError
+    from farna.db.crud.rating import CopyToAdaptError
 
     with (
         patch(
-            "modulo.api.routes.library.submit_rating",
+            "farna.api.routes.library.submit_rating",
             new_callable=AsyncMock,
             side_effect=CopyToAdaptError("not allowed"),
         ),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(f"/api/v1/libraries/{uuid.uuid4()}/ratings", json={"thumbs_up": True})
     assert resp.status_code == 403
@@ -1774,7 +1774,7 @@ def _full_bundle() -> dict[str, Any]:
 
 
 def test_resolve_import_bundle_stamps_ids_and_warnings(client: TestClient) -> None:
-    import modulo.api.routes.library as lib
+    import farna.api.routes.library as lib
 
     team = MagicMock()
     team.id = uuid.uuid4()
@@ -1785,29 +1785,29 @@ def test_resolve_import_bundle_stamps_ids_and_warnings(client: TestClient) -> No
 
     with (
         patch(
-            "modulo.api.routes.library.get_existing_pipeline_names",
+            "farna.api.routes.library.get_existing_pipeline_names",
             new_callable=AsyncMock,
             return_value={"Existing"},
         ),
         patch(
-            "modulo.api.routes.library.resolve_schema",
+            "farna.api.routes.library.resolve_schema",
             new_callable=AsyncMock,
             return_value={"schema_id": "s-1", "version": 1, "warning": "schema warning"},
         ),
         patch(
-            "modulo.api.routes.library.resolve_connector_type",
+            "farna.api.routes.library.resolve_connector_type",
             new_callable=AsyncMock,
             return_value={"instance_id": "i-1", "warning": None},
         ),
         patch(
-            "modulo.api.routes.library.resolve_model_backend",
+            "farna.api.routes.library.resolve_model_backend",
             new_callable=AsyncMock,
             return_value={"model_backend_id": "mb-1", "warning": "backend warning"},
         ),
-        patch("modulo.api.routes.library.get_existing_agent_names", new_callable=AsyncMock, return_value={"AgentA"}),
-        patch("modulo.api.routes.library._fetch_available_teams", side_effect=_fake_teams),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_existing_agent_names", new_callable=AsyncMock, return_value={"AgentA"}),
+        patch("farna.api.routes.library._fetch_available_teams", side_effect=_fake_teams),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resolution = asyncio.run(
             lib._resolve_import_bundle(client.mock_session, _principal(), _full_bundle())  # type: ignore[attr-defined]
@@ -1835,26 +1835,26 @@ def test_analyse_endpoint_with_real_resolver_returns_conflicts(client: TestClien
         return [team]
 
     with (
-        patch("modulo.api.routes.library.get_existing_pipeline_names", new_callable=AsyncMock, return_value=set()),
+        patch("farna.api.routes.library.get_existing_pipeline_names", new_callable=AsyncMock, return_value=set()),
         patch(
-            "modulo.api.routes.library.resolve_schema",
+            "farna.api.routes.library.resolve_schema",
             new_callable=AsyncMock,
             return_value={"schema_id": "s-1", "version": 1},
         ),
         patch(
-            "modulo.api.routes.library.resolve_connector_type",
+            "farna.api.routes.library.resolve_connector_type",
             new_callable=AsyncMock,
             return_value={"instance_id": "i-1"},
         ),
         patch(
-            "modulo.api.routes.library.resolve_model_backend",
+            "farna.api.routes.library.resolve_model_backend",
             new_callable=AsyncMock,
             return_value={"model_backend_id": "mb-1"},
         ),
-        patch("modulo.api.routes.library.get_existing_agent_names", new_callable=AsyncMock, return_value=set()),
-        patch("modulo.api.routes.library._fetch_available_teams", side_effect=_fake_teams),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.get_existing_agent_names", new_callable=AsyncMock, return_value=set()),
+        patch("farna.api.routes.library._fetch_available_teams", side_effect=_fake_teams),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post("/api/v1/libraries/import/analyse", json={"bundle": _full_bundle()})
     assert resp.status_code == 200, resp.text
@@ -1867,7 +1867,7 @@ def test_analyse_endpoint_with_real_resolver_returns_conflicts(client: TestClien
 
 def test_analyse_bundle_integrity_error_returns_409(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library._resolve_import_bundle",
+        "farna.api.routes.library._resolve_import_bundle",
         new_callable=AsyncMock,
         side_effect=_INTEGRITY,
     ):
@@ -1877,7 +1877,7 @@ def test_analyse_bundle_integrity_error_returns_409(client: TestClient) -> None:
 
 def test_analyse_bundle_missing_table_returns_501(client: TestClient) -> None:
     with patch(
-        "modulo.api.routes.library._resolve_import_bundle",
+        "farna.api.routes.library._resolve_import_bundle",
         new_callable=AsyncMock,
         side_effect=_PROGRAMMING,
     ):
@@ -1891,7 +1891,7 @@ def test_analyse_bundle_missing_table_returns_501(client: TestClient) -> None:
 
 
 def test_read_zip_upload_rejects_oversized_content() -> None:
-    from modulo.api.routes.library import _MAX_UPLOAD_SIZE, _read_zip_upload
+    from farna.api.routes.library import _MAX_UPLOAD_SIZE, _read_zip_upload
 
     big_file = MagicMock()
     big_file.filename = "big.zip"
@@ -1903,7 +1903,7 @@ def test_read_zip_upload_rejects_oversized_content() -> None:
 
 
 def test_node_label_and_edge_helpers() -> None:
-    from modulo.api.routes.library import _convert_template_edges, _node_label
+    from farna.api.routes.library import _convert_template_edges, _node_label
 
     agents: list[dict[str, Any]] = [{"name": "A1"}]
     assert _node_label({"node_type": "manual", "label": "Gate"}, agents, None) == "Gate"
@@ -1925,7 +1925,7 @@ def test_node_label_and_edge_helpers() -> None:
 
 
 def test_bind_helpers_stamp_resolved_ids() -> None:
-    from modulo.api.routes.library import _bind_connector_instances_to_graph, _bind_model_backends_to_agents
+    from farna.api.routes.library import _bind_connector_instances_to_graph, _bind_model_backends_to_agents
 
     pipeline_info: dict[str, Any] = {"graph_nodes_json": [{"connector_binding": {"connector_type_id": "ct-1"}}]}
     _bind_connector_instances_to_graph(pipeline_info, {"ct-1": "i-1"})

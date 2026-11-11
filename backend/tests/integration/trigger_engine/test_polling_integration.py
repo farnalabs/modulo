@@ -15,20 +15,20 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.connectors.base import ConnectorResult
-from modulo.core.trigger_engine.polling import _fire_polling_trigger
-from modulo.db.models.run import Run
-from modulo.db.models.trigger import Trigger
-from modulo.db.models.trigger_event import TriggerEvent
-from modulo.db.rls import set_rls_org
+from farna.connectors.base import ConnectorResult
+from farna.core.trigger_engine.polling import _fire_polling_trigger
+from farna.db.models.run import Run
+from farna.db.models.trigger import Trigger
+from farna.db.models.trigger_event import TriggerEvent
+from farna.db.rls import set_rls_org
 
-_POLL_PKG = "modulo.core.trigger_engine.polling"
-# The fire logic lives in ``modulo.core.cron_helpers.fire_polling_trigger``
+_POLL_PKG = "farna.core.trigger_engine.polling"
+# The fire logic lives in ``farna.core.cron_helpers.fire_polling_trigger``
 # (polling.py re-exports it). Settings are read there via
 # ``cron_helpers.get_settings`` and the secrets backend is constructed via
-# ``modulo.core.secrets_backend.create_secrets_backend``.
-_CRON_PKG = "modulo.core.cron_helpers"
-_SECRETS_PKG = "modulo.core.secrets_backend"
+# ``farna.core.secrets_backend.create_secrets_backend``.
+_CRON_PKG = "farna.core.cron_helpers"
+_SECRETS_PKG = "farna.core.secrets_backend"
 
 # Share the session-scoped Postgres container from conftest
 pytestmark = [

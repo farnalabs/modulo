@@ -31,7 +31,7 @@ def ctx() -> dict:
 
 @given("a Grafana connector configured with valid credentials")
 def grafana_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.grafana import GrafanaConnector
+    from farna.connectors.grafana import GrafanaConnector
 
     ctx["connector"] = GrafanaConnector(token=TOKEN)
     ctx["valid"] = True
@@ -39,7 +39,7 @@ def grafana_connector_valid(ctx: dict) -> None:
 
 @given("a Grafana connector configured with invalid credentials")
 def grafana_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.grafana import GrafanaConnector
+    from farna.connectors.grafana import GrafanaConnector
 
     ctx["connector"] = GrafanaConnector(token=TOKEN)
     ctx["valid"] = False
@@ -57,7 +57,7 @@ def grafana_health_check(ctx: dict) -> None:
 
 @when("the connector queries dashboards")
 def grafana_query_dashboards(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     dashboards = [
         {"uid": "d1", "title": "System Dashboard", "type": "dash-db"},
@@ -72,7 +72,7 @@ def grafana_query_dashboards(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries dashboard with uid "{uid}"'))
 def grafana_query_dashboard_by_uid(uid: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     dashboard = {"dashboard": {"uid": uid, "title": "My Dashboard"}, "meta": {"slug": "my-dashboard"}}
     with respx.mock:
@@ -84,7 +84,7 @@ def grafana_query_dashboard_by_uid(uid: str, ctx: dict) -> None:
 
 @when("the connector queries alert rules")
 def grafana_query_alert_rules(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     rules = [{"uid": "r1", "name": "High CPU Rule"}, {"uid": "r2", "name": "Memory Rule"}]
     with respx.mock:
@@ -94,7 +94,7 @@ def grafana_query_alert_rules(ctx: dict) -> None:
 
 @when("the connector queries datasources")
 def grafana_query_datasources(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     datasources = [{"id": 1, "name": "Prometheus", "type": "prometheus"}, {"id": 2, "name": "Loki", "type": "loki"}]
     with respx.mock:
@@ -104,7 +104,7 @@ def grafana_query_datasources(ctx: dict) -> None:
 
 @when(parsers.parse('the connector creates an annotation with text "{text}"'))
 def grafana_write_annotation(text: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/api/annotations").mock(return_value=httpx.Response(200, json={"id": 42, "text": text}))

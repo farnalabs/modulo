@@ -3,8 +3,8 @@
 Builds real container-hosted fixtures for the 9 self-hostable connectors
 (gitea, jenkins, n8n, youtrack, sonarqube, grafana, teamcity, codeclimate,
 gitlab) and the 5 OpenAI-compatible local model servers (ollama, llamacpp,
-localai, vllm, tgi) that the ``modulo.connectors`` and
-``modulo.model_backends`` clients talk to.
+localai, vllm, tgi) that the ``farna.connectors`` and
+``farna.model_backends`` clients talk to.
 
 Design rules (FAR-934):
 

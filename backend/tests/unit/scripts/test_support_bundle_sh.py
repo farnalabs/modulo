@@ -13,7 +13,7 @@ What is pinned here:
 * credential posture — ``.env`` / ``secrets.json`` are never copied, and a value
   that lives only in them never reaches a member;
 * the app-merge contract — members from
-  ``python -m modulo.support.bundle --out ... --json`` are merged into the SAME
+  ``python -m farna.support.bundle --out ... --json`` are merged into the SAME
   zip, the module's ref line and ``bundle_format_version`` win, and its own
   MANIFEST/report are preserved under ``app/`` rather than dropped;
 * a failed run leaves no archive behind that could be mistaken for a bundle.
@@ -133,7 +133,7 @@ case "${1:-}" in
       run)
         # One-off redaction filter (the contract with FAR-2305):
         #   docker compose run --rm -T --no-deps --entrypoint python backend \
-        #     -m modulo.support.bundle --redact-stdin
+        #     -m farna.support.bundle --redact-stdin
         # STUB_REDACT_STDIN_OK=1 makes this act as the module's stdin gate; the
         # default is UNAVAILABLE, which is what the collector must tolerate.
         if [[ "${STUB_REDACT_STDIN_OK:-0}" != "1" ]]; then
@@ -154,7 +154,7 @@ case "${1:-}" in
           printf '%s\n' "${STUB_APP_JSON:-}"
           exit 0
         fi
-        printf 'No module named modulo.support.bundle\n' >&2
+        printf 'No module named farna.support.bundle\n' >&2
         exit 1
         ;;
       *) printf 'unexpected compose subcommand: %s\n' "$sub" >&2; exit 1 ;;
@@ -358,7 +358,7 @@ class TestStackDown:
         assert lines[0].startswith("modulo support bundle 1 ref=MSB-1-")
         assert lines[1].startswith(f"bundle: {out} (")
         assert lines[2] == (
-            "Log tails were withheld because redaction via modulo.support.bundle was unavailable (3 service(s))."
+            "Log tails were withheld because redaction via farna.support.bundle was unavailable (3 service(s))."
         )
         assert "before sending" in lines[3]
 
@@ -374,8 +374,8 @@ class TestStackDown:
         )
         assert proc.returncode == 0, proc.stderr
         manifest = _member_text(out, "MANIFEST.txt")
-        assert "modulo.support.bundle failed" in manifest
-        assert "No module named modulo.support.bundle" in manifest
+        assert "farna.support.bundle failed" in manifest
+        assert "No module named farna.support.bundle" in manifest
 
 
 class TestCredentials:
@@ -479,7 +479,7 @@ class TestLogRedaction:
         assert not [name for name in names if name.startswith("docker/logs/")]
         manifest = _member_text(out, "MANIFEST.txt")
         assert "log tail withheld" in manifest
-        assert "python -m modulo.support.bundle --redact-stdin" in manifest
+        assert "python -m farna.support.bundle --redact-stdin" in manifest
         assert "pull access denied" in manifest
         for name in names:
             assert PLANTED_GITHUB_TOKEN not in _member_text(out, name)

@@ -21,7 +21,7 @@ from onelogin.saml2.response import OneLogin_Saml2_Response
 from onelogin.saml2.settings import OneLogin_Saml2_Settings
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
 
-from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
+from farna.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 
 NS_SAML = "urn:oasis:names:tc:SAML:2.0:assertion"
 NS_SAMLP = "urn:oasis:names:tc:SAML:2.0:protocol"

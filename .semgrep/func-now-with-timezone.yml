@@ -8,4 +8,4 @@ rules:
     languages: [python]
     severity: ERROR
     paths:
-      include: ["**/backend/src/modulo/**"]
+      include: ["**/backend/src/farna/**"]

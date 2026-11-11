@@ -9,7 +9,7 @@ drifted pin set and fail closed.
 
 import uuid
 
-from modulo.core.guardrails import fingerprint_guardrail_pins
+from farna.core.guardrails import fingerprint_guardrail_pins
 
 _PIN_A = {
     "id": str(uuid.uuid4()),

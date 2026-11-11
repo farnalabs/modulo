@@ -1,4 +1,4 @@
-"""Tests for modulo.core.license_signing — team license generation."""
+"""Tests for farna.core.license_signing — team license generation."""
 
 import base64
 import json
@@ -9,15 +9,15 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
-from modulo.core.license_signing import (
+from farna.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
+from farna.core.license_signing import (
     TEAM_FEATURES,
     LicenseSigningError,
     build_team_payload,
     encode_license_key,
     generate_team_license,
 )
-from modulo.core.registry.crypto import generate_keypair
+from farna.core.registry.crypto import generate_keypair
 
 _ORIGINAL_KEY = _LICENSE_PUBLIC_KEY_HEX
 
@@ -125,14 +125,14 @@ class TestGenerateTeamLicense:
         kp = generate_keypair()
         set_public_key(kp["public_key"])
         fake_settings = SimpleNamespace(modulo_license_private_key=kp["private_key"])
-        with patch("modulo.core.license_signing.get_settings", return_value=fake_settings):
+        with patch("farna.core.license_signing.get_settings", return_value=fake_settings):
             key = generate_team_license("Acme")
         assert parse_and_verify(key).valid is True
 
     def test_no_private_key_raises(self) -> None:
         with (
             patch(
-                "modulo.core.license_signing.get_settings", return_value=SimpleNamespace(modulo_license_private_key="")
+                "farna.core.license_signing.get_settings", return_value=SimpleNamespace(modulo_license_private_key="")
             ),
             pytest.raises(LicenseSigningError, match="MODULO_LICENSE_PRIVATE_KEY"),
         ):

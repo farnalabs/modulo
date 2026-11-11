@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.variant_group import (
+from farna.db.crud.variant_group import (
     _as_dict,
     _coerce_snapshot_id,
     _extract_agent_ids_from_graph,
@@ -32,7 +32,7 @@ from modulo.db.crud.variant_group import (
     update_variant_group,
     validate_batch_ownership,
 )
-from modulo.db.models.agent import Agent
+from farna.db.models.agent import Agent
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -156,7 +156,7 @@ class TestCheckPipelineRunQuotaForBatch:
         group.max_concurrent_runs = 5
 
         with patch(
-            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            "farna.db.crud.variant_group.count_active_runs_for_pipeline",
             new_callable=AsyncMock,
             return_value=3,
         ):
@@ -169,7 +169,7 @@ class TestCheckPipelineRunQuotaForBatch:
         group.max_concurrent_runs = 5
 
         with patch(
-            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            "farna.db.crud.variant_group.count_active_runs_for_pipeline",
             new_callable=AsyncMock,
             return_value=4,
         ):
@@ -182,7 +182,7 @@ class TestCheckPipelineRunQuotaForBatch:
         group.max_concurrent_runs = 2
 
         with patch(
-            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            "farna.db.crud.variant_group.count_active_runs_for_pipeline",
             new_callable=AsyncMock,
             return_value=2,
         ):
@@ -235,12 +235,12 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
         ):
             results = await run_variant_batch(
                 session,
@@ -290,12 +290,12 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             results = await run_variant_batch(
                 session,
@@ -343,14 +343,14 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
             patch(
-                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                "farna.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
                 return_value={agent_a: "You are v3."},
             ),
@@ -396,14 +396,14 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
             patch(
-                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                "farna.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
                 return_value={},
             ),
@@ -433,11 +433,11 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
         ):
             result = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -455,7 +455,7 @@ class TestRunVariantBatch:
         exec_result.scalar_one_or_none.return_value = locked
         session.execute.return_value = exec_result
 
-        with patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
+        with patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
             result = await run_variant_batch(session, org_id=org_id, group=group)
 
         assert result is None
@@ -477,11 +477,11 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
         ):
             result = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -497,7 +497,7 @@ class TestRunVariantBatch:
         exec_result.scalar_one_or_none.return_value = None
         session.execute.return_value = exec_result
 
-        with patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
+        with patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
             result = await run_variant_batch(session, org_id=org_id, group=group)
 
         assert result is None
@@ -533,12 +533,12 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             results = await run_variant_batch(session, org_id=org_id, group=group, input_payload={"topic": "x"})
 
@@ -561,12 +561,12 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             results = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -593,12 +593,12 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
         ):
             results = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -624,16 +624,16 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ) as mock_create,
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             results = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -667,23 +667,23 @@ class TestRunVariantBatch:
         # First fire.
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             first = await run_variant_batch(session, org_id=org_id, group=group)
         # Second fire.
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             second = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -729,16 +729,16 @@ class TestRunVariantBatch:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                "farna.db.crud.variant_group.check_pipeline_run_quota_for_batch",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ) as mock_create,
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             results = await run_variant_batch(session, org_id=org_id, group=group)
 
@@ -803,10 +803,10 @@ class TestRunVariantWeighted:
         mock_run.id = uuid.uuid4()
 
         with (
-            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
-            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("farna.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             result = await run_variant_weighted(session, org_id=org_id, group=group, input_payload={"existing": "data"})
 
@@ -836,7 +836,7 @@ class TestRunVariantWeighted:
         exec_result.scalar_one_or_none.return_value = locked
         session.execute.return_value = exec_result
 
-        with patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=False):
+        with patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=False):
             result = await run_variant_weighted(session, org_id=org_id, group=group)
 
         assert result is None
@@ -876,8 +876,8 @@ class TestRunVariantWeighted:
         session.execute.return_value = exec_result
 
         with (
-            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
-            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=None),
+            patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("farna.db.crud.variant_group.pick_variant_weighted", return_value=None),
         ):
             result = await run_variant_weighted(session, org_id=org_id, group=group)
 
@@ -903,7 +903,7 @@ class TestRunVariantWeighted:
         exec_result.scalar_one_or_none.return_value = locked
         session.execute.return_value = exec_result
 
-        with patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True):
+        with patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True):
             result = await run_variant_weighted(session, org_id=org_id, group=group)
 
         assert result is None
@@ -932,10 +932,10 @@ class TestRunVariantWeighted:
         mock_run.id = uuid.uuid4()
 
         with (
-            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
-            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("farna.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             result = await run_variant_weighted(session, org_id=org_id, group=group)
 
@@ -985,10 +985,10 @@ class TestRunVariantWeighted:
         mock_run.id = uuid.uuid4()
 
         with (
-            patch("modulo.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
-            patch("modulo.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
-            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
-            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+            patch("farna.db.crud.variant_group.check_pipeline_run_quota", new_callable=AsyncMock, return_value=True),
+            patch("farna.db.crud.variant_group.pick_variant_weighted", return_value=group.variants[0]),
+            patch("farna.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("farna.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
         ):
             result = await run_variant_weighted(session, org_id=org_id, group=group, input_payload={"existing": "data"})
 
@@ -1418,7 +1418,7 @@ class TestResolvePromptTemplateOverride:
             return by_id[agent_id]
 
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             side_effect=_get,
         ):
@@ -1437,7 +1437,7 @@ class TestResolvePromptTemplateOverride:
         session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
 
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             return_value=a,
         ):
@@ -1456,7 +1456,7 @@ class TestResolvePromptTemplateOverride:
         session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
 
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             return_value=a,
         ):
@@ -1477,7 +1477,7 @@ class TestResolvePromptTemplateOverride:
         session = self._session(snapshot_exists=True, graph_json={"nodes": [{"agent_id": str(a.id)}]})
 
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             return_value=a,
         ):
@@ -1514,7 +1514,7 @@ class TestResolvePromptTemplateOverride:
             return by_id[agent_id]
 
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             side_effect=_get,
         ):
@@ -1545,7 +1545,7 @@ class TestResolvePromptTemplateOverride:
             graph_json={"nodes": [{"agent_id": str(uuid.uuid4())}]},
         )
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1567,7 +1567,7 @@ class TestResolvePromptTemplateOverride:
             graph_json={"nodes": [{"agent_id": str(a.id)}]},
         )
         with patch(
-            "modulo.db.crud.variant_group.get_agent",
+            "farna.db.crud.variant_group.get_agent",
             new_callable=AsyncMock,
             return_value=a,
         ):
@@ -1794,7 +1794,7 @@ class TestCheckPipelineRunQuota:
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
         with patch(
-            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            "farna.db.crud.variant_group.count_active_runs_for_pipeline",
             new_callable=AsyncMock,
             return_value=3,
         ):
@@ -1806,7 +1806,7 @@ class TestCheckPipelineRunQuota:
         group.pipeline_id = uuid.uuid4()
         group.max_concurrent_runs = 5
         with patch(
-            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            "farna.db.crud.variant_group.count_active_runs_for_pipeline",
             new_callable=AsyncMock,
             return_value=5,
         ):
@@ -2019,7 +2019,7 @@ class TestGetBatchCompare:
     async def test_empty_runs_returns_empty(self) -> None:
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         with patch(
-            "modulo.db.crud.variant_group.get_batch_runs",
+            "farna.db.crud.variant_group.get_batch_runs",
             new_callable=AsyncMock,
             return_value=[],
         ):
@@ -2067,25 +2067,25 @@ class TestRunVariantWeightedPromptVersion:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota",
+                "farna.db.crud.variant_group.check_pipeline_run_quota",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.db.crud.variant_group.pick_variant_weighted",
+                "farna.db.crud.variant_group.pick_variant_weighted",
                 return_value=group.variants[0],
             ),
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.db.crud.variant_group.increment_run_count",
+                "farna.db.crud.variant_group.increment_run_count",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                "farna.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
                 return_value={agent_id: "resolved template"},
             ),
@@ -2129,25 +2129,25 @@ class TestRunVariantWeightedPromptVersion:
 
         with (
             patch(
-                "modulo.db.crud.variant_group.check_pipeline_run_quota",
+                "farna.db.crud.variant_group.check_pipeline_run_quota",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.db.crud.variant_group.pick_variant_weighted",
+                "farna.db.crud.variant_group.pick_variant_weighted",
                 return_value=group.variants[0],
             ),
             patch(
-                "modulo.db.crud.variant_group.create_run",
+                "farna.db.crud.variant_group.create_run",
                 new_callable=AsyncMock,
                 return_value=mock_run,
             ),
             patch(
-                "modulo.db.crud.variant_group.increment_run_count",
+                "farna.db.crud.variant_group.increment_run_count",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.crud.variant_group._resolve_prompt_template_override",
+                "farna.db.crud.variant_group._resolve_prompt_template_override",
                 new_callable=AsyncMock,
                 return_value={},
             ),

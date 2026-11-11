@@ -14,7 +14,7 @@ import — or, worse, an auth-exercising test loses its patch. These tests pin:
 - the PATCH path via a ``sys.modules`` marker (stack already loaded);
 - the PATCH path via source mention (the lazy in-body-import shape);
 - ``_provisioned_system_engine``'s skip path (its body imports
-  ``modulo.api.dependencies``, which executes ``modulo.auth.dependencies``);
+  ``farna.api.dependencies``, which executes ``farna.auth.dependencies``);
 - the source-scan helper itself: token read from the module's own file and
   cached per ``(path, token)``.
 
@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-import modulo.auth.dependencies as _auth_deps
+import farna.auth.dependencies as _auth_deps
 import tests.unit.conftest as _unit_conftest
 from tests.conftest import _REAL_VERIFY_IDENTITY
 
@@ -66,18 +66,18 @@ def test_mentions_helper_reads_the_file_and_caches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Token is read from the module's source; results are cached per file."""
-    request = _fake_request(tmp_path, monkeypatch, "target = 'modulo.api'\n")
+    request = _fake_request(tmp_path, monkeypatch, "target = 'farna.api'\n")
 
-    assert _unit_conftest._test_module_mentions(request.node, "modulo.api")
-    assert not _unit_conftest._test_module_mentions(request.node, "modulo.auth")
+    assert _unit_conftest._test_module_mentions(request.node, "farna.api")
+    assert not _unit_conftest._test_module_mentions(request.node, "farna.auth")
 
     registered_file = sys.modules[_FAKE_MODNAME].__file__
-    assert _unit_conftest._MENTION_CACHE.get((registered_file, "modulo.api")) is True
+    assert _unit_conftest._MENTION_CACHE.get((registered_file, "farna.api")) is True
 
     # Cache: rewriting the file must NOT change the answer — a re-read would
     # flip this to False, so the assertion fails if the cache is bypassed.
     (tmp_path / f"{_FAKE_MODNAME}.py").write_text("nothing relevant here\n", encoding="utf-8")
-    assert _unit_conftest._test_module_mentions(request.node, "modulo.api")
+    assert _unit_conftest._test_module_mentions(request.node, "farna.api")
 
 
 def test_patch_gate_skips_without_hint_and_does_not_import_auth(
@@ -116,7 +116,7 @@ def test_patch_gate_patches_on_source_mention_of_lazy_import(
     This is the lazy in-body-import shape: the fixture decides BEFORE the
     test body imports the stack, so the source scan is the only signal.
     """
-    source = "def go():\n    from modulo.api.main import app\n    return app\n"
+    source = "def go():\n    from farna.api.main import app\n    return app\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_stack_markers(monkeypatch)
 
@@ -132,8 +132,8 @@ def test_provisioned_engine_gate_skips_without_hint(
     """The system-settings stub's body must not import the stack when gated off.
 
     ``_provisioned_system_engine``'s body does
-    ``from modulo.api import dependencies`` — which executes
-    ``modulo.auth.dependencies`` — so a skip must leave BOTH markers out of
+    ``from farna.api import dependencies`` — which executes
+    ``farna.auth.dependencies`` — so a skip must leave BOTH markers out of
     ``sys.modules`` (otherwise a pure-logic session regains the import via
     this fixture even with ``_patch_verify_identity`` gated).
     """
@@ -142,7 +142,7 @@ def test_provisioned_engine_gate_skips_without_hint(
 
     _unit_conftest._provisioned_system_engine.__wrapped__(request, monkeypatch)
 
-    assert "modulo.api.dependencies" not in sys.modules
+    assert "farna.api.dependencies" not in sys.modules
     assert _unit_conftest._AUTH_DEPS_MODULE not in sys.modules
 
 
@@ -151,7 +151,7 @@ def test_gate_predicate_is_conservative_on_mention(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A comment/docstring mention still counts — false positives are safe."""
-    source = "# touches modulo.api in comments only\nvalue = 1\n"
+    source = "# touches farna.api in comments only\nvalue = 1\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_stack_markers(monkeypatch)
 

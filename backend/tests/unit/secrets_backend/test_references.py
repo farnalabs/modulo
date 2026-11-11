@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from modulo.core.secrets_backend import (
+from farna.core.secrets_backend import (
     CredentialReferenceError,
     SecretsBackend,
     is_secret_ref,
@@ -156,16 +156,16 @@ class TestBackendOrgScopeFlags:
     """FAR-1640: only the Fernet backend partitions secrets by organisation."""
 
     def test_base_and_external_backends_are_not_org_scoped(self) -> None:
-        from modulo.core.secrets_backend import SecretsBackend
-        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
-        from modulo.core.secrets_backend.vault import VaultSecretsBackend
+        from farna.core.secrets_backend import SecretsBackend
+        from farna.core.secrets_backend.aws import AWSSecretsManagerBackend
+        from farna.core.secrets_backend.vault import VaultSecretsBackend
 
         assert SecretsBackend.organisation_scoped is False
         assert AWSSecretsManagerBackend.organisation_scoped is False
         assert VaultSecretsBackend.organisation_scoped is False
 
     def test_fernet_backend_is_org_scoped(self) -> None:
-        from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+        from farna.core.secrets_backend.fernet import FernetSecretsBackend
 
         assert FernetSecretsBackend.organisation_scoped is True
 
@@ -180,11 +180,11 @@ class TestMultiOrgExternalBackendGuard:
 
     @pytest.fixture
     def multi_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.core.secrets_backend.references._multi_org_enabled", lambda: True)
+        monkeypatch.setattr("farna.core.secrets_backend.references._multi_org_enabled", lambda: True)
 
     @pytest.fixture
     def single_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.core.secrets_backend.references._multi_org_enabled", lambda: False)
+        monkeypatch.setattr("farna.core.secrets_backend.references._multi_org_enabled", lambda: False)
 
     async def test_unscoped_backend_refused_in_multi_org_without_reading(self, multi_org: None) -> None:
         backend = _FakeBackend({"kv/x": "sk-secret"})

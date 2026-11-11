@@ -37,7 +37,7 @@ services:
   # for the worker role).
   saq-runner:
     build: ./backend
-    command: ["python", "-m", "saq", "modulo.core.saq_worker.runs_settings"]
+    command: ["python", "-m", "saq", "farna.core.saq_worker.runs_settings"]
     depends_on:
       db-local:
         condition: service_healthy
@@ -65,12 +65,12 @@ services:
       # -> feedback_manager) - both reaching crud.run.create_run. Without the
       # volume visible here those runs resolve capacity "none" and the 98%
       # hard-stop is inert for them.
-      DB_CAPACITY_PATH: /var/lib/modulo/db-volume
+      DB_CAPACITY_PATH: /var/lib/farna/db-volume
     volumes:
       - ./backend/src:/app/src
       # Read-only: the monitor only statvfs()es it (fails open, stop inert, if
       # it cannot - see DB_CAPACITY_BYTES to override with an explicit size).
-      - pgdata_local:/var/lib/modulo/db-volume:ro
+      - pgdata_local:/var/lib/farna/db-volume:ro
 
   # SAQ system worker — owns the scheduler (fire_due_triggers) + reconcile +
   # system crons (plan F8). REQUIRED for local cron/triggers (see Local
@@ -78,7 +78,7 @@ services:
   # via the custom runner (fly-ssh-only equivalent in prod).
   saq-system:
     build: ./backend
-    command: ["python", "-m", "modulo.core.saq_worker"]
+    command: ["python", "-m", "farna.core.saq_worker"]
     depends_on:
       db-local:
         condition: service_healthy
@@ -99,14 +99,14 @@ services:
       # here (cron_helpers.fire_cron_trigger / _run_poll_fire), so the volume
       # must be visible in this process for the 98% hard-stop to arm with no
       # DB_CAPACITY_BYTES set.
-      DB_CAPACITY_PATH: /var/lib/modulo/db-volume
+      DB_CAPACITY_PATH: /var/lib/farna/db-volume
     ports:
       - "127.0.0.1:8081:8081"
     volumes:
       - ./backend/src:/app/src
       # Read-only: the monitor only statvfs()es it (fails open, stop inert, if
       # it cannot - see DB_CAPACITY_BYTES to override with an explicit size).
-      - pgdata_local:/var/lib/modulo/db-volume:ro
+      - pgdata_local:/var/lib/farna/db-volume:ro
 
   otel-collector:
     profiles:

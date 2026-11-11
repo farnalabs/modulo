@@ -19,16 +19,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import RunDailyFact
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from farna.db.models.base import Base
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import RunDailyFact
+from farna.db.models.run_node_outputs import RunNodeOutput
 
 # The migration file (structural: no DB needed).
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"
@@ -36,7 +36,7 @@ _MIGRATION_PATH = (
 )
 
 # The sweep module source.
-_SWEEP_MODULE = Path(__file__).resolve().parents[3] / "src" / "modulo" / "core" / "analytics" / "enforcement_sweep.py"
+_SWEEP_MODULE = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "analytics" / "enforcement_sweep.py"
 
 
 def test_index_predicate_matches_sweep_filter() -> None:
@@ -60,7 +60,7 @@ def test_index_predicate_matches_sweep_filter() -> None:
 
 def test_sweep_wired_into_dispatcher_reconcile() -> None:
     """The sweep is imported and called from _run_reconcile_sweeps in cron_helpers."""
-    cron_helpers_path = Path(__file__).resolve().parents[3] / "src" / "modulo" / "core" / "cron_helpers.py"
+    cron_helpers_path = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "cron_helpers.py"
     source = cron_helpers_path.read_text(encoding="utf-8")
     assert "sweep_schema_enforcement_facts" in source
     assert "enforcement_sweep_scanned" in source
@@ -88,7 +88,7 @@ def test_sweep_accepts_factory_not_session() -> None:
     """
     import inspect
 
-    from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+    from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
     sig = inspect.signature(sweep_schema_enforcement_facts)
     params = list(sig.parameters.keys())
@@ -195,7 +195,7 @@ class TestSweepSchemaEnforcementFacts:
         FAILS WITHOUT FIX: the sweep crashes with AttributeError on every tick
         because it receives a factory instead of a session.
         """
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         async with factory() as session:
@@ -228,7 +228,7 @@ class TestSweepSchemaEnforcementFacts:
     @pytest.mark.anyio
     async def test_idempotent_second_tick_does_not_re_correct(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """The sweep is idempotent — a second tick finds no work to do."""
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         async with factory() as session:
@@ -253,7 +253,7 @@ class TestSweepSchemaEnforcementFacts:
     @pytest.mark.anyio
     async def test_excludes_run_without_enforcement_data(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """A run with NULL enforcement columns but NO enforcement data is not scanned."""
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         async with factory() as session:
@@ -267,7 +267,7 @@ class TestSweepSchemaEnforcementFacts:
     @pytest.mark.anyio
     async def test_multiple_runs_bounded_per_tick(self, factory: async_sessionmaker[AsyncSession]) -> None:
         """The sweep processes at most _SWEEP_MAX_PER_TICK runs per tick."""
-        from modulo.core.analytics.enforcement_sweep import (
+        from farna.core.analytics.enforcement_sweep import (
             _SWEEP_MAX_PER_TICK,
             sweep_schema_enforcement_facts,
         )
@@ -301,7 +301,7 @@ class TestSweepSchemaEnforcementFacts:
         """
         from unittest.mock import patch
 
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         async with factory() as session:
@@ -311,7 +311,7 @@ class TestSweepSchemaEnforcementFacts:
             await session.commit()
 
         with patch(
-            "modulo.core.analytics.enforcement_sweep.text",
+            "farna.core.analytics.enforcement_sweep.text",
             side_effect=RuntimeError("structural failure"),
         ):
             result = await sweep_schema_enforcement_facts(factory)
@@ -329,7 +329,7 @@ class TestSweepSchemaEnforcementFacts:
         non-object ``schema_enforcement_json`` (e.g. a legacy list) is counted
         as scanned but contributes no aggregate and is not corrected.
         """
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         async with factory() as session:
@@ -361,7 +361,7 @@ class TestSweepSchemaEnforcementFacts:
         """A CancelledError is re-raised, never swallowed as a generic failure."""
         import asyncio
 
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         def _cancelled_factory() -> None:
             raise asyncio.CancelledError
@@ -379,7 +379,7 @@ class TestSweepSchemaEnforcementFacts:
         """
         from unittest.mock import AsyncMock, MagicMock
 
-        from modulo.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
+        from farna.core.analytics.enforcement_sweep import sweep_schema_enforcement_facts
 
         run_id = uuid.uuid4()
         scan_result = MagicMock()

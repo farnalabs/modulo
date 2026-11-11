@@ -1,4 +1,4 @@
-"""QA lens tests for ``modulo.core.trigger_validation`` (FAR-158).
+"""QA lens tests for ``farna.core.trigger_validation`` (FAR-158).
 
 The ``ongoing`` trigger type keeps a pipeline topped up to a target number of
 in-flight runs. Its configuration is validated identically at every write
@@ -21,7 +21,7 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
-from modulo.core.trigger_validation import validate_ongoing_config
+from farna.core.trigger_validation import validate_ongoing_config
 
 
 def _raise_detail(exc: HTTPException) -> str:

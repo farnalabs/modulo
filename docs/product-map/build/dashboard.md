@@ -3,8 +3,8 @@ id: feat-dashboard
 prd: 8.20
 adr: []
 code:
-  - backend/src/modulo/api/routes/dashboard.py
-  - backend/src/modulo/db/crud/daily_run_count.py
+  - backend/src/farna/api/routes/dashboard.py
+  - backend/src/farna/db/crud/daily_run_count.py
 unit-tests:
   - backend/tests/unit/api/test_dashboard.py
   - backend/tests/unit/api/test_daily_run_counts.py

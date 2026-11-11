@@ -8,8 +8,8 @@ import pytest
 import respx
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.n8n import N8NConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.n8n import N8NConnector
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/n8n.feature")

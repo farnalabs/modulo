@@ -38,8 +38,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import RunRetryPolicyError
-from modulo.core.pipeline_execution import run_executor_with_watchdog
+from farna.core.pipeline_engine.executor import RunRetryPolicyError
+from farna.core.pipeline_execution import run_executor_with_watchdog
 
 # Short-but-safe node timeout: the kill fires ~0.2s after node start while
 # staying far above event-loop jitter (the >=6x margin rule). Production runs
@@ -85,15 +85,15 @@ def _retry_db_seams(retry_policy: dict[str, Any]):
 
     factory = MagicMock(side_effect=lambda: _session_ctx())
     return (
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
-        patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
-        patch("modulo.db.rls.set_rls_org", AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", AsyncMock()),
-        patch("modulo.core.pipeline_engine.watchdog_retry.async_sessionmaker", return_value=factory),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=run)),
+        patch("farna.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("farna.db.rls.set_rls_org", AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", AsyncMock()),
+        patch("farna.core.pipeline_engine.watchdog_retry.async_sessionmaker", return_value=factory),
         # The hook's discoverable backoff sleep (45-300s defaults) is patched at
         # the asyncio boundary so the re-dispatch path completes instantly
         # without changing the decision logic under test.
-        patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()),
     )
 
 
@@ -124,11 +124,11 @@ async def test_node_deadline_watchdog_fires_and_redispatches_under_timeout_polic
     with contextlib.ExitStack() as stack:
         for seam in _retry_db_seams({"on": ["timeout"], "max_retries": 2}):
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=60, saq_node_default_timeout_seconds=1200),
             )
         )

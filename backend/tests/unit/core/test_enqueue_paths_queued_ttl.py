@@ -30,13 +30,13 @@ from unittest.mock import AsyncMock
 import fakeredis.aioredis as fakeredis
 import pytest
 
-import modulo.core.cron_helpers as ch
-import modulo.core.saq_worker as sw
-from modulo.core import dispatch
+import farna.core.cron_helpers as ch
+import farna.core.saq_worker as sw
+from farna.core import dispatch
 
 
 def _payload(status: str) -> str:
-    return json.dumps({"function": "modulo.core.saq_worker.execute_run", "status": status})
+    return json.dumps({"function": "farna.core.saq_worker.execute_run", "status": status})
 
 
 class _OpenFakeRedis(fakeredis.FakeRedis):
@@ -95,7 +95,7 @@ async def test_fire_enqueue_bounds_a_queued_job_hash() -> None:
     redis = _OpenFakeRedis()
     queue = _FireQueue(redis)
 
-    job_id = await ch._enqueue_fire_job_async(queue, "modulo.core.saq_worker.fire_cron_trigger", key="epoch-1")
+    job_id = await ch._enqueue_fire_job_async(queue, "farna.core.saq_worker.fire_cron_trigger", key="epoch-1")
 
     assert job_id == "saq:job:fire:epoch-1"
     assert await redis.ttl(job_id) == dispatch.SAQ_QUEUED_JOB_TTL
@@ -106,7 +106,7 @@ async def test_fire_enqueue_leaves_a_picked_up_job_alone() -> None:
     redis = _OpenFakeRedis()
     queue = _FireQueue(redis, status="active")
 
-    job_id = await ch._enqueue_fire_job_async(queue, "modulo.core.saq_worker.fire_cron_trigger", key="epoch-1")
+    job_id = await ch._enqueue_fire_job_async(queue, "farna.core.saq_worker.fire_cron_trigger", key="epoch-1")
 
     assert job_id == "saq:job:fire:epoch-1"
     assert await redis.ttl(job_id) == -1
@@ -118,7 +118,7 @@ async def test_fire_enqueue_bounds_a_hash_deduped_by_another_machine() -> None:
     await redis.set("saq:job:fire:epoch-1", _payload("queued"))
     queue = _FireQueue(redis, dedupe=True)
 
-    job_id = await ch._enqueue_fire_job_async(queue, "modulo.core.saq_worker.fire_cron_trigger", key="epoch-1")
+    job_id = await ch._enqueue_fire_job_async(queue, "farna.core.saq_worker.fire_cron_trigger", key="epoch-1")
 
     assert job_id is None
     assert await redis.ttl("saq:job:fire:epoch-1") == dispatch.SAQ_QUEUED_JOB_TTL
@@ -131,7 +131,7 @@ async def test_report_fire_enqueue_is_not_bound() -> None:
 
     job_id = await ch._enqueue_fire_job_async(
         queue,
-        "modulo.core.saq_worker.fire_report_trigger",
+        "farna.core.saq_worker.fire_report_trigger",
         key="epoch-1",
         repairable=False,
     )

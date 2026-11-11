@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.library.workflows.definitions import DAILY_REVIEWER
+from farna.core.library.workflows.definitions import DAILY_REVIEWER
 
 from .helpers import assert_step_case_matches, assert_step_ids
 

@@ -32,7 +32,7 @@ def ctx() -> dict:
 
 @given("a Microsoft Teams connector configured with valid credentials")
 def teams_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
+    from farna.connectors.microsoft_teams import MicrosoftTeamsConnector
 
     ctx["connector"] = MicrosoftTeamsConnector(token="ms_test_token")
     ctx["valid"] = True
@@ -40,7 +40,7 @@ def teams_connector_valid(ctx: dict) -> None:
 
 @given("a Microsoft Teams connector configured with invalid credentials")
 def teams_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
+    from farna.connectors.microsoft_teams import MicrosoftTeamsConnector
 
     ctx["connector"] = MicrosoftTeamsConnector(token="bad_token")
     ctx["valid"] = False
@@ -60,7 +60,7 @@ def teams_health_check(ctx: dict) -> None:
 
 @when("the connector queries teams")
 def teams_query_teams(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     teams = [
         {"id": "T1", "displayName": "Engineering", "description": "Engineering team"},
@@ -73,7 +73,7 @@ def teams_query_teams(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries team with team_id "{team_id}"'))
 def teams_query_team(team_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     team = {"id": team_id, "displayName": "Engineering", "description": "Build stuff"}
     with respx.mock:
@@ -85,7 +85,7 @@ def teams_query_team(team_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries channels for team "{team_id}"'))
 def teams_query_channels(team_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     channels = [
         {"id": "C1", "displayName": "General"},
@@ -100,7 +100,7 @@ def teams_query_channels(team_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries channel with team_id "{team_id}" and channel_id "{channel_id}"'))
 def teams_query_channel(team_id: str, channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     channel = {"id": channel_id, "displayName": "General", "description": "General discussions"}
     with respx.mock:
@@ -114,7 +114,7 @@ def teams_query_channel(team_id: str, channel_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries messages in team "{team_id}" and channel "{channel_id}"'))
 def teams_query_messages(team_id: str, channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     messages = [
         {"id": "M1", "body": {"content": "Hello"}},
@@ -133,7 +133,7 @@ def teams_query_messages(team_id: str, channel_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries members of team "{team_id}"'))
 def teams_query_members(team_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     members = [
         {"id": "M1", "displayName": "Alice"},
@@ -148,7 +148,7 @@ def teams_query_members(team_id: str, ctx: dict) -> None:
 
 @when("the connector queries users")
 def teams_query_users(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     users = [
         {"id": "U1", "displayName": "Alice", "mail": "alice@example.com"},
@@ -161,7 +161,7 @@ def teams_query_users(ctx: dict) -> None:
 
 @when("the connector queries groups")
 def teams_query_groups(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     groups = [
         {"id": "G1", "displayName": "Sales Team"},
@@ -174,7 +174,7 @@ def teams_query_groups(ctx: dict) -> None:
 
 @when(parsers.parse('the connector sends a message "{content}" to team "{team_id}" and channel "{channel_id}"'))
 def teams_write_message(content: str, team_id: str, channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/teams/{team_id}/channels/{channel_id}/messages").mock(
@@ -195,7 +195,7 @@ def teams_write_message(content: str, team_id: str, channel_id: str, ctx: dict) 
 
 @when(parsers.parse('the connector creates a channel "{name}" in team "{team_id}"'))
 def teams_write_channel(name: str, team_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/teams/{team_id}/channels").mock(

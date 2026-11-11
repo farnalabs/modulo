@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin_orgs`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin_orgs`` (FAR-573).
 
 Complements test_admin_orgs.py by exercising the endpoints and branches the
 existing suite leaves uncovered: org listing (orphan hidden), org deletion,
@@ -22,18 +22,18 @@ from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes.admin_orgs as admin_orgs
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.license import LicenseValidation
-from modulo.db.models.organisation import (
+import farna.api.routes.admin_orgs as admin_orgs
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.license import LicenseValidation
+from farna.db.models.organisation import (
     MODULO_REGISTRY_ORG_ID,
     SYSTEM_ORG_ID,
     Organisation,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -474,7 +474,7 @@ def test_get_org_license_from_org_key(api: tuple[TestClient, AsyncMock], monkeyp
     org = _org(settings_json={"license_key": "org-key"})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
@@ -491,10 +491,10 @@ def test_get_org_license_falls_back_to_system_license(
     org = _org(settings_json={"license_key": "invalid-org-key"})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=False, license_data=None, error="bad signature")),
     )
-    monkeypatch.setattr("modulo.core.license.get_license", MagicMock(return_value=_license_data()))
+    monkeypatch.setattr("farna.core.license.get_license", MagicMock(return_value=_license_data()))
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == 200
     assert resp.json()["tier"] == "pro"
@@ -504,7 +504,7 @@ def test_get_org_license_no_license(api: tuple[TestClient, AsyncMock], monkeypat
     client, _ = api
     org = _org(settings_json=None)
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-    monkeypatch.setattr("modulo.core.license.get_license", MagicMock(return_value=None))
+    monkeypatch.setattr("farna.core.license.get_license", MagicMock(return_value=None))
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == 200
     data = resp.json()
@@ -534,11 +534,11 @@ def test_set_org_license_success(api: tuple[TestClient, AsyncMock], monkeypatch:
     org = _org(settings_json={})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
     update = AsyncMock(return_value=org.settings_json or {})
-    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", update)
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", update)
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "valid-key"})
     assert resp.status_code == 200
     data = resp.json()
@@ -554,7 +554,7 @@ def test_set_org_license_invalid_key_422(api: tuple[TestClient, AsyncMock], monk
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=LicenseValidation(valid=False, license_data=None, error="expired")),
     )
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "expired-key"})
@@ -565,7 +565,7 @@ def test_set_org_license_invalid_key_422(api: tuple[TestClient, AsyncMock], monk
 def test_set_org_license_parse_raises_422(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
-    monkeypatch.setattr("modulo.core.license.parse_and_verify", MagicMock(side_effect=ValueError("malformed key")))
+    monkeypatch.setattr("farna.core.license.parse_and_verify", MagicMock(side_effect=ValueError("malformed key")))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "junk"})
     assert resp.status_code == 422
 
@@ -584,10 +584,10 @@ def test_set_org_license_update_error_mapping(
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == expected
 
@@ -598,11 +598,11 @@ def test_set_org_license_update_unexpected_500(
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
     monkeypatch.setattr(
-        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom"))
+        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom"))
     )
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == 500
@@ -613,7 +613,7 @@ def test_remove_org_license_success(api: tuple[TestClient, AsyncMock], monkeypat
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     update = AsyncMock(return_value=org.settings_json or {})
-    monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", update)
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", update)
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
     assert resp.status_code == 200
     data = resp.json()
@@ -648,7 +648,7 @@ def test_remove_org_license_error_mapping(
 
 def _patch_fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     """Route ``admin_license``'s cache Redis at a shared fakeredis server (FAR-1719)."""
-    import modulo.api.routes.admin_license as admin_license
+    import farna.api.routes.admin_license as admin_license
 
     # The invalidation helper reads settings.redis_url, which the unit conftest
     # pins to "" (unparseable by fakeredis). Re-override it for these tests.
@@ -679,11 +679,11 @@ def test_set_org_license_invalidates_org_status_cache(
     org = _org(settings_json={})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(
-        "modulo.core.license.parse_and_verify",
+        "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
     monkeypatch.setattr(
-        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
+        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
     )
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
@@ -703,7 +703,7 @@ def test_remove_org_license_invalidates_org_status_cache(
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(
-        "modulo.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
+        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
     )
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
@@ -871,7 +871,7 @@ def test_set_org_guardrails_kill_switch_enable_notifies(
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(admin_orgs, "append_audit_event", AsyncMock())
     notify = AsyncMock()
-    monkeypatch.setattr("modulo.core.guardrails.notify_guardrail_event", notify)
+    monkeypatch.setattr("farna.core.guardrails.notify_guardrail_event", notify)
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch", json={"enabled": True})
     assert resp.status_code == 200
     data = resp.json()
@@ -888,7 +888,7 @@ def test_set_org_guardrails_kill_switch_disable_no_notify(
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
     monkeypatch.setattr(admin_orgs, "append_audit_event", AsyncMock())
     notify = AsyncMock()
-    monkeypatch.setattr("modulo.core.guardrails.notify_guardrail_event", notify)
+    monkeypatch.setattr("farna.core.guardrails.notify_guardrail_event", notify)
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch", json={"enabled": False})
     assert resp.status_code == 200
     data = resp.json()

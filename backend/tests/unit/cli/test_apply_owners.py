@@ -18,10 +18,10 @@ import uuid
 import httpx
 import respx
 
-from modulo.api.routes.pipelines import PipelineCreate, PipelineUpdate
-from modulo.cli.apply.drift import has_drift
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
-from modulo.cli.apply.loader import parse_apply_documents
+from farna.api.routes.pipelines import PipelineCreate, PipelineUpdate
+from farna.cli.apply.drift import has_drift
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor
+from farna.cli.apply.loader import parse_apply_documents
 from tests.unit.cli.test_apply_pipeline import _mock_current_with_pipelines, _pipeline_item
 
 _EXISTING_ID = "00000000-0000-0000-0000-0000000000aa"

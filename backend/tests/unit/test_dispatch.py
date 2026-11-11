@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.dispatch — dispatch_run routing (plan F3e/F6).
+"""Unit tests for farna.core.dispatch — dispatch_run routing (plan F3e/F6).
 
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)
@@ -27,8 +27,8 @@ from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import OperationalError
 
-from modulo.api.models.error import ErrorEventInput
-from modulo.core import dispatch
+from farna.api.models.error import ErrorEventInput
+from farna.core import dispatch
 from tests.unit.api.mock_session import configure_redis_client, make_redis_client
 
 RUN_ID = "fb4b1368-68ca-4125-8091-ca8d7c25839e"
@@ -98,7 +98,7 @@ def _make_settings(**overrides: object) -> MagicMock:
 def _rls_patch() -> MagicMock:
     """Patch set_rls_org / set_rls_execution_context (imported lazily inside dispatch_run)."""
     return patch.multiple(
-        "modulo.db.rls",
+        "farna.db.rls",
         set_rls_org=AsyncMock(),
         set_rls_execution_context=AsyncMock(),
     )
@@ -366,7 +366,7 @@ class TestCountActiveRunsForOrg:
         return statuses
 
     async def test_include_pending_false_excludes_pending(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_org
+        from farna.db.crud.run import count_active_runs_for_org
 
         executed: list[tuple[object, object]] = []
 
@@ -385,7 +385,7 @@ class TestCountActiveRunsForOrg:
         assert statuses == {"running", "awaiting_human", "claimed"}
 
     async def test_include_pending_true_includes_pending(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_org
+        from farna.db.crud.run import count_active_runs_for_org
 
         executed: list[object] = []
 
@@ -415,7 +415,7 @@ class TestCountActiveRunsForOrg:
                 stmt_sql.append(str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})))
                 return _Result()
 
-        from modulo.db.crud.run import count_active_runs_for_org
+        from farna.db.crud.run import count_active_runs_for_org
 
         org_id = uuid.uuid4()
         rid = uuid.uuid4()
@@ -426,7 +426,7 @@ class TestCountActiveRunsForOrg:
         assert "runs.id !=" in rendered or "id !=" in rendered
 
     async def test_returns_count(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_org
+        from farna.db.crud.run import count_active_runs_for_org
 
         class _Result:
             def scalar_one_or_none(self) -> int:
@@ -453,26 +453,26 @@ def _org_with_run_settings(settings: Any) -> MagicMock:
 
 class TestGetOrgRunConcurrencyLimit:
     async def test_unset_returns_none(self) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
-        with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_run_settings({})):
+        with patch("farna.db.crud.run.get_organisation", return_value=_org_with_run_settings({})):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
 
     async def test_returns_int(self) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
         org = _org_with_run_settings({"run_concurrency_limit": 5})
-        with patch("modulo.db.crud.run.get_organisation", return_value=org):
+        with patch("farna.db.crud.run.get_organisation", return_value=org):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 5
 
     async def test_clamps_out_of_range(self) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
         org_high = _org_with_run_settings({"run_concurrency_limit": 9999})
-        with patch("modulo.db.crud.run.get_organisation", return_value=org_high):
+        with patch("farna.db.crud.run.get_organisation", return_value=org_high):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 100
         org_low = _org_with_run_settings({"run_concurrency_limit": 0})
-        with patch("modulo.db.crud.run.get_organisation", return_value=org_low):
+        with patch("farna.db.crud.run.get_organisation", return_value=org_low):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 1
 
     @pytest.mark.parametrize(
@@ -480,24 +480,24 @@ class TestGetOrgRunConcurrencyLimit:
         ["3", 3.0, True, False, [3], {"v": 3}],
     )
     async def test_fail_open_on_bad_type(self, bad_value: object) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
         with patch(
-            "modulo.db.crud.run.get_organisation",
+            "farna.db.crud.run.get_organisation",
             return_value=_org_with_run_settings({"run_concurrency_limit": bad_value}),
         ):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
 
     async def test_fail_open_on_non_dict_settings(self) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
-        with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_run_settings("not-a-dict")):
+        with patch("farna.db.crud.run.get_organisation", return_value=_org_with_run_settings("not-a-dict")):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
 
     async def test_fail_open_on_missing_org(self) -> None:
-        from modulo.db.crud.run import get_org_run_concurrency_limit
+        from farna.db.crud.run import get_org_run_concurrency_limit
 
-        with patch("modulo.db.crud.run.get_organisation", return_value=None):
+        with patch("farna.db.crud.run.get_organisation", return_value=None):
             assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
 
 
@@ -515,29 +515,29 @@ def _run_with_status(status: str) -> MagicMock:
 class TestOrgCapacityDeferred:
     @pytest.mark.asyncio
     async def test_defers_and_writes_marker_when_at_cap_and_pending(self) -> None:
-        from modulo.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED
+        from farna.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED
 
         session = AsyncMock()
         run_id = uuid.UUID(RUN_ID)
         org_id = uuid.UUID(ORG_ID)
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
             patch(
-                "modulo.db.crud.run.get_run",
+                "farna.db.crud.run.get_run",
                 new_callable=AsyncMock,
                 return_value=_run_with_status("pending"),
             ),
             patch(
-                "modulo.db.crud.run.update_run_status",
+                "farna.db.crud.run.update_run_status",
                 new_callable=AsyncMock,
             ) as update_status,
         ):
@@ -567,21 +567,21 @@ class TestOrgCapacityDeferred:
         org_id = uuid.UUID(ORG_ID)
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
             patch(
-                "modulo.db.crud.run.get_run",
+                "farna.db.crud.run.get_run",
                 new_callable=AsyncMock,
                 return_value=_run_with_status(current_status),
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(session, run_id, org_id)
 
@@ -603,16 +603,16 @@ class TestOrgCapacityDeferred:
         org_id = uuid.UUID(ORG_ID)
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=1,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 return_value=1,
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(session, run_id, org_id, job_type="resume_run")
 
@@ -623,16 +623,16 @@ class TestOrgCapacityDeferred:
     async def test_admits_when_under_cap(self) -> None:
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=5,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
 
@@ -643,11 +643,11 @@ class TestOrgCapacityDeferred:
     async def test_admits_when_no_cap_configured(self) -> None:
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
 
@@ -658,11 +658,11 @@ class TestOrgCapacityDeferred:
     async def test_fail_open_when_limit_read_raises(self) -> None:
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
 
@@ -673,16 +673,16 @@ class TestOrgCapacityDeferred:
     async def test_fail_open_when_count_raises(self) -> None:
         with (
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=2,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("count failed"),
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
 
@@ -700,7 +700,7 @@ class TestOrgCapacityDeferred:
         with (
             pytest.raises(asyncio.CancelledError),
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),
@@ -732,7 +732,7 @@ class TestCapacityDeferred:
     async def test_missing_run_defers(self) -> None:
         """A run that vanished before the capacity check cannot be enqueued."""
         session = AsyncMock()
-        with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=None):
+        with patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=None):
             deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
@@ -744,7 +744,7 @@ class TestCapacityDeferred:
         run = MagicMock()
         run.pipeline_id = uuid.uuid4()
         session = _session_with_pipeline(None)
-        with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run):
+        with patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run):
             deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
         assert deferred is True
@@ -760,8 +760,8 @@ class TestCapacityDeferred:
         pipeline.max_concurrent_runs = max_concurrent
         session = _session_with_pipeline(pipeline)
         with (
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
-            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
         ):
             deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID))
 
@@ -776,9 +776,9 @@ class TestCapacityDeferred:
         pipeline.max_concurrent_runs = 2
         session = _session_with_pipeline(pipeline)
         with (
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_pipeline",
+                "farna.db.crud.run.count_active_runs_for_pipeline",
                 new_callable=AsyncMock,
                 return_value=2,
             ) as count,
@@ -802,9 +802,9 @@ class TestCapacityDeferred:
         pipeline.max_concurrent_runs = 3
         session = _session_with_pipeline(pipeline)
         with (
-            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_pipeline",
+                "farna.db.crud.run.count_active_runs_for_pipeline",
                 new_callable=AsyncMock,
                 return_value=1,
             ) as count,
@@ -881,21 +881,21 @@ class TestDispatchRunOrgCapacity:
             _enqueue_patch(return_value=(JOB_ID, False)),
             patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
             patch(
-                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                "farna.db.crud.run.get_org_run_concurrency_limit",
                 new_callable=AsyncMock,
                 return_value=1,
             ),
             patch(
-                "modulo.db.crud.run.count_active_runs_for_org",
+                "farna.db.crud.run.count_active_runs_for_org",
                 new_callable=AsyncMock,
                 return_value=1,
             ),
             patch(
-                "modulo.db.crud.run.get_run",
+                "farna.db.crud.run.get_run",
                 new_callable=AsyncMock,
                 return_value=_run_with_status("running"),
             ),
-            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+            patch("farna.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
         ):
             outcome, job_id = await dispatch.dispatch_run(
                 RUN_ID,
@@ -954,7 +954,7 @@ class TestErrorSourceEnum:
     def test_constraint_contains_saq(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        from modulo.db.models import Base
+        from farna.db.models import Base
 
         table = Base.metadata.tables["error_events"]
         check = next(
@@ -1121,7 +1121,7 @@ class TestOpenSession:
         divergent second pool (the pool-divergence connection churn bug)."""
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
-            patch("modulo.api.dependencies.get_or_create_engine") as get_engine,
+            patch("farna.api.dependencies.get_or_create_engine") as get_engine,
             patch.object(dispatch, "async_sessionmaker") as sm,
         ):
             session = dispatch._open_session()
@@ -1255,18 +1255,18 @@ class TestCallSiteConversions:
     def test_webhooks_module_uses_dispatch_run(self) -> None:
         from fastapi import BackgroundTasks
 
-        from modulo.api.routes import webhooks
+        from farna.api.routes import webhooks
 
         assert webhooks.dispatch_run is dispatch.dispatch_run
         assert webhooks.BackgroundTasks is BackgroundTasks
 
     def test_runs_manual_route_uses_dispatch_run(self) -> None:
-        from modulo.api.routes import runs
+        from farna.api.routes import runs
 
         assert runs.dispatch_run is dispatch.dispatch_run
 
     def test_mcp_server_uses_dispatch_run(self) -> None:
-        import modulo.api.mcp_server as mcp
+        import farna.api.mcp_server as mcp
 
         assert mcp.dispatch_run is dispatch.dispatch_run
 
@@ -1393,7 +1393,7 @@ class TestReconcileF6aRecovery:
         approving the gate). The committed-decision guard in
         ``_awaiting_human_has_committed_decision`` now skips genuinely-waiting
         runs so a lost resume job can never silently approve a gate."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 40)
@@ -1440,7 +1440,7 @@ class TestReconcileF6aRecovery:
     async def test_awaiting_human_with_live_job_skipped(self, monkeypatch) -> None:
         """F6a gate: an awaiting_human run whose job still exists is NOT
         re-dispatched — the no-job gate is the discriminator."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 40)
@@ -1483,7 +1483,7 @@ class TestReconcileF6aRecovery:
         """Plan F8/B5: a running SAQ run at its claim cap with a STALE heartbeat
         is FAILED, not re-dispatched — via the dedicated org-scoped terminalizer
         UPDATE, independent of the reconcile predicates."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 40)
@@ -1533,7 +1533,7 @@ class TestReconcileF6aRecovery:
         """B5 regression: a capped run with a FRESH heartbeat is a LIVE run on
         its final claim — the terminalizer must NOT fire (stale-heartbeat gate),
         and the run is re-dispatched (no job)."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 40)
@@ -1579,7 +1579,7 @@ class TestReconcileF6aRecovery:
 
     def test_reconcile_job_type_discriminator(self) -> None:
         """F6a discriminator: awaiting_human/claimed -> resume_run; else execute_run."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         assert ch._reconcile_job_type("awaiting_human") == "resume_run"
         assert ch._reconcile_job_type("claimed") == "resume_run"
@@ -1589,7 +1589,7 @@ class TestReconcileF6aRecovery:
     def test_reconcile_predicate_contains_f6a_branch(self) -> None:
         """The reconcile predicate includes an awaiting_human/claimed staleness
         branch (F6a), alongside the pending/running branches."""
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         pred = ch._build_re_dispatch_predicate(
             reenqueue_window=600,
@@ -1687,7 +1687,7 @@ class TestWritersBoundTheirRowLockWait:
     ) -> None:
         session = _PgRecordingSession()
         with patch(
-            "modulo.db.crud.row_lock.get_settings",
+            "farna.db.crud.row_lock.get_settings",
             return_value=_make_settings(mutation_row_lock_timeout_ms=5000),
         ):
             await writer(session, *args)
@@ -1718,13 +1718,13 @@ class TestWritersBoundTheirRowLockWait:
             patch.object(dispatch, "_open_session", return_value=session),
             _rls_patch(),
             patch(
-                "modulo.db.crud.run.get_run",
+                "farna.db.crud.run.get_run",
                 new_callable=AsyncMock,
                 return_value=SimpleNamespace(status="pending"),
             ),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=True),
             patch(
-                "modulo.db.crud.row_lock.get_settings",
+                "farna.db.crud.row_lock.get_settings",
                 return_value=_make_settings(mutation_row_lock_timeout_ms=5000),
             ),
         ):
@@ -1747,14 +1747,14 @@ class TestLockBoundBelowHaproxyWindow:
     _HAPROXY_SESSION_WINDOW_SECONDS = 1800
 
     def test_default_value_is_well_below_the_window(self) -> None:
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         default_ms = Settings.model_fields["mutation_row_lock_timeout_ms"].default
         assert default_ms == 5000
         assert default_ms < self._HAPROXY_SESSION_WINDOW_SECONDS * 1000
 
     def test_operator_ceiling_is_well_below_the_window(self) -> None:
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         field = Settings.model_fields["mutation_row_lock_timeout_ms"]
         ceilings = [m.le for m in field.metadata if getattr(m, "le", None) is not None]
@@ -1798,7 +1798,7 @@ class TestLockTimeoutHandling:
             ),
             _enqueue_patch() as enqueue,
         ):
-            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            caplog.set_level(logging.WARNING, logger="farna.core.dispatch")
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
         assert outcome == "deferred"
@@ -1828,7 +1828,7 @@ class TestLockTimeoutHandling:
             _enqueue_patch() as enqueue,
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
         ):
-            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            caplog.set_level(logging.WARNING, logger="farna.core.dispatch")
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
         assert outcome == "deferred"
@@ -1862,7 +1862,7 @@ class TestLockTimeoutHandling:
                 side_effect=_lock_timeout_error("UPDATE runs SET dispatcher='saq'"),
             ),
         ):
-            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            caplog.set_level(logging.WARNING, logger="farna.core.dispatch")
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
         assert outcome == "enqueued"
@@ -1897,7 +1897,7 @@ class TestLockTimeoutHandling:
             ),
             patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock),
         ):
-            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            caplog.set_level(logging.WARNING, logger="farna.core.dispatch")
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
         assert outcome == "enqueue_failed"
@@ -1946,7 +1946,7 @@ class TestLockTimeoutHandling:
         dispatcher_reconcile re-dispatches every tick — 'retried on the next
         dispatch tick' is enforced by the existing recovery query, not assumed.
         """
-        from modulo.core import cron_helpers as ch
+        from farna.core import cron_helpers as ch
 
         pred = ch._build_re_dispatch_predicate(
             reenqueue_window=600,

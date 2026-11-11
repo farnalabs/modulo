@@ -11,10 +11,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import operators
 
-from modulo.core.email_service import EmailSendingError
-from modulo.core.reports.cost_report import deliver_cost_report, format_cost_report, generate_cost_report
-from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
-from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
+from farna.core.email_service import EmailSendingError
+from farna.core.reports.cost_report import deliver_cost_report, format_cost_report, generate_cost_report
+from farna.core.reports.scheduler import _fire_scheduled_report, get_generator
+from farna.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
 from tests.unit.reports.helpers import (
     MockSession,
     has_predicate,
@@ -25,7 +25,7 @@ from tests.unit.reports.helpers import (
 
 
 def test_cost_report_generator_is_registered() -> None:
-    from modulo.core.reports import _register_cost_report
+    from farna.core.reports import _register_cost_report
 
     _register_cost_report()
     assert get_generator("cost") is generate_cost_report
@@ -34,9 +34,7 @@ def test_cost_report_generator_is_registered() -> None:
 async def test_generate_format_and_deliver_cost_report() -> None:
     rows = [{"entity_id": "team-1", "entity_name": "Platform", "total_spend_usd": 2.5, "total_runs": 4}]
     session = MagicMock(spec=AsyncSession)
-    with patch(
-        "modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock, return_value=rows
-    ) as get_cost:
+    with patch("farna.core.reports.cost_report.get_cost_report", new_callable=AsyncMock, return_value=rows) as get_cost:
         generated = await generate_cost_report(
             cast(AsyncSession, session),
             uuid.uuid4(),
@@ -49,8 +47,8 @@ async def test_generate_format_and_deliver_cost_report() -> None:
     assert "total_spend_usd" in payload["body_text"]
 
     with (
-        patch("modulo.core.reports.cost_report.get_settings", return_value=MagicMock()),
-        patch("modulo.core.reports.cost_report.send_email", return_value=True) as send,
+        patch("farna.core.reports.cost_report.get_settings", return_value=MagicMock()),
+        patch("farna.core.reports.cost_report.send_email", return_value=True) as send,
     ):
         results = await deliver_cost_report(payload, {"type": "email", "emails": ["admin@example.com"]})
 
@@ -75,7 +73,7 @@ async def test_generate_format_and_deliver_cost_report() -> None:
 )
 async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str], match: str) -> None:
     with (
-        patch("modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
+        patch("farna.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
         pytest.raises(ValueError, match=f"Unsupported scheduled cost report {match}"),
     ):
         await generate_cost_report(
@@ -88,9 +86,7 @@ async def test_generate_cost_report_rejects_unsupported_config(config: dict[str,
 
 async def test_generate_cost_report_json_format() -> None:
     rows = [{"entity_id": "team-1", "entity_name": "Platform", "total_spend_usd": 2.5, "total_runs": 4}]
-    with patch(
-        "modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock, return_value=rows
-    ) as get_cost:
+    with patch("farna.core.reports.cost_report.get_cost_report", new_callable=AsyncMock, return_value=rows) as get_cost:
         generated = await generate_cost_report(
             cast(AsyncSession, MagicMock(spec=AsyncSession)),
             uuid.uuid4(),
@@ -142,8 +138,8 @@ def test_format_cost_report_rejects_unknown_format() -> None:
 async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object], match: str) -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
     with (
-        patch("modulo.core.reports.cost_report.get_settings"),
-        patch("modulo.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
+        patch("farna.core.reports.cost_report.get_settings"),
+        patch("farna.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
         pytest.raises(ValueError, match=match),
     ):
         await deliver_cost_report(payload, recipient_config)
@@ -153,8 +149,8 @@ async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: 
 async def test_deliver_cost_report_raises_when_smtp_unconfigured() -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
     with (
-        patch("modulo.core.reports.cost_report.get_settings", return_value=MagicMock()),
-        patch("modulo.core.reports.cost_report.send_email", return_value=False) as send,
+        patch("farna.core.reports.cost_report.get_settings", return_value=MagicMock()),
+        patch("farna.core.reports.cost_report.send_email", return_value=False) as send,
         pytest.raises(EmailSendingError, match="SMTP is not configured"),
     ):
         await deliver_cost_report(payload, {"type": "email", "emails": ["admin@example.com"]})
@@ -181,10 +177,10 @@ async def test_due_report_executes_and_transitions_schedule(
 
     with (
         report_firing_env(session),
-        patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-        patch("modulo.core.reports.scheduler.get_formatter", return_value=formatter),
-        patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
-        patch("modulo.core.reports.scheduler.compute_next_send", return_value=expected_next),
+        patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+        patch("farna.core.reports.scheduler.get_formatter", return_value=formatter),
+        patch("farna.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        patch("farna.core.reports.scheduler.compute_next_send", return_value=expected_next),
     ):
         result = await _fire_scheduled_report(report_id=report.id, org_id=report.organisation_id)
 
@@ -218,9 +214,9 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
 
     with (
         report_firing_env(session),
-        patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
-        patch("modulo.core.reports.scheduler.get_formatter", return_value=MagicMock()),
-        patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
+        patch("farna.core.reports.scheduler.get_generator", return_value=generator),
+        patch("farna.core.reports.scheduler.get_formatter", return_value=MagicMock()),
+        patch("farna.core.reports.scheduler.get_deliverer", return_value=deliverer),
     ):
         result = await _fire_scheduled_report(report_id=report.id, org_id=report.organisation_id)
 

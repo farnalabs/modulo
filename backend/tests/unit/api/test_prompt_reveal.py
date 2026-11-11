@@ -11,12 +11,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -46,8 +46,8 @@ def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     repo queries, so the stub reassembles from whatever the (per-test mocked)
     ``get_run`` returns, exactly as the real reader serves the reassembled
     legacy shapes."""
-    import modulo.api.routes.runs as runs_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.routes.runs as runs_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(runs_module.get_run, "return_value", None)
@@ -185,27 +185,27 @@ def _setup_session_execute(return_value: MagicMock | None) -> None:
 
 class TestMaskPromptText:
     def test_masks_api_key_value(self) -> None:
-        from modulo.api.routes.runs import _mask_prompt_text
+        from farna.api.routes.runs import _mask_prompt_text
 
         result = _mask_prompt_text('api_key: "sk-123456"')
         assert SENSITIVE_VALUE_MASK in result
         assert "sk-123456" not in result
 
     def test_masks_secret_value(self) -> None:
-        from modulo.api.routes.runs import _mask_prompt_text
+        from farna.api.routes.runs import _mask_prompt_text
 
         result = _mask_prompt_text('secret: "my-secret"')
         assert SENSITIVE_VALUE_MASK in result
         assert "my-secret" not in result
 
     def test_leaves_non_sensitive_untouched(self) -> None:
-        from modulo.api.routes.runs import _mask_prompt_text
+        from farna.api.routes.runs import _mask_prompt_text
 
         text = "Hello world, this is a normal message."
         assert _mask_prompt_text(text) == text
 
     def test_masks_multiple_sensitive_values(self) -> None:
-        from modulo.api.routes.runs import _mask_prompt_text
+        from farna.api.routes.runs import _mask_prompt_text
 
         text = 'api_key: "sk-123", token: "abc-456"'
         result = _mask_prompt_text(text)
@@ -216,12 +216,12 @@ class TestMaskPromptText:
 
 class TestEstimateTokens:
     def test_returns_positive_for_empty(self) -> None:
-        from modulo.api.routes.runs import _estimate_tokens
+        from farna.api.routes.runs import _estimate_tokens
 
         assert _estimate_tokens("") == 1
 
     def test_approximates_tokens(self) -> None:
-        from modulo.api.routes.runs import _estimate_tokens
+        from farna.api.routes.runs import _estimate_tokens
 
         text = "Hello world, this is a test."
         expected = max(1, len(text) // 4)
@@ -230,7 +230,7 @@ class TestEstimateTokens:
 
 class TestLookupAgentForNode:
     def test_returns_agent_id_when_found(self) -> None:
-        from modulo.api.routes.runs import _lookup_agent_for_node
+        from farna.api.routes.runs import _lookup_agent_for_node
 
         graph = {
             "nodes": [
@@ -242,7 +242,7 @@ class TestLookupAgentForNode:
         assert result == _AGENT_ID
 
     def test_returns_none_when_node_has_no_agent(self) -> None:
-        from modulo.api.routes.runs import _lookup_agent_for_node
+        from farna.api.routes.runs import _lookup_agent_for_node
 
         graph = {"nodes": [{"id": "manual-node"}]}
         result = _lookup_agent_for_node(graph, "manual-node")
@@ -253,7 +253,7 @@ class TestLookupAgentForNode:
         # is a 404 (never ambiguous with "node exists but has no agent").
         from fastapi import HTTPException
 
-        from modulo.api.routes.runs import _lookup_agent_for_node
+        from farna.api.routes.runs import _lookup_agent_for_node
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID)}]}
         with pytest.raises(HTTPException) as exc_info:
@@ -264,7 +264,7 @@ class TestLookupAgentForNode:
 
 class TestFindNode:
     def test_returns_node_when_found(self) -> None:
-        from modulo.api.routes.runs import _find_node
+        from farna.api.routes.runs import _find_node
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID)}, {"id": "node-b"}]}
         node = _find_node(graph, "node-b")
@@ -272,7 +272,7 @@ class TestFindNode:
         assert node["id"] == "node-b"
 
     def test_returns_none_when_node_not_found(self) -> None:
-        from modulo.api.routes.runs import _find_node
+        from farna.api.routes.runs import _find_node
 
         graph = {"nodes": [{"id": "node-a"}]}
         assert _find_node(graph, "nonexistent") is None
@@ -282,21 +282,21 @@ class TestResolveRevealPromptTemplate:
     """FAR-1398: dispatch precedence - frozen variant override > snapshot node."""
 
     def test_variant_override_wins_over_snapshot_template(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
         variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}}}
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<VARIANT>"
 
     def test_sandbox_agent_uses_agent_prompt_without_agent_id(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "node_type": "sandbox_agent", "agent_prompt": "<SANDBOX>"}]}
         variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<MODEL-VARIANT>"}}}
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SANDBOX>"
 
     def test_sandbox_agent_uses_agent_prompt_with_agent_id(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {
             "nodes": [
@@ -313,20 +313,20 @@ class TestResolveRevealPromptTemplate:
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SANDBOX>"
 
     def test_falls_back_to_snapshot_template_without_variant_config(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
         assert _resolve_reveal_prompt_template(graph, "node-a", None) == "<SNAPSHOT>"
 
     def test_override_for_a_different_agent_does_not_apply(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
         variant = {"_run_overrides": {"prompt_templates": {str(uuid.uuid4()): "<OTHER>"}}}
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SNAPSHOT>"
 
     def test_non_agent_node_ignores_variant_config(self) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "prompt_template": "<SNAPSHOT>"}]}
         variant = {"_run_overrides": {"prompt_templates": {str(_AGENT_ID): "<VARIANT>"}}}
@@ -352,7 +352,7 @@ class TestResolveRevealPromptTemplate:
         ],
     )
     def test_malformed_variant_config_falls_back_to_snapshot_template(self, variant: Any) -> None:
-        from modulo.api.routes.runs import _resolve_reveal_prompt_template
+        from farna.api.routes.runs import _resolve_reveal_prompt_template
 
         graph = {"nodes": [{"id": "node-a", "agent_id": str(_AGENT_ID), "prompt_template": "<SNAPSHOT>"}]}
         assert _resolve_reveal_prompt_template(graph, "node-a", variant) == "<SNAPSHOT>"
@@ -360,7 +360,7 @@ class TestResolveRevealPromptTemplate:
 
 class TestBuildMessagesFromTemplateAndState:
     def test_includes_system_message_from_snapshot_template(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         messages = _build_messages_from_template_and_state("You are a bot.", {"q": "hi"}, None, None, "node-a")
         roles = [m["role"] for m in messages]
@@ -368,7 +368,7 @@ class TestBuildMessagesFromTemplateAndState:
         assert any("You are a bot." in m["content"] for m in messages)
 
     def test_includes_user_message_from_input_payload(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         messages = _build_messages_from_template_and_state(
             "You are a helpful assistant.", {"query": "hello"}, None, None, "node-a"
@@ -378,14 +378,14 @@ class TestBuildMessagesFromTemplateAndState:
         assert "hello" in user_msgs[0]["content"]
 
     def test_no_system_message_when_no_template(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         messages = _build_messages_from_template_and_state(None, {"q": "hi"}, None, None, "node-a")
         roles = [m["role"] for m in messages]
         assert "system" not in roles
 
     def test_includes_assistant_messages_from_outputs(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-b": "previous result"}
         messages = _build_messages_from_template_and_state(
@@ -396,7 +396,7 @@ class TestBuildMessagesFromTemplateAndState:
         assert "previous result" in assistant_msgs[0]["content"]
 
     def test_skips_own_node_output(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-a": "self output", "node-b": "other output"}
         messages = _build_messages_from_template_and_state(
@@ -407,7 +407,7 @@ class TestBuildMessagesFromTemplateAndState:
         assert any("other output" in m["content"] for m in assistant_msgs)
 
     def test_prefers_checkpoint_state_over_input_payload(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         checkpoint_state = {"run_context": {"input": {"query": "from checkpoint"}}}
         messages = _build_messages_from_template_and_state(
@@ -417,7 +417,7 @@ class TestBuildMessagesFromTemplateAndState:
         assert "from checkpoint" in user_msgs[0]["content"]
 
     def test_new_shape_outputs_use_pure_return_content(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-b": {"summary": "agent summary", "changed_files": ["a.py"]}}
         messages = _build_messages_from_template_and_state(
@@ -432,7 +432,7 @@ class TestBuildMessagesFromTemplateAndState:
         assert "wall_clock_time_ms" not in content
 
     def test_returns_empty_when_no_data(self) -> None:
-        from modulo.api.routes.runs import _build_messages_from_template_and_state
+        from farna.api.routes.runs import _build_messages_from_template_and_state
 
         messages = _build_messages_from_template_and_state(None, None, None, None, "node-a")
         assert messages == []
@@ -453,7 +453,7 @@ class TestRevealNodePrompt:
     def test_reveal_run_not_found_returns_404(self, client: TestClient) -> None:
         _setup_session_execute(None)
 
-        with patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{uuid.uuid4()}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -482,7 +482,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=_mock_execute)
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/nonexistent-node/prompt/reveal",
             )
@@ -496,7 +496,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, None))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -519,7 +519,7 @@ class TestRevealNodePrompt:
         # agent=None: the agents query resolves no live row (deleted agent).
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=None))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -568,7 +568,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -606,7 +606,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -638,7 +638,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -673,7 +673,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -723,7 +723,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -741,7 +741,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -772,7 +772,7 @@ class TestRevealNodePrompt:
             side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -790,7 +790,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -810,7 +810,7 @@ class TestRevealNodePrompt:
 
         session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent))
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp1 = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )
@@ -846,7 +846,7 @@ class TestRevealNodePrompt:
             side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
         )
 
-        with patch("modulo.api.routes.runs.get_run", return_value=run), patch("modulo.api.routes.runs.set_rls_org"):
+        with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
                 f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/prompt/reveal",
             )

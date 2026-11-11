@@ -1,4 +1,4 @@
-"""Unit tests for modulo.auth.secret_storage: encrypted secret helpers."""
+"""Unit tests for farna.auth.secret_storage: encrypted secret helpers."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.auth.secret_storage import (
+from farna.auth.secret_storage import (
     CorruptSecretError,
     DecryptionError,
     InvalidFernetKeyError,

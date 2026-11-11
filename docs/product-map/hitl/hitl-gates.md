@@ -3,17 +3,17 @@ id: feat-hitl
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/hitl.py
-  - backend/src/modulo/api/routes/admin.py
-  - backend/src/modulo/core/hitl_manager/__init__.py
-  - backend/src/modulo/core/hitl_manager/deadline_warning.py
-  - backend/src/modulo/core/hitl_manager/expiry_job.py
-  - backend/src/modulo/core/hitl_manager/overdue_warning.py
-  - backend/src/modulo/core/hitl_manager/sweep_alarm.py
-  - backend/src/modulo/core/pipeline_engine/hitl_context.py
-  - backend/src/modulo/db/crud/hitl_review_config.py
-  - backend/src/modulo/core/run_context/autonomy.py
-  - backend/src/modulo/db/models/hitl_claim.py
+  - backend/src/farna/api/routes/hitl.py
+  - backend/src/farna/api/routes/admin.py
+  - backend/src/farna/core/hitl_manager/__init__.py
+  - backend/src/farna/core/hitl_manager/deadline_warning.py
+  - backend/src/farna/core/hitl_manager/expiry_job.py
+  - backend/src/farna/core/hitl_manager/overdue_warning.py
+  - backend/src/farna/core/hitl_manager/sweep_alarm.py
+  - backend/src/farna/core/pipeline_engine/hitl_context.py
+  - backend/src/farna/db/crud/hitl_review_config.py
+  - backend/src/farna/core/run_context/autonomy.py
+  - backend/src/farna/db/models/hitl_claim.py
   - frontend/src/views/SettingsHitlReviewView.vue
   - frontend/src/components/HitlBriefing.vue
 unit-tests:
@@ -96,8 +96,8 @@ may decide.
       200-with-empty-gates cross-team existence oracle, for a run outside that
       boundary, and an MCP viewer read with no resolved account fails closed
       (`McpAuthContextError`) instead of degrading to an org-wide read
-      (`backend/src/modulo/api/routes/hitl.py`,
-      `backend/src/modulo/core/hitl_manager/__init__.py`,
+      (`backend/src/farna/api/routes/hitl.py`,
+      `backend/src/farna/core/hitl_manager/__init__.py`,
       `backend/tests/unit/api/test_hitl_routes_coverage.py`,
       `backend/tests/unit/mcp/test_team_scope_enforcement.py`)
 - [x] Claim is atomic – `claim()` issues a short-lived (15-minute) JWT

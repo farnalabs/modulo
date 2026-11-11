@@ -45,7 +45,7 @@ message.
 .. note::
 
    The project-wide percentage is computed over the CI coverage run's
-   instrumented set (``pytest --cov=src/modulo``, ``vitest run src``) and will
+   instrumented set (``pytest --cov=src/farna``, ``vitest run src``) and will
    therefore NOT equal the SonarCloud badge figure, which analyses a wider
    scope.
 
@@ -187,7 +187,7 @@ BRANCH_COVERAGE_THRESHOLD = 98  # Changed-lines branch coverage minimum (%)
 # the mechanism, not to pick the final number.  Raise as coverage improves;
 # never lower.  Lowering requires an explicit justified commit message.
 #
-# Computed over the CI coverage run's instrumented set (pytest --cov=src/modulo,
+# Computed over the CI coverage run's instrumented set (pytest --cov=src/farna,
 # vitest run src), NOT the full SonarCloud scope.
 MIN_PROJECT_LINE_COVERAGE = 89.0
 MIN_PROJECT_BRANCH_COVERAGE = 81.0
@@ -223,7 +223,7 @@ _EXCLUDE_PATTERNS: list[str] = [
     "frontend/*.config.*",
     # CI/ops helper modules under ``.github/scripts/**`` are the same class as
     # the ``scripts/**`` and ``backend/scripts/**`` exclusions: the CI coverage
-    # scan runs ``pytest --cov=src/modulo`` (see scripts/coverage-thresholds.sh),
+    # scan runs ``pytest --cov=src/farna`` (see scripts/coverage-thresholds.sh),
     # so it never instruments them. Their unit tests run and pass (regression
     # protection), but no line-coverage data for them reaches coverage.xml, so
     # every changed line would otherwise register as "0% unmeasured".
@@ -1310,10 +1310,10 @@ def _match_report_key_to_changed(
 
     Coverage reports do not carry repo-relative paths.  coverage.py emits
     Cobertura ``filename`` values relative to its ``source`` root (this repo:
-    ``src/modulo``), and vitest emits LCOV ``SF:`` values relative to
+    ``src/farna``), and vitest emits LCOV ``SF:`` values relative to
     ``frontend/`` (the gate normalises the report to absolute paths before
     evaluation).  The changed-file keys from ``git diff`` are always
-    repo-relative (``backend/src/modulo/...``, ``frontend/src/...``), so a
+    repo-relative (``backend/src/farna/...``, ``frontend/src/...``), so a
     naive ``branch_data.get(filepath)`` never matches and every changed JS /
     Python production file is scored as ``branch_total == 0`` — a false 0%
     branch failure regardless of real coverage.  Resolve *raw_key* into the
@@ -1347,8 +1347,8 @@ def _match_report_key_to_changed(
             return changed[key]
 
     # The report path may be relative to a deeper source root (coverage.py
-    # relativises to ``src/modulo``), so ``core/foo.py`` names
-    # ``backend/src/modulo/core/foo.py``.  Match on whole path segments and
+    # relativises to ``src/farna``), so ``core/foo.py`` names
+    # ``backend/src/farna/core/foo.py``.  Match on whole path segments and
     # require a unique hit so a shared basename can never cross-attribute.
     for candidate in sorted(candidates, key=len, reverse=True):
         key = _path_key(candidate)

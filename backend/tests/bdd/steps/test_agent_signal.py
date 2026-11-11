@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from farna.core.trigger_engine.agent_signal import fire_agent_signal
 from tests.bdd.conftest import ALT_ORG_ID, ORG_ID
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -225,7 +225,7 @@ def _when_node_completes(node_id: str, source: str, mock_session: MagicMock, req
     filtered = [t for t in ctx["triggers"] if t.active and str(t.organisation_id) == str(ctx["org_id"])]
     _setup_session(mock_session, filtered, ctx.get("active_runs_count", 0))
 
-    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
+    with patch("farna.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
         child_run = MagicMock(id=uuid.uuid4())
         mock_cr.return_value = child_run
         ctx["mock_create_run"] = mock_cr
@@ -254,7 +254,7 @@ def _when_node_completes_with_output(
     filtered = [t for t in ctx["triggers"] if t.active and str(t.organisation_id) == str(ctx["org_id"])]
     _setup_session(mock_session, filtered, ctx.get("active_runs_count", 0))
 
-    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
+    with patch("farna.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
         child_run = MagicMock(id=uuid.uuid4())
         mock_cr.return_value = child_run
         ctx["mock_create_run"] = mock_cr
@@ -281,7 +281,7 @@ def _when_node_completes_with_output_simple(node_id: str, output: str, mock_sess
     filtered = [t for t in ctx["triggers"] if t.active and str(t.organisation_id) == str(ctx["org_id"])]
     _setup_session(mock_session, filtered, ctx.get("active_runs_count", 0))
 
-    with patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
+    with patch("farna.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as mock_cr:
         child_run = MagicMock(id=uuid.uuid4())
         mock_cr.return_value = child_run
         ctx["mock_create_run"] = mock_cr

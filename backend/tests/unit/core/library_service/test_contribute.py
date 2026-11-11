@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.library_service import (
+from farna.core.library_service import (
     _MODULO_PRIMITIVES,
     CONTRIBUTION_DRAFT,
     CONTRIBUTION_PUBLISHED,
@@ -58,14 +58,14 @@ class TestContributeFixture:
         prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_create,
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_update,
@@ -100,14 +100,14 @@ class TestContributeFixture:
         prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_create,
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -135,14 +135,14 @@ class TestContributeFixture:
         prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_create,
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -172,14 +172,14 @@ class TestContributeFixture:
         prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ) as mock_create,
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -207,14 +207,14 @@ class TestContributeFixture:
         updated_prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=updated_prim,
             ),
@@ -240,14 +240,14 @@ class TestContributeFixture:
         prim = _fake_primitive()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.create_library_primitive",
+                "farna.core.library_service.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -277,14 +277,14 @@ class TestSubmitForReview:
         updated = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_REVIEW_QUEUE)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=updated,
             ),
@@ -300,9 +300,9 @@ class TestSubmitForReview:
         prim_id = uuid.uuid4()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -317,9 +317,9 @@ class TestSubmitForReview:
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -334,9 +334,9 @@ class TestSubmitForReview:
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_REVIEW_QUEUE)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -353,14 +353,14 @@ class TestSubmitForReview:
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_DRAFT)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -384,19 +384,19 @@ class TestPublish:
         )
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=updated,
             ) as mock_update,
             patch(
-                "modulo.core.library_service.notify_importers_of_update",
+                "farna.core.library_service.notify_importers_of_update",
                 new_callable=AsyncMock,
             ),
         ):
@@ -420,9 +420,9 @@ class TestPublish:
         prim_id = uuid.uuid4()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -438,18 +438,18 @@ class TestPublish:
         updated = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, visibility="community")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=updated,
             ),
-            patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
+            patch("farna.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
         ):
             result = await publish_contribution(session, org_id, prim_id)
             assert result.contribution_status == CONTRIBUTION_PUBLISHED
@@ -462,9 +462,9 @@ class TestPublish:
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
@@ -479,14 +479,14 @@ class TestPublish:
         prim = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_REVIEW_QUEUE)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.get_library_primitive",
+                "farna.core.library_service.get_library_primitive",
                 new_callable=AsyncMock,
                 return_value=prim,
             ),
             patch(
-                "modulo.core.library_service.update_library_primitive",
+                "farna.core.library_service.update_library_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -509,9 +509,9 @@ class TestListContributions:
         page_result.page_size = 20
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ) as mock_list,
@@ -531,9 +531,9 @@ class TestListContributions:
         page_result.total = 0
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ),
@@ -554,9 +554,9 @@ class TestListContributions:
         page_result.total = 2
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.core.library_service.list_library_primitives",
+                "farna.core.library_service.list_library_primitives",
                 new_callable=AsyncMock,
                 return_value=page_result,
             ),
@@ -614,14 +614,12 @@ class TestSubmitContributionVersion:
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.2")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
+                "farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
             ) as mock_create,
-            patch(
-                "modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
-            ),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim),
         ):
             result = await submit_contribution_version(
                 session,
@@ -644,8 +642,8 @@ class TestSubmitContributionVersion:
         org_id = uuid.uuid4()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError),
         ):
             await submit_contribution_version(
@@ -667,8 +665,8 @@ class TestSubmitContributionVersion:
         existing = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_DRAFT)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             pytest.raises(ContributionInvalidTransitionError),
         ):
             await submit_contribution_version(
@@ -692,12 +690,10 @@ class TestSubmitContributionVersion:
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.1")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch(
-                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
-            ),
-            patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim),
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError),
         ):
             await submit_contribution_version(
@@ -724,13 +720,11 @@ class TestSubmitContributionVersion:
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.1")
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim),
             patch(
-                "modulo.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
-            ),
-            patch(
-                "modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
+                "farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
             ) as mock_update,
         ):
             await submit_contribution_version(
@@ -762,10 +756,10 @@ class TestListContributionVersions:
         v2 = _fake_primitive(pid=uuid.uuid4(), version="1.1", version_group_id=group_id)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.list_primitives_by_version_group",
+                "farna.core.library_service.list_primitives_by_version_group",
                 new_callable=AsyncMock,
                 return_value=[v2, existing],
             ),
@@ -779,8 +773,8 @@ class TestListContributionVersions:
         org_id = uuid.uuid4()
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError),
         ):
             await list_contribution_versions(session, org_id, uuid.uuid4())
@@ -792,10 +786,10 @@ class TestListContributionVersions:
         existing = _fake_primitive(pid=prim_id, version="1.0", version_group_id=None)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]
+                "farna.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]
             ),
         ):
             result = await list_contribution_versions(session, org_id, prim_id)
@@ -812,10 +806,10 @@ class TestListContributionVersions:
         v2 = _fake_primitive(pid=uuid.uuid4(), version="1.1", version_group_id=group_id)
 
         with (
-            patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
+            patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
+            patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch(
-                "modulo.core.library_service.list_primitives_by_version_group",
+                "farna.core.library_service.list_primitives_by_version_group",
                 new_callable=AsyncMock,
                 return_value=[v2],
             ),

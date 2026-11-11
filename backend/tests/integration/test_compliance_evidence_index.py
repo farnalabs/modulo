@@ -14,31 +14,31 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.compliance.artifacts import (
+from farna.compliance.artifacts import (
     ARTIFACT_AUDIT_CHAIN,
     ARTIFACT_EVAL_RESULT,
     ARTIFACT_HITL_DECISION,
     ARTIFACT_RUN_SNAPSHOT,
     INDEXED_ARTIFACT_TYPES,
 )
-from modulo.compliance.evidence_index import (
+from farna.compliance.evidence_index import (
     AUTONOMY_DEMOTION_EVENT,
     AUTONOMY_PROMOTION_EVENT,
     STATUS_ABSENT,
     EvidenceIndexIncompleteError,
     build_evidence_index,
 )
-from modulo.compliance.pack import load_mapping_pack
-from modulo.core.eval_engine import EvalType
-from modulo.db.models.account import Account
-from modulo.db.models.audit_event import AuditChainHead, AuditEvent
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
-from modulo.db.models.hitl_claim import HitlClaim
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from farna.compliance.pack import load_mapping_pack
+from farna.core.eval_engine import EvalType
+from farna.db.models.account import Account
+from farna.db.models.audit_event import AuditChainHead, AuditEvent
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
+from farna.db.models.hitl_claim import HitlClaim
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 

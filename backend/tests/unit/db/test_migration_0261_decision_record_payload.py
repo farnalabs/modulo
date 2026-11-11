@@ -21,7 +21,7 @@ import pytest
 
 _MIGRATION_NAME = "0261_decision_record_payload"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
 _INDEX_NAME = "ix_tmp_policy_gate_decisions_run_gate_result"

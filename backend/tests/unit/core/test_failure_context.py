@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.pipeline_engine.failure_context import (
+import farna
+from farna.core.pipeline_engine.failure_context import (
     _extract_column_info,
     _extract_tables_from_query,
     _get_build_sha,
@@ -51,28 +52,26 @@ class TestGetBuildSha:
         assert result == "unknown"
 
     def test_uses_build_tag_when_available(self) -> None:
-        import modulo
 
-        original = modulo.__build_tag__
+        original = farna.__build_tag__
         try:
-            modulo.__build_tag__ = "build-deadbe"
+            farna.__build_tag__ = "build-deadbe"
             result = _get_build_sha()
         finally:
-            modulo.__build_tag__ = original
+            farna.__build_tag__ = original
         assert result == "build-deadbe"
 
     def test_env_only_build_tag_used_when_module_cache_is_local_dev(self) -> None:
         """When ``__build_tag__`` is the local-dev sentinel but GIT_SHA is set,
-        the shared ``modulo.get_build_tag()`` helper derives it from the env."""
-        import modulo
+        the shared ``farna.get_build_tag()`` helper derives it from the env."""
 
-        original = modulo.__build_tag__
+        original = farna.__build_tag__
         try:
-            modulo.__build_tag__ = "build-local-dev"
+            farna.__build_tag__ = "build-local-dev"
             with patch.dict(os.environ, {"GIT_SHA": "deadbeefcafe"}):
                 result = _get_build_sha()
         finally:
-            modulo.__build_tag__ = original
+            farna.__build_tag__ = original
         assert result == "build-deadbee"
 
 
@@ -115,7 +114,7 @@ class TestExtractColumnInfo:
         an unanchored ``word.word`` alternative, so an error like
         ``"no module named a.b"`` produced a false attribution.
         """
-        exc = _make_db_error("ImportError: no module named modulo.db")
+        exc = _make_db_error("ImportError: no module named farna.db")
         table, column = _extract_column_info(exc)
         assert table is None
         assert column is None
@@ -226,15 +225,14 @@ class TestFailOpenBranches:
     """FAR-872 fail-open contract: every internal error degrades, never raises."""
 
     def test_build_tag_preferred_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo
 
-        monkeypatch.setattr(modulo, "__build_tag__", "build-deadbe")
+        monkeypatch.setattr(farna, "__build_tag__", "build-deadbe")
         assert _get_build_sha() == "build-deadbe"
 
     def test_build_tag_import_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import sys
 
-        monkeypatch.setitem(sys.modules, "modulo", None)
+        monkeypatch.setitem(sys.modules, "farna", None)
         assert _get_build_sha() == "unknown"
 
     def test_column_extraction_never_raises_on_unstringable(self) -> None:
@@ -246,14 +244,14 @@ class TestFailOpenBranches:
         assert _extract_tables_from_query(_UnstringableError()) is None
 
     def test_build_context_swallows_build_sha_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.pipeline_engine.failure_context as fc
+        import farna.core.pipeline_engine.failure_context as fc
 
         monkeypatch.setattr(fc, "_get_build_sha", _raise)
         ctx = build_failure_context(RuntimeError("x"))
         assert ctx["build_sha"] == "unknown"
 
     def test_build_context_swallows_column_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.pipeline_engine.failure_context as fc
+        import farna.core.pipeline_engine.failure_context as fc
 
         monkeypatch.setattr(fc, "_extract_column_info", _raise)
         ctx = build_failure_context(RuntimeError("x"))
@@ -261,14 +259,14 @@ class TestFailOpenBranches:
         assert ctx["failing_table"] is None
 
     def test_build_context_swallows_table_query_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.pipeline_engine.failure_context as fc
+        import farna.core.pipeline_engine.failure_context as fc
 
         monkeypatch.setattr(fc, "_extract_tables_from_query", _raise)
         ctx = build_failure_context(RuntimeError("x"))
         assert ctx["query_tables"] is None
 
     def test_enrich_includes_build_when_only_sha_known(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.pipeline_engine.failure_context as fc
+        import farna.core.pipeline_engine.failure_context as fc
 
         monkeypatch.setattr(
             fc,
@@ -279,7 +277,7 @@ class TestFailOpenBranches:
         assert "build=build-abc1234" in result
 
     def test_enrich_swallows_context_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.pipeline_engine.failure_context as fc
+        import farna.core.pipeline_engine.failure_context as fc
 
         monkeypatch.setattr(fc, "build_failure_context", _raise)
         result = enrich_error_detail("original", RuntimeError("x"))

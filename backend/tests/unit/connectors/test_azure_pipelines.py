@@ -4,12 +4,12 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors._safe_page import safe_paging_total as _paging_total
-from modulo.connectors.azure_pipelines import (
+from farna.connectors._safe_page import safe_paging_total as _paging_total
+from farna.connectors.azure_pipelines import (
     AzurePipelinesConnector,
     _AzurePipelinesTestDouble,
 )
-from modulo.connectors.base import (
+from farna.connectors.base import (
     CIRunStatus,
     ConnectorPayload,
     ConnectorQuery,

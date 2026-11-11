@@ -8,7 +8,7 @@ wider vocabulary so a future CHECK value cannot silently ship without a
 provider mapping.
 
 The vocabulary itself has a single source of truth — ``PROVIDER_TYPES`` in
-``modulo.db.models.environment_profile`` (FAR-595). This module derives its
+``farna.db.models.environment_profile`` (FAR-595). This module derives its
 expectation from that constant and asserts the CHECK text stays in parity
 with it (CHECK <-> constant <-> scanner).
 """
@@ -17,12 +17,12 @@ import re
 
 import pytest
 
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     _PROVIDER_ENV_VARS,
     build_hub,
     env_var_for_provider_type,
 )
-from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
+from farna.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 
 # Derived from the model constant (FAR-595): the scanner expectation is no
 # longer an independent hardcoded list. New vocabulary members must be added

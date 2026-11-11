@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import (
     UUID_A as _UUID_A,
 )

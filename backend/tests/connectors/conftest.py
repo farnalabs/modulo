@@ -12,8 +12,8 @@ from typing import Any
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorBase
-from modulo.connectors.rest import RestConnector
+from farna.connectors.base import ConnectorBase
+from farna.connectors.rest import RestConnector
 from tests.connectors._conformance import get_registered_fixture, get_registered_types, register_conformance_connector
 from tests.connectors._noop_guard import make_noop_security_guard
 
@@ -188,7 +188,7 @@ def rest_test_server(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def fs_connector(tmp_path: Path):
-    from modulo.connectors.filesystem import FilesystemConnector
+    from farna.connectors.filesystem import FilesystemConnector
 
     return FilesystemConnector(base_path=str(tmp_path))
 
@@ -212,7 +212,7 @@ class _FakeRuntimeProvider:
 
 @pytest.fixture
 def shell_connector():
-    from modulo.connectors.shell import ShellConnector
+    from farna.connectors.shell import ShellConnector
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
@@ -276,14 +276,14 @@ register_conformance_connector("rest", "rest_connector")
 
 @pytest.fixture
 def npm_connector():
-    from modulo.connectors.npm import NpmConnector
+    from farna.connectors.npm import NpmConnector
 
     return NpmConnector(token="")
 
 
 @pytest.fixture
 def pypi_connector():
-    from modulo.connectors.pypi import PyPIConnector
+    from farna.connectors.pypi import PyPIConnector
 
     return PyPIConnector(token="")
 

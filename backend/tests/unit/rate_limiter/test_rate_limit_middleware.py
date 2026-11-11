@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from starlette.responses import Response
 from tests.unit.rate_limiter.helpers import ANONYMOUS_GET_RULES, make_mock_request, make_settings
 
-from modulo.api.middleware.rate_limiter import (
+from farna.api.middleware.rate_limiter import (
     RATELIMIT_BYPASS_HEADER,
     RateLimitMiddleware,
 )
@@ -57,7 +57,7 @@ def _registry(allowed: bool = True, retry_after: int = 60) -> MagicMock:
 
 @pytest.fixture
 def rl_mod():
-    import modulo.api.middleware.rate_limiter as m
+    import farna.api.middleware.rate_limiter as m
 
     return m
 

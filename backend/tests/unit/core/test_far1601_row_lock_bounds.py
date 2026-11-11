@@ -49,8 +49,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.pipeline_execution import (
+import farna.core.pipeline_execution as pe
+from farna.core.pipeline_execution import (
     _record_node_deadline_watchdog_firing,
     claim_resume_run_async,
     claim_run_async,
@@ -60,7 +60,7 @@ from modulo.core.pipeline_execution import (
     stale_run_recovery_sweep,
 )
 
-_LOGGER = "modulo.core.pipeline_execution"
+_LOGGER = "farna.core.pipeline_execution"
 
 
 def _lock_timeout_error(statement: str) -> OperationalError:
@@ -492,7 +492,7 @@ class TestPhaseWriterAlreadyBounded:
         ``mutation_row_lock_timeout_ms`` (5 s), so the DB-side bound could
         never fire first; a 55P03 from a lowered knob lands in the writer's
         existing fail-soft handler (WARNING + dropped). No DB bound added."""
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         default_ms = Settings.model_fields["mutation_row_lock_timeout_ms"].default
         assert default_ms is not None

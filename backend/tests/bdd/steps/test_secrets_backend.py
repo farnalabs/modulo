@@ -1,6 +1,6 @@
 """BDD step definitions: at-rest secret storage (feat-core-secrets-backend).
 
-Drives the REAL ``modulo.core.secrets_backend`` seams network-free and
+Drives the REAL ``farna.core.secrets_backend`` seams network-free and
 DB-free — the ``FernetSecretsBackend`` persists and reads real rows in an
 in-memory aiosqlite engine (the community-tier default store), organisation
 scoping goes through the real ``WHERE organisation_id = :oid`` SQL the backend
@@ -28,12 +28,12 @@ from cryptography.fernet import Fernet
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-from modulo.db.models.base import Base
-from modulo.db.models.secret import Secret
+from farna.core.secrets_backend import create_secrets_backend
+from farna.core.secrets_backend.fernet import FernetSecretsBackend
+from farna.db.models.base import Base
+from farna.db.models.secret import Secret
 
-logging.getLogger("modulo.core.secrets_backend").setLevel(logging.CRITICAL)
+logging.getLogger("farna.core.secrets_backend").setLevel(logging.CRITICAL)
 
 scenarios("../features/infra/secrets_backend.feature")
 

@@ -1,8 +1,8 @@
 """FAR-1586: the ``apply`` CLI path must not require database/secret settings.
 
-``modulo`` is a published console script (``modulo.cli.main:cli``). Importing
-it executes the ``modulo.cli`` package ``__init__`` FIRST, and until FAR-1586
-that module eagerly imported ``modulo.cli.migrate_org`` -> ``modulo.db.session``,
+``modulo`` is a published console script (``farna.cli.main:cli``). Importing
+it executes the ``farna.cli`` package ``__init__`` FIRST, and until FAR-1586
+that module eagerly imported ``farna.cli.migrate_org`` -> ``farna.db.session``,
 whose async engine is built AT IMPORT TIME through ``get_settings()``. The whole
 ``modulo apply`` surface therefore demanded ``DATABASE_URL`` / ``SECRET_KEY`` /
 ``FERNET_KEY`` at startup, even though ``apply`` only talks to a remote instance
@@ -25,8 +25,8 @@ from types import ModuleType
 import pytest
 from pydantic import ValidationError
 
-import modulo.cli as cli_package
-from modulo.settings import Settings
+import farna.cli as cli_package
+from farna.settings import Settings
 
 #: Every variable that makes ``Settings`` constructible — all absent in the
 #: subprocess, so an eager ``get_settings()`` cannot be satisfied.
@@ -56,8 +56,8 @@ for _name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"):
 assert os.environ.get("MODULO_URL")
 assert os.environ.get("MODULO_API_KEY")
 
-import modulo.cli.main as cli_main
-from modulo.settings import get_settings
+import farna.cli.main as cli_main
+from farna.settings import get_settings
 
 apply_cmd = cli_main.cli.commands.get("apply")
 assert apply_cmd is not None, "apply command is not registered on the group"
@@ -67,7 +67,7 @@ assert isinstance(apply_cmd, click.Command), type(apply_cmd)
 assert get_settings.cache_info().currsize == 0
 
 # ...and the module that builds the async engine at import time must not load.
-assert "modulo.db.session" not in sys.modules
+assert "farna.db.session" not in sys.modules
 
 result = CliRunner().invoke(cli_main.cli, ["apply", "--help"])
 assert result.exit_code == 0, result.output
@@ -89,7 +89,7 @@ def test_apply_cli_imports_with_only_modulo_url_and_api_key(tmp_path: Path) -> N
     The subprocess runs with ``DATABASE_URL``/``SECRET_KEY``/``FERNET_KEY``
     stripped and ``cwd`` set to an empty temp dir (so no ambient ``.env`` can
     satisfy ``Settings``). Before FAR-1586 this raised
-    ``pydantic ValidationError`` while importing ``modulo.cli.migrate_org``.
+    ``pydantic ValidationError`` while importing ``farna.cli.migrate_org``.
     """
     result = subprocess.run(  # noqa: S603 — test driver
         [sys.executable, "-c", _APPLY_IMPORT_SCRIPT],
@@ -119,12 +119,12 @@ def test_settings_validation_is_unchanged_without_db_or_secret(
 
 
 def _uncache_lazy_attr(name: str) -> ModuleType:
-    """Return ``modulo.cli`` with ``name`` un-cached.
+    """Return ``farna.cli`` with ``name`` un-cached.
 
     PEP 562 only invokes ``__getattr__`` when normal attribute lookup misses,
     so a name already cached in the package namespace would bypass the very
     code path under test. Each test uncaches ONLY the name it exercises: the
-    ``main`` re-export deliberately collides with the ``modulo.cli.main``
+    ``main`` re-export deliberately collides with the ``farna.cli.main``
     submodule, so popping it would clobber that submodule attribute for later
     tests.
     """
@@ -134,7 +134,7 @@ def _uncache_lazy_attr(name: str) -> ModuleType:
 
 def test_lazy_getattr_imports_and_caches_on_first_access() -> None:
     """A lazy re-export is imported on first access and then cached flat."""
-    from modulo.cli.migrate_org import build_parser as migrate_org_build_parser
+    from farna.cli.migrate_org import build_parser as migrate_org_build_parser
 
     package = _uncache_lazy_attr("build_parser")
     assert package.build_parser is migrate_org_build_parser

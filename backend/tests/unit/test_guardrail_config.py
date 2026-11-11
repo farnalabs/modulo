@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.config — guardrail config-as-code.
+"""Unit tests for farna.core.guardrails.config — guardrail config-as-code.
 
 Covers YAML load/dump round-trips, validation (bad detection type, missing
 pattern/field, non-dict schema, duplicate ids), content-hash stability (same
@@ -13,9 +13,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.guardrails import GuardrailAction, GuardrailConfigError
-from modulo.core.guardrails.config import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.guardrails import GuardrailAction, GuardrailConfigError
+from farna.core.guardrails.config import (
     GuardrailConfigSet,
     GuardrailDetection,
     GuardrailPin,

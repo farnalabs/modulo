@@ -24,10 +24,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine import EvalType
-from modulo.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
-from modulo.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
-from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER
+from farna.core.eval_engine import EvalType
+from farna.core.eval_engine.policy_gate import fingerprint_policy_gate_pins
+from farna.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
+from farna.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER
 
 
 def _make_run(*, claim_token: str | None = "tok-claim-abc") -> MagicMock:
@@ -252,23 +252,23 @@ async def test_execute_replay_recompiles_with_fresh_eval_defs():
         return _mock_compiled_empty_stream()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch.object(
             PipelineExecutor,
             "_load_eval_defs_for_pipeline",
             AsyncMock(side_effect=[[row1], [row2]]),
         ),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock())
         await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
@@ -309,24 +309,24 @@ async def test_resume_recompiles_with_fresh_eval_defs():
         yield MagicMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", _fake_checkpointer_scope),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor._checkpointer_scope", _fake_checkpointer_scope),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_enforce_resume_sandbox_capacity", AsyncMock()),
         patch.object(
             PipelineExecutor,
             "_load_eval_defs_for_pipeline",
             AsyncMock(side_effect=[[row1], [row2]]),
         ),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://fake-checkpointer")
         await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"}, claim_token="tok")
@@ -457,16 +457,16 @@ async def test_execute_threads_snapshot_pins_into_the_build() -> None:
     capacity = AsyncMock(return_value=MagicMock(status="pending"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
         patch.object(PipelineExecutor, "_build_eval_defs_by_node", MagicMock(side_effect=_capture_build)),
         patch.object(PipelineExecutor, "_check_capacity", capacity),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
@@ -501,15 +501,15 @@ async def test_execute_terminalizes_on_pin_fingerprint_mismatch() -> None:
     capacity = AsyncMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
         patch.object(PipelineExecutor, "_check_capacity", capacity),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
@@ -548,15 +548,15 @@ async def test_execute_proceeds_when_pin_fingerprint_matches() -> None:
     capacity = AsyncMock(return_value=MagicMock(status="pending"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
         patch.object(PipelineExecutor, "_check_capacity", capacity),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=org_id, input_payload={}, claim_token="tok-claim-abc")
@@ -584,14 +584,14 @@ async def test_resume_terminalizes_on_pin_fingerprint_mismatch() -> None:
     load_defs = AsyncMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", AsyncMock(side_effect=[run, terminal_run])),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://fake-checkpointer")
         result = await executor.resume(
@@ -628,11 +628,11 @@ async def test_check_policy_gate_pin_raises_when_run_vanishes_after_terminalize(
     executor = PipelineExecutor(MagicMock())
     with (
         patch(
-            "modulo.core.pipeline_engine.executor._verify_policy_gate_pin_fingerprint",
+            "farna.core.pipeline_engine.executor._verify_policy_gate_pin_fingerprint",
             MagicMock(return_value=(True, "mismatch")),
         ),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.get_run", AsyncMock(return_value=None)),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.get_run", AsyncMock(return_value=None)),
         pytest.raises(RunNotFoundError),
     ):
         await executor._check_policy_gate_pin(
@@ -681,21 +681,21 @@ async def test_resume_threads_snapshot_pins_into_the_build() -> None:
     load_defs = AsyncMock(return_value=[row1])
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update_mock),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", _fake_checkpointer_scope),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
-        patch("modulo.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build_graph),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", new=update_mock),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor._checkpointer_scope", _fake_checkpointer_scope),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", side_effect=_spy_get_or_compile),
+        patch("farna.core.pipeline_engine.executor.build_graph_from_json", side_effect=_capture_build_graph),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=_mock_registry()),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_enforce_resume_sandbox_capacity", AsyncMock()),
         patch.object(PipelineExecutor, "_load_eval_defs_for_pipeline", load_defs),
         patch.object(PipelineExecutor, "_build_eval_defs_by_node", MagicMock(side_effect=_capture_build)),
-        patch("modulo.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
+        patch("farna.settings.get_settings", return_value=MagicMock(saq_run_retries=5)),
     ):
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="postgresql://fake-checkpointer")
         await executor.resume(run_id=run.id, org_id=org_id, resume_data={"action": "approved"}, claim_token="tok")

@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.feedback_manager import FeedbackManager
+from farna.core.feedback_manager import FeedbackManager
 
 pytestmark = [
     pytest.mark.integration,
@@ -151,7 +151,7 @@ class TestFeedbackFlowUnit:
         rls_session: AsyncSession,
         test_org: uuid.UUID,
     ) -> None:
-        from modulo.core.feedback_manager import FeedbackRecordNotFoundError
+        from farna.core.feedback_manager import FeedbackRecordNotFoundError
 
         mgr = FeedbackManager(rls_session, test_org)
         with pytest.raises(FeedbackRecordNotFoundError):

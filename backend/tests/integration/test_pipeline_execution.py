@@ -1,4 +1,4 @@
-"""Integration tests for modulo.core.pipeline_execution (real Postgres).
+"""Integration tests for farna.core.pipeline_execution (real Postgres).
 
 These use the session-scoped Testcontainers Postgres + ``db_engine`` from
 ``tests/integration/conftest.py`` and are marked ``integration`` so they are
@@ -22,23 +22,23 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-import modulo.core.pipeline_execution as pe
-from modulo.api.routes.hitl import _restore_failed_mcp_resume_for_reconcile
-from modulo.core.cron_helpers import (
+import farna.core.pipeline_execution as pe
+from farna.api.routes.hitl import _restore_failed_mcp_resume_for_reconcile
+from farna.core.cron_helpers import (
     CAPACITY_REDISPATCH_SECONDS,
     RECONCILE_STALE_HEARTBEAT_FACTOR,
     _build_re_dispatch_predicate,
     _resolve_hitl_resume_or_skip,
 )
-from modulo.core.pipeline_engine.errors import ResumeClaimSupersededError
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.errors import ResumeClaimSupersededError
+from farna.core.pipeline_engine.executor import (
     PipelineExecutor,
     SandboxCapacityExceededError,
     _claim_resume_for_executor,
 )
-from modulo.db.models.run import Run
-from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
+from farna.db.models.run import Run
+from farna.db.rls import set_rls_org
+from farna.settings import get_settings
 
 pytestmark = [
     pytest.mark.integration,
@@ -156,8 +156,8 @@ async def test_transition_run_fenced_and_superseded(
     claim and is a no-op for a superseded one (dist/runtime-core A1)."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.crud.run import transition_run
-    from modulo.db.rls import set_rls_org
+    from farna.db.crud.run import transition_run
+    from farna.db.rls import set_rls_org
 
     run_id = uuid.uuid4()
     await _insert_run_with_token(
@@ -221,8 +221,8 @@ async def test_update_run_status_fenced_rewrites_cancel_wins(
     cancellation-requested row is rewritten to 'cancelled' (B6 CANCEL-WINS)."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.crud.run import update_run_status
-    from modulo.db.rls import set_rls_org
+    from farna.db.crud.run import update_run_status
+    from farna.db.rls import set_rls_org
 
     run_id = uuid.uuid4()
     await _insert_run_with_token(
@@ -851,8 +851,8 @@ async def test_update_run_status_refund_claim_count_fenced_real_pg(
     one claim and clamps at 0 (the ``ck_runs_claim_count_nonneg`` floor)."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.db.crud.run import update_run_status
-    from modulo.db.rls import set_rls_org
+    from farna.db.crud.run import update_run_status
+    from farna.db.rls import set_rls_org
 
     run_id = uuid.uuid4()
     await _insert_run_with_token(

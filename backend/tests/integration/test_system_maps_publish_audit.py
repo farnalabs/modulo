@@ -22,16 +22,16 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.feature_flags import PlanContext
-from modulo.core.system_map_persistence import SystemMapDiscoveryRepository
-from modulo.db.models.system_map import SystemMap, SystemMapRevision
-from modulo.db.rls import set_rls_org, set_rls_user_context
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.core.feature_flags import PlanContext
+from farna.core.system_map_persistence import SystemMapDiscoveryRepository
+from farna.db.models.system_map import SystemMap, SystemMapRevision
+from farna.db.rls import set_rls_org, set_rls_user_context
+from farna.settings import Settings, get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -297,7 +297,7 @@ async def integration_client_with_audit(
     """ASGI client with audit_session overridden to use a fresh RLS session per request,
     and auth overridden to return the test principal.
     """
-    from modulo.api.dependencies import _get_engine
+    from farna.api.dependencies import _get_engine
 
     settings = Settings(
         database_url=db_url,
@@ -446,7 +446,7 @@ async def test_audit_append_without_org_context_is_rejected_under_rls(
     """
     from sqlalchemy.exc import SQLAlchemyError
 
-    from modulo.core.audit_logger import append_audit_event
+    from farna.core.audit_logger import append_audit_event
 
     with pytest.raises(SQLAlchemyError):
         async with rls_session.begin():

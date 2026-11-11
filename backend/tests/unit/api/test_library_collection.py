@@ -14,18 +14,18 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, InvalidRequestError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.permissions import PERMISSIONS
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.core.library_service.primitive_types import (
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.auth.permissions import PERMISSIONS
+from farna.core.feature_flags import FeatureFlagRegistry
+from farna.core.library_service.primitive_types import (
     COLLECTION_PIN_TYPES,
     MAX_COLLECTION_PINS,
     PRIMITIVE_TYPES,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -80,7 +80,7 @@ def _build_client(principal: AuthenticatedPrincipal) -> tuple[TestClient, AsyncM
     mock_registry = FeatureFlagRegistry(current_tier="community")
     mock_registry.set_override("library_collection", True)
 
-    with patch("modulo.api.routes.library.get_registry", return_value=mock_registry):
+    with patch("farna.api.routes.library.get_registry", return_value=mock_registry):
         test_client = TestClient(app)
     test_client.mock_session = mock_session  # type: ignore[attr-defined]
     return test_client, mock_session
@@ -104,7 +104,7 @@ def _build_client_flag(principal: AuthenticatedPrincipal, *, enabled: bool) -> t
     mock_registry = FeatureFlagRegistry(current_tier="community")
     mock_registry.set_override("library_collection", enabled)
 
-    with patch("modulo.api.routes.library.get_registry", return_value=mock_registry):
+    with patch("farna.api.routes.library.get_registry", return_value=mock_registry):
         test_client = TestClient(app)
     test_client.mock_session = mock_session  # type: ignore[attr-defined]
     return test_client, mock_session
@@ -246,9 +246,9 @@ class TestCreateCollectionEndpoint:
     def test_create_collection_success(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive()
         with (
-            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.api.routes.library.create_library_primitive",
+                "farna.api.routes.library.create_library_primitive",
                 new_callable=AsyncMock,
                 return_value=mock_prim,
             ) as create_mock,
@@ -273,7 +273,7 @@ class TestCreateCollectionEndpoint:
 
     def test_create_collection_duplicate_slug(self, client: TestClient) -> None:
         existing = _make_collection_primitive()
-        with patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=existing):
+        with patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=existing):
             resp = client.post(
                 "/api/v1/libraries/collections",
                 json={
@@ -303,8 +303,8 @@ class TestUpdateCollectionEndpoint:
     def test_update_collection_success(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive()
         with (
-            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
-            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
         ):
             resp = client.patch(
                 f"/api/v1/libraries/collections/{mock_prim.id}",
@@ -317,7 +317,7 @@ class TestUpdateCollectionEndpoint:
         assert data["manifest_pins"] == [{"slug": "new-schema", "version": "2.0"}]
 
     def test_update_collection_not_found(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=None):
             resp = client.patch(
                 f"/api/v1/libraries/collections/{uuid.uuid4()}",
                 json={"manifest_pins": []},
@@ -327,7 +327,7 @@ class TestUpdateCollectionEndpoint:
     def test_update_non_collection_type(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive()
         mock_prim.primitive_type = "workflow"
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.patch(
                 f"/api/v1/libraries/collections/{mock_prim.id}",
                 json={"manifest_pins": []},
@@ -336,7 +336,7 @@ class TestUpdateCollectionEndpoint:
 
     def test_update_published_collection_denied(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive(status="published")
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.patch(
                 f"/api/v1/libraries/collections/{mock_prim.id}",
                 json={"manifest_pins": []},
@@ -354,8 +354,8 @@ class TestPublishCollectionEndpoint:
         mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
         pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
         with (
-            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
-            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+            patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("farna.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
@@ -369,10 +369,10 @@ class TestPublishCollectionEndpoint:
         mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
         pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
         with (
-            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
-            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+            patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("farna.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
             patch(
-                "modulo.api.routes.library.notify_importers_of_update",
+                "farna.api.routes.library.notify_importers_of_update",
                 new_callable=AsyncMock,
             ) as notify,
         ):
@@ -385,7 +385,7 @@ class TestPublishCollectionEndpoint:
 
     def test_publish_empty_manifest_rejected(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive(manifest_pins=[])
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -400,8 +400,8 @@ class TestPublishCollectionEndpoint:
         )
         pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
         with (
-            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
-            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+            patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("farna.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
@@ -411,7 +411,7 @@ class TestPublishCollectionEndpoint:
     def test_publish_too_many_pins_rejected(self, client: TestClient) -> None:
         pins = [{"slug": f"schema-{i}", "version": "1.0"} for i in range(26)]
         mock_prim = _make_collection_primitive(manifest_pins=pins)
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -419,7 +419,7 @@ class TestPublishCollectionEndpoint:
 
     def test_publish_non_draft_denied(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive(status="published")
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -428,7 +428,7 @@ class TestPublishCollectionEndpoint:
     def test_publish_not_collection_denied(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive()
         mock_prim.primitive_type = "workflow"
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -436,7 +436,7 @@ class TestPublishCollectionEndpoint:
 
     def test_publish_runner_denied(self, runner_client: TestClient) -> None:
         mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
-        with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
+        with patch("farna.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
             resp = runner_client.post(
                 f"/api/v1/libraries/collections/{mock_prim.id}/publish",
             )
@@ -479,9 +479,9 @@ class TestCollectionFeatureFlag:
 class TestCreateCollectionErrorPaths:
     def test_create_integrity_error_returns_409(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.api.routes.library.create_library_primitive",
+                "farna.api.routes.library.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=IntegrityError("stmt", {}, RuntimeError("conflict")),
             ),
@@ -494,9 +494,9 @@ class TestCreateCollectionErrorPaths:
 
     def test_create_programming_error_returns_501(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.api.routes.library.create_library_primitive",
+                "farna.api.routes.library.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
             ),
@@ -509,9 +509,9 @@ class TestCreateCollectionErrorPaths:
 
     def test_create_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+            patch("farna.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
             patch(
-                "modulo.api.routes.library.create_library_primitive",
+                "farna.api.routes.library.create_library_primitive",
                 new_callable=AsyncMock,
                 side_effect=SQLAlchemyError("db down"),
             ),
@@ -531,7 +531,7 @@ class TestCreateCollectionErrorPaths:
 class TestUpdateCollectionErrorPaths:
     def test_update_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
         ):
@@ -543,7 +543,7 @@ class TestUpdateCollectionErrorPaths:
 
     def test_update_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -562,7 +562,7 @@ class TestUpdateCollectionErrorPaths:
 class TestPublishCollectionErrorPaths:
     def test_publish_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
         ):
@@ -571,7 +571,7 @@ class TestPublishCollectionErrorPaths:
 
     def test_publish_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -613,7 +613,7 @@ class TestPublishCollectionErrorPaths:
             return original_side_effect(stmt, *args, **kwargs)
 
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=mock_prim,
         ):
@@ -631,10 +631,10 @@ class TestPublishCollectionErrorPaths:
 
 class TestValidateManifestPins:
     def test_empty_slug_or_version_rejected(self) -> None:
-        from modulo.api.routes.library import _validate_manifest_pins
+        from farna.api.routes.library import _validate_manifest_pins
 
         async def run() -> list[str]:
-            with patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock):
+            with patch("farna.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock):
                 return await _validate_manifest_pins(
                     [{"slug": "", "version": "1.0"}, {"slug": "s", "version": ""}],
                     MagicMock(),
@@ -646,11 +646,11 @@ class TestValidateManifestPins:
         assert any("non-empty slug and version" in e for e in errors)
 
     def test_unknown_primitive_rejected(self) -> None:
-        from modulo.api.routes.library import _validate_manifest_pins
+        from farna.api.routes.library import _validate_manifest_pins
 
         async def run() -> list[str]:
             with patch(
-                "modulo.api.routes.library._lookup_pin_primitive",
+                "farna.api.routes.library._lookup_pin_primitive",
                 new_callable=AsyncMock,
                 return_value=None,
             ):
@@ -660,13 +660,13 @@ class TestValidateManifestPins:
         assert any("unknown primitive" in e for e in errors)
 
     def test_disallowed_pin_type_rejected(self) -> None:
-        from modulo.api.routes.library import _validate_manifest_pins
+        from farna.api.routes.library import _validate_manifest_pins
 
         pinned = _make_collection_pin_primitive("my-composite", "1.0", primitive_type="composite")
 
         async def run() -> list[str]:
             with patch(
-                "modulo.api.routes.library._lookup_pin_primitive",
+                "farna.api.routes.library._lookup_pin_primitive",
                 new_callable=AsyncMock,
                 return_value=pinned,
             ):
@@ -676,13 +676,13 @@ class TestValidateManifestPins:
         assert any("not allowed" in e for e in errors)
 
     def test_valid_pin_accepted(self) -> None:
-        from modulo.api.routes.library import _validate_manifest_pins
+        from farna.api.routes.library import _validate_manifest_pins
 
         pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
 
         async def run() -> list[str]:
             with patch(
-                "modulo.api.routes.library._lookup_pin_primitive",
+                "farna.api.routes.library._lookup_pin_primitive",
                 new_callable=AsyncMock,
                 return_value=pinned,
             ):
@@ -697,7 +697,7 @@ class TestValidateManifestPins:
         Fail-before: ``_lookup_pin_primitive`` swallowed ``SQLAlchemyError``
         and returned ``None`` - indistinguishable from a genuinely missing pin.
         """
-        from modulo.api.routes.library import _lookup_pin_primitive
+        from farna.api.routes.library import _lookup_pin_primitive
 
         session = MagicMock()
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
@@ -707,7 +707,7 @@ class TestValidateManifestPins:
 
     def test_pin_lookup_not_found_still_returns_none(self) -> None:
         """The converted helper keeps its legitimate not-found contract."""
-        from modulo.api.routes.library import _lookup_pin_primitive
+        from farna.api.routes.library import _lookup_pin_primitive
 
         session = MagicMock()
         empty_result = MagicMock()
@@ -723,7 +723,7 @@ class TestValidateManifestPins:
         Fail-before: the swallowed ``None`` became the error message
         ``pin references unknown primitive: my-schema@1.0`` (a 422).
         """
-        from modulo.api.routes.library import _validate_manifest_pins
+        from farna.api.routes.library import _validate_manifest_pins
 
         session = MagicMock()
         session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
@@ -762,7 +762,7 @@ def _patch_no_newer_version():
     """FAR-759: install responses surface update-available via
     ``find_newer_version`` — stub "no update" for route-shape tests."""
     return patch(
-        "modulo.api.routes.library.find_newer_version",
+        "farna.api.routes.library.find_newer_version",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -773,12 +773,12 @@ class TestInstallCollectionEndpoint:
         mock_install = _make_install_record()
         with (
             patch(
-                "modulo.api.routes.library.install_collection",
+                "farna.api.routes.library.install_collection",
                 new_callable=AsyncMock,
                 return_value=mock_install,
             ),
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -810,21 +810,21 @@ class TestInstallCollectionEndpoint:
         ]
         with (
             patch(
-                "modulo.api.routes.library.install_collection",
+                "farna.api.routes.library.install_collection",
                 new_callable=AsyncMock,
                 return_value=mock_install,
             ),
             patch(
-                "modulo.api.routes.library.get_pipeline",
+                "farna.api.routes.library.get_pipeline",
                 new_callable=AsyncMock,
                 return_value=installed,
             ),
             patch(
-                "modulo.api.routes.library._enforce_imported_connector_team_gate",
+                "farna.api.routes.library._enforce_imported_connector_team_gate",
                 new_callable=AsyncMock,
             ) as gate,
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -837,11 +837,11 @@ class TestInstallCollectionEndpoint:
         gate.assert_awaited_once()
 
     def test_install_not_published(self, client: TestClient) -> None:
-        from modulo.core.library_service.install import CollectionNotPublishedError
+        from farna.core.library_service.install import CollectionNotPublishedError
 
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=CollectionNotPublishedError("not published"),
         ):
@@ -851,11 +851,11 @@ class TestInstallCollectionEndpoint:
         assert resp.status_code == 400
 
     def test_install_pin_resolution_error(self, client: TestClient) -> None:
-        from modulo.core.library_service.install import PinResolutionError
+        from farna.core.library_service.install import PinResolutionError
 
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=PinResolutionError("pin not found"),
         ):
@@ -871,11 +871,11 @@ class TestInstallCollectionEndpoint:
         ``GitContentRefError``; without this clause it would escape the
         endpoint as a raw 500 because it is not a DB error.
         """
-        from modulo.core.pipeline_engine.git_content import GitContentRefError
+        from farna.core.pipeline_engine.git_content import GitContentRefError
 
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=GitContentRefError(
                 "Agent 'Ref Agent' prompt_template git content ref "
@@ -889,11 +889,11 @@ class TestInstallCollectionEndpoint:
         assert "not pinned" in resp.json()["detail"]
 
     def test_install_generic_error(self, client: TestClient) -> None:
-        from modulo.core.library_service.install import CollectionInstallError
+        from farna.core.library_service.install import CollectionInstallError
 
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=CollectionInstallError("something went wrong"),
         ):
@@ -912,7 +912,7 @@ class TestInstallCollectionEndpoint:
     def test_install_programming_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
         ):
@@ -924,7 +924,7 @@ class TestInstallCollectionEndpoint:
     def test_install_sqlalchemy_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.install_collection",
+            "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -944,7 +944,7 @@ class TestUninstallCollectionEndpoint:
         install_id = uuid.uuid4()
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.uninstall_collection",
+            "farna.api.routes.library.uninstall_collection",
             new_callable=AsyncMock,
             return_value={
                 "install_id": str(install_id),
@@ -963,12 +963,12 @@ class TestUninstallCollectionEndpoint:
         assert not data["detached"]
 
     def test_uninstall_not_found(self, client: TestClient) -> None:
-        from modulo.core.library_service.uninstall import InstallNotFoundError
+        from farna.core.library_service.uninstall import InstallNotFoundError
 
         install_id = uuid.uuid4()
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.uninstall_collection",
+            "farna.api.routes.library.uninstall_collection",
             new_callable=AsyncMock,
             side_effect=InstallNotFoundError("not found"),
         ):
@@ -979,12 +979,12 @@ class TestUninstallCollectionEndpoint:
         assert resp.status_code == 404
 
     def test_uninstall_generic_error(self, client: TestClient) -> None:
-        from modulo.core.library_service.uninstall import UninstallError
+        from farna.core.library_service.uninstall import UninstallError
 
         install_id = uuid.uuid4()
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.uninstall_collection",
+            "farna.api.routes.library.uninstall_collection",
             new_callable=AsyncMock,
             side_effect=UninstallError("failed"),
         ):
@@ -1005,7 +1005,7 @@ class TestUninstallCollectionEndpoint:
     def test_uninstall_programming_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.uninstall_collection",
+            "farna.api.routes.library.uninstall_collection",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
         ):
@@ -1018,7 +1018,7 @@ class TestUninstallCollectionEndpoint:
     def test_uninstall_sqlalchemy_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.uninstall_collection",
+            "farna.api.routes.library.uninstall_collection",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -1038,7 +1038,7 @@ class TestListCollectionInstallsEndpoint:
     def test_list_installs_programming_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.select",
+            "farna.api.routes.library.select",
             return_value=MagicMock(),
         ):
             client.mock_session.execute = AsyncMock(
@@ -1052,7 +1052,7 @@ class TestListCollectionInstallsEndpoint:
     def test_list_installs_sqlalchemy_error(self, client: TestClient) -> None:
         coll_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.select",
+            "farna.api.routes.library.select",
             return_value=MagicMock(),
         ):
             client.mock_session.execute = AsyncMock(
@@ -1074,7 +1074,7 @@ class TestGetCollectionInstallEndpoint:
         mock_install = _make_install_record()
         with (
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1145,7 +1145,7 @@ class TestGetCollectionInstallEndpoint:
 
 class TestInstallCollectionService:
     def test_install_not_published_raises(self) -> None:
-        from modulo.core.library_service.install import (
+        from farna.core.library_service.install import (
             CollectionNotPublishedError,
             install_collection,
         )
@@ -1163,7 +1163,7 @@ class TestInstallCollectionService:
             asyncio.run(run())
 
     def test_install_not_collection_raises(self) -> None:
-        from modulo.core.library_service.install import (
+        from farna.core.library_service.install import (
             CollectionInstallError,
             install_collection,
         )
@@ -1181,7 +1181,7 @@ class TestInstallCollectionService:
             asyncio.run(run())
 
     def test_install_empty_pins_raises(self) -> None:
-        from modulo.core.library_service.install import (
+        from farna.core.library_service.install import (
             CollectionInstallError,
             install_collection,
         )
@@ -1203,7 +1203,7 @@ class TestInstallCollectionService:
             asyncio.run(run())
 
     def test_install_refuses_when_already_installed(self) -> None:
-        from modulo.core.library_service.install import (
+        from farna.core.library_service.install import (
             CollectionInstallError,
             install_collection,
         )
@@ -1238,7 +1238,7 @@ class TestInstallCollectionService:
             pin_stub.primitive_type = "schema"
             pin_stub.content_json = {}
             with patch(
-                "modulo.core.library_service.install._resolve_pin",
+                "farna.core.library_service.install._resolve_pin",
                 new_callable=AsyncMock,
                 return_value=pin_stub,
             ):
@@ -1248,8 +1248,8 @@ class TestInstallCollectionService:
             asyncio.run(run())
 
     def test_install_collection_success_builds_provenance(self) -> None:
-        from modulo.core.library_service.install import install_collection
-        from modulo.db.models.collection_install import CollectionInstall
+        from farna.core.library_service.install import install_collection
+        from farna.db.models.collection_install import CollectionInstall
 
         async def run() -> CollectionInstall:
             mock_session = AsyncMock()
@@ -1281,17 +1281,17 @@ class TestInstallCollectionService:
 
             with (
                 patch(
-                    "modulo.core.library_service.install._resolve_pin",
+                    "farna.core.library_service.install._resolve_pin",
                     new_callable=AsyncMock,
                     return_value=pin,
                 ),
                 patch(
-                    "modulo.core.library_service.install.materialize_import",
+                    "farna.core.library_service.install.materialize_import",
                     new_callable=AsyncMock,
                     return_value={"schemas": {}, "agents": {}, "pipeline_id": None},
                 ),
                 patch(
-                    "modulo.core.library_service.install._stamp_install_id",
+                    "farna.core.library_service.install._stamp_install_id",
                     new_callable=AsyncMock,
                     return_value=[],
                 ),
@@ -1300,7 +1300,7 @@ class TestInstallCollectionService:
                     # it without await); patching it with an AsyncMock returns a
                     # coroutine nobody awaits, which leaks a
                     # PytestUnraisableExceptionWarning on every run.
-                    "modulo.core.library_service.install._record_entities",
+                    "farna.core.library_service.install._record_entities",
                     new_callable=MagicMock,
                 ),
             ):
@@ -1339,12 +1339,12 @@ class TestInstalledEntitiesSingleSourceOfTruth:
     """
 
     def test_collection_install_model_has_no_installed_entities_column(self) -> None:
-        from modulo.db.models.collection_install import CollectionInstall
+        from farna.db.models.collection_install import CollectionInstall
 
         assert "installed_entities" not in CollectionInstall.__table__.columns
 
     def test_load_installed_entities_reads_the_child_rows(self) -> None:
-        from modulo.api.routes.library import _load_installed_entities
+        from farna.api.routes.library import _load_installed_entities
 
         install_id = uuid.uuid4()
         schema_id = uuid.uuid4()
@@ -1369,7 +1369,7 @@ class TestInstalledEntitiesSingleSourceOfTruth:
         ]
 
     def test_install_response_carries_the_caller_preloaded_entity_list(self) -> None:
-        from modulo.api.routes.library import _install_response, _load_install_facts
+        from farna.api.routes.library import _install_response, _load_install_facts
 
         install = _make_install_record()
         # A stale JSON copy on the record: the response must carry the list
@@ -1386,7 +1386,7 @@ class TestInstalledEntitiesSingleSourceOfTruth:
         session = AsyncMock()
         with (
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1403,7 +1403,7 @@ class TestInstalledEntitiesSingleSourceOfTruth:
 
 class TestUninstallCollectionService:
     def test_uninstall_collection_id_mismatch_raises(self) -> None:
-        from modulo.core.library_service.uninstall import (
+        from farna.core.library_service.uninstall import (
             InstallNotFoundError,
             uninstall_collection,
         )
@@ -1426,7 +1426,7 @@ class TestUninstallCollectionService:
             asyncio.run(run())
 
     def test_uninstall_skips_missing_entity(self) -> None:
-        from modulo.core.library_service.uninstall import uninstall_collection
+        from farna.core.library_service.uninstall import uninstall_collection
 
         async def run() -> dict:
             mock_session = AsyncMock()
@@ -1453,7 +1453,7 @@ class TestUninstallCollectionService:
         assert not result["detached"]
 
     def test_check_unmodified_true_when_stamped(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
+        from farna.core.library_service.uninstall import _check_unmodified
 
         async def run() -> bool:
             install_id = uuid.uuid4()
@@ -1466,7 +1466,7 @@ class TestUninstallCollectionService:
         assert asyncio.run(run()) is True
 
     def test_check_unmodified_false_when_detached(self) -> None:
-        from modulo.core.library_service.uninstall import _check_unmodified
+        from farna.core.library_service.uninstall import _check_unmodified
 
         async def run() -> bool:
             install_id = uuid.uuid4()
@@ -1484,7 +1484,7 @@ class TestUninstallCollectionService:
 # ---------------------------------------------------------------------------
 class TestGrantCollectionAgents:
     def test_grant_community_sourced(self) -> None:
-        from modulo.core.library_service.grant import grant_collection_agents
+        from farna.core.library_service.grant import grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1500,7 +1500,7 @@ class TestGrantCollectionAgents:
         asyncio.run(run())
 
     def test_grant_already_granted(self) -> None:
-        from modulo.core.library_service.grant import grant_collection_agents
+        from farna.core.library_service.grant import grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1516,7 +1516,7 @@ class TestGrantCollectionAgents:
         asyncio.run(run())
 
     def test_grant_not_community_sourced(self) -> None:
-        from modulo.core.library_service.grant import NotCommunitySourcedError, grant_collection_agents
+        from farna.core.library_service.grant import NotCommunitySourcedError, grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1532,7 +1532,7 @@ class TestGrantCollectionAgents:
             asyncio.run(run())
 
     def test_grant_install_not_found(self) -> None:
-        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+        from farna.core.library_service.grant import InstallNotFoundError, grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1545,7 +1545,7 @@ class TestGrantCollectionAgents:
     def test_grant_soft_deleted_install_is_not_found(self) -> None:
         """A retired (uninstalled) install must never be grantable — 0308
         soft-delete guard on the grant path."""
-        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+        from farna.core.library_service.grant import InstallNotFoundError, grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1561,7 +1561,7 @@ class TestGrantCollectionAgents:
             asyncio.run(run())
 
     def test_grant_wrong_org(self) -> None:
-        from modulo.core.library_service.grant import InstallNotFoundError, grant_collection_agents
+        from farna.core.library_service.grant import InstallNotFoundError, grant_collection_agents
 
         async def run() -> None:
             mock_session = AsyncMock()
@@ -1597,12 +1597,12 @@ class TestGrantCollectionAgentsEndpoint:
         mock_install = _make_install_record_with_grant(agents_granted=True)
         with (
             patch(
-                "modulo.api.routes.library.grant_collection_agents",
+                "farna.api.routes.library.grant_collection_agents",
                 new_callable=AsyncMock,
                 return_value=mock_install,
             ),
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1617,12 +1617,12 @@ class TestGrantCollectionAgentsEndpoint:
         assert data["agents_granted"] is True
 
     def test_grant_not_found(self, client: TestClient) -> None:
-        from modulo.core.library_service.grant import InstallNotFoundError
+        from farna.core.library_service.grant import InstallNotFoundError
 
         coll_id = uuid.uuid4()
         install_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.grant_collection_agents",
+            "farna.api.routes.library.grant_collection_agents",
             new_callable=AsyncMock,
             side_effect=InstallNotFoundError("not found"),
         ):
@@ -1632,12 +1632,12 @@ class TestGrantCollectionAgentsEndpoint:
         assert resp.status_code == 404
 
     def test_grant_not_community(self, client: TestClient) -> None:
-        from modulo.core.library_service.grant import NotCommunitySourcedError
+        from farna.core.library_service.grant import NotCommunitySourcedError
 
         coll_id = uuid.uuid4()
         install_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.grant_collection_agents",
+            "farna.api.routes.library.grant_collection_agents",
             new_callable=AsyncMock,
             side_effect=NotCommunitySourcedError("not community"),
         ):
@@ -1650,7 +1650,7 @@ class TestGrantCollectionAgentsEndpoint:
         coll_id = uuid.uuid4()
         install_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.grant_collection_agents",
+            "farna.api.routes.library.grant_collection_agents",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", {}, RuntimeError("missing table")),
         ):
@@ -1663,7 +1663,7 @@ class TestGrantCollectionAgentsEndpoint:
         coll_id = uuid.uuid4()
         install_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.library.grant_collection_agents",
+            "farna.api.routes.library.grant_collection_agents",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("db down"),
         ):
@@ -1676,12 +1676,12 @@ class TestGrantCollectionAgentsEndpoint:
         mock_install = _make_install_record_with_grant(community_sourced=True, agents_granted=True)
         with (
             patch(
-                "modulo.api.routes.library.install_collection",
+                "farna.api.routes.library.install_collection",
                 new_callable=AsyncMock,
                 return_value=mock_install,
             ),
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
@@ -1760,7 +1760,7 @@ class TestCreateCollectionVersionEndpoint:
 
         mock_session.flush = AsyncMock(side_effect=_stamp_added_row)
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=coll,
         ):
@@ -1781,7 +1781,7 @@ class TestCreateCollectionVersionEndpoint:
 
     def test_version_not_found(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1792,7 +1792,7 @@ class TestCreateCollectionVersionEndpoint:
         prim = _make_published_collection()
         prim.primitive_type = "schema"
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ):
@@ -1802,7 +1802,7 @@ class TestCreateCollectionVersionEndpoint:
     def test_version_rejects_cross_org_row(self, client: TestClient) -> None:
         prim = _make_published_collection(org_id=uuid.uuid4())
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ):
@@ -1812,7 +1812,7 @@ class TestCreateCollectionVersionEndpoint:
     def test_version_rejects_draft_collection(self, client: TestClient) -> None:
         prim = _make_published_collection(status="draft")
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=prim,
         ):
@@ -1828,7 +1828,7 @@ class TestCreateCollectionVersionEndpoint:
         res.scalars = MagicMock(return_value=scalars)
         client.mock_session.execute = AsyncMock(return_value=res)
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=coll,
         ):
@@ -1867,7 +1867,7 @@ class TestGetCollectionUpdateEndpoint:
             "warnings": [],
         }
         with patch(
-            "modulo.api.routes.library.detect_collection_update",
+            "farna.api.routes.library.detect_collection_update",
             new_callable=AsyncMock,
             return_value=report,
         ):
@@ -1892,7 +1892,7 @@ class TestGetCollectionUpdateEndpoint:
             "warnings": [],
         }
         with patch(
-            "modulo.api.routes.library.detect_collection_update",
+            "farna.api.routes.library.detect_collection_update",
             new_callable=AsyncMock,
             return_value=report,
         ):
@@ -1905,10 +1905,10 @@ class TestGetCollectionUpdateEndpoint:
         assert data["delta"] is None
 
     def test_update_unknown_install_404(self, client: TestClient) -> None:
-        from modulo.core.library_service.upgrade import UpgradeInstallNotFoundError
+        from farna.core.library_service.upgrade import UpgradeInstallNotFoundError
 
         with patch(
-            "modulo.api.routes.library.detect_collection_update",
+            "farna.api.routes.library.detect_collection_update",
             new_callable=AsyncMock,
             side_effect=UpgradeInstallNotFoundError("nope"),
         ):
@@ -1930,7 +1930,7 @@ class TestUpgradeCollectionEndpoint:
             "warnings": [],
         }
         with patch(
-            "modulo.api.routes.library.upgrade_collection",
+            "farna.api.routes.library.upgrade_collection",
             new_callable=AsyncMock,
             return_value=report,
         ):
@@ -1945,10 +1945,10 @@ class TestUpgradeCollectionEndpoint:
         assert data["preserved"][0]["slug"] == "s2"
 
     def test_upgrade_no_update_409(self, client: TestClient) -> None:
-        from modulo.core.library_service.upgrade import NoUpdateAvailableError
+        from farna.core.library_service.upgrade import NoUpdateAvailableError
 
         with patch(
-            "modulo.api.routes.library.upgrade_collection",
+            "farna.api.routes.library.upgrade_collection",
             new_callable=AsyncMock,
             side_effect=NoUpdateAvailableError("already current"),
         ):
@@ -1958,10 +1958,10 @@ class TestUpgradeCollectionEndpoint:
         assert resp.status_code == 409
 
     def test_upgrade_unknown_install_404(self, client: TestClient) -> None:
-        from modulo.core.library_service.upgrade import UpgradeInstallNotFoundError
+        from farna.core.library_service.upgrade import UpgradeInstallNotFoundError
 
         with patch(
-            "modulo.api.routes.library.upgrade_collection",
+            "farna.api.routes.library.upgrade_collection",
             new_callable=AsyncMock,
             side_effect=UpgradeInstallNotFoundError("nope"),
         ):
@@ -1971,10 +1971,10 @@ class TestUpgradeCollectionEndpoint:
         assert resp.status_code == 404
 
     def test_upgrade_generic_error_400(self, client: TestClient) -> None:
-        from modulo.core.library_service.upgrade import CollectionUpgradeError
+        from farna.core.library_service.upgrade import CollectionUpgradeError
 
         with patch(
-            "modulo.api.routes.library.upgrade_collection",
+            "farna.api.routes.library.upgrade_collection",
             new_callable=AsyncMock,
             side_effect=CollectionUpgradeError("bad"),
         ):
@@ -1999,7 +1999,7 @@ class TestSeedPrReviewAgent:
     """Verify the PR Review Agent seed entry exists with correct fields."""
 
     def test_seed_pr_review_agent_exists(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         key = ("agent", "pr-review-agent")
         assert key in _MODULO_BY_SLUG, f"Missing seed entry for {key}"
@@ -2018,7 +2018,7 @@ class TestSeedPrReviewAgent:
         assert "code_review" in github_refs[0]["capabilities"]
 
     def test_seed_pr_review_agent_prompt_mentions_decision_schema(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         agent = _MODULO_BY_SLUG[("agent", "pr-review-agent")]
         prompt = agent.content_json["prompt_template"]
@@ -2031,7 +2031,7 @@ class TestSeedGitHubPrReviewerBundle:
     """Verify the GitHub PR Reviewer bundle seed entry exists with correct fields."""
 
     def test_seed_github_pr_reviewer_bundle_exists(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         key = ("library_collection", "github-pr-reviewer")
         assert key in _MODULO_BY_SLUG, f"Missing seed entry for {key}"
@@ -2042,7 +2042,7 @@ class TestSeedGitHubPrReviewerBundle:
         assert "quick-start" in coll.tags
 
     def test_bundle_pins_reference_existing_primitives(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
         pins = coll.content_json["manifest_pins"]
@@ -2059,7 +2059,7 @@ class TestSeedGitHubPrReviewerBundle:
             assert key in _MODULO_BY_SLUG, f"Pinned slug '{pin['slug']}' not found in seed data"
 
     def test_bundle_connector_requirements(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
         reqs = coll.content_json["connector_requirements"]
@@ -2068,7 +2068,7 @@ class TestSeedGitHubPrReviewerBundle:
         assert "code_review" in reqs[0]["capabilities"]
 
     def test_bundle_trust_header(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         coll = _MODULO_BY_SLUG[("library_collection", "github-pr-reviewer")]
         assert coll.content_json["trust_header"] == {"source": "modulo", "verified": True}
@@ -2110,28 +2110,28 @@ class TestAllNewBundlesExist:
     """Verify all 6 FAR-787 collection bundles are in the seed data."""
 
     def test_all_collections_exist(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             key = ("library_collection", slug)
             assert key in _MODULO_BY_SLUG, f"Missing collection bundle for {slug}"
 
     def test_all_collections_are_library_collection_type(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
             assert coll.primitive_type == "library_collection"
 
     def test_all_collections_are_published(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
             assert coll.status == "published", f"Collection '{slug}' is not published"
 
     def test_all_collections_have_expected_tags(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         expected_tags = {
             "prompt-to-pr": {"library_collection", "code-generation", "pr", "github", "sandbox"},
@@ -2150,7 +2150,7 @@ class TestAllBundlePinsResolve:
     """Verify every pinned slug across all 6 bundles exists as a primitive."""
 
     def test_all_pins_resolve(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
@@ -2167,7 +2167,7 @@ class TestAllBundlePinsResolve:
                 assert found, f"Pin '{pin_slug}' in collection '{slug}' not found in seed data"
 
     def test_all_agents_have_prompts(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_AGENT_SLUGS:
             key = ("agent", slug)
@@ -2177,7 +2177,7 @@ class TestAllBundlePinsResolve:
             assert prompt, f"Agent '{slug}' has empty prompt_template"
 
     def test_all_pipelines_have_nodes_and_edges(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_PIPELINE_SLUGS:
             key = ("pipeline_template", slug)
@@ -2188,7 +2188,7 @@ class TestAllBundlePinsResolve:
             assert "edges" in content, f"Pipeline '{slug}' missing edges key"
 
     def test_bundle_connector_requirements_present(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
@@ -2199,7 +2199,7 @@ class TestAllBundlePinsResolve:
                 assert "capabilities" in req, f"Collection '{slug}' connector req missing capabilities"
 
     def test_bundle_trust_headers_present(self) -> None:
-        from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
+        from farna.core.library_service._seed_data import _MODULO_BY_SLUG
 
         for slug in _NEW_BUNDLE_SLUGS:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
@@ -2227,7 +2227,7 @@ class TestListInstallsSuccess:
         client.mock_session.execute = AsyncMock(return_value=_scalars_result([install]))
         client.mock_session.get = AsyncMock(return_value=None)  # collection not visible
         with patch(
-            "modulo.api.routes.library.compute_runnable",
+            "farna.api.routes.library.compute_runnable",
             new_callable=AsyncMock,
             return_value=True,
         ):
@@ -2247,12 +2247,12 @@ class TestListInstallsSuccess:
         client.mock_session.get = AsyncMock(return_value=MagicMock())
         with (
             patch(
-                "modulo.api.routes.library.compute_runnable",
+                "farna.api.routes.library.compute_runnable",
                 new_callable=AsyncMock,
                 return_value=True,
             ),
             patch(
-                "modulo.api.routes.library.find_newer_version",
+                "farna.api.routes.library.find_newer_version",
                 new_callable=AsyncMock,
                 return_value=newer,
             ),
@@ -2281,7 +2281,7 @@ class TestCreateCollectionVersionSeededGroup:
 
         mock_session.flush = AsyncMock(side_effect=_stamp_added_row)
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             return_value=coll,
         ):
@@ -2303,7 +2303,7 @@ class TestCreateCollectionVersionDbErrors:
     )
     def test_create_version_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
         with patch(
-            "modulo.api.routes.library.get_primitive",
+            "farna.api.routes.library.get_primitive",
             new_callable=AsyncMock,
             side_effect=exc,
         ):
@@ -2321,7 +2321,7 @@ class TestCollectionUpdateDbErrors:
     )
     def test_update_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
         with patch(
-            "modulo.api.routes.library.detect_collection_update",
+            "farna.api.routes.library.detect_collection_update",
             new_callable=AsyncMock,
             side_effect=exc,
         ):
@@ -2342,7 +2342,7 @@ class TestUpgradeCollectionDbErrors:
     )
     def test_upgrade_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
         with patch(
-            "modulo.api.routes.library.upgrade_collection",
+            "farna.api.routes.library.upgrade_collection",
             new_callable=AsyncMock,
             side_effect=exc,
         ):

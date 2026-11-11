@@ -36,13 +36,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import runs as runs_module
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.auth.permissions import resolve_required
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import runs as runs_module
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.auth.permissions import resolve_required
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.route_introspection import get_all_apiroutes, get_permission_tag
 
@@ -180,8 +180,8 @@ def test_returns_attempts_in_index_order(client: TestClient) -> None:
     ]
 
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
-        patch("modulo.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=attempts)),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
+        patch("farna.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=attempts)),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -209,8 +209,8 @@ def test_item_page_is_capped_and_total_is_the_true_count(client: TestClient) -> 
     attempts = [_attempt(index) for index in range(150)]
 
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
-        patch("modulo.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=attempts)),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
+        patch("farna.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=attempts)),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -223,8 +223,8 @@ def test_item_page_is_capped_and_total_is_the_true_count(client: TestClient) -> 
 
 def test_existing_run_with_no_attempts_returns_empty_page(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
-        patch("modulo.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
+        patch("farna.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[])),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -241,8 +241,8 @@ def test_missing_run_returns_404_and_never_lists_attempts(client: TestClient) ->
     list_mock = AsyncMock(return_value=[])
 
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=None)),
-        patch("modulo.api.routes.runs.db_list_attempts", new=list_mock),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=None)),
+        patch("farna.api.routes.runs.db_list_attempts", new=list_mock),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -262,8 +262,8 @@ def test_foreign_org_run_is_looked_up_with_caller_org_and_returns_404(client: Te
     get_run_mock = AsyncMock(return_value=None)
 
     with (
-        patch("modulo.api.routes.runs.get_run", new=get_run_mock),
-        patch("modulo.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[])),
+        patch("farna.api.routes.runs.get_run", new=get_run_mock),
+        patch("farna.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[])),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -312,8 +312,8 @@ def test_permission_tag_matches_run_detail_and_resolves_to_viewer() -> None:
 def test_viewer_principal_can_read_attempts(viewer_client: TestClient) -> None:
     """The viewer-level key is honoured behaviourally end-to-end."""
     with (
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
-        patch("modulo.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[_attempt(0)])),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=_make_run())),
+        patch("farna.api.routes.runs.db_list_attempts", new=AsyncMock(return_value=[_attempt(0)])),
     ):
         resp = viewer_client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
@@ -336,7 +336,7 @@ def test_viewer_principal_can_read_attempts(viewer_client: TestClient) -> None:
     ],
 )
 def test_route_error_convention(client: TestClient, error: Exception, expected_status: int) -> None:
-    with patch("modulo.api.routes.runs.get_run", new=AsyncMock(side_effect=error)):
+    with patch("farna.api.routes.runs.get_run", new=AsyncMock(side_effect=error)):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")
 
     assert resp.status_code == expected_status
@@ -349,7 +349,7 @@ def test_http_exception_from_the_load_is_re_raised(client: TestClient) -> None:
     # A mapped status (the app renders unknown statuses as a 500 problem), so
     # a reclassified exception would show up as a different code/detail.
     with patch(
-        "modulo.api.routes.runs.get_run",
+        "farna.api.routes.runs.get_run",
         new=AsyncMock(side_effect=HTTPException(status_code=403, detail="load refused")),
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}/attempts")

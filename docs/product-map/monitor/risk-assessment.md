@@ -3,7 +3,7 @@ id: feat-risk-assessment
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/evidence.py
+  - backend/src/farna/api/routes/evidence.py
   - frontend/src/views/RiskAssessmentView.vue
   - frontend/src/components/risk-assessment/ActionBadge.vue
   - frontend/src/components/risk-assessment/RiskAssessmentFacets.vue

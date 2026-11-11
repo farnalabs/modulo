@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.error_tracking.alerting import TriggeredAlert
-from modulo.db.models.error_notification_rule import ErrorNotificationRule
+from farna.core.error_tracking.alerting import TriggeredAlert
+from farna.db.models.error_notification_rule import ErrorNotificationRule
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")

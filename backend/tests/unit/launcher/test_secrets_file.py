@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-import modulo.launcher.secrets_file as secrets_file_module
-from modulo.launcher.secrets_file import (
+import farna.launcher.secrets_file as secrets_file_module
+from farna.launcher.secrets_file import (
     _HMAC_KEY_BYTES,
     LauncherSecrets,
     SecretsFileError,
@@ -31,7 +31,7 @@ from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seam."""
-    bypass_platform_seams(monkeypatch, "modulo.launcher.secrets_file")
+    bypass_platform_seams(monkeypatch, "farna.launcher.secrets_file")
 
 
 def test_first_boot_generates_all_credentials(tmp_path: Path) -> None:

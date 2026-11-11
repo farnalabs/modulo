@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
-from modulo.connectors.base import (
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.base import (
     CIRun,
     CIRunLog,
     CIRunStatus,

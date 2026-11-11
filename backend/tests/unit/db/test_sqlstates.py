@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from sqlalchemy.exc import OperationalError
 
-from modulo.db.sqlstates import (
+from farna.db.sqlstates import (
     DUAL_WRITE_RETRYABLE_SQLSTATES,
     LOCK_NOT_AVAILABLE_SQLSTATE,
     STATEMENT_TIMEOUT_SQLSTATE,

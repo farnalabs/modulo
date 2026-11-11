@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine.schema_repair import (
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine.schema_repair import (
     SchemaRepairLoop,
     SchemaValidationOutcome,
     _clear_validator_cache,
@@ -665,7 +665,7 @@ class TestRepairPrompt:
     """_build_repair_prompt injection hardening."""
 
     def test_no_raw_schema_text(self) -> None:
-        from modulo.core.pipeline_engine.schema_repair import _build_repair_prompt
+        from farna.core.pipeline_engine.schema_repair import _build_repair_prompt
 
         errors = [{"pointer": "$.name", "constraint": "required", "expected": "string", "actual": "None"}]
         prompt = _build_repair_prompt(errors, "test-schema", 1, 3)
@@ -676,7 +676,7 @@ class TestRepairPrompt:
         assert "examples" not in prompt.lower()
 
     def test_structural_metadata_present(self) -> None:
-        from modulo.core.pipeline_engine.schema_repair import _build_repair_prompt
+        from farna.core.pipeline_engine.schema_repair import _build_repair_prompt
 
         errors = [{"pointer": "$.name", "constraint": "required", "expected": "string", "actual": "None"}]
         prompt = _build_repair_prompt(errors, "test-schema", 1, 3)
@@ -686,7 +686,7 @@ class TestRepairPrompt:
         assert "required" in prompt
 
     def test_max_chars_cap(self) -> None:
-        from modulo.core.pipeline_engine.schema_repair import _build_repair_prompt
+        from farna.core.pipeline_engine.schema_repair import _build_repair_prompt
 
         # Create many errors to exceed the cap
         errors = [{"pointer": f"$.field{i}", "constraint": "type"} for i in range(100)]
@@ -696,7 +696,7 @@ class TestRepairPrompt:
 
     def test_allowed_values_capped_in_prompt(self) -> None:
         """FIX F: allowed values capped in the repair prompt."""
-        from modulo.core.pipeline_engine.schema_repair import _build_repair_prompt
+        from farna.core.pipeline_engine.schema_repair import _build_repair_prompt
 
         many_values = [f"val{i}" for i in range(20)]
         errors = [{"pointer": "$.status", "constraint": "enum", "allowed": many_values}]
@@ -717,7 +717,7 @@ class TestStructuredErrorHelpers:
     def test_error_info_omits_absent_optional_metadata(self) -> None:
         """An error with no message/validator_value/instance keeps only the
         pointer and constraint; the three optional fields are omitted."""
-        from modulo.core.pipeline_engine.schema_repair import _error_info
+        from farna.core.pipeline_engine.schema_repair import _error_info
 
         error = SimpleNamespace(json_path="$", validator="required", message="", validator_value=None, instance=None)
         assert _error_info(error) == {"pointer": "", "constraint": "required"}
@@ -725,7 +725,7 @@ class TestStructuredErrorHelpers:
     def test_format_repair_error_skips_absent_constraint_and_non_list_allowed(self) -> None:
         """A missing constraint line is skipped, and a non-list ``allowed``
         value is rendered via ``str()`` rather than list-capped."""
-        from modulo.core.pipeline_engine.schema_repair import _format_repair_error
+        from farna.core.pipeline_engine.schema_repair import _format_repair_error
 
         rendered = _format_repair_error(3, {"pointer": "$.colour", "allowed": "red"})
         assert "Constraint:" not in rendered
@@ -836,9 +836,9 @@ class TestNonUuidBackendId:
             "artifacts": [],
         }
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
-            patch("modulo.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
-            patch("modulo.core.pipeline_engine.node_runner._render_agent_prompt", new=lambda **kw: ("ok", None)),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._invoke_node_model", new=AsyncMock(return_value="out")),
+            patch("farna.core.pipeline_engine.node_runner._render_agent_prompt", new=lambda **kw: ("ok", None)),
         ):
             result = await fn(state)
         # Node completed without raising — the non-UUID backend id was handled
@@ -863,7 +863,7 @@ class TestNonUuidBackendId:
             "artifacts": [],
         }
         with (
-            patch("modulo.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
+            patch("farna.core.pipeline_engine.node_runner._run_conformance_gate", new=AsyncMock(return_value=None)),
         ):
             result = await fn(state)
         # The early-return path fires before the repair code is reached
@@ -901,19 +901,19 @@ class TestMakeNodeFnTerminalSchemaFailure:
         persist = AsyncMock()
         with (
             patch(
-                "modulo.core.pipeline_engine.node_runner._run_conformance_gate",
+                "farna.core.pipeline_engine.node_runner._run_conformance_gate",
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._invoke_node_model",
+                "farna.core.pipeline_engine.node_runner._invoke_node_model",
                 new=AsyncMock(return_value={"other": 1}),  # missing required 'name'
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._render_agent_prompt",
+                "farna.core.pipeline_engine.node_runner._render_agent_prompt",
                 new=lambda **kw: ("ok", None),
             ),
             patch(
-                "modulo.core.pipeline_engine.node_runner._persist_enforcement_record_best_effort",
+                "farna.core.pipeline_engine.node_runner._persist_enforcement_record_best_effort",
                 new=persist,
             ),
             pytest.raises(nr.OutputSchemaValidationError),

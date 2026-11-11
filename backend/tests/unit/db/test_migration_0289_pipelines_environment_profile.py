@@ -35,7 +35,7 @@ from unittest.mock import MagicMock, patch
 
 import sqlalchemy as sa
 
-from modulo.db.models.pipeline import Pipeline
+from farna.db.models.pipeline import Pipeline
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
@@ -47,7 +47,7 @@ _INDEX_NAME = "ix_pipelines_environment_profile_id"
 _TRIGGER_NAME = "trg_pipelines_environment_profile_id_tenant"
 _REFERENCED_TABLE = "environment_profiles"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

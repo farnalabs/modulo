@@ -25,12 +25,12 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.guardrails.conformance import check_node_start
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+import farna.core.pipeline_execution as pe
+from farna.core.guardrails.conformance import check_node_start
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 from tests.integration.conftest import EvalFixture, insert_eval
 
 pytestmark = [
@@ -294,12 +294,12 @@ async def _dispatch_and_execute(
     backend_id: str,
 ) -> str:
     """Dispatch -> RLS claim -> real executor -> return final run status."""
-    from modulo.core import dispatch as dispatch_mod
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.settings import get_settings
+    from farna.core import dispatch as dispatch_mod
+    from farna.core.pipeline_engine.executor import PipelineExecutor
+    from farna.settings import get_settings
 
     enqueue_stub = AsyncMock(return_value=("saq:job:runs:midrun", False))
-    with patch("modulo.core.dispatch._enqueue_saq", new=enqueue_stub):
+    with patch("farna.core.dispatch._enqueue_saq", new=enqueue_stub):
         outcome, _job_id = await dispatch_mod.dispatch_run(str(run_id), str(org_id))
     assert outcome == "enqueued"
 

@@ -1,4 +1,4 @@
-"""Tests for modulo.api.main._verify_db_connectivity retry logic.
+"""Tests for farna.api.main._verify_db_connectivity retry logic.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the startup DB
 connectivity probe. The probe must never block application startup: it retries
@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.main import _verify_db_connectivity
-from modulo.settings import Settings
+from farna.api.main import _verify_db_connectivity
+from farna.settings import Settings
 
-_LOGGER = "modulo.api.main"
+_LOGGER = "farna.api.main"
 
 
 def _make_settings() -> Settings:
@@ -58,7 +58,7 @@ class TestDbConnectivity:
         conn.__aexit__ = AsyncMock(return_value=None)
         engine.connect = MagicMock(return_value=conn)
 
-        with patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine:
+        with patch("farna.api.main.get_or_create_engine", return_value=engine) as mock_engine:
             await _verify_db_connectivity(settings)
             mock_engine.assert_called_once_with(settings)
             conn.execute.assert_awaited_once()
@@ -73,8 +73,8 @@ class TestDbConnectivity:
         engine.connect = MagicMock(return_value=conn)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine) as mock_engine,
-            patch("modulo.api.main.asyncio.sleep") as mock_sleep,
+            patch("farna.api.main.get_or_create_engine", return_value=engine) as mock_engine,
+            patch("farna.api.main.asyncio.sleep") as mock_sleep,
         ):
             # Must return normally (not raise) after exhausting retries.
             await _verify_db_connectivity(settings)
@@ -93,8 +93,8 @@ class TestDbConnectivity:
         engine.connect = MagicMock(return_value=conn)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine),
-            patch("modulo.api.main.asyncio.sleep") as mock_sleep,
+            patch("farna.api.main.get_or_create_engine", return_value=engine),
+            patch("farna.api.main.asyncio.sleep") as mock_sleep,
         ):
             await _verify_db_connectivity(settings)
 
@@ -107,8 +107,8 @@ class TestDbConnectivity:
         engine, conn = _mock_engine(failing_attempts=2)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine),
-            patch("modulo.api.main.asyncio.sleep") as mock_sleep,
+            patch("farna.api.main.get_or_create_engine", return_value=engine),
+            patch("farna.api.main.asyncio.sleep") as mock_sleep,
         ):
             await _verify_db_connectivity(settings)
 
@@ -122,8 +122,8 @@ class TestDbConnectivity:
         engine, conn = _mock_engine(failing_attempts=1)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine),
-            patch("modulo.api.main.asyncio.sleep") as mock_sleep,
+            patch("farna.api.main.get_or_create_engine", return_value=engine),
+            patch("farna.api.main.asyncio.sleep") as mock_sleep,
         ):
             await _verify_db_connectivity(settings)
 
@@ -137,8 +137,8 @@ class TestDbConnectivity:
         engine, _ = _mock_engine(failing_attempts=1)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine),
-            patch("modulo.api.main.asyncio.sleep"),
+            patch("farna.api.main.get_or_create_engine", return_value=engine),
+            patch("farna.api.main.asyncio.sleep"),
             caplog.at_level(logging.INFO, logger=_LOGGER),
         ):
             await _verify_db_connectivity(settings)
@@ -152,8 +152,8 @@ class TestDbConnectivity:
         engine, _ = _mock_engine(failing_attempts=3)
 
         with (
-            patch("modulo.api.main.get_or_create_engine", return_value=engine),
-            patch("modulo.api.main.asyncio.sleep"),
+            patch("farna.api.main.get_or_create_engine", return_value=engine),
+            patch("farna.api.main.asyncio.sleep"),
             caplog.at_level(logging.INFO, logger=_LOGGER),
         ):
             await _verify_db_connectivity(settings)

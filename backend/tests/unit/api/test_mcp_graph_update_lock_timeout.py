@@ -44,7 +44,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from modulo.api import mcp_server as ms
+from farna.api import mcp_server as ms
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -120,8 +120,8 @@ def _patches(session: AsyncMock) -> list:
         patch.object(ms, "_session", lambda _org_id: _fake_session(session)),
         patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
         patch.object(ms, "_check_agent_tool_scope"),
-        patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=_pipeline_row())),
-        patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
+        patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=_pipeline_row())),
+        patch("farna.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
     ]
 
 

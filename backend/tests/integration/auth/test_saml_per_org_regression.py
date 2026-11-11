@@ -218,9 +218,9 @@ async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session:
     - ``modulo_multi_org_enabled=True`` (org-login routes otherwise 404 per ADR 005),
     - a REAL system-session override (exercises the modulo_system leg),
     - an anonymous plan-context override (pre-auth feature gate)."""
-    from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -463,8 +463,8 @@ async def test_org_b_assertion_accepted_at_org_b_acs_control(
     with (
         _sig_validate_sign(),
         _sig_signed_elements(),
-        patch("modulo.auth.sso.jit_provision_user", jit),
-        patch("modulo.auth.sso.issue_sso_tokens", tokens),
+        patch("farna.auth.sso.jit_provision_user", jit),
+        patch("farna.auth.sso.issue_sso_tokens", tokens),
     ):
         resp = await multi_org_client.post(
             f"/api/v1/auth/saml/acs/{two_saml_orgs['saml_b']}",
@@ -488,7 +488,7 @@ async def test_relay_state_signed_for_org_a_rejected_at_org_b_acs(
     """A signed RelayState minted for provider A is rejected at B's ACS
     (FAR-1003 HMAC defense-in-depth) BEFORE the response is processed.
     FAR-1791: the browser-facing rejection is a 303 login redirect."""
-    from modulo.auth.sso import sign_saml_relay_state
+    from farna.auth.sso import sign_saml_relay_state
 
     relay = sign_saml_relay_state(two_saml_orgs["saml_a"], "a" * 32)
     xml = _build_saml_response(
@@ -528,8 +528,8 @@ async def test_idp_initiated_sso_without_relay_state_on_per_provider_acs(
     with (
         _sig_validate_sign(),
         _sig_signed_elements(),
-        patch("modulo.auth.sso.jit_provision_user", jit),
-        patch("modulo.auth.sso.issue_sso_tokens", tokens),
+        patch("farna.auth.sso.jit_provision_user", jit),
+        patch("farna.auth.sso.issue_sso_tokens", tokens),
     ):
         resp = await multi_org_client.post(
             f"/api/v1/auth/saml/acs/{two_saml_orgs['saml_b']}",
@@ -576,7 +576,7 @@ async def test_legacy_metadata_serves_instance_wide_acs_and_first_enabled_entity
     per-provider segment), and the Entity ID is the legacy first-enabled
     resolution contract (``get_enabled_saml_provider`` — created_at asc,
     limit 1), not a per-provider lookup."""
-    from modulo.db.crud.sso_provider import get_enabled_saml_provider
+    from farna.db.crud.sso_provider import get_enabled_saml_provider
 
     async with system_session.begin():
         legacy_provider = await get_enabled_saml_provider(system_session)
@@ -604,7 +604,7 @@ async def test_legacy_acs_round_trip_with_legacy_acs_destination(
     legacy entity with the instance-wide ACS destination processes and issues
     tokens. No RelayState is supplied or required — the legacy route never
     had RelayState handling. Signature + JIT + tokens mocked (module doc)."""
-    from modulo.db.crud.sso_provider import get_enabled_saml_provider
+    from farna.db.crud.sso_provider import get_enabled_saml_provider
 
     async with system_session.begin():
         legacy_provider = await get_enabled_saml_provider(system_session)
@@ -618,8 +618,8 @@ async def test_legacy_acs_round_trip_with_legacy_acs_destination(
     with (
         _sig_validate_sign(),
         _sig_signed_elements(),
-        patch("modulo.auth.sso.jit_provision_user", jit),
-        patch("modulo.auth.sso.issue_sso_tokens", tokens),
+        patch("farna.auth.sso.jit_provision_user", jit),
+        patch("farna.auth.sso.issue_sso_tokens", tokens),
     ):
         resp = await multi_org_client.post(
             "/api/v1/auth/saml/acs",

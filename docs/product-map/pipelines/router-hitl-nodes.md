@@ -4,16 +4,16 @@ prd: N/A
 adr:
   - ADR 050 (execution-graph-router-hitl-nodes)
 code:
-  - backend/src/modulo/core/pipeline_engine/jmespath_eval.py
-  - backend/src/modulo/core/pipeline_engine/node_runner.py
-  - backend/src/modulo/core/pipeline_engine/graph_cache.py
-  - backend/src/modulo/core/pipeline_engine/errors.py
-  - backend/src/modulo/core/pipeline_engine/executor.py
-  - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/core/workflow_import_export/__init__.py
-  - backend/src/modulo/db/models/run.py
-  - backend/src/modulo/db/migrations/versions/0150_add_router_no_match_status.py
-  - backend/src/modulo/db/migrations/versions/0284_add_rejected_run_status.py
+  - backend/src/farna/core/pipeline_engine/jmespath_eval.py
+  - backend/src/farna/core/pipeline_engine/node_runner.py
+  - backend/src/farna/core/pipeline_engine/graph_cache.py
+  - backend/src/farna/core/pipeline_engine/errors.py
+  - backend/src/farna/core/pipeline_engine/executor.py
+  - backend/src/farna/api/routes/pipelines.py
+  - backend/src/farna/core/workflow_import_export/__init__.py
+  - backend/src/farna/db/models/run.py
+  - backend/src/farna/db/migrations/versions/0150_add_router_no_match_status.py
+  - backend/src/farna/db/migrations/versions/0284_add_rejected_run_status.py
   - frontend/src/views/PipelineEditorView.vue
   - frontend/src/constants/runStatuses.ts
 unit-tests:

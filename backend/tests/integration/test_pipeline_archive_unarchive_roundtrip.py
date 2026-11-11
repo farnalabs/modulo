@@ -25,7 +25,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")

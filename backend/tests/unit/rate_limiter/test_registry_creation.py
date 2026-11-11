@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 import pytest
 from tests.unit.rate_limiter.helpers import make_settings
 
-from modulo.api.middleware import rate_limiter as rl_mod
-from modulo.api.middleware.rate_limiter import _create_registry, _NoopRateLimiter
-from modulo.core.rate_limiter import RateLimiterRegistry
+from farna.api.middleware import rate_limiter as rl_mod
+from farna.api.middleware.rate_limiter import _create_registry, _NoopRateLimiter
+from farna.core.rate_limiter import RateLimiterRegistry
 
 
 class TestCreateRegistry:

@@ -10,18 +10,18 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
-from modulo.api.dependencies import get_db_session, get_plan_context, resolve_audit_principal
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.license import (
+from farna.api.dependencies import get_db_session, get_plan_context, resolve_audit_principal
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.license import (
     REASON_ANCHOR_MISMATCH,
     REASON_EXPIRED,
     REASON_MALFORMED,
     REASON_SIGNATURE_MISMATCH,
 )
-from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
-from modulo.settings import get_settings
+from farna.db.models.organisation import SYSTEM_ORG_ID, Organisation
+from farna.settings import get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 ORG_ID = uuid4()
@@ -104,7 +104,7 @@ def client_system_admin(mock_session):
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: SYSTEM_ADMIN_PRINCIPAL
     # Enable multi-org for tests that exercise org creation.
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     settings = Settings(
         database_url="postgresql+asyncpg://localhost/test",
@@ -149,7 +149,7 @@ def client_tenant_member(mock_session):
 @pytest.mark.anyio
 async def test_create_org_success(client_system_admin, mock_session):
     """System admin can create an org with valid name and slug."""
-    from modulo.api.routes import admin_orgs
+    from farna.api.routes import admin_orgs
 
     original_get_slug = admin_orgs.get_organisation_by_slug
     admin_orgs.get_organisation_by_slug = AsyncMock(return_value=None)
@@ -216,7 +216,7 @@ async def test_create_org_invalid_slug(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_slug_collision(client_system_admin):
     """Duplicate slug returns 409."""
-    from modulo.api.routes import admin_orgs
+    from farna.api.routes import admin_orgs
 
     existing = Organisation(
         id=uuid4(),
@@ -241,7 +241,7 @@ async def test_create_org_slug_collision(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_duplicate_slug_orig(client_system_admin):
     """Duplicate slug returns 409 (alternate path)."""
-    from modulo.api.routes import admin_orgs
+    from farna.api.routes import admin_orgs
 
     existing_org = Organisation(
         id=uuid4(),
@@ -269,8 +269,8 @@ async def test_create_org_duplicate_slug_orig(client_system_admin):
 @pytest.mark.anyio
 async def test_create_org_user_success(client_system_admin):
     """System admin can create a user in a specified org."""
-    from modulo.api.routes import admin_orgs
-    from modulo.db.models.account import Account
+    from farna.api.routes import admin_orgs
+    from farna.db.models.account import Account
 
     target_org_id = uuid4()
 
@@ -305,7 +305,7 @@ async def test_create_org_user_success(client_system_admin):
     original_create_membership = admin_orgs.create_membership
 
     async def mock_create_membership(session, *, account_id, org_id, role="runner"):
-        from modulo.db.models.org_membership import OrgMembership
+        from farna.db.models.org_membership import OrgMembership
 
         return OrgMembership(
             id=uuid4(),
@@ -356,7 +356,7 @@ async def test_create_org_user_admin_forbidden(client_admin):
 @pytest.mark.anyio
 async def test_create_org_user_org_not_found(client_system_admin):
     """Non-existent org returns 404."""
-    from modulo.api.routes import admin_orgs
+    from farna.api.routes import admin_orgs
 
     original = admin_orgs.get_organisation
     admin_orgs.get_organisation = AsyncMock(return_value=None)
@@ -412,7 +412,7 @@ async def test_create_org_user_invalid_role(client_system_admin):
 @pytest.mark.anyio
 async def test_org_member_reads_guardrails_kill_switch(client_tenant_member, mock_session):
     """Any org member (non-admin) can read the org's kill-switch state."""
-    from modulo.api.routes import org_settings
+    from farna.api.routes import org_settings
 
     original_get_org = org_settings.get_organisation
 
@@ -440,7 +440,7 @@ async def test_org_member_reads_guardrails_kill_switch(client_tenant_member, moc
 @pytest.mark.anyio
 async def test_org_member_reads_kill_switch_off(client_tenant_member, mock_session):
     """A non-admin org member sees the kill-switch OFF state too."""
-    from modulo.api.routes import org_settings
+    from farna.api.routes import org_settings
 
     original_get_org = org_settings.get_organisation
 
@@ -473,7 +473,7 @@ async def test_org_member_read_is_org_scoped(client_tenant_member, mock_session)
     (mirroring the org_settings precedent), so a caller cannot target another
     org's kill-switch state.
     """
-    from modulo.api.routes import org_settings
+    from farna.api.routes import org_settings
 
     captured: list = []
     original_set_rls = org_settings.set_rls_org
@@ -538,8 +538,8 @@ class TestOrgLicenseAtomicPatch:
     def _patch_crud(self, monkeypatch, admin_orgs, org, events):
         # The gated dependency resolves the live role first — patch it so the org
         # admin principal is admitted without a real membership lookup.
-        monkeypatch.setattr("modulo.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
-        monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
+        monkeypatch.setattr("farna.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
+        monkeypatch.setattr("farna.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
         # License signature verification is covered in test_admin_license.py —
         # stub it here so the single-transaction patch is the thing under test.
         validation = SimpleNamespace(
@@ -547,7 +547,7 @@ class TestOrgLicenseAtomicPatch:
             error=None,
             license_data=SimpleNamespace(tier="team", features=["sso"], expires_at=None, org_id="test-org"),
         )
-        monkeypatch.setattr("modulo.core.license.parse_and_verify", MagicMock(return_value=validation))
+        monkeypatch.setattr("farna.core.license.parse_and_verify", MagicMock(return_value=validation))
 
         async def get_side_effect(session, oid, *, for_update=False):
             events.append(f"get(for_update={for_update})")
@@ -563,7 +563,7 @@ class TestOrgLicenseAtomicPatch:
         get_recorder = AsyncMock(side_effect=get_side_effect)
         patch_recorder = AsyncMock(side_effect=patch_side_effect)
         monkeypatch.setattr(admin_orgs, "get_organisation", get_recorder)
-        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_recorder)
+        monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", patch_recorder)
         return get_recorder, patch_recorder
 
     @staticmethod
@@ -577,7 +577,7 @@ class TestOrgLicenseAtomicPatch:
     async def test_set_license_patches_inside_one_transaction_without_prelatch(
         self, client_admin, mock_session, monkeypatch
     ):
-        from modulo.api.routes import admin_orgs
+        from farna.api.routes import admin_orgs
 
         events: list[str] = []
         self._wire_session_events(mock_session, events)
@@ -606,7 +606,7 @@ class TestOrgLicenseAtomicPatch:
         """FAR-1832: the write emits ONLY ``license_key`` — sibling settings
         survive by jsonb composition, never by re-writing a stale blob (the
         whole-column dumper shape is forbidden)."""
-        from modulo.api.routes import admin_orgs
+        from farna.api.routes import admin_orgs
 
         org = MagicMock()
         org.settings_json = {"existing": True}
@@ -619,7 +619,7 @@ class TestOrgLicenseAtomicPatch:
 
     @pytest.mark.anyio
     async def test_set_license_missing_org_returns_404_without_write(self, client_admin, mock_session, monkeypatch):
-        from modulo.api.routes import admin_orgs
+        from farna.api.routes import admin_orgs
 
         org = MagicMock()
         org.settings_json = {"existing": True}
@@ -628,7 +628,7 @@ class TestOrgLicenseAtomicPatch:
         get_recorder.side_effect = None
         get_recorder.return_value = None
         patch_mock = AsyncMock()
-        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_mock)
+        monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", patch_mock)
 
         resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "abc.123"})
         assert resp.status_code == 404
@@ -638,7 +638,7 @@ class TestOrgLicenseAtomicPatch:
     async def test_remove_license_patches_delete_keys_inside_one_transaction(
         self, client_admin, mock_session, monkeypatch
     ):
-        from modulo.api.routes import admin_orgs
+        from farna.api.routes import admin_orgs
 
         events: list[str] = []
         self._wire_session_events(mock_session, events)
@@ -729,17 +729,17 @@ class TestOrgLicenseValidationFailure:
     @staticmethod
     def _wire(monkeypatch: pytest.MonkeyPatch, validation: Any) -> AsyncMock:
         """Wire a passing org lookup with ``parse_and_verify`` returning *validation*."""
-        from modulo.api.routes import admin_orgs
+        from farna.api.routes import admin_orgs
 
         # The gated dependency resolves the live role first — admit the admin.
-        monkeypatch.setattr("modulo.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
-        monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
+        monkeypatch.setattr("farna.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
+        monkeypatch.setattr("farna.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
         org = MagicMock()
         org.settings_json = {"existing": True}
         monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-        monkeypatch.setattr("modulo.core.license.parse_and_verify", MagicMock(return_value=validation))
+        monkeypatch.setattr("farna.core.license.parse_and_verify", MagicMock(return_value=validation))
         patch_recorder = AsyncMock()
-        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_recorder)
+        monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", patch_recorder)
         monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
         return patch_recorder
 
@@ -774,7 +774,7 @@ class TestOrgLicenseValidationFailure:
         error: str,
         hint: str | None,
     ) -> None:
-        from modulo.core.license import LicenseValidation
+        from farna.core.license import LicenseValidation
 
         patch_recorder = self._wire(
             monkeypatch,
@@ -812,8 +812,8 @@ class TestOrgLicenseValidationFailure:
         ``outcome="success"`` — falsifying the audit record for a security-
         relevant change.
         """
-        from modulo.core.audit_coverage import audit_session
-        from modulo.core.license import LicenseValidation
+        from farna.core.audit_coverage import audit_session
+        from farna.core.license import LicenseValidation
 
         patch_recorder = self._wire(
             monkeypatch,
@@ -824,7 +824,7 @@ class TestOrgLicenseValidationFailure:
         async def _capture_audit(_session: Any, _principal: Any, **kwargs: Any) -> None:
             emitted.append(kwargs)
 
-        monkeypatch.setattr("modulo.core.audit_coverage.append_audit_event_isolated", _capture_audit)
+        monkeypatch.setattr("farna.core.audit_coverage.append_audit_event_isolated", _capture_audit)
         app.dependency_overrides[audit_session] = lambda: mock_session
         try:
             resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "bad.key"})

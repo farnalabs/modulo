@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.db.models.onboarding_progress import OnboardingProgress
+from farna.db.models.onboarding_progress import OnboardingProgress
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/onboarding/sdlc_onboarding.feature")
@@ -61,7 +61,7 @@ def _progress(request) -> OnboardingProgress:
 def _progress_patch(request) -> patch:
     """Patch ``_get_or_create_progress`` to serve the scenario's shared row."""
     return patch(
-        "modulo.api.routes.onboarding._get_or_create_progress",
+        "farna.api.routes.onboarding._get_or_create_progress",
         new=AsyncMock(side_effect=lambda *args, **kwargs: _progress(request)),
     )
 
@@ -81,7 +81,7 @@ def _status_patches(request):
     auto = getattr(request.node, "_onboarding_auto", {"login"})
     patches = [_progress_patch(request)]
     if not getattr(request.node, "_onboarding_real_detection", False):
-        patches.append(patch("modulo.api.routes.onboarding._check_auto_completion", new=AsyncMock(return_value=auto)))
+        patches.append(patch("farna.api.routes.onboarding._check_auto_completion", new=AsyncMock(return_value=auto)))
     return tuple(patches)
 
 
@@ -212,13 +212,13 @@ def seed_onboarding_examples(client, mock_session, request) -> None:
 
     with (
         _progress_patch(request),
-        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema) as create_schema,
-        patch("modulo.api.routes.onboarding.create_schema_version"),
-        patch("modulo.api.routes.onboarding.create_agent", return_value=mock_agent) as create_agent,
-        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline) as create_pipeline,
-        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
-        patch("modulo.api.routes.onboarding.set_rls_org"),
-        patch("modulo.api.routes.onboarding.set_rls_user_context"),
+        patch("farna.api.routes.onboarding.create_schema", return_value=mock_schema) as create_schema,
+        patch("farna.api.routes.onboarding.create_schema_version"),
+        patch("farna.api.routes.onboarding.create_agent", return_value=mock_agent) as create_agent,
+        patch("farna.api.routes.onboarding.create_pipeline", return_value=mock_pipeline) as create_pipeline,
+        patch("farna.api.routes.onboarding.replace_pipeline_graph"),
+        patch("farna.api.routes.onboarding.set_rls_org"),
+        patch("farna.api.routes.onboarding.set_rls_user_context"),
     ):
         request.node._onboarding_create_schema = create_schema
         request.node._onboarding_create_agent = create_agent
@@ -239,11 +239,11 @@ def create_starter_pipeline(client, request) -> None:
     mock_pipeline.snapshot_count = 0
     request.node._onboarding_starter_pipeline_id = str(mock_pipeline.id)
     with (
-        patch("modulo.api.routes.onboarding.create_schema", return_value=mock_schema),
-        patch("modulo.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
-        patch("modulo.api.routes.onboarding.replace_pipeline_graph"),
-        patch("modulo.api.routes.onboarding.set_rls_org"),
-        patch("modulo.api.routes.onboarding.set_rls_user_context"),
+        patch("farna.api.routes.onboarding.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.onboarding.create_pipeline", return_value=mock_pipeline),
+        patch("farna.api.routes.onboarding.replace_pipeline_graph"),
+        patch("farna.api.routes.onboarding.set_rls_org"),
+        patch("farna.api.routes.onboarding.set_rls_user_context"),
     ):
         request.node._resp = client.post("/api/v1/onboarding/starter-pipeline")
 

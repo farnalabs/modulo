@@ -26,18 +26,18 @@ from httpx import AsyncClient
 from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api.routes.product_analytics_identity import (
+from farna.api.routes.product_analytics_identity import (
     _HAS_ROTATED_KEY_PREFIX,
     _SEQUENCE_KEY_PREFIX,
 )
-from modulo.auth.jwt import create_access_token
-from modulo.core.product_analytics.hmac_verify import sign_rotation_request
-from modulo.core.product_analytics.instance_identity import (
+from farna.auth.jwt import create_access_token
+from farna.core.product_analytics.hmac_verify import sign_rotation_request
+from farna.core.product_analytics.instance_identity import (
     _INSTANCE_ID_KEY,
     _SECRET_KEY,
     get_or_create_instance_identity,
 )
-from modulo.db.models.system_config import SystemConfig
+from farna.db.models.system_config import SystemConfig
 
 pytestmark = pytest.mark.integration
 
@@ -80,7 +80,7 @@ def _rotate_body(secret: str, instance_id: str, sequence: int, timestamp: float 
 @pytest_asyncio.fixture(autouse=True)
 async def _reset_rate_limiter() -> AsyncGenerator[None, None]:
     """Each test starts with a clean in-memory rotation rate-limit window."""
-    import modulo.api.routes.product_analytics_identity as pa
+    import farna.api.routes.product_analytics_identity as pa
 
     with patch.object(pa, "_rotation_timestamps", defaultdict(list)):
         yield

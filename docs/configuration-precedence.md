@@ -21,9 +21,9 @@ values as a 0600 dotenv file (`config.env`) inside the data dir.
 `_COMPOSED_FIELDS`; `SECRET_KEY` and `FERNET_KEY` reach `Settings` through the
 pinned `config.env`, which carries all six keys.
 
-Implementation: `backend/src/modulo/launcher/config_source.py`
+Implementation: `backend/src/farna/launcher/config_source.py`
 (`compose_config`, `write_pinned_env_file`). The pin lands through
-`modulo.settings.pin_env_file`, so every `get_settings()` call in the API,
+`farna.settings.pin_env_file`, so every `get_settings()` call in the API,
 the SAQ children, and the CLI sees the bundled endpoints.
 
 ### Precedence order
@@ -37,7 +37,7 @@ the SAQ children, and the CLI sees the bundled endpoints.
    values derive from `state.json` (ports) + `secrets.json` (passwords).
    Editing `state.json` ports or rotating `secrets.json` changes these
    on the NEXT boot.
-3. **Field defaults** in `modulo.settings` sit below the pinned file.
+3. **Field defaults** in `farna.settings` sit below the pinned file.
 
 Practical consequence: exporting `DATABASE_URL` in your shell says
 "ignore the bundled Postgres and use mine" (`PG*` client vars are scrubbed
@@ -57,10 +57,10 @@ precedence surface.
 
 Do not conflate these; they do NOT share a code path:
 
-- `backend/src/modulo/settings.py` is the pydantic-settings `Settings`
+- `backend/src/farna/settings.py` is the pydantic-settings `Settings`
   model and the env-resolution machinery (field defaults, env source,
   dotenv support, the pin seam used by the native launcher).
-- `backend/src/modulo/db/settings_resolver.py` is something DIFFERENT
+- `backend/src/farna/db/settings_resolver.py` is something DIFFERENT
   ENTIRELY: it resolves ORG-LEVEL runtime state (for example the
   org-wide trigger pause, `org_row_is_paused`) from the database rows -
   a per-request decision layered above Settings, read fresh from Postgres

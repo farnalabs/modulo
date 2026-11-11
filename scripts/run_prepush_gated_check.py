@@ -5,7 +5,7 @@ Used by the pre-push hooks (mypy, schema-freshness) to skip expensive checks
 when no relevant source files changed between the branch and origin/main.
 
 Usage:
-    python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv --directory backend run mypy src/modulo/
+    python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- uv --directory backend run mypy src/farna/
     python scripts/run_prepush_gated_check.py --pattern "backend/src/**/*.py" -- pnpm run type-check
 
 The --pattern glob is matched against files changed between origin/main and HEAD.

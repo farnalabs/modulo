@@ -66,20 +66,20 @@ def _base_infer_patches(mock_ci, mock_mb, records, expected_schema, backend_id=N
         backend_id = uuid.uuid4()
 
     return [
-        patch("modulo.api.routes.schemas.get_connector_instance", return_value=mock_ci),
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample", return_value=records),
-        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
-        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.get_connector_instance", return_value=mock_ci),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ConnectorHub.sample", return_value=records),
+        patch("farna.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
+        patch("farna.api.routes.schemas.ConnectorHub.initialise"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.core.audit_logger.append_audit_event"),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
+        patch("farna.core.audit_logger.append_audit_event"),
     ]
 
 
@@ -227,20 +227,20 @@ def step_infer_schema_no_limit(request, client):
         return records
 
     with (
-        patch("modulo.api.routes.schemas.get_connector_instance", return_value=mock_ci),
-        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.ConnectorHub.sample", side_effect=capture_limit),
-        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
-        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
-        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch("farna.api.routes.schemas.get_connector_instance", return_value=mock_ci),
+        patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.ConnectorHub.sample", side_effect=capture_limit),
+        patch("farna.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
+        patch("farna.api.routes.schemas.ConnectorHub.initialise"),
+        patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
-            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            "farna.api.routes.schemas.ModelBackendHub.backend_ids",
             new_callable=PropertyMock(return_value=frozenset({backend_id})),
         ),
-        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
-        patch("modulo.api.routes.schemas.create_secrets_backend"),
-        patch("modulo.core.audit_logger.append_audit_event"),
+        patch("farna.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("farna.api.routes.schemas.create_secrets_backend"),
+        patch("farna.core.audit_logger.append_audit_event"),
     ):
         resp = client.post(
             "/api/v1/schemas/infer",
@@ -347,8 +347,8 @@ def step_create_schema_from_draft(name: str, request, client):
     _MOCK_SCHEMAS[name] = mock_schema
 
     with (
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.create_schema", return_value=mock_schema),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.create_schema", return_value=mock_schema),
     ):
         resp = client.post(
             "/api/v1/schemas",
@@ -377,9 +377,9 @@ def step_publish_schema_version(version: str, request, client):
     _MOCK_VERSIONS.append(mock_sv)
 
     with (
-        patch("modulo.api.routes.schemas.set_rls_org"),
-        patch("modulo.api.routes.schemas.get_schema", return_value=_MOCK_SCHEMAS.get(request.node._schema_name)),
-        patch("modulo.api.routes.schemas.create_schema_version", return_value=mock_sv),
+        patch("farna.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_MOCK_SCHEMAS.get(request.node._schema_name)),
+        patch("farna.api.routes.schemas.create_schema_version", return_value=mock_sv),
     ):
         resp = client.post(
             f"/api/v1/schemas/{request.node._schema_id}/versions",

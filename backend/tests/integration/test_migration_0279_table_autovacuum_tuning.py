@@ -76,7 +76,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.pipeline_engine.modulo_saver import (
+from farna.core.pipeline_engine.modulo_saver import (
     _AUTOVACUUM_TUNING_SQL,
     _MIGRATION_SQL,
     CHECKPOINT_AUTOVACUUM_TABLES,
@@ -132,7 +132,7 @@ _TUNED_KEYS: tuple[str, ...] = (
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 
@@ -208,7 +208,7 @@ async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
         _migrate(iso_url, PREV_REV)
 
         # The checkpoint tables are created at app startup, not by alembic.
-        from modulo.core.pipeline_engine.modulo_saver import _MIGRATION_SQL as CHECKPOINT_MIGRATION_SQL
+        from farna.core.pipeline_engine.modulo_saver import _MIGRATION_SQL as CHECKPOINT_MIGRATION_SQL
 
         engine = create_async_engine(iso_url, poolclass=NullPool)
         async with engine.begin() as conn:
@@ -536,7 +536,7 @@ class TestFreshInstallBoot:
 # MAJOR-1: a failed or skipped startup tuning statement must reach the LOG
 # ---------------------------------------------------------------------------
 
-_SAVER_LOGGER = "modulo.core.pipeline_engine.modulo_saver"
+_SAVER_LOGGER = "farna.core.pipeline_engine.modulo_saver"
 
 
 def _tuning_failure_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:

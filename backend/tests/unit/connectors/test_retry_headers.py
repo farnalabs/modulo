@@ -1,6 +1,6 @@
 """Unit tests for the shared connector retry-header helper module.
 
-The helper lives at ``modulo.connectors._retry_headers`` and is consumed by
+The helper lives at ``farna.connectors._retry_headers`` and is consumed by
 GitHub, GitLab, Jira, Linear and Slack connectors. These tests cover it
 directly (including the detail/metadata formatters that have no other direct
 coverage) so the shared contract stays locked down regardless of per-connector
@@ -12,7 +12,7 @@ import time
 import httpx
 import pytest
 
-from modulo.connectors._retry_headers import (
+from farna.connectors._retry_headers import (
     MAX_RETRY_AFTER_SECONDS,
     RETRYABLE_STATUSES,
     CancellationPhase,
@@ -28,7 +28,7 @@ from modulo.connectors._retry_headers import (
     rest_retry_decision,
     retry_after_seconds,
 )
-from modulo.core.pipeline_engine.error_codes import known_error_codes, map_legacy_code
+from farna.core.pipeline_engine.error_codes import known_error_codes, map_legacy_code
 
 RATE_LIMIT_HEADERS = (
     "X-RateLimit-Limit",

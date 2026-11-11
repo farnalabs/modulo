@@ -50,7 +50,7 @@ silent fallback.
 ## 3. The runner image + digest pinning
 
 The shipped profile pins `modulo-runner:opencode@sha256:<digest>` (the
-per-minor constant in `backend/src/modulo/db/bundled_runner_template.py`;
+per-minor constant in `backend/src/farna/db/bundled_runner_template.py`;
 the compose overlay's `bundled-runner` service builds the same Dockerfile
 for self-builders):
 

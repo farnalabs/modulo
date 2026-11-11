@@ -11,7 +11,7 @@ from typing import Self
 
 import pytest
 
-from modulo.launcher.state import (
+from farna.launcher.state import (
     DEFAULT_API_PORT,
     DEFAULT_POSTGRES_PORT,
     DEFAULT_REDIS_PORT,
@@ -91,7 +91,7 @@ def test_schema_version_downgrade_refused(tmp_path: Path) -> None:
     state = _state()
     payload = state.to_payload()
     payload["schema_version"] = SCHEMA_VERSION + 1  # written by a NEWER launcher
-    from modulo.launcher.state import _mac_for
+    from farna.launcher.state import _mac_for
 
     envelope = {"payload": payload, "mac": _mac_for(payload, _key())}
     path.write_text(json.dumps(envelope))
@@ -103,7 +103,7 @@ def test_schema_version_older_than_supported_refused(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     payload = _state().to_payload()
     payload["schema_version"] = SCHEMA_VERSION - 1  # no migration path exists in v1
-    from modulo.launcher.state import _mac_for
+    from farna.launcher.state import _mac_for
 
     envelope = {"payload": payload, "mac": _mac_for(payload, _key())}
     path.write_text(json.dumps(envelope))
@@ -115,7 +115,7 @@ def test_missing_schema_version_refused(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     payload = _state().to_payload()
     payload.pop("schema_version")
-    from modulo.launcher.state import _mac_for
+    from farna.launcher.state import _mac_for
 
     envelope = {"payload": payload, "mac": _mac_for(payload, _key())}
     path.write_text(json.dumps(envelope))
@@ -127,7 +127,7 @@ def test_unknown_payload_field_refused(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     payload = _state().to_payload()
     payload["postgres_password"] = "oops-a-credential"  # not part of the contract
-    from modulo.launcher.state import _mac_for
+    from farna.launcher.state import _mac_for
 
     envelope = {"payload": payload, "mac": _mac_for(payload, _key())}
     path.write_text(json.dumps(envelope))
@@ -155,7 +155,7 @@ def test_invalid_port_refused(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     payload = _state().to_payload()
     payload["postgres_port"] = 80  # privileged/well-known port — impossible from the allocator
-    from modulo.launcher.state import _mac_for
+    from farna.launcher.state import _mac_for
 
     envelope = {"payload": payload, "mac": _mac_for(payload, _key())}
     path.write_text(json.dumps(envelope))
@@ -218,7 +218,7 @@ def test_failed_replace_leaves_previous_state_intact(
     save_state(_state(), path, _key())
     original = path.read_bytes()
 
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     def _broken_replace(src: str, dst: str) -> None:
         raise OSError("disk full")
@@ -251,7 +251,7 @@ def test_initial_state_uses_non_default_high_ports() -> None:
 
 def test_initial_state_excludes_previous_allocations(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bump that lands Postgres on Redis' preferred port must push Redis on."""
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     class _FakeSocket:
         def __init__(self, _family: int, _type: int) -> None:
@@ -277,7 +277,7 @@ def test_initial_state_excludes_previous_allocations(monkeypatch: pytest.MonkeyP
 
 
 def test_find_free_port_bumps_when_taken(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     class _FakeSocket:
         def __init__(self, _family: int, _type: int) -> None:
@@ -302,7 +302,7 @@ def test_find_free_port_bumps_when_taken(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_find_free_port_raises_when_nothing_binds(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exhausting the port range surfaces StateIntegrityError, not a hang."""
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     class _DeadSocket:
         def __init__(self, _family: int, _type: int) -> None:
@@ -324,7 +324,7 @@ def test_find_free_port_raises_when_nothing_binds(monkeypatch: pytest.MonkeyPatc
 
 def test_find_free_port_raises_when_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The exclude set can drain the whole remaining range on its own."""
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     class _FreeSocket:
         def __init__(self, _family: int, _type: int) -> None:
@@ -346,7 +346,7 @@ def test_find_free_port_raises_when_excluded(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_find_free_port_returns_preferred_when_free(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.launcher.state as state_module
+    import farna.launcher.state as state_module
 
     class _FakeSocket:
         def __init__(self, _family: int, _type: int) -> None:

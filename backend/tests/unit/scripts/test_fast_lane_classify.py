@@ -84,12 +84,12 @@ class TestClassifyPath:
             "frontend/package.json",
             ".semgrep/rls_set_local.yml",
             ".pre-commit-config.yaml",
-            "backend/src/modulo/api/routes/pipelines.py",
+            "backend/src/farna/api/routes/pipelines.py",
             "frontend/src/views/PipelinesView.vue",
             "fly.toml",
             "deploy/fly/entrypoint.sh",
-            "backend/src/modulo/db/migrations/versions/0001_initial.py",
-            "backend/src/modulo/core/pipeline_engine/graph.py",
+            "backend/src/farna/db/migrations/versions/0001_initial.py",
+            "backend/src/farna/core/pipeline_engine/graph.py",
         ],
         ids=[
             "gh-workflow-ci",
@@ -131,7 +131,7 @@ class TestClassifyPaths:
     def test_one_b_makes_all_b(self) -> None:
         paths = [
             "backend/tests/unit/test_foo.py",
-            "backend/src/modulo/api/routes/pipelines.py",  # class-B
+            "backend/src/farna/api/routes/pipelines.py",  # class-B
         ]
         assert classify_paths(paths) == "B"
 
@@ -165,7 +165,7 @@ class TestClassifyPaths:
         assert classify_paths(paths) == "B"
 
     def test_migrations_are_b(self) -> None:
-        paths = ["backend/src/modulo/db/migrations/versions/0123_foo.py"]
+        paths = ["backend/src/farna/db/migrations/versions/0123_foo.py"]
         assert classify_paths(paths) == "B"
 
     def test_mixed_a_and_b(self) -> None:
@@ -255,7 +255,7 @@ class TestMainExitCode:
         """A class-B PR (backend/src/ change) must exit 1."""
         mock_run.return_value = MagicMock(
             returncode=0,
-            stdout="backend/src/modulo/api/routes/pipelines.py\n",
+            stdout="backend/src/farna/api/routes/pipelines.py\n",
             stderr="",
         )
         rc = classify_main(
@@ -301,6 +301,36 @@ class TestMainExitCode:
             ]
         )
         assert rc == 1, "diff-too-large must exit 1 (neutral), not 2 (failure)"
+
+    @patch("fast_lane_classify.subprocess.run")
+    def test_diff_file_cap_exits_nonzero(self, mock_run: MagicMock) -> None:
+        """A PR whose diff exceeds GitHub's 300-file cap is ineligible (rc=1).
+
+        ``gh pr diff`` fails with an HTTP 406 reporting the maximum number of
+        FILES for a mass rename; that must also be class-B/neutral rather than
+        a classifier error (rc=2), exactly like the line cap.
+        """
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "could not find pull request diff: HTTP 406: Sorry, the diff "
+                "exceeded the maximum number of files (300)."
+            ),
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "3086",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 1, "diff-file-cap must exit 1 (neutral), not 2 (failure)"
 
     @patch("fast_lane_classify.subprocess.run")
     def test_unexpected_fetch_error_still_fails_closed(self, mock_run: MagicMock) -> None:

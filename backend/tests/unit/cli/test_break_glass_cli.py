@@ -17,7 +17,7 @@ import pytest
 from click.testing import CliRunner
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.cli.break_glass import (
+from farna.cli.break_glass import (
     EXIT_ACTIVATION_TXN_FAILURE,
     EXIT_CREDENTIAL_PRINT_FAILURE,
     EXIT_DEACTIVATE_ATOMICITY_FAILURE,
@@ -39,7 +39,7 @@ from modulo.cli.break_glass import (
     cli,
     deactivate,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 _NOW = datetime.now(UTC)
 _ORG = SimpleNamespace(
@@ -166,10 +166,10 @@ class TestActivate:
     def test_success_yes_prints_credential_once(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(return_value="cred-single-use")) as core,
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock(return_value="cred-single-use")) as core,
         ):
             result = _invoke(
                 ["activate", "acme", "--reason", "TKT-1", "--ttl-minutes", "60", "--yes"],
@@ -192,17 +192,17 @@ class TestActivate:
 
     def test_org_not_found_exits_3(self) -> None:
         settings = _make_settings()
-        with patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
+        with patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
             result = _invoke(["activate", "nope", "--reason", "TKT-1", "--yes"], settings)
         assert result.exit_code == EXIT_ORG_NOT_FOUND
 
     def test_activation_txn_failure_exits_4(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(side_effect=RuntimeError("db exploded"))),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock(side_effect=RuntimeError("db exploded"))),
         ):
             result = _invoke(["activate", "acme", "--reason", "TKT-1", "--yes"], settings)
         assert result.exit_code == EXIT_ACTIVATION_TXN_FAILURE
@@ -210,10 +210,10 @@ class TestActivate:
     def test_never_prints_credential_on_rollback(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(side_effect=RuntimeError("commit failed"))),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock(side_effect=RuntimeError("commit failed"))),
         ):
             result = _invoke(["activate", "acme", "--reason", "TKT-1", "--yes"], settings)
         assert result.exit_code == EXIT_ACTIVATION_TXN_FAILURE
@@ -235,9 +235,9 @@ class TestActivate:
     def test_non_tty_without_yes_exits_5(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
         ):
             result = _invoke(["activate", "acme", "--reason", "TKT-1"], settings)
         assert result.exit_code == EXIT_PRECONDITIONS
@@ -246,11 +246,11 @@ class TestActivate:
     def test_tty_confirm_true_proceeds(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(return_value="cred-tty")),
-            patch("modulo.cli.break_glass._confirm_interactive", return_value=True),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock(return_value="cred-tty")),
+            patch("farna.cli.break_glass._confirm_interactive", return_value=True),
         ):
             result = _invoke(["activate", "acme", "--reason", "TKT-1"], settings)
         assert result.exit_code == 0
@@ -259,10 +259,10 @@ class TestActivate:
     def test_dry_run_prints_plan_without_activating(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock()) as core,
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock()) as core,
         ):
             result = _invoke(
                 ["activate", "acme", "--reason", "TKT-1", "--ttl-minutes", "60", "--dry-run", "--yes"],
@@ -276,10 +276,10 @@ class TestActivate:
         settings = _make_settings()
         live_row = _FakeBgRow(expires_at=_NOW + timedelta(minutes=30))
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[live_row])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(return_value="cred-live-warn")),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[live_row])),
+            patch("farna.cli.break_glass.activate", AsyncMock(return_value="cred-live-warn")),
         ):
             result = _invoke(["activate", "acme", "--reason", "TKT-1", "--yes"], settings)
         assert result.exit_code == 0
@@ -288,12 +288,12 @@ class TestActivate:
     def test_credential_print_failure_exits_9(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
-            patch("modulo.cli.break_glass.activate", AsyncMock(return_value="cred-print-fail")),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass.activate", AsyncMock(return_value="cred-print-fail")),
             patch(
-                "modulo.cli.break_glass._deliver_credential",
+                "farna.cli.break_glass._deliver_credential",
                 side_effect=CredentialPrintError("stdout closed"),
             ),
         ):
@@ -308,7 +308,7 @@ class TestActivate:
             def flush(self) -> None:
                 return None
 
-        with patch("modulo.cli.break_glass.sys.stdout", _FailingStdout()), pytest.raises(CredentialPrintError):
+        with patch("farna.cli.break_glass.sys.stdout", _FailingStdout()), pytest.raises(CredentialPrintError):
             _deliver_credential("cred", yes=True)
 
 
@@ -319,10 +319,10 @@ class TestDeactivate:
     def test_success_exits_0(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
             patch(
-                "modulo.cli.break_glass.deactivate",
+                "farna.cli.break_glass.deactivate",
                 AsyncMock(return_value={"deactivated": 1, "account_ids": ["acc-1"]}),
             ) as core,
         ):
@@ -334,10 +334,10 @@ class TestDeactivate:
     def test_refused_exits_6(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
             patch(
-                "modulo.cli.break_glass.deactivate",
+                "farna.cli.break_glass.deactivate",
                 AsyncMock(side_effect=DeactivateRefusedError("a live break-glass activation exists")),
             ),
         ):
@@ -346,17 +346,17 @@ class TestDeactivate:
 
     def test_org_not_found_exits_3(self) -> None:
         settings = _make_settings()
-        with patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
+        with patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
             result = _invoke(["deactivate", "nope", "--reason", "TKT-1", "--force"], settings)
         assert result.exit_code == EXIT_ORG_NOT_FOUND
 
     def test_atomicity_failure_exits_8(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
             patch(
-                "modulo.cli.break_glass.deactivate",
+                "farna.cli.break_glass.deactivate",
                 AsyncMock(side_effect=DeactivateAtomicityError("deactivation transaction failed")),
             ),
         ):
@@ -376,10 +376,10 @@ class TestForceLastAdmin:
     def test_success_exits_0(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
             patch(
-                "modulo.cli.break_glass.force_last_admin",
+                "farna.cli.break_glass.force_last_admin",
                 AsyncMock(return_value={"removed_account_id": "acc-final"}),
             ) as core,
         ):
@@ -391,10 +391,10 @@ class TestForceLastAdmin:
     def test_refuses_bg_only_org_exits_5(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
             patch(
-                "modulo.cli.break_glass.force_last_admin",
+                "farna.cli.break_glass.force_last_admin",
                 AsyncMock(side_effect=PreconditionError("refusing to remove a live break-glass account")),
             ),
         ):
@@ -414,9 +414,9 @@ class TestStatus:
     def test_empty_exits_0(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(return_value=[])),
         ):
             result = _invoke(["status", "acme"], settings)
         assert result.exit_code == 0
@@ -433,9 +433,9 @@ class TestStatus:
             "actor": "operator",
         }
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
         ):
             result = _invoke(["status", "acme"], settings)
         assert result.exit_code == 0
@@ -452,9 +452,9 @@ class TestStatus:
             "actor": "operator",
         }
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
         ):
             result = _invoke(["status", "acme", "--json"], settings)
         assert result.exit_code == 0
@@ -462,7 +462,7 @@ class TestStatus:
 
     def test_org_not_found_exits_3(self) -> None:
         settings = _make_settings()
-        with patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
+        with patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=None)):
             result = _invoke(["status", "nope"], settings)
         assert result.exit_code == EXIT_ORG_NOT_FOUND
 
@@ -482,8 +482,8 @@ class TestStatus:
             "actor": "operator",
         }
         with (
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(return_value=[row])),
         ):
             result = _invoke(["status", "--all", "--json"], settings)
         assert result.exit_code == EXIT_PRECONDITIONS
@@ -492,8 +492,8 @@ class TestStatus:
     def test_sweep_clean_exits_0(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(return_value=[])),
         ):
             result = _invoke(["status", "--all", "--json"], settings)
         assert result.exit_code == 0
@@ -501,9 +501,9 @@ class TestStatus:
     def test_unexpected_error_exits_1(self) -> None:
         settings = _make_settings()
         with (
-            patch("modulo.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
-            patch("modulo.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
-            patch("modulo.cli.break_glass.status_rows", AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.cli.break_glass._resolve_org", AsyncMock(return_value=_ORG)),
+            patch("farna.cli.break_glass._db_now", AsyncMock(return_value=_NOW)),
+            patch("farna.cli.break_glass.status_rows", AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = _invoke(["status", "acme"], settings)
         assert result.exit_code == EXIT_UNEXPECTED
@@ -516,7 +516,7 @@ class TestSmoke:
     def test_success_exits_0(self) -> None:
         settings = _make_settings()
         with patch(
-            "modulo.cli.break_glass.smoke",
+            "farna.cli.break_glass.smoke",
             AsyncMock(return_value={"connectivity": "ok", "session_user": "modulo_breakglass"}),
         ) as core:
             result = _invoke(["smoke"], settings)
@@ -526,7 +526,7 @@ class TestSmoke:
     def test_failure_exits_7(self) -> None:
         settings = _make_settings()
         with patch(
-            "modulo.cli.break_glass.smoke",
+            "farna.cli.break_glass.smoke",
             AsyncMock(side_effect=Exception("connection refused")),
         ):
             result = _invoke(["smoke"], settings)
@@ -540,7 +540,7 @@ class TestCoreDeactivatePgcode:
     @pytest.fixture(autouse=True)
     def _patch_target_rows(self) -> object:
         live_row = _FakeBgRow(expires_at=_NOW + timedelta(minutes=30))
-        with patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[live_row])):
+        with patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[live_row])):
             yield None
 
     def _failing_session(self, sqlstate: str) -> object:
@@ -613,7 +613,7 @@ class TestCoreDeactivatePgcode:
     async def test_no_targets_raises_org_not_found(self) -> None:
         session = MagicMock()
         with (
-            patch("modulo.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
+            patch("farna.cli.break_glass._bg_accounts_for_org", AsyncMock(return_value=[])),
             pytest.raises(OrgNotFoundError),
         ):
             await deactivate(
@@ -638,19 +638,19 @@ class TestHelpers:
         assert _sqlstate_from_exc(RuntimeError("no state")) is None
 
     def test_confirm_interactive_false_when_not_tty(self) -> None:
-        with patch("modulo.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: False)):
+        with patch("farna.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: False)):
             assert _confirm_interactive(_ORG) is False
 
     def test_confirm_interactive_true_when_confirmed(self) -> None:
         with (
-            patch("modulo.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: True)),
-            patch("modulo.cli.break_glass.click.confirm", return_value=True),
+            patch("farna.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: True)),
+            patch("farna.cli.break_glass.click.confirm", return_value=True),
         ):
             assert _confirm_interactive(_ORG) is True
 
     def test_confirm_interactive_false_when_declined(self) -> None:
         with (
-            patch("modulo.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: True)),
-            patch("modulo.cli.break_glass.click.confirm", return_value=False),
+            patch("farna.cli.break_glass.sys.stdin", SimpleNamespace(isatty=lambda: True)),
+            patch("farna.cli.break_glass.click.confirm", return_value=False),
         ):
             assert _confirm_interactive(_ORG) is False

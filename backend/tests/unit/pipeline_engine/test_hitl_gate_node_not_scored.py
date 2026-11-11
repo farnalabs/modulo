@@ -23,8 +23,8 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import modulo.core.pipeline_engine.executor as ex
-from modulo.core.pipeline_engine.node_runner import (
+import farna.core.pipeline_engine.executor as ex
+from farna.core.pipeline_engine.node_runner import (
     HITL_REVIEW_OUTPUT_PROVENANCE_STATE_KEY_PREFIX,
     hitl_output_provenance_marker,
 )

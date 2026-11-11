@@ -30,9 +30,9 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from starlette.responses import StreamingResponse
 
-from modulo.api.routes import audit as route
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.audit_logger import SCAN_CSV_COLUMNS
+from farna.api.routes import audit as route
+from farna.auth.jwt import TenantPrincipal
+from farna.core.audit_logger import SCAN_CSV_COLUMNS
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000a2")

@@ -12,9 +12,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from modulo.connectors._rate_bucket import TokenBucket
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.rest import (
+from farna.connectors._rate_bucket import TokenBucket
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.rest import (
     _SENSITIVE_VALUE_MASK,
     RESTCardinalityExceededError,
     RESTConnectError,
@@ -26,7 +26,7 @@ from modulo.connectors.rest import (
     RESTStatusError,
     SecurityGuard,
 )
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 from tests.connectors._conformance import assert_result_shape, assert_write_result_shape
 from tests.connectors._noop_guard import make_noop_security_guard as _noop_guard
 
@@ -414,7 +414,7 @@ def test_validate_credentials_rejects_masked_secret() -> None:
     (guaranteed runtime auth failure). All three secret-bearing auth_modes are
     covered (FAR-504)."""
     # The connector's local mirror of the mask sentinel must stay in sync with the
-    # canonical value (the connector cannot import ``modulo.core`` per the
+    # canonical value (the connector cannot import ``farna.core`` per the
     # import-linter contract, so it mirrors the string — a drift here silently
     # defeats the masked-rejection guard).
     assert _SENSITIVE_VALUE_MASK == SENSITIVE_VALUE_MASK
@@ -621,8 +621,8 @@ def test_hub_ciphertext_round_trips_multi_field_json_dict() -> None:
     """A JSON-dict credentials_ciphertext round-trips as multi-field creds (REST)."""
     from cryptography.fernet import Fernet
 
-    from modulo.core.connector_hub import ConnectorHub
-    from modulo.core.secrets_backend import create_secrets_backend
+    from farna.core.connector_hub import ConnectorHub
+    from farna.core.secrets_backend import create_secrets_backend
 
     key = Fernet.generate_key().decode()
     creds = {"auth_mode": "bearer", "token": "secret-token"}
@@ -641,7 +641,7 @@ def test_hub_ciphertext_round_trips_multi_field_json_dict() -> None:
     backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         get_settings.return_value.fernet_key = key
         hub = ConnectorHub(secrets_backend=backend)
@@ -658,8 +658,8 @@ def test_hub_teardown_closes_connector_client() -> None:
     """ConnectorHub async teardown must close held connectors' pooled clients (FAR-408)."""
     from cryptography.fernet import Fernet
 
-    from modulo.core.connector_hub import ConnectorHub
-    from modulo.core.secrets_backend import create_secrets_backend
+    from farna.core.connector_hub import ConnectorHub
+    from farna.core.secrets_backend import create_secrets_backend
 
     key = Fernet.generate_key().decode()
     creds = {"auth_mode": "bearer", "token": "secret-token"}
@@ -678,7 +678,7 @@ def test_hub_teardown_closes_connector_client() -> None:
     backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
     with (
         patch.object(backend, "get_secret", side_effect=KeyError(str(ci.id))),
-        patch("modulo.settings.get_settings") as get_settings,
+        patch("farna.settings.get_settings") as get_settings,
     ):
         get_settings.return_value.fernet_key = key
 
@@ -1079,7 +1079,7 @@ def test_verify_tls_passes_through_to_client(
         captured.update(kwargs)
         return real_client(**kwargs)
 
-    monkeypatch.setattr("modulo.connectors.rest.httpx.AsyncClient", factory)
+    monkeypatch.setattr("farna.connectors.rest.httpx.AsyncClient", factory)
     c = RestConnector(
         {"base_url": "https://api.example.com", "path": "/items", **verify_tls_config},
         {"auth_mode": "bearer", "token": "t"},
@@ -1543,8 +1543,8 @@ def test_fanout_failure_redacts_failed_item():
 
 
 def _real_ssrf_guard() -> SecurityGuard:
-    """A guard bound to the real ``modulo.core.ssrf`` validator (as the hub does)."""
-    from modulo.core.ssrf import validate_outbound_url_async
+    """A guard bound to the real ``farna.core.ssrf`` validator (as the hub does)."""
+    from farna.core.ssrf import validate_outbound_url_async
 
     async def validate_url(url: str) -> None:
         await validate_outbound_url_async(url)
@@ -2209,7 +2209,7 @@ def test_guard_rejects_crlf_in_header_name() -> None:
 def test_write_surface_screens_injection_terms() -> None:
     """The WRITE surface runs output-injection screening on the rendered payload
     (unlike the READ surface, which scopes the text classifier off)."""
-    from modulo.core.pipeline_engine.output_filter import OutputRejectedError
+    from farna.core.pipeline_engine.output_filter import OutputRejectedError
 
     class _RejectGuard(SecurityGuard):
         def __init__(self) -> None:

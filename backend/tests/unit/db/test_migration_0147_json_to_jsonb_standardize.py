@@ -22,7 +22,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0147_json_to_jsonb_standardize"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 

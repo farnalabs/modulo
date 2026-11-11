@@ -147,9 +147,9 @@ def get_audit_log(limit: int, client, request):
     from datetime import datetime
 
     with (
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
         patch(
-            "modulo.api.routes.audit.list_audit_events",
+            "farna.api.routes.audit.list_audit_events",
             return_value={
                 "items": [
                     {
@@ -192,9 +192,9 @@ def check_next_cursor(request):
 @when("I verify the audit chain")
 def verify_audit_chain(client, request):
     with (
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
         patch(
-            "modulo.api.routes.audit.verify_chain",
+            "farna.api.routes.audit.verify_chain",
             return_value={"valid": True, "events_checked": 3, "total_events": 3},
         ),
     ):

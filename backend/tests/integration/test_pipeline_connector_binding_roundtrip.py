@@ -22,7 +22,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -75,7 +75,7 @@ async def _seed_connector(
     allowed_operations: list[str] | None = None,
 ) -> uuid.UUID:
     """An ORG-visibility GitHub connector (the binding's existence/team gates pass)."""
-    from modulo.db.crud.connector_instance import create_connector_instance
+    from farna.db.crud.connector_instance import create_connector_instance
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -104,7 +104,7 @@ async def _persisted_binding(
     HTTP response and this row agree; the row is still read directly because it
     is the shape the engine consumes at run start.
     """
-    from modulo.db.models.pipeline import Pipeline
+    from farna.db.models.pipeline import Pipeline
 
     async with db_engine.begin() as conn:
         await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
@@ -205,7 +205,7 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
     default, so every existing query/dispatch binding would crash on its next
     run — the newly added field-populated round trip cannot catch that.
     """
-    from modulo.core.pipeline_engine.node_runner import _connector_inputs
+    from farna.core.pipeline_engine.node_runner import _connector_inputs
 
     headers = _auth_headers(test_org, test_user)
     agent_id = await _seed_agent(db_engine, test_org, test_user)
@@ -321,7 +321,7 @@ async def test_connector_node_query_round_trips_through_rest(
     headers = _auth_headers(test_org, test_user)
     connector_id = await _seed_connector(db_engine, test_org, test_user)
     node = _connector_node(connector_id)
-    from modulo.core.pipeline_engine.node_runner import _connector_inputs
+    from farna.core.pipeline_engine.node_runner import _connector_inputs
 
     create = await integration_client.post(
         "/api/v1/pipelines",

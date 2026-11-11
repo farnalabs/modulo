@@ -17,14 +17,14 @@ import pytest
 from sqlalchemy import CheckConstraint, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.executor import (
     _TERMINAL_STATUSES,
     PipelineExecutor,
     _node_output_stall_reason,
 )
-from modulo.db.crud.run import RUN_STATUS_WHITELIST, update_run_status
-from modulo.db.models.base import Base
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.db.crud.run import RUN_STATUS_WHITELIST, update_run_status
+from farna.db.models.base import Base
+from farna.db.models.run import TERMINAL_STATUSES, Run
 
 
 def _stalled_event(stall_reason: str) -> dict[str, Any]:

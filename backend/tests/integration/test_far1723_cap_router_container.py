@@ -42,12 +42,12 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.core.pipeline_engine.executor import PipelineExecutor
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+import farna.core.pipeline_execution as pe
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.core.pipeline_engine.executor import PipelineExecutor
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend, normalize_input
 
 pytestmark = [
     pytest.mark.integration,
@@ -505,8 +505,8 @@ async def test_router_branch_hitl_gate_pauses_and_resumes_real_executor(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from modulo.core.cron_helpers import _committed_decision_resume_data
-    from modulo.db.rls import set_rls_org
+    from farna.core.cron_helpers import _committed_decision_resume_data
+    from farna.db.rls import set_rls_org
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

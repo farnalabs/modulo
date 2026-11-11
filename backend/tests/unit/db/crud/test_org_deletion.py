@@ -110,7 +110,7 @@ def _snapshot_sessionmaker(session: _FakeSnapshotSession) -> MagicMock:
 
 class TestHelpers:
     def test_generate_deletion_token_is_urlsafe_and_long(self) -> None:
-        from modulo.db.crud.org_deletion import _generate_deletion_token
+        from farna.db.crud.org_deletion import _generate_deletion_token
 
         token = _generate_deletion_token()
         assert len(token) >= 64
@@ -120,7 +120,7 @@ class TestHelpers:
         result = MagicMock()
         result.scalar = MagicMock(return_value=7)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.org_deletion import _count_non_terminal_runs
+        from farna.db.crud.org_deletion import _count_non_terminal_runs
 
         assert await _count_non_terminal_runs(mock_session, _ORG_ID) == 7
 
@@ -128,7 +128,7 @@ class TestHelpers:
         result = MagicMock()
         result.scalar = MagicMock(return_value=None)
         mock_session.execute = AsyncMock(return_value=result)
-        from modulo.db.crud.org_deletion import _count_non_terminal_runs
+        from farna.db.crud.org_deletion import _count_non_terminal_runs
 
         assert await _count_non_terminal_runs(mock_session, _ORG_ID) == 0
 
@@ -138,7 +138,7 @@ class TestHelpers:
         absent = MagicMock()
         absent.first = MagicMock(return_value=None)
         mock_session.execute = AsyncMock(side_effect=[present, absent])
-        from modulo.db.crud.org_deletion import _checkpoint_created_at_present
+        from farna.db.crud.org_deletion import _checkpoint_created_at_present
 
         assert await _checkpoint_created_at_present(mock_session) is True
         assert await _checkpoint_created_at_present(mock_session) is False
@@ -157,7 +157,7 @@ class TestCollectOrgExport:
         membership = self._record({"account_id": Decimal("1.5")})
         listing = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[membership]))))
         mock_session.execute = AsyncMock(return_value=listing)
-        from modulo.db.crud.org_deletion import _collect_org_export
+        from farna.db.crud.org_deletion import _collect_org_export
 
         org = _make_org()
         org.__table__ = org_record.__table__
@@ -178,7 +178,7 @@ class TestCollectOrgExport:
         listings_scalars.all = MagicMock(return_value=[])
         listing = MagicMock(scalars=MagicMock(return_value=listings_scalars))
         mock_session.execute = AsyncMock(return_value=listing)
-        from modulo.db.crud.org_deletion import _collect_org_export
+        from farna.db.crud.org_deletion import _collect_org_export
 
         org = _make_org()
         org.__table__ = self._record({"id": org.id}).__table__
@@ -209,7 +209,7 @@ class TestCollectOrgExport:
         rec_scalars.all = MagicMock(return_value=[record])
         listing = MagicMock(scalars=MagicMock(return_value=rec_scalars))
         mock_session.execute = AsyncMock(return_value=listing)
-        from modulo.db.crud.org_deletion import _collect_org_export
+        from farna.db.crud.org_deletion import _collect_org_export
 
         org = _make_org()
         org.__table__ = record.__table__
@@ -221,7 +221,7 @@ class TestCollectOrgExportInSnapshot:
     """The snapshot helper configures READ ONLY / REPEATABLE READ before reading."""
 
     async def test_postgres_uses_read_only_repeatable_read_snapshot(self) -> None:
-        from modulo.db.crud import org_deletion
+        from farna.db.crud import org_deletion
 
         org = _make_org()
         conn = _FakeSnapshotConnection("postgresql")
@@ -248,7 +248,7 @@ class TestCollectOrgExportInSnapshot:
         assert engine.connect_count == 1
 
     async def test_non_postgres_skips_isolation_statements(self) -> None:
-        from modulo.db.crud import org_deletion
+        from farna.db.crud import org_deletion
 
         org = _make_org()
         conn = _FakeSnapshotConnection("sqlite")
@@ -267,7 +267,7 @@ class TestCollectOrgExportInSnapshot:
         assert not conn.executed
 
     async def test_defaults_to_shared_engine(self) -> None:
-        from modulo.db.crud import org_deletion
+        from farna.db.crud import org_deletion
 
         org = _make_org()
         engine = _FakeSnapshotEngine(_FakeSnapshotConnection("sqlite"))
@@ -287,7 +287,7 @@ class TestCollectOrgExportInSnapshot:
         assert engine.connect_count == 1
 
     async def test_missing_org_raises_before_collecting(self) -> None:
-        from modulo.db.crud import org_deletion
+        from farna.db.crud import org_deletion
 
         engine = _FakeSnapshotEngine(_FakeSnapshotConnection("sqlite"))
         session = _FakeSnapshotSession(None)
@@ -307,14 +307,14 @@ class TestCollectOrgExportInSnapshot:
 class TestRequestOrgDeletion:
     async def test_org_not_found_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(None))
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         with pytest.raises(ValueError, match="not found"):
             await request_org_deletion(mock_session, _ORG_ID, _ORG_ID)
 
     async def test_already_deleted_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(status="deleted")))
-        from modulo.db.crud.org_deletion import request_org_deletion
+        from farna.db.crud.org_deletion import request_org_deletion
 
         with pytest.raises(ValueError, match="already deleted"):
             await request_org_deletion(mock_session, _ORG_ID, _ORG_ID)
@@ -323,9 +323,9 @@ class TestRequestOrgDeletion:
         org = _make_org()
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
         export = {"organisation": [], "exported_at": "2026-01-01"}
-        target = "modulo.db.crud.org_deletion._collect_org_export_in_snapshot"
+        target = "farna.db.crud.org_deletion._collect_org_export_in_snapshot"
         with patch(target, AsyncMock(return_value=export)) as collect:
-            from modulo.db.crud.org_deletion import request_org_deletion
+            from farna.db.crud.org_deletion import request_org_deletion
 
             result = await request_org_deletion(mock_session, _ORG_ID, _ORG_ID)
         collect.assert_awaited_once()
@@ -342,21 +342,21 @@ class TestRequestOrgDeletion:
 class TestConfirmOrgDeletion:
     async def test_org_not_found_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(None))
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         with pytest.raises(ValueError, match="not found"):
             await confirm_org_deletion(mock_session, _ORG_ID, "tok")
 
     async def test_wrong_token_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(deletion_token="correct")))
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         with pytest.raises(ValueError, match="Invalid deletion token"):
             await confirm_org_deletion(mock_session, _ORG_ID, "wrong")
 
     async def test_missing_token_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(deletion_token=None)))
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         with pytest.raises(ValueError, match="Invalid deletion token"):
             await confirm_org_deletion(mock_session, _ORG_ID, "anything")
@@ -364,7 +364,7 @@ class TestConfirmOrgDeletion:
     async def test_expired_token_raises(self, mock_session: AsyncMock) -> None:
         expired = _make_org(token_expires_at=datetime.now(UTC) - timedelta(hours=1))
         mock_session.execute = AsyncMock(return_value=_lookup_result(expired))
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         with pytest.raises(ValueError, match="expired"):
             await confirm_org_deletion(mock_session, _ORG_ID, expired.deletion_token)
@@ -372,7 +372,7 @@ class TestConfirmOrgDeletion:
     async def test_token_expires_missing_raises(self, mock_session: AsyncMock) -> None:
         missing = _make_org(token_expires_at=None)
         mock_session.execute = AsyncMock(return_value=_lookup_result(missing))
-        from modulo.db.crud.org_deletion import confirm_org_deletion
+        from farna.db.crud.org_deletion import confirm_org_deletion
 
         with pytest.raises(ValueError, match="expired"):
             await confirm_org_deletion(mock_session, _ORG_ID, missing.deletion_token)
@@ -381,14 +381,14 @@ class TestConfirmOrgDeletion:
         org = _make_org()
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
         with (
-            patch("modulo.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=2)) as count,
-            patch("modulo.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()) as abort,
+            patch("farna.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=2)) as count,
+            patch("farna.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()) as abort,
             patch(
-                "modulo.db.crud.org_deletion.batch_delete_old_terminal_runs",
+                "farna.db.crud.org_deletion.batch_delete_old_terminal_runs",
                 AsyncMock(return_value=0),
             ),
         ):
-            from modulo.db.crud.org_deletion import confirm_org_deletion
+            from farna.db.crud.org_deletion import confirm_org_deletion
 
             with pytest.raises(ValueError, match="still in progress"):
                 await confirm_org_deletion(mock_session, _ORG_ID, org.deletion_token)
@@ -399,14 +399,14 @@ class TestConfirmOrgDeletion:
         org = _make_org()
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
         with (
-            patch("modulo.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=3)),
-            patch("modulo.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()) as abort,
+            patch("farna.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=3)),
+            patch("farna.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()) as abort,
             patch(
-                "modulo.db.crud.org_deletion.batch_delete_old_terminal_runs",
+                "farna.db.crud.org_deletion.batch_delete_old_terminal_runs",
                 AsyncMock(return_value=4),
             ) as batch_delete,
         ):
-            from modulo.db.crud.org_deletion import confirm_org_deletion
+            from farna.db.crud.org_deletion import confirm_org_deletion
 
             result = await confirm_org_deletion(mock_session, _ORG_ID, org.deletion_token, force=True)
         abort.assert_awaited_once()
@@ -419,14 +419,14 @@ class TestConfirmOrgDeletion:
         org = _make_org(deletion_token="expected")
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
         with (
-            patch("modulo.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=0)),
-            patch("modulo.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
+            patch("farna.db.crud.org_deletion._count_non_terminal_runs", AsyncMock(return_value=0)),
+            patch("farna.db.crud.org_deletion._abort_org_live_sandboxes", AsyncMock()),
             patch(
-                "modulo.db.crud.org_deletion.batch_delete_old_terminal_runs",
+                "farna.db.crud.org_deletion.batch_delete_old_terminal_runs",
                 AsyncMock(return_value=2),
             ),
         ):
-            from modulo.db.crud.org_deletion import confirm_org_deletion
+            from farna.db.crud.org_deletion import confirm_org_deletion
 
             result = await confirm_org_deletion(mock_session, _ORG_ID, "NOT the token", immediate=True)
         assert result["hard_deleted_runs"] == 2
@@ -435,14 +435,14 @@ class TestConfirmOrgDeletion:
 class TestCancelAndExport:
     async def test_cancel_org_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(None))
-        from modulo.db.crud.org_deletion import cancel_org_deletion
+        from farna.db.crud.org_deletion import cancel_org_deletion
 
         with pytest.raises(ValueError, match="not found"):
             await cancel_org_deletion(mock_session, _ORG_ID)
 
     async def test_cancel_without_pending_deletion_raises(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(status="active")))
-        from modulo.db.crud.org_deletion import cancel_org_deletion
+        from farna.db.crud.org_deletion import cancel_org_deletion
 
         with pytest.raises(ValueError, match="No pending deletion"):
             await cancel_org_deletion(mock_session, _ORG_ID)
@@ -451,7 +451,7 @@ class TestCancelAndExport:
         org = _make_org(status="deleted", deleted_at=datetime.now(UTC))
         org.deletion_token = "tok"
         mock_session.execute = AsyncMock(return_value=_lookup_result(org))
-        from modulo.db.crud.org_deletion import cancel_org_deletion
+        from farna.db.crud.org_deletion import cancel_org_deletion
 
         result = await cancel_org_deletion(mock_session, _ORG_ID)
         assert result == {"status": "active"}
@@ -463,7 +463,7 @@ class TestCancelAndExport:
 
     async def test_export_org_not_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(None))
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         with pytest.raises(ValueError, match="not found"):
             await export_org_data(mock_session, _ORG_ID)
@@ -471,15 +471,15 @@ class TestCancelAndExport:
     async def test_export_returns_cached_bundle(self, mock_session: AsyncMock) -> None:
         cached = {"organisation": [], "exported_at": "x"}
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(export_bundle_json=cached)))
-        from modulo.db.crud.org_deletion import export_org_data
+        from farna.db.crud.org_deletion import export_org_data
 
         assert await export_org_data(mock_session, _ORG_ID) == cached
 
     async def test_export_collects_when_no_cached_bundle(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_lookup_result(_make_org(export_bundle_json=None)))
         collected = {"organisation": []}
-        with patch("modulo.db.crud.org_deletion._collect_org_export_in_snapshot", AsyncMock(return_value=collected)):
-            from modulo.db.crud.org_deletion import export_org_data
+        with patch("farna.db.crud.org_deletion._collect_org_export_in_snapshot", AsyncMock(return_value=collected)):
+            from farna.db.crud.org_deletion import export_org_data
 
             assert await export_org_data(mock_session, _ORG_ID) == collected
 
@@ -491,13 +491,13 @@ class TestAbortSandboxes:
         mock_session.execute = AsyncMock(return_value=absent)
         fake_e2b = _fake_module(AsyncSandbox=MagicMock())
         with patch.dict(sys_modules, {"e2b": fake_e2b}):
-            from modulo.db.crud.org_deletion import _abort_org_live_sandboxes
+            from farna.db.crud.org_deletion import _abort_org_live_sandboxes
 
             assert await _abort_org_live_sandboxes(mock_session, _ORG_ID) == 0
 
     async def test_sqlalchemy_error_returns_zero(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=Exception("db unavailable"))
-        from modulo.db.crud.org_deletion import _abort_org_live_sandboxes
+        from farna.db.crud.org_deletion import _abort_org_live_sandboxes
 
         assert await _abort_org_live_sandboxes(mock_session, _ORG_ID) == 0
 
@@ -511,7 +511,7 @@ class TestAbortSandboxes:
         sandbox_cls = SimpleNamespace(kill=kill_mock)
         fake_e2b = _fake_module(AsyncSandbox=sandbox_cls)
         with patch.dict(sys_modules, {"e2b": fake_e2b}):
-            from modulo.db.crud.org_deletion import _abort_org_live_sandboxes
+            from farna.db.crud.org_deletion import _abort_org_live_sandboxes
 
             killed = await _abort_org_live_sandboxes(mock_session, _ORG_ID)
             assert killed == 2
@@ -527,7 +527,7 @@ class TestAbortSandboxes:
         sandbox_cls = SimpleNamespace(kill=kill_mock)
         fake_e2b = _fake_module(AsyncSandbox=sandbox_cls)
         with patch.dict(sys_modules, {"e2b": fake_e2b}):
-            from modulo.db.crud.org_deletion import _abort_org_live_sandboxes
+            from farna.db.crud.org_deletion import _abort_org_live_sandboxes
 
             assert await _abort_org_live_sandboxes(mock_session, _ORG_ID) == 1
 
@@ -598,7 +598,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rowcount_result(5),
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session)
         assert result == 15
@@ -622,7 +622,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rowcount_result(0),
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session, batch_size=2, max_age_days=10)
         assert result == 300 + 150 + 50 + 40
@@ -644,7 +644,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rowcount_result(1),
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session, batch_size=1, max_rows_per_tick=5)
         # Two batches ran (3 rows each); the budget of 5 stopped the third.
@@ -662,7 +662,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rowcount_result(7),
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session)
         assert result == 21
@@ -695,7 +695,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rowcount_result(1),
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session, batch_size=4)
         assert result == 5 + 4 + 3 + 2 + 2 + 1
@@ -730,7 +730,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 _rows_result(),  # stale blobs
             ]
         )
-        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+        from farna.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         result = await batch_delete_langgraph_checkpoints(session, batch_size=2)
         assert result == 3

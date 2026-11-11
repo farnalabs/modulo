@@ -33,8 +33,8 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.rls import set_rls_org
-from modulo.settings import get_settings
+from farna.db.rls import set_rls_org
+from farna.settings import get_settings
 
 _COST_COLUMN_CAP = Decimal("99999999.999999")
 

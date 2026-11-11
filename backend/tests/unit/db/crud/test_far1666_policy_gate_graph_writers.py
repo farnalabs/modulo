@@ -32,21 +32,21 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import (
+from farna.db.crud.pipeline import (
     _clone_pipeline_config,
     _clone_snapshots,
     _CloneSourceSnapshot,
     strip_declared_policy_gates,
 )
-from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.policy_gate import PolicyGate
-from modulo.db.soft_delete import include_soft_deleted
+from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.eval import Eval
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.policy_gate import PolicyGate
+from farna.db.soft_delete import include_soft_deleted
 
 # Scoped create_all: unrelated models use Postgres-only column types that SQLite
 # cannot render (same rationale as tests/unit/db/test_seed_demo.py).
@@ -196,7 +196,7 @@ async def _seed_eval(
 async def _live_gates(session: AsyncSession) -> list[PolicyGate]:
     # State the soft-delete predicate EXPLICITLY instead of depending on the
     # app-wide soft-delete filter, which is an ORM event listener registered
-    # only by ``modulo.db.session`` — a module this test's import chain never
+    # only by ``farna.db.session`` — a module this test's import chain never
     # loads. Expire first so a row mutated in-session (the fixture commits with
     # ``expire_on_commit=False``) is re-read against the server's view before
     # the filtered select.
@@ -258,7 +258,7 @@ class TestCloneStripsDeclaredPolicyGates:
         session: AsyncSession,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             cloned = await _clone_pipeline_config(
                 session,
                 _clone_snapshot([_gate_node(_NODE_A), _plain_node(_NODE_B)]),
@@ -278,7 +278,7 @@ class TestCloneStripsDeclaredPolicyGates:
         session: AsyncSession,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             await _clone_pipeline_config(
                 session,
                 _clone_snapshot([_plain_node(_NODE_A)]),
@@ -301,7 +301,7 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
         row = _clone_source_snapshot_row(source_nodes)
         cloned_id = uuid.uuid4()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             count = await _clone_snapshots(
                 session,
                 [row],
@@ -328,7 +328,7 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
     ) -> None:
         row = _clone_source_snapshot_row([_plain_node(_NODE_A)])
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             await _clone_snapshots(
                 session,
                 [row],
@@ -352,7 +352,7 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
         row["graph_json"] = ["not-a-dict"]
         cloned_id = uuid.uuid4()
 
-        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+        with caplog.at_level(logging.WARNING, logger="farna.db.crud.pipeline"):
             count = await _clone_snapshots(
                 session,
                 [row],
@@ -409,7 +409,7 @@ class TestRollbackReconcilesDeclaredPolicyGates:
         # ``create_snapshot_from_live_graph`` takes a Postgres advisory lock
         # SQLite cannot execute; it runs AFTER the reconciliation under test.
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot_versioning.create_snapshot_from_live_graph",
             new=AsyncMock(return_value=None),
         ):
             result = await rollback_to_snapshot(
@@ -474,7 +474,7 @@ class TestRollbackReconcilesDeclaredPolicyGates:
         )
 
         with patch(
-            "modulo.db.crud.pipeline_snapshot_versioning.reconcile_graph_policy_gates",
+            "farna.db.crud.pipeline_snapshot_versioning.reconcile_graph_policy_gates",
             new=AsyncMock(),
         ) as reconcile:
             await self._rollback(session, snapshot.id)

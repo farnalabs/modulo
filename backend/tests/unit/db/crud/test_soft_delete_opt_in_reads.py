@@ -15,14 +15,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.environment_profile import (
+from farna.db.crud.environment_profile import (
     get_environment_profile,
     list_environment_profiles,
 )
-from modulo.db.crud.library_primitive import get_library_primitive
-from modulo.db.crud.node_category import list_node_categories
-from modulo.db.crud.observability import update_otel_config
-from modulo.db.crud.pipeline import list_pipelines
+from farna.db.crud.library_primitive import get_library_primitive
+from farna.db.crud.node_category import list_node_categories
+from farna.db.crud.observability import update_otel_config
+from farna.db.crud.pipeline import list_pipelines
 
 
 def _result(*, scalar: Any = None, scalars: list[Any] | None = None) -> MagicMock:
@@ -62,7 +62,7 @@ async def test_list_environment_profiles_include_deleted() -> None:
 async def test_list_environment_profiles_include_deleted_cursor() -> None:
     page = MagicMock(items=[], total=0, next_cursor=None, has_more=False)
     session = AsyncMock()
-    with patch("modulo.db.crud.environment_profile.CursorPaginator") as paginator_cls:
+    with patch("farna.db.crud.environment_profile.CursorPaginator") as paginator_cls:
         paginator_cls.return_value.paginate = AsyncMock(return_value=page)
 
         result = await list_environment_profiles(session, cursor="abc", include_deleted=True)
@@ -158,7 +158,7 @@ async def test_update_otel_config_missing_org_raises_value_error() -> None:
     session = AsyncMock()
     with (
         patch(
-            "modulo.db.crud.organisation.update_org_json_column_patch",
+            "farna.db.crud.organisation.update_org_json_column_patch",
             new=AsyncMock(side_effect=LookupError("organisation not found")),
         ),
         pytest.raises(ValueError, match="Organisation not found"),

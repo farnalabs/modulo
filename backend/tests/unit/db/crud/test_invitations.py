@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.db.crud.invitations import (
+from farna.db.crud.invitations import (
     consume_invitation,
     create_invitation,
     get_valid_by_token_hash,
@@ -20,8 +20,8 @@ from modulo.db.crud.invitations import (
     list_pending_for_org,
     revoke_invitation,
 )
-from modulo.db.crud.org_membership import reactivate_membership
-from modulo.db.models.invitation import Invitation
+from farna.db.crud.org_membership import reactivate_membership
+from farna.db.models.invitation import Invitation
 from tests.unit.api.mock_session import configure_mock_session
 
 
@@ -48,7 +48,7 @@ def _invitation() -> Invitation:
 
 class TestHashInvitationToken:
     def test_delegates_to_hash_token(self) -> None:
-        from modulo.util.one_time_token import hash_token
+        from farna.util.one_time_token import hash_token
 
         assert hash_invitation_token("tok") == hash_token("tok")
 
@@ -74,7 +74,7 @@ class TestCreateInvitation:
         assert isinstance(plaintext, str)
         assert len(plaintext) >= 32
         # The persisted hash is the SHA-256 of the returned plaintext.
-        from modulo.util.one_time_token import hash_token
+        from farna.util.one_time_token import hash_token
 
         assert invitation.token_hash == hash_token(plaintext)
         assert invitation.organisation_id == org_id
@@ -101,7 +101,7 @@ class TestGetLiveForEmail:
     """FAR-855: the SSO join-gate lookup (row-locked, live-only)."""
 
     async def test_returns_locked_live_invitation(self) -> None:
-        from modulo.db.crud.invitations import get_live_for_email
+        from farna.db.crud.invitations import get_live_for_email
 
         session = _mock_session()
         invitation = _invitation()
@@ -115,7 +115,7 @@ class TestGetLiveForEmail:
         assert "FOR UPDATE" in str(stmt.compile()).upper()
 
     async def test_returns_none_when_no_match(self) -> None:
-        from modulo.db.crud.invitations import get_live_for_email
+        from farna.db.crud.invitations import get_live_for_email
 
         session = _mock_session()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))

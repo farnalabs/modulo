@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from modulo.core.schema_registry.generation import (
+from farna.core.schema_registry.generation import (
     SchemaGenerationError,
     SchemaGenerationService,
     _build_generate_prompt,

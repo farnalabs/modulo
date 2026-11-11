@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.guardrails.compensation as comp
+import farna.core.guardrails.compensation as comp
 
 
 class _Scalar:

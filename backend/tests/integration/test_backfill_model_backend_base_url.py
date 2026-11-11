@@ -22,13 +22,13 @@ from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.cli.backfill_model_backend_base_url import (
+from farna.cli.backfill_model_backend_base_url import (
     AUDIT_ACTOR_SOURCE,
     AUDIT_EVENT_TYPE,
     BackfillResult,
     run_backfill,
 )
-from modulo.settings import get_settings
+from farna.settings import get_settings
 
 pytestmark = pytest.mark.integration
 

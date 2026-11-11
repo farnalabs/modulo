@@ -42,17 +42,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_MULTI_HOST,
     SANDBOX_CAPABILITY_WORKSPACE_INPUTS,
     _validate_sandbox_managed_inputs_config,
     derive_sandbox_capabilities,
 )
-from modulo.core.pipeline_engine.workspace_input_credentials import (
+from farna.core.pipeline_engine.workspace_input_credentials import (
     CloneCredential,
     build_provisioning_credential_scripts,
 )
-from modulo.core.pipeline_engine.workspace_input_orchestration import (
+from farna.core.pipeline_engine.workspace_input_orchestration import (
     DriftResult,
     ProvisioningError,
     ResolvedInput,
@@ -158,7 +158,7 @@ class TestResolutionFailureTransitions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         remote = AsyncMock(return_value=_ls_remote_for({"refs/heads/main": _SHA_A}))
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
         inputs = [
             {"url": _URL_A, "dest": _DEST_A, "ref": {"kind": "branch", "value": "main"}},
             {"url": _URL_A, "dest": _DEST_B, "ref": {"kind": "tag", "value": "v9.9.9-missing"}},
@@ -173,7 +173,7 @@ class TestResolutionFailureTransitions:
 
     async def test_transient_network_error_is_retryable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
+            "farna.core.pipeline_engine.workspace_input_orchestration._resolve_ref_with_retry",
             AsyncMock(side_effect=TimeoutError("network unreachable")),
         )
         inputs = [{"url": _URL_A, "dest": _DEST_A, "ref": {"kind": "branch", "value": "main"}}]
@@ -193,7 +193,7 @@ class TestResolutionFailureTransitions:
                 ConnectionError("unreachable"),
             ]
         )
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
         inputs = [
             {"url": _URL_A, "dest": _DEST_A, "ref": {"kind": "branch", "value": "main"}},
             {"url": _URL_B, "dest": _DEST_B, "ref": {"kind": "branch", "value": "main"}},
@@ -293,9 +293,9 @@ class TestMultiHostTokenIsolation:
         remote = AsyncMock(
             side_effect=lambda url: _ls_remote_for({"refs/heads/main": _SHA_A if url == _URL_A else _SHA_B})
         )
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
         monkeypatch.setattr(
-            "modulo.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
+            "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
             _fake_resolve,
         )
         resolved = await resolve_managed_inputs_host_side(
@@ -515,7 +515,7 @@ class TestDriftFailureStillCompletes:
         """End-to-end: a raising drift check maps to a node that still
         completes with its audit/envelope fields written (degraded, fail-open
         with a log) — never an opaque node crash after successful work."""
-        from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+        from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
         node_def: dict[str, Any] = {
             "id": str(uuid.uuid4()),
@@ -548,21 +548,21 @@ class TestDriftFailureStillCompletes:
         }
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
                 new=AsyncMock(return_value=[_resolved_input()]),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+                "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
                 new=AsyncMock(),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+                "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
                 new=AsyncMock(side_effect=TimeoutError()),
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 new=MagicMock(return_value=MagicMock(modulo_workspace_inputs_enabled=True)),
             ),
         ):
@@ -588,13 +588,13 @@ class TestAuditWriteUsesFinalAttemptKey:
         compensating sweep and the analytics backfill (which read at
         FINAL_ATTEMPT_KEY) find it.  Regression guard for the silent-no-op
         attempt_key mismatch the PR Reviewer flagged."""
-        from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
-        from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+        from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+        from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
         spy_resolved = AsyncMock()
         spy_drift = AsyncMock()
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_resolved_inputs", spy_resolved)
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_drift", spy_drift)
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_audit.record_resolved_inputs", spy_resolved)
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_audit.record_drift", spy_drift)
 
         node_def: dict[str, Any] = {
             "id": str(uuid.uuid4()),
@@ -628,21 +628,21 @@ class TestAuditWriteUsesFinalAttemptKey:
         drift_result = DriftResult(dest=_DEST_A, expected_sha=_SHA_A, final_sha=_SHA_B, drift_detected=True)
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
                 new=AsyncMock(return_value=[_resolved_input()]),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+                "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
                 new=AsyncMock(),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+                "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
                 new=AsyncMock(return_value=[drift_result]),
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 new=MagicMock(return_value=MagicMock(modulo_workspace_inputs_enabled=True)),
             ),
         ):
@@ -660,13 +660,13 @@ class TestAuditWriteUsesFinalAttemptKey:
         Without it Postgres raises 42501, which the best-effort ``except`` swallows, so
         the audit row + drift flag silently never persist and the sweep/backfill no-op.
         Regression guard for the PR Reviewer's blocking RLS finding (head 6bddaa420)."""
-        from modulo.core.pipeline_engine import node_runner as _nr
-        from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+        from farna.core.pipeline_engine import node_runner as _nr
+        from farna.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
         spy_set_rls = AsyncMock()
         monkeypatch.setattr(_nr, "set_rls_org", spy_set_rls)
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_resolved_inputs", AsyncMock())
-        monkeypatch.setattr("modulo.core.pipeline_engine.workspace_input_audit.record_drift", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_audit.record_resolved_inputs", AsyncMock())
+        monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_audit.record_drift", AsyncMock())
 
         node_def: dict[str, Any] = {
             "id": str(uuid.uuid4()),
@@ -700,21 +700,21 @@ class TestAuditWriteUsesFinalAttemptKey:
         drift_result = DriftResult(dest=_DEST_A, expected_sha=_SHA_A, final_sha=_SHA_B, drift_detected=True)
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
+            patch("farna.core.runner_bindings.resolve_agent_bindings", new=AsyncMock(return_value={})),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
+                "farna.core.pipeline_engine.workspace_input_orchestration.resolve_managed_inputs_host_side",
                 new=AsyncMock(return_value=[_resolved_input()]),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
+                "farna.core.pipeline_engine.workspace_input_orchestration.provision_workspace_inputs_in_sandbox",
                 new=AsyncMock(),
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
+                "farna.core.pipeline_engine.workspace_input_orchestration.detect_workspace_input_drift",
                 new=AsyncMock(return_value=[drift_result]),
             ),
             patch(
-                "modulo.settings.get_settings",
+                "farna.settings.get_settings",
                 new=MagicMock(return_value=MagicMock(modulo_workspace_inputs_enabled=True)),
             ),
         ):

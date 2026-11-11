@@ -22,12 +22,12 @@ from typing import ClassVar
 
 import pytest
 
-import modulo.launcher.entry as entry_module
-import modulo.launcher.secrets_file as secrets_file_module
-import modulo.settings as settings_module
-from modulo.launcher.entry import BootError, default_data_dir, resolve_bin_dir, run_start
-from modulo.launcher.env_safety import AmbientEnvironmentError
-from modulo.launcher.supervisor import DataDirLockError
+import farna.launcher.entry as entry_module
+import farna.launcher.secrets_file as secrets_file_module
+import farna.settings as settings_module
+from farna.launcher.entry import BootError, default_data_dir, resolve_bin_dir, run_start
+from farna.launcher.env_safety import AmbientEnvironmentError
+from farna.launcher.supervisor import DataDirLockError
 from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, launcher_state_reset
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -45,8 +45,8 @@ def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
     bypass_platform_seams(
         monkeypatch,
-        "modulo.launcher.secrets_file",
-        "modulo.launcher.initdb",
+        "farna.launcher.secrets_file",
+        "farna.launcher.initdb",
     )
 
 
@@ -82,7 +82,7 @@ def test_entry_first_modulo_import_is_env_safety() -> None:
     # top-level modulo import may appear (the exact set). The forbidden-prefix
     # policy (settings/cli/api/db) is owned separately by
     # test_entry_has_no_top_level_settings_or_cli_imports.
-    assert imports == ["modulo.launcher.env_safety"]
+    assert imports == ["farna.launcher.env_safety"]
 
 
 def test_run_start_scrub_is_the_first_action() -> None:
@@ -101,7 +101,7 @@ def test_run_start_scrub_is_the_first_action() -> None:
 
 def test_entry_has_no_top_level_settings_or_cli_imports() -> None:
     tree = _entry_tree()
-    forbidden = ("modulo.settings", "modulo.cli", "modulo.api", "modulo.db")
+    forbidden = ("farna.settings", "farna.cli", "farna.api", "farna.db")
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             targets: list[str] = []
@@ -120,7 +120,7 @@ def test_entry_has_no_top_level_settings_or_cli_imports() -> None:
 
 
 def test_run_start_scrubs_environment_before_anything_else(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modulo.launcher import env_safety
+    from farna.launcher import env_safety
 
     calls: list[str] = []
 
@@ -170,11 +170,11 @@ class FakeProc:
 
 
 def _install_boot_mocks(monkeypatch: pytest.MonkeyPatch, order: list[str], *, mock_saq: bool = True) -> None:
-    import modulo.launcher.config_source as config_source_module
-    import modulo.launcher.initdb as initdb_module
-    import modulo.launcher.state as state_mod
-    import modulo.launcher.supervisor as supervisor_mod
-    import modulo.settings as settings_mod
+    import farna.launcher.config_source as config_source_module
+    import farna.launcher.initdb as initdb_module
+    import farna.launcher.state as state_mod
+    import farna.launcher.supervisor as supervisor_mod
+    import farna.settings as settings_mod
 
     class FakeLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -336,7 +336,7 @@ def test_serve_phase_base_exception_tears_down_supervisor(monkeypatch: pytest.Mo
     the supervisor must still be shut down before it propagates - otherwise the
     bundled Postgres/Redis/SAQ children are orphaned.
     """
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     order: list[str] = []
     _install_boot_mocks(monkeypatch, order)
@@ -361,7 +361,7 @@ def test_serve_phase_base_exception_tears_down_supervisor(monkeypatch: pytest.Mo
 
 
 def test_lock_refusal_propagates_naming_holder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class RefusingLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -379,7 +379,7 @@ def test_lock_refusal_propagates_naming_holder(monkeypatch: pytest.MonkeyPatch, 
 
 
 def test_ambient_url_refusal_precedes_any_bootstrap_artefact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     created: list[Path] = []
 
@@ -414,9 +414,9 @@ def _install_degrade_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
     terminal degraded moments after boot, driving the degraded exit path
     end-to-end with a real Supervisor (no threads beyond its own monitor).
     """
-    import modulo.launcher.config_source as config_source_module
-    import modulo.launcher.initdb as initdb_module
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.config_source as config_source_module
+    import farna.launcher.initdb as initdb_module
+    import farna.launcher.supervisor as supervisor_mod
 
     class FakeLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -502,8 +502,8 @@ def _install_degrade_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_degraded_boot_exits_nonzero_with_status_hint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from modulo.launcher import policy as policy_module
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+    from farna.launcher import policy as policy_module
+    from farna.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
 
     _install_degrade_mocks(monkeypatch)
 
@@ -528,7 +528,7 @@ def test_degraded_boot_exits_nonzero_with_status_hint(
     assert all(crash.get("exit_code") == 7 for crash in record["crashes"])
     # The persisted exit code is the service-mode contract: the unit lists it
     # in SuccessExitStatus so systemd leaves a degraded service STOPPED.
-    from modulo.launcher.service import UNIT_FILENAME, render_unit
+    from farna.launcher.service import UNIT_FILENAME, render_unit
 
     unit = render_unit(Path("modulo"))
     assert f"SuccessExitStatus={policy_module.DEGRADED_EXIT_CODE}" in unit
@@ -541,8 +541,8 @@ def test_degrade_within_the_upgrade_window_persists_post_upgrade_context(
     """A crash-cap trip shortly after an upgrade boot carries restore guidance."""
     import time as time_module
 
-    from modulo.launcher import policy as policy_module
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+    from farna.launcher import policy as policy_module
+    from farna.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
 
     _install_degrade_mocks(monkeypatch)
     data_dir = tmp_path / "data"
@@ -593,9 +593,9 @@ def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, t
         def monitor_thread_alive(self) -> bool:
             return True
 
-    import modulo.api.dependencies as deps_module
-    import modulo.db.health_checks as health_module
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.api.dependencies as deps_module
+    import farna.db.health_checks as health_module
+    import farna.launcher.supervisor as supervisor_mod
 
     class FakeLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -651,9 +651,9 @@ def test_saq_gate_reopens_when_the_first_tick_sees_false(monkeypatch: pytest.Mon
     unconditionally, so on a fresh install (migrations still running in the
     lifespan) the API served forever with zero SAQ workers.
     """
-    import modulo.api.dependencies as deps_module
-    import modulo.db.health_checks as health_module
-    from modulo.launcher.supervisor import Supervisor, SupervisorKnobs
+    import farna.api.dependencies as deps_module
+    import farna.db.health_checks as health_module
+    from farna.launcher.supervisor import Supervisor, SupervisorKnobs
 
     migrated = {"value": False}
     calls: list[int] = []
@@ -689,7 +689,7 @@ def test_saq_gate_reopens_when_the_first_tick_sees_false(monkeypatch: pytest.Mon
 
 
 def test_run_probe_command_maps_missing_binary_to_unavailable(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import ProbeOutcome
+    from farna.launcher.supervisor import ProbeOutcome
 
     missing = tmp_path / "no-such-binary"
     outcome = entry_module._run_probe_command([str(missing)])
@@ -699,7 +699,7 @@ def test_run_probe_command_maps_missing_binary_to_unavailable(tmp_path: Path) ->
 def test_run_probe_command_maps_timeout_to_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import subprocess
 
-    from modulo.launcher.supervisor import ProbeOutcome
+    from farna.launcher.supervisor import ProbeOutcome
 
     def raise_timeout(argv: list[str], **kwargs: object) -> object:
         raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
@@ -710,7 +710,7 @@ def test_run_probe_command_maps_timeout_to_unavailable(monkeypatch: pytest.Monke
 
 
 def test_verify_bundled_binaries_names_the_missing_ones(tmp_path: Path) -> None:
-    from modulo.launcher.entry import BootError
+    from farna.launcher.entry import BootError
 
     with pytest.raises(BootError, match=r"--bin-dir"):
         entry_module._verify_bundled_binaries(tmp_path)
@@ -721,7 +721,7 @@ def test_verify_bundled_binaries_names_the_missing_ones(tmp_path: Path) -> None:
 
 
 def test_verify_bundled_binaries_passes_when_all_present(tmp_path: Path) -> None:
-    from modulo.launcher.initdb import _binary
+    from farna.launcher.initdb import _binary
 
     for name in ("initdb", "postgres", "pg_isready", "redis-server", "redis-cli"):
         Path(_binary(tmp_path, name)).write_text("", encoding="utf-8")
@@ -945,7 +945,7 @@ def test_default_data_dir_translates_a_platform_refusal_into_boot_error(
     Driven through the platform module's own seam so the translation executes on
     every host (the Windows PROGRAMDATA refusal is a Windows-only state).
     """
-    from modulo.launcher import platform as platform_module
+    from farna.launcher import platform as platform_module
 
     def _refuse() -> Path:
         raise platform_module.LauncherPlatformError("PROGRAMDATA is required for the Windows native launcher")
@@ -986,7 +986,7 @@ def test_redis_server_argv_never_carries_the_password(tmp_path: Path) -> None:
 
 
 def test_redis_conf_is_swept_with_sigkill_debris(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import REDIS_CONF_PREFIX, reconcile_orphans
+    from farna.launcher.supervisor import REDIS_CONF_PREFIX, reconcile_orphans
 
     pgdata = tmp_path / "pgdata"
     pgdata.mkdir()
@@ -1010,7 +1010,7 @@ def _write_degraded_record(
     post_upgrade: bool = False,
     pre_upgrade_snapshot: str | None = None,
 ) -> Path:
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
+    from farna.launcher.supervisor import DEGRADED_FILENAME, write_degraded_record
 
     data_dir.mkdir(parents=True, exist_ok=True)
     degraded_path = data_dir / DEGRADED_FILENAME
@@ -1030,7 +1030,7 @@ def _write_degraded_record(
 
 def test_terminal_degraded_refuses_a_normal_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A normal start refuses with the persisted reason + the resume path."""
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class FakeLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -1056,7 +1056,7 @@ def test_terminal_degraded_refuses_a_normal_start(monkeypatch: pytest.MonkeyPatc
 def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class FakeLock:
         def __init__(self, data_dir: Path, mode: str = "serve") -> None:
@@ -1083,7 +1083,7 @@ def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(
 
 def test_clear_degraded_resumes_the_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`--clear-degraded` removes the record and the boot proceeds normally."""
-    from modulo.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
+    from farna.launcher.supervisor import DEGRADED_FILENAME, read_degraded_record
 
     order: list[str] = []
     _install_boot_mocks(monkeypatch, order)
@@ -1122,7 +1122,7 @@ def test_upgrade_context_provider_attaches_fields_inside_the_window(
 
 
 def test_await_health_shutdown_requested() -> None:
-    from modulo.launcher.entry import BootError, _await_health
+    from farna.launcher.entry import BootError, _await_health
 
     stop = threading.Event()
     stop.set()
@@ -1136,7 +1136,7 @@ def test_await_health_shutdown_requested() -> None:
 
 
 def test_await_health_probe_error() -> None:
-    from modulo.launcher.entry import _await_health
+    from farna.launcher.entry import _await_health
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1159,7 +1159,7 @@ def test_await_health_probe_error() -> None:
 
 
 def test_await_health_timeout() -> None:
-    from modulo.launcher.entry import BootError, _await_health
+    from farna.launcher.entry import BootError, _await_health
 
     stop = threading.Event()
     tick = {"t": 0.0}
@@ -1180,8 +1180,8 @@ def test_await_health_timeout() -> None:
 
 
 def test_await_health_propagates_probe_outcome_healthy() -> None:
-    from modulo.launcher.entry import _await_health
-    from modulo.launcher.supervisor import ProbeOutcome
+    from farna.launcher.entry import _await_health
+    from farna.launcher.supervisor import ProbeOutcome
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1209,7 +1209,7 @@ def test_await_health_propagates_probe_outcome_healthy() -> None:
 def test_run_probe_command_oserror_returns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
-    from modulo.launcher.supervisor import ProbeOutcome
+    from farna.launcher.supervisor import ProbeOutcome
 
     def raise_oserror(argv, **kwargs):
         raise OSError("no such device")
@@ -1454,7 +1454,7 @@ def test_default_data_dir_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_load_or_init_state_fresh(tmp_path: Path) -> None:
     """When state.json doesn't exist, creates a fresh state."""
-    import modulo.launcher.state as state_mod
+    import farna.launcher.state as state_mod
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1466,7 +1466,7 @@ def test_load_or_init_state_fresh(tmp_path: Path) -> None:
 
 def test_load_or_init_state_existing(tmp_path: Path) -> None:
     """When state.json exists, loads it."""
-    import modulo.launcher.state as state_mod
+    import farna.launcher.state as state_mod
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1484,7 +1484,7 @@ def test_load_or_init_state_existing(tmp_path: Path) -> None:
 
 
 def test_await_health_all_healthy_immediately() -> None:
-    from modulo.launcher.entry import _await_health
+    from farna.launcher.entry import _await_health
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1509,7 +1509,7 @@ def test_await_health_all_healthy_immediately() -> None:
 
 
 def test_await_health_one_at_a_time() -> None:
-    from modulo.launcher.entry import _await_health
+    from farna.launcher.entry import _await_health
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1535,8 +1535,8 @@ def test_await_health_one_at_a_time() -> None:
 
 
 def test_await_health_probe_unavailable_does_not_fail_boot() -> None:
-    from modulo.launcher.entry import _await_health
-    from modulo.launcher.supervisor import ProbeOutcome
+    from farna.launcher.entry import _await_health
+    from farna.launcher.supervisor import ProbeOutcome
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1564,7 +1564,7 @@ def test_await_health_probe_unavailable_does_not_fail_boot() -> None:
 
 
 def test_await_health_unhealthy_keeps_waiting() -> None:
-    from modulo.launcher.entry import _await_health
+    from farna.launcher.entry import _await_health
 
     stop = threading.Event()
     calls = {"n": 0}
@@ -1590,7 +1590,7 @@ def test_await_health_unhealthy_keeps_waiting() -> None:
 
 
 def test_degraded_callback_sets_events() -> None:
-    from modulo.launcher.entry import _degraded_callback, _RunState
+    from farna.launcher.entry import _degraded_callback, _RunState
 
     run_state = _RunState()
     callback = _degraded_callback(run_state)
@@ -1605,7 +1605,7 @@ def test_degraded_callback_sets_events() -> None:
 
 
 def test_degraded_exit_message_without_post_upgrade(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import write_degraded_record
+    from farna.launcher.supervisor import write_degraded_record
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1617,7 +1617,7 @@ def test_degraded_exit_message_without_post_upgrade(tmp_path: Path) -> None:
 
 
 def test_degraded_exit_message_with_post_upgrade(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import write_degraded_record
+    from farna.launcher.supervisor import write_degraded_record
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -1737,7 +1737,7 @@ def test_run_state_double_signal_sets_force_exit() -> None:
 
 
 def test_run_foreground_generic_exception_wraps_in_boot_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class FailLock:
         def __init__(self, data_dir, mode="serve"):
@@ -1755,7 +1755,7 @@ def test_run_foreground_generic_exception_wraps_in_boot_error(monkeypatch: pytes
     monkeypatch.delenv("REDIS_URL", raising=False)
 
     # Make secrets_file.load_or_create raise a non-BootError
-    import modulo.launcher.secrets_file as sf_mod
+    import farna.launcher.secrets_file as sf_mod
 
     def exploding_load(path):
         raise RuntimeError("unexpected failure")
@@ -1766,7 +1766,7 @@ def test_run_foreground_generic_exception_wraps_in_boot_error(monkeypatch: pytes
 
 
 def test_run_foreground_boot_error_propagates_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class FailLock:
         def __init__(self, data_dir, mode="serve"):
@@ -1789,7 +1789,7 @@ def test_run_foreground_boot_error_propagates_directly(monkeypatch: pytest.Monke
 
 
 def test_run_foreground_shutdown_failure_during_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import modulo.launcher.supervisor as supervisor_mod
+    import farna.launcher.supervisor as supervisor_mod
 
     class FailLock:
         def __init__(self, data_dir, mode="serve"):
@@ -1807,7 +1807,7 @@ def test_run_foreground_shutdown_failure_during_error(monkeypatch: pytest.Monkey
     monkeypatch.delenv("REDIS_URL", raising=False)
 
     # Make secrets load fail AFTER lock is acquired
-    import modulo.launcher.secrets_file as sf_mod
+    import farna.launcher.secrets_file as sf_mod
 
     def exploding_load(path):
         raise RuntimeError("boom")
@@ -1823,13 +1823,13 @@ class TestEnsureAppDatabaseSafety:
     validate APP_DB_NAME as a SQL identifier before interpolating it."""
 
     def test_validate_sql_identifier_accepts_grammar_valid_names(self) -> None:
-        from modulo.launcher.entry import _validate_sql_identifier
+        from farna.launcher.entry import _validate_sql_identifier
 
         assert _validate_sql_identifier("modulo", "APP_DB_NAME") == "modulo"
         assert _validate_sql_identifier("_priv_db9", "APP_DB_NAME") == "_priv_db9"
 
     def test_validate_sql_identifier_rejects_hostile_names(self) -> None:
-        from modulo.launcher.entry import _validate_sql_identifier
+        from farna.launcher.entry import _validate_sql_identifier
 
         for hostile in ("dup; DROP SCHEMA public", 'dup"; DELETE', "dup-name", "dup d"):
             with pytest.raises(BootError, match="not a safe SQL identifier"):

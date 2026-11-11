@@ -25,14 +25,14 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.evidence import _upsert_redaction_rule
-from modulo.core.evidence_redaction import (
+from farna.api.routes.evidence import _upsert_redaction_rule
+from farna.core.evidence_redaction import (
     REDACTED_SENTINEL,
     apply_redaction,
     load_redaction_rules,
     resolve_redaction_classes_from,
 )
-from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
+from farna.db.models.evidence_redaction_rule import EvidenceRedactionRule
 
 pytestmark = pytest.mark.integration
 

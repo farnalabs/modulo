@@ -5,8 +5,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.graph_validator import GraphValidator
-from modulo.core.graph_validator.category_validator import validate_node_categories
+from farna.core.graph_validator import GraphValidator
+from farna.core.graph_validator.category_validator import validate_node_categories
 
 # ---------------------------------------------------------------------------
 # Helpers

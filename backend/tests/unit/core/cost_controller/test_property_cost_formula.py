@@ -1,6 +1,6 @@
 """Hypothesis property-based tests for the cost formula engine.
 
-Target: ``modulo.core.cost_controller.breakdown.formula`` -- the 4-operator
+Target: ``farna.core.cost_controller.breakdown.formula`` -- the 4-operator
 formula parser and evaluator.
 
 Properties assert safety invariants:
@@ -19,10 +19,10 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import assume, given, settings
 
-from modulo.core.cost_controller.breakdown.constants import (
+from farna.core.cost_controller.breakdown.constants import (
     MAX_FORMULA_LENGTH,
 )
-from modulo.core.cost_controller.breakdown.formula import (
+from farna.core.cost_controller.breakdown.formula import (
     CostFormulaError,
     evaluate_formula,
     validate_formula,

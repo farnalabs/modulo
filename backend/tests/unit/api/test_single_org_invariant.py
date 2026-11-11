@@ -21,11 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -130,9 +130,9 @@ async def test_admin_create_org_allowed_when_multi_org_enabled() -> None:
     app.dependency_overrides[get_current_user] = lambda: ADMIN_PRINCIPAL
     app.dependency_overrides[get_plan_context] = _make_plan
     try:
-        with patch("modulo.api.routes.admin_orgs.create_organisation", new_callable=AsyncMock, return_value=fake_org):
+        with patch("farna.api.routes.admin_orgs.create_organisation", new_callable=AsyncMock, return_value=fake_org):
             with patch(
-                "modulo.api.routes.admin_orgs.seed_cost_components_for_org",
+                "farna.api.routes.admin_orgs.seed_cost_components_for_org",
                 new_callable=AsyncMock,
             ):
                 transport = ASGITransport(app=app)
@@ -203,11 +203,11 @@ async def test_login_org_slug_ignored_when_multi_org_disabled() -> None:
     app.dependency_overrides[get_plan_context] = _make_plan
     try:
         with (
-            patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
-            patch("modulo.api.routes.auth.create_family", new_callable=AsyncMock, return_value=mock_family),
-            patch("modulo.api.routes.auth.create_access_token", return_value="fake-token"),
-            patch("modulo.api.routes.auth.create_refresh_token", return_value="fake-refresh"),
-            patch("modulo.api.routes.auth._run_login_transaction", new_callable=AsyncMock) as mock_login_txn,
+            patch("farna.api.routes.auth.authenticate_db_user", return_value=True),
+            patch("farna.api.routes.auth.create_family", new_callable=AsyncMock, return_value=mock_family),
+            patch("farna.api.routes.auth.create_access_token", return_value="fake-token"),
+            patch("farna.api.routes.auth.create_refresh_token", return_value="fake-refresh"),
+            patch("farna.api.routes.auth._run_login_transaction", new_callable=AsyncMock) as mock_login_txn,
         ):
             # Pre-populate the mock return value for _run_login_transaction
             mock_login_ctx = MagicMock()
@@ -371,7 +371,7 @@ async def test_org_login_slug_allowed_when_multi_org_enabled() -> None:
 
     # Mock list_enabled_oidc_providers
     with patch(
-        "modulo.api.routes.org_login.list_enabled_oidc_providers",
+        "farna.api.routes.org_login.list_enabled_oidc_providers",
         new_callable=AsyncMock,
         return_value=[],
     ):
@@ -408,8 +408,8 @@ async def test_seed_demo_skipped_when_multi_org_disabled() -> None:
 
     app.dependency_overrides[get_settings] = lambda: settings
     try:
-        with patch("modulo.db.seed_demo.get_settings", return_value=settings):
-            from modulo.db.seed_demo import seed_demo
+        with patch("farna.db.seed_demo.get_settings", return_value=settings):
+            from farna.db.seed_demo import seed_demo
 
             result = await seed_demo(mock_session)
         assert result is None
@@ -451,51 +451,51 @@ async def test_seed_demo_proceeds_when_multi_org_enabled() -> None:
     app.dependency_overrides[get_settings] = lambda: settings
     try:
         with (
-            patch("modulo.db.seed_demo.get_settings", return_value=settings),
+            patch("farna.db.seed_demo.get_settings", return_value=settings),
             patch(
-                "modulo.db.seed_demo._get_or_create_demo_org",
+                "farna.db.seed_demo._get_or_create_demo_org",
                 new_callable=AsyncMock,
                 return_value=fake_org,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_account",
+                "farna.db.seed_demo._seed_demo_account",
                 new_callable=AsyncMock,
                 return_value=fake_account,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_membership",
+                "farna.db.seed_demo._seed_demo_membership",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo.set_rls_org",
+                "farna.db.seed_demo.set_rls_org",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo.set_rls_execution_context",
+                "farna.db.seed_demo.set_rls_execution_context",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_schemas",
+                "farna.db.seed_demo._seed_demo_schemas",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_pipeline_and_runs",
+                "farna.db.seed_demo._seed_demo_pipeline_and_runs",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_evals",
+                "farna.db.seed_demo._seed_demo_evals",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_triggers",
+                "farna.db.seed_demo._seed_demo_triggers",
                 new_callable=AsyncMock,
             ),
             patch(
-                "modulo.db.seed_demo._seed_demo_governance_surfaces",
+                "farna.db.seed_demo._seed_demo_governance_surfaces",
                 new_callable=AsyncMock,
             ),
         ):
-            from modulo.db.seed_demo import seed_demo
+            from farna.db.seed_demo import seed_demo
 
             result = await seed_demo(mock_session)
         assert result is not None

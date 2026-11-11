@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorPayload,
     ConnectorQuery,
     ConnectorResult,

@@ -19,9 +19,9 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.auth.api_key import _MK_PREFIX, generate_api_key
-from modulo.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
-from modulo.settings import Settings
+from farna.auth.api_key import _MK_PREFIX, generate_api_key
+from farna.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
+from farna.settings import Settings
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -38,7 +38,7 @@ def _reset_engine_globals() -> Generator[None, None, None]:
     """Point the auth dependency's process-global engine at this test's DB."""
     import asyncio
 
-    import modulo.api.dependencies as deps
+    import farna.api.dependencies as deps
 
     deps._engine = None
     deps._session_factory = None
@@ -175,7 +175,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from modulo.db.models.api_key import OrgApiKey
+    from farna.db.models.api_key import OrgApiKey
 
     role = f"test_apikey_{uuid.uuid4().hex[:8]}"
     async with db_engine.connect() as conn:

@@ -15,8 +15,8 @@ import pytest
 from sqlalchemy import Column, MetaData, Table, Uuid, func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-import modulo.db.models  # noqa: F401  (register metadata)
-from modulo.core.eval_engine.decision_reconcile import (
+import farna.db.models  # noqa: F401  (register metadata)
+from farna.core.eval_engine.decision_reconcile import (
     ANOMALY_DUPLICATE_EVENT,
     ANOMALY_DUPLICATE_UNBOUNDED_EVENT,
     ANOMALY_MISSING_EVAL_RESULT_ID,
@@ -24,8 +24,8 @@ from modulo.core.eval_engine.decision_reconcile import (
     ANOMALY_ORPHANED_RUN,
     reconcile_decision_records,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.policy_gate_decision import PolicyGateDecision
+from farna.db.models.base import Base
+from farna.db.models.policy_gate_decision import PolicyGateDecision
 
 _PERMANENT_INDEX = "uq_policy_gate_decisions_eval_result_id"
 

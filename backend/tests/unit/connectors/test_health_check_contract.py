@@ -40,31 +40,31 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector, _AzurePipelinesTestDouble
-from modulo.connectors.azure_repos import AzureReposConnector
-from modulo.connectors.bitbucket import BitbucketConnector
-from modulo.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
-from modulo.connectors.circleci import CircleCIConnector, _CircleCITestDouble
-from modulo.connectors.codeclimate import CodeClimateConnector
-from modulo.connectors.datadog import DatadogConnector
-from modulo.connectors.discord import DiscordConnector
-from modulo.connectors.gitea import GiteaConnector
-from modulo.connectors.gitlab import GitLabConnector
-from modulo.connectors.grafana import GrafanaConnector
-from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
-from modulo.connectors.jira import JiraConnector
-from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
-from modulo.connectors.n8n import N8NConnector
-from modulo.connectors.npm import NpmConnector
-from modulo.connectors.onepassword import OnePasswordConnector
-from modulo.connectors.opsgenie import OpsgenieConnector
-from modulo.connectors.pagerduty import PagerDutyConnector
-from modulo.connectors.pypi import PyPIConnector
-from modulo.connectors.sentry import SentryConnector
-from modulo.connectors.sharepoint import SharePointConnector
-from modulo.connectors.snyk import SnykConnector
-from modulo.connectors.teamcity import TeamCityConnector, _TeamCityTestDouble
+from farna.connectors.azure_key_vault import AzureKeyVaultConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector, _AzurePipelinesTestDouble
+from farna.connectors.azure_repos import AzureReposConnector
+from farna.connectors.bitbucket import BitbucketConnector
+from farna.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
+from farna.connectors.circleci import CircleCIConnector, _CircleCITestDouble
+from farna.connectors.codeclimate import CodeClimateConnector
+from farna.connectors.datadog import DatadogConnector
+from farna.connectors.discord import DiscordConnector
+from farna.connectors.gitea import GiteaConnector
+from farna.connectors.gitlab import GitLabConnector
+from farna.connectors.grafana import GrafanaConnector
+from farna.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
+from farna.connectors.jira import JiraConnector
+from farna.connectors.microsoft_teams import MicrosoftTeamsConnector
+from farna.connectors.n8n import N8NConnector
+from farna.connectors.npm import NpmConnector
+from farna.connectors.onepassword import OnePasswordConnector
+from farna.connectors.opsgenie import OpsgenieConnector
+from farna.connectors.pagerduty import PagerDutyConnector
+from farna.connectors.pypi import PyPIConnector
+from farna.connectors.sentry import SentryConnector
+from farna.connectors.sharepoint import SharePointConnector
+from farna.connectors.snyk import SnykConnector
+from farna.connectors.teamcity import TeamCityConnector, _TeamCityTestDouble
 
 # --------------------------------------------------------------------------
 # Spec + scenario data model

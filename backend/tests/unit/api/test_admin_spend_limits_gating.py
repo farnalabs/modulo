@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -205,14 +205,14 @@ class TestSpendLimitsGatingFeatureEnabled:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
             patch(
-                "modulo.api.routes.costs.list_teams",
+                "farna.api.routes.costs.list_teams",
                 return_value=page_result,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.get("/api/v1/admin/costs/limits")
 
@@ -226,10 +226,10 @@ class TestSpendLimitsGatingFeatureEnabled:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_organisation",
+                "farna.api.routes.costs.get_organisation",
                 return_value=org,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.put(
                 "/api/v1/admin/costs/limits/org",
@@ -247,10 +247,10 @@ class TestSpendLimitsGatingFeatureEnabled:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=team,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.put(
                 f"/api/v1/admin/costs/limits/teams/{_TEAM_ID}",
@@ -270,10 +270,10 @@ class TestSpendLimitsGatingFeatureEnabled:
 
         with (
             patch(
-                "modulo.api.routes.costs.get_team",
+                "farna.api.routes.costs.get_team",
                 return_value=team,
             ),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.put(
                 f"/api/v1/admin/costs/limits/teams/{_TEAM_ID}",
@@ -293,8 +293,8 @@ class TestNonGatedEndpoints:
     def test_get_costs_unaffected(self, licensed_client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_report", return_value=rows),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.get("/api/v1/admin/costs?group_by=team&period=month")
         assert resp.status_code == 200
@@ -302,8 +302,8 @@ class TestNonGatedEndpoints:
     def test_export_unaffected(self, licensed_client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]
         with (
-            patch("modulo.api.routes.costs.get_cost_export_rows", return_value=rows),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_export_rows", return_value=rows),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.get("/api/v1/admin/costs/export?period=this_month&group_by=team&format=csv")
         assert resp.status_code == 200
@@ -319,8 +319,8 @@ class TestNonGatedEndpoints:
         mock_report.created_at = datetime(2025, 1, 1, tzinfo=UTC)
 
         with (
-            patch("modulo.api.routes.costs.create_scheduled_report", return_value=mock_report),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.create_scheduled_report", return_value=mock_report),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.post(
                 "/api/v1/admin/costs/reports",
@@ -336,8 +336,8 @@ class TestNonGatedEndpoints:
 
     def test_anomalies_unaffected(self, licensed_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.costs.list_anomalies", return_value=[]),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.list_anomalies", return_value=[]),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = licensed_client.get("/api/v1/admin/costs/anomalies")
         assert resp.status_code == 200
@@ -362,9 +362,9 @@ class TestNonLimitCostSurfacesGatedByGoverningFeature:
         page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
 
         with (
-            patch("modulo.api.routes.costs.get_organisation", return_value=org),
-            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_organisation", return_value=org),
+            patch("farna.api.routes.costs.list_teams", return_value=page_result),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = controls_only_client.get("/api/v1/admin/costs/controls")
 
@@ -379,8 +379,8 @@ class TestNonLimitCostSurfacesGatedByGoverningFeature:
 
     def test_get_anomalies_succeeds_with_breakdown_but_no_spend_limits(self, breakdown_only_client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.costs.list_anomalies", return_value=[]),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.list_anomalies", return_value=[]),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = breakdown_only_client.get("/api/v1/admin/costs/anomalies")
 
@@ -391,8 +391,8 @@ class TestNonLimitCostSurfacesGatedByGoverningFeature:
     def test_get_cost_report_succeeds_with_no_features(self, client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]
         with (
-            patch("modulo.api.routes.costs.get_cost_report", return_value=rows),
-            patch("modulo.api.routes.costs.set_rls_org"),
+            patch("farna.api.routes.costs.get_cost_report", return_value=rows),
+            patch("farna.api.routes.costs.set_rls_org"),
         ):
             resp = client.get("/api/v1/admin/costs?group_by=team&period=month")
         assert resp.status_code == 200, f"Expected free-tier access to the cost report, got {resp.status_code}"

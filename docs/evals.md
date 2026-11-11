@@ -365,7 +365,7 @@ monitored error event to the Error Dashboard (source = `suite_run`). The SAQ
 
 No feature flag gates the eval REST surface. The eval endpoints (including
 `POST /api/v1/evals/compare`) are authenticated and gated by the `evals.*`
-permission codes in `backend/src/modulo/api/routes/evals.py`; suite runs are
+permission codes in `backend/src/farna/api/routes/evals.py`; suite runs are
 executed from triggers with `run_kind: suite_run`, not from a gated REST or UI
 surface. The two eval UI views (`EvalEditorView`, `EvalProposalsQueueView`) are
 wrapped in the community-tier `eval_system` feature gate.

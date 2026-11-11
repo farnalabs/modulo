@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 
@@ -57,7 +57,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 class TestGetDevMode:
     def test_default_returns_false(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.get_config", return_value=None):
+        with patch("farna.api.routes.admin_dev_mode.get_config", return_value=None):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -68,7 +68,7 @@ class TestGetDevMode:
         settings = _make_settings()
         settings.modulo_dev_mode = True
         app.dependency_overrides[get_settings] = lambda: settings
-        with patch("modulo.api.routes.admin_dev_mode.get_config", return_value=None):
+        with patch("farna.api.routes.admin_dev_mode.get_config", return_value=None):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -78,7 +78,7 @@ class TestGetDevMode:
     def test_db_override_returns_true(self, client: TestClient) -> None:
         config_mock = MagicMock()
         config_mock.value = True
-        with patch("modulo.api.routes.admin_dev_mode.get_config", return_value=config_mock):
+        with patch("farna.api.routes.admin_dev_mode.get_config", return_value=config_mock):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -88,7 +88,7 @@ class TestGetDevMode:
     def test_db_override_disabled(self, client: TestClient) -> None:
         config_mock = MagicMock()
         config_mock.value = False
-        with patch("modulo.api.routes.admin_dev_mode.get_config", return_value=config_mock):
+        with patch("farna.api.routes.admin_dev_mode.get_config", return_value=config_mock):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -103,7 +103,7 @@ class TestGetDevMode:
         settings = _make_settings()
         settings.modulo_dev_mode = True
         app.dependency_overrides[get_settings] = lambda: settings
-        with patch("modulo.api.routes.admin_dev_mode.get_config", side_effect=RuntimeError("DB error")):
+        with patch("farna.api.routes.admin_dev_mode.get_config", side_effect=RuntimeError("DB error")):
             resp = client.get("/api/v1/admin/dev-mode")
         assert resp.status_code == 200
         body = resp.json()
@@ -118,7 +118,7 @@ class TestGetDevMode:
 
 class TestSetDevMode:
     def test_enable_returns_200(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
+        with patch("farna.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": True})
         assert resp.status_code == 200
         body = resp.json()
@@ -127,7 +127,7 @@ class TestSetDevMode:
         mock_set.assert_awaited_once()
 
     def test_disable_returns_200(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
+        with patch("farna.api.routes.admin_dev_mode.update_config", new_callable=AsyncMock) as mock_set:
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": False})
         assert resp.status_code == 200
         body = resp.json()
@@ -140,7 +140,7 @@ class TestSetDevMode:
         assert resp.status_code in (401, 403)
 
     def test_db_error_returns_500(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_dev_mode.update_config", side_effect=RuntimeError("DB error")):
+        with patch("farna.api.routes.admin_dev_mode.update_config", side_effect=RuntimeError("DB error")):
             resp = client.put("/api/v1/admin/dev-mode", json={"enabled": True})
         assert resp.status_code == 500
         body = resp.json()

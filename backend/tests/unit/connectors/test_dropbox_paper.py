@@ -6,8 +6,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.dropbox_paper import DropboxPaperConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.dropbox_paper import DropboxPaperConnector
 
 TOKEN = "sl.AAAABBBBCCCCDDDD"
 _BASE = "https://api.dropboxapi.com/2"

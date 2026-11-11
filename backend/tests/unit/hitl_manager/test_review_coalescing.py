@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.hitl_manager.gate_coalescing (FAR-604 D4).
+"""Unit tests for farna.core.hitl_manager.gate_coalescing (FAR-604 D4).
 
 Mock/fake based — no Postgres. Covers the gate-raise coalescing decision:
 
@@ -25,11 +25,11 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.hitl_manager.gate_coalescing import (
+from farna.core.hitl_manager.gate_coalescing import (
     _coalesce_lock_key,
     evaluate_gate_coalescing,
 )
-from modulo.db.models.hitl_claim import HitlClaim
+from farna.db.models.hitl_claim import HitlClaim
 
 ORG_ID = uuid.UUID("18348064-eca3-4aa7-be96-8f6c9123efd0")
 OTHER_ORG_ID = uuid.UUID("2b6d9f0a-1c3e-4d5b-8a7f-9e0d1c2b3a4c")
@@ -173,7 +173,7 @@ class TestEvaluateGateCoalescing:
         assert outcome == "raise"
         assert len(session.statements) == 2
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_same_sha_reuses_open_gate_no_second_gate(self, audit: AsyncMock) -> None:
         """Same-key same-SHA re-dispatch → no second gate: the existing gate
         decides, the duplicate run is skipped (executor terminalises it)."""
@@ -189,7 +189,7 @@ class TestEvaluateGateCoalescing:
         assert len(session.statements) == 2
         audit.assert_awaited_once()
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_condition_result_member_never_affects_the_decision(self, audit: AsyncMock) -> None:
         """FAR-688: the interrupt payload now carries a ``condition_result``
         member. The coalescing decision keys on ``runs.input_hash`` + the
@@ -226,7 +226,7 @@ class TestEvaluateGateCoalescing:
         # Each path audited once (reuse + supersede over the shared mock).
         assert audit.await_count == 2
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_changed_sha_supersedes_old_gate_and_raises_fresh(self, audit: AsyncMock) -> None:
         """Changed SHA → old gate auto-rejected + parked old run un-parked,
         new run raises fresh."""
@@ -252,7 +252,7 @@ class TestEvaluateGateCoalescing:
         assert str(OLD_RUN_ID) in unpark_values
         audit.assert_awaited_once()
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_supersede_race_with_claimer_skips(self, audit: AsyncMock) -> None:
         """A claimer taking the old gate between scan and close-out skips the
         supersede (no decide, no un-park) and the new run still raises."""
@@ -269,7 +269,7 @@ class TestEvaluateGateCoalescing:
         assert len(session.statements) == 3
         audit.assert_not_awaited()
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_candidate_scan_is_open_gate_scoped(self, audit: AsyncMock) -> None:
         """The candidate query filters on pipeline + gate id + open state."""
         session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
@@ -316,7 +316,7 @@ class TestCandidateScanIsolation:
         assert str(PIPELINE_ID) in param_values
         assert str(RUN_ID) in param_values  # the != run_id exclusion
 
-    @patch("modulo.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
+    @patch("farna.core.hitl_manager.gate_coalescing.append_audit_event", new_callable=AsyncMock)
     async def test_two_org_scans_never_cross(self, audit: AsyncMock) -> None:
         """qa F12(a): org A's open gate is INVISIBLE to an org-B scan — the
         org-B call binds org-B's id, finds no candidates, and the outcome is

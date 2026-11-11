@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.sonarqube import SonarQubeConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.sonarqube import SonarQubeConnector
 
 TOKEN = "sq_test_token"
 _BASE = "http://localhost:9000"

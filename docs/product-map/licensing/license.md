@@ -3,17 +3,17 @@ id: feat-license
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/core/license.py
-  - backend/src/modulo/core/license_signing.py
-  - backend/src/modulo/core/feature_flags.py
-  - backend/src/modulo/core/stripe_fulfilment.py
-  - backend/src/modulo/api/routes/admin_license.py
-  - backend/src/modulo/api/routes/admin_tiers.py
-  - backend/src/modulo/api/routes/admin_feature_flags.py
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/api/routes/admin_orgs.py
-  - backend/src/modulo/api/routes/stripe_webhook.py
-  - backend/src/modulo/api/routes/viewmodel.py
+  - backend/src/farna/core/license.py
+  - backend/src/farna/core/license_signing.py
+  - backend/src/farna/core/feature_flags.py
+  - backend/src/farna/core/stripe_fulfilment.py
+  - backend/src/farna/api/routes/admin_license.py
+  - backend/src/farna/api/routes/admin_tiers.py
+  - backend/src/farna/api/routes/admin_feature_flags.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/api/routes/admin_orgs.py
+  - backend/src/farna/api/routes/stripe_webhook.py
+  - backend/src/farna/api/routes/viewmodel.py
   - frontend/src/stores/planStore.ts
 unit-tests:
   - backend/tests/unit/core/test_license_key.py
@@ -253,9 +253,9 @@ trust-anchor caveat) are documented in
       fails the request rather than returning a removal a restart would undo),
       then clears the in-memory slot and busts every cached `license:{org_id}`
       entry, so resolution falls back to the env key and then Community
-      (`backend/src/modulo/core/license.py`,
-      `backend/src/modulo/core/feature_flags.py`,
-      `backend/src/modulo/api/routes/admin_license.py`, FAR-2153)
+      (`backend/src/farna/core/license.py`,
+      `backend/src/farna/core/feature_flags.py`,
+      `backend/src/farna/api/routes/admin_license.py`, FAR-2153)
 
 ## Known Gaps
 

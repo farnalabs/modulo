@@ -12,13 +12,13 @@ import uuid
 
 import pytest
 
-from modulo.core.pipeline_engine.idempotency import (
+from farna.core.pipeline_engine.idempotency import (
     node_idempotency_key,
     read_before_write_ambiguous,
     read_before_write_suppression,
     stable_idempotency_key,
 )
-from modulo.db.crud.run import run_idempotency_key, run_idempotency_ref
+from farna.db.crud.run import run_idempotency_key, run_idempotency_ref
 
 
 def test_stable_idempotency_key_is_deterministic() -> None:
@@ -378,7 +378,7 @@ def test_no_delivery_confirmed_resolves_after_in_flight_intent() -> None:
 def test_run_ref_shape_regex_consistent_with_db_layer() -> None:
     """The core (``_RUN_REF_RE``) and DB-layer (``_RUN_IDEMPOTENCY_REF_RE``)
     run-ref shape regexes are mirrored deliberately (import-linter forbids
-    ``modulo.db`` importing ``modulo.core``), so they must accept/reject the
+    ``farna.db`` importing ``farna.core``), so they must accept/reject the
     SAME samples — a divergent copy would silently break key read-back."""
     samples = [
         "pipeline:42",  # valid

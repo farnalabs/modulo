@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from modulo.api.dependencies import (
+from farna.api.dependencies import (
     get_current_tenant_user,
     get_current_tenant_user_or_api_key,
     get_current_user,
@@ -41,25 +41,25 @@ from modulo.api.dependencies import (
     get_plan_context,
     get_settings,
 )
-from modulo.api.main import app
-from modulo.api.routes.pipelines import (
+from farna.api.main import app
+from farna.api.routes.pipelines import (
     PipelineGraphUpdate,
     _edge_data_to_dict,
     _edge_to_data,
     replace_pipeline_graph,
     strip_unset_connector_binding_inputs,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud.pipeline import GraphWriteActor, GraphWriteRecording
-from modulo.db.models.account import Account
-from modulo.db.models.agent import Agent
-from modulo.db.models.base import Base
-from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud.pipeline import GraphWriteActor, GraphWriteRecording
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.base import Base
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.org_membership import OrgMembership
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.rls import set_rls_org, set_rls_user_context
 from tests.helpers.pipeline_graph import (
     _ACCOUNT_ID,
     _AGENT_ROW_ID,
@@ -188,7 +188,7 @@ async def seeded_db(session: AsyncSession) -> None:
 
 
 async def _make_settings() -> Any:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     return Settings(
         database_url="sqlite+aiosqlite://",
@@ -244,7 +244,7 @@ def _make_session_override(maker: async_sessionmaker[AsyncSession]):
 
 
 async def _override_plan_context() -> Any:
-    from modulo.core.feature_flags import PlanContext
+    from farna.core.feature_flags import PlanContext
 
     class _AllFeatures(PlanContext):
         def feature_enabled(self, name: str) -> bool:
@@ -297,9 +297,9 @@ async def _mock_release_lock(*_args: Any, **_kwargs: Any) -> None:
 def _patch_snapshot_and_role():
     """Return context managers that patch the snapshot advisory lock and the
     live-role re-read (which binds string UUIDs on SQLite)."""
-    lock_patch = patch("modulo.db.crud.pipeline_snapshot._acquire_snapshot_lock", _mock_acquire_lock)
-    release_patch = patch("modulo.db.crud.pipeline_snapshot._release_snapshot_lock", _mock_release_lock)
-    role_patch = patch("modulo.db.crud.org_membership.resolve_role_from_membership", AsyncMock(return_value="admin"))
+    lock_patch = patch("farna.db.crud.pipeline_snapshot._acquire_snapshot_lock", _mock_acquire_lock)
+    release_patch = patch("farna.db.crud.pipeline_snapshot._release_snapshot_lock", _mock_release_lock)
+    role_patch = patch("farna.db.crud.org_membership.resolve_role_from_membership", AsyncMock(return_value="admin"))
     return lock_patch, release_patch, role_patch
 
 
@@ -677,7 +677,7 @@ class TestMcpRestEquivalence:
     def _apply_patches(self):
         """Patch SQLite-incompatible primitives (advisory lock + live-role re-read)
         and seed the MCP request ContextVars the direct tool call reads."""
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         tokens = (
             ms._ctx_org_id.set(_ORG_ID),
@@ -698,7 +698,7 @@ class TestMcpRestEquivalence:
         engine: AsyncEngine,
         seeded_db: None,
     ) -> None:
-        import modulo.api.mcp_server as ms
+        import farna.api.mcp_server as ms
 
         payload = _build_graph_payload()
         # ``pipeline_edges.id`` is a global primary key, so the second write
@@ -750,11 +750,11 @@ class TestMcpRestEquivalence:
             lock_patch,
             release_patch,
             role_patch,
-            patch("modulo.api.mcp_server.resolve_role_from_membership", AsyncMock(return_value="admin")),
-            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
-            patch("modulo.api.mcp_server._session", _session_factory),
+            patch("farna.api.mcp_server.resolve_role_from_membership", AsyncMock(return_value="admin")),
+            patch("farna.api.mcp_server.validate_current_auth", return_value=True),
+            patch("farna.api.mcp_server._session", _session_factory),
             patch(
-                "modulo.core.team_visibility.find_connector_team_mismatches",
+                "farna.core.team_visibility.find_connector_team_mismatches",
                 new=AsyncMock(return_value=[]),
             ),
         ):

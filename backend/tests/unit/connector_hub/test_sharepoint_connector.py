@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.sharepoint import SharePointConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.sharepoint import SharePointConnector
 
 TOKEN = "sp_test_token"
 _BASE = "https://graph.microsoft.com/v1.0"

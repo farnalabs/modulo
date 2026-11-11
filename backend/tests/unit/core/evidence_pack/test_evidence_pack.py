@@ -10,10 +10,10 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from modulo.cli.evidence import evidence as evidence_cli
-from modulo.core.audit_logger import compute_event_hash
-from modulo.core.audit_logger.hashing import compute_event_hash as direct_compute_event_hash
-from modulo.core.evidence_pack import (
+from farna.cli.evidence import evidence as evidence_cli
+from farna.core.audit_logger import compute_event_hash
+from farna.core.audit_logger.hashing import compute_event_hash as direct_compute_event_hash
+from farna.core.evidence_pack import (
     AUDIT_EVENTS_FILE,
     EvidenceSigningError,
     build_evidence_pack,
@@ -27,7 +27,7 @@ from modulo.core.evidence_pack import (
     sign_manifest,
     verify_evidence_pack,
 )
-from modulo.registry.crypto import generate_keypair
+from farna.registry.crypto import generate_keypair
 
 ORG = "00000000-0000-0000-0000-0000000000aa"
 CREATED_AT = "2026-10-13T12:00:00+00:00"
@@ -249,7 +249,7 @@ class TestSigningFailsClosed:
     def test_build_without_a_configured_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from types import SimpleNamespace
 
-        from modulo.core.evidence_pack import signing
+        from farna.core.evidence_pack import signing
 
         monkeypatch.setattr(signing, "get_settings", lambda: SimpleNamespace(modulo_evidence_signing_key=""))
 
@@ -533,7 +533,7 @@ class TestSigningKeyEdges:
     def test_configured_public_key_is_derived_from_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from types import SimpleNamespace
 
-        from modulo.core.evidence_pack import signing
+        from farna.core.evidence_pack import signing
 
         private_pem, public_pem = _keypair()
         monkeypatch.setattr(signing, "get_settings", lambda: SimpleNamespace(modulo_evidence_signing_key=private_pem))
@@ -567,7 +567,7 @@ class TestBuildValidation:
 
 class TestEvidenceCommandRegistration:
     def test_conflicting_registration_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.cli.main as cli_main
+        import farna.cli.main as cli_main
 
         monkeypatch.setitem(cli_main.cli.commands, "evidence", object())
 
@@ -642,7 +642,7 @@ class TestEvidenceCliErrors:
 class TestEvidencePublicKeyCli:
     def test_prints_the_configured_pem(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _, public_pem = _keypair()
-        monkeypatch.setattr("modulo.core.evidence_pack.configured_public_key_pem", lambda: public_pem)
+        monkeypatch.setattr("farna.core.evidence_pack.configured_public_key_pem", lambda: public_pem)
 
         result = CliRunner().invoke(evidence_cli, ["public-key"])
 
@@ -651,7 +651,7 @@ class TestEvidencePublicKeyCli:
 
     def test_json_flag_emits_the_key_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _, public_pem = _keypair()
-        monkeypatch.setattr("modulo.core.evidence_pack.configured_public_key_pem", lambda: public_pem)
+        monkeypatch.setattr("farna.core.evidence_pack.configured_public_key_pem", lambda: public_pem)
 
         result = CliRunner().invoke(evidence_cli, ["public-key", "--json"])
 
@@ -663,7 +663,7 @@ class TestEvidencePublicKeyCli:
         def _raise() -> str:
             raise EvidenceSigningError("No evidence signing key configured")
 
-        monkeypatch.setattr("modulo.core.evidence_pack.configured_public_key_pem", _raise)
+        monkeypatch.setattr("farna.core.evidence_pack.configured_public_key_pem", _raise)
 
         result = CliRunner().invoke(evidence_cli, ["public-key"])
 

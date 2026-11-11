@@ -3,8 +3,8 @@ id: feat-system-config
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/admin_system_config.py
-  - backend/src/modulo/db/models/system_config.py
+  - backend/src/farna/api/routes/admin_system_config.py
+  - backend/src/farna/db/models/system_config.py
 unit-tests:
   - backend/tests/unit/api/test_admin_system_config.py
   - backend/tests/unit/db/test_system_config.py

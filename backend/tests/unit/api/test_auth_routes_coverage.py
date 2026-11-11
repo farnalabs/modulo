@@ -29,12 +29,12 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from starlette.responses import Response
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.auth import REFRESH_COOKIE
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_refresh_token
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.auth import REFRESH_COOKIE
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, create_refresh_token
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -48,7 +48,7 @@ _SQL = SQLAlchemyError("boom")
 _INTEGRITY = IntegrityError("s", {}, Exception())
 _RUNTIME = RuntimeError("kaboom")
 
-_PREFIX = "modulo.api.routes.auth."
+_PREFIX = "farna.api.routes.auth."
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +66,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings(**overrides: object) -> Settings:
@@ -790,7 +790,7 @@ def test_ws_token_role_read_failure_maps_503(client: tuple[TestClient, AsyncMock
 
 
 def test_ws_token_removed_member_denied(client: tuple[TestClient, AsyncMock]) -> None:
-    from modulo.auth.dependencies import OrganisationMembershipNotFound
+    from farna.auth.dependencies import OrganisationMembershipNotFound
 
     http, _session = client
     with patch(f"{_PREFIX}resolve_role_from_membership", new=AsyncMock(return_value=None)):
@@ -881,7 +881,7 @@ def test_csrf_token_propagates_http_exception(client: tuple[TestClient, AsyncMoc
 
 
 def test_set_and_clear_auth_cookies() -> None:
-    from modulo.api.routes.auth import _clear_auth_cookies, _set_auth_cookies
+    from farna.api.routes.auth import _clear_auth_cookies, _set_auth_cookies
 
     settings = _make_settings()
     response = Response()
@@ -897,7 +897,7 @@ def test_set_and_clear_auth_cookies() -> None:
 
 
 def test_client_ip_resolution() -> None:
-    from modulo.api.routes.auth import _client_ip
+    from farna.api.routes.auth import _client_ip
 
     client_scope = {"type": "http", "client": ("203.0.113.5", 1234), "headers": []}
     from starlette.requests import Request
@@ -919,7 +919,7 @@ def test_client_ip_resolution() -> None:
 def test_resolve_demo_membership_and_login_context_edges() -> None:
     import asyncio
 
-    from modulo.api.routes.auth import _resolve_login_org_context
+    from farna.api.routes.auth import _resolve_login_org_context
 
     # System-admin account without memberships still logs in (bootstrap).
     system_admin = _make_account(is_system_admin=True)

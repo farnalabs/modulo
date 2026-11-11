@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.db.crud import organisation as organisation_mod
-from modulo.db.crud.organisation import (
+from farna.db.crud import organisation as organisation_mod
+from farna.db.crud.organisation import (
     OrgSettingsPatchContextAbsentError,
     OrgSettingsPatchContextUnreadableError,
     OrgSettingsPatchOrgMismatch,
@@ -29,7 +29,7 @@ from modulo.db.crud.organisation import (
     update_org_json_column_patch,
     update_org_settings_patch,
 )
-from modulo.db.models.organisation import Organisation
+from farna.db.models.organisation import Organisation
 
 _UNSET = object()
 

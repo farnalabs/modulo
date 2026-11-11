@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.executor import (
     _compute_otel_run_context,
     _connector_scope_agent_ids,
     _graph_has_script_mode,
@@ -143,7 +143,7 @@ def test_should_skip_retry_delivery_done():
         "delivery_done:run:abc:node:n1": True,
     }
     with patch(
-        "modulo.core.pipeline_engine.executor._marker_delivery_done_for_node",
+        "farna.core.pipeline_engine.executor._marker_delivery_done_for_node",
         return_value=True,
     ):
         assert _should_skip_retry("n1", markers, "abc") is True
@@ -152,7 +152,7 @@ def test_should_skip_retry_delivery_done():
 def test_should_skip_retry_no_delivery_done():
     """Marker does not indicate delivery_done → should not skip."""
     with patch(
-        "modulo.core.pipeline_engine.executor._marker_delivery_done_for_node",
+        "farna.core.pipeline_engine.executor._marker_delivery_done_for_node",
         return_value=False,
     ):
         assert _should_skip_retry("n1", {}, "abc") is False
@@ -303,7 +303,7 @@ def test_graph_is_idempotent_none_node_type():
 def test_stream_terminal_reason_agent_failure_elevation_disabled():
     """Agent failure but elevation disabled → falls through to stall (or None)."""
     state = _StreamState(agent_failure_reason="error")
-    with patch("modulo.settings.get_settings") as mock_settings:
+    with patch("farna.settings.get_settings") as mock_settings:
         mock_settings.return_value.modulo_agent_failure_elevation_enabled = False
         result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
     assert result is None
@@ -312,7 +312,7 @@ def test_stream_terminal_reason_agent_failure_elevation_disabled():
 def test_stream_terminal_reason_agent_failure_elevation_exception():
     """Agent failure, settings raises → fail-open, falls through to stall."""
     state = _StreamState(agent_failure_reason="error")
-    with patch("modulo.settings.get_settings", side_effect=RuntimeError("boom")):
+    with patch("farna.settings.get_settings", side_effect=RuntimeError("boom")):
         result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
     assert result is None
 

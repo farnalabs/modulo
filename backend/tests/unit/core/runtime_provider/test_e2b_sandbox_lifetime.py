@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.runtime_provider import WorkspaceSpec
-from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
+from farna.core.runtime_provider import WorkspaceSpec
+from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
 # The FAR-487 grace the dispatch adds on top of the node's command timeout
 # (node_runner._SANDBOX_LIFETIME_GRACE_S) — 1200 + 120 = 1320.
@@ -249,7 +249,7 @@ async def test_missing_lifetime_falls_back_to_the_provision_bound(
     The bound must stay finite even when there is nothing to forward — the
     pre-fix fallback is preserved for the create CALL (not for the lifetime).
     """
-    from modulo.core.runtime_provider.e2b import _MAX_PROVISION_TIMEOUT
+    from farna.core.runtime_provider.e2b import _MAX_PROVISION_TIMEOUT
 
     captured: dict[str, Any] = {}
     real_wait_for = asyncio.wait_for

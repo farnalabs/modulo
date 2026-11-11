@@ -27,17 +27,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.feedback_manager import FeedbackManager
-from modulo.core.guardrails.correction import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.feedback_manager import FeedbackManager
+from farna.core.guardrails.correction import (
     CorrectionDefinition,
     CorrectionDetectorFamily,
     CorrectionVerdict,
     fingerprint_state,
     redact_payload,
 )
-from modulo.db.models.feedback_record import FeedbackRecord
-from modulo.model_backends.stub.backend import StubModelBackend, normalize_input
+from farna.db.models.feedback_record import FeedbackRecord
+from farna.model_backends.stub.backend import StubModelBackend, normalize_input
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -219,7 +219,7 @@ async def _run_scenario(
 
     with (
         patch.object(FeedbackManager, "get_feedback_record", AsyncMock(return_value=record)),
-        patch("modulo.core.audit_logger.append_audit_event", AsyncMock()),
+        patch("farna.core.audit_logger.append_audit_event", AsyncMock()),
     ):
         mgr = FeedbackManager(session, _ORG)
         result = await mgr.run_single_node_correction(
@@ -469,7 +469,7 @@ async def test_e2e_schema_valid_malicious_output_redacted_continuing_suspicious(
 
 @pytest.mark.asyncio
 async def test_e2e_concurrent_correction_cap_enforced_at_claim_time():
-    from modulo.core.guardrails.correction import CorrectionCapExceededError
+    from farna.core.guardrails.correction import CorrectionCapExceededError
 
     guardrail = _guardrail()
     correction = _correction(concurrency_cap=2)
@@ -491,7 +491,7 @@ async def test_e2e_cap_does_not_count_the_current_record():
     """MAJOR-3: cap=1 with one 'correcting' record (the current one) still admits
     the correction — the current record is excluded from the self-count, so the
     first correction never blocks itself."""
-    from modulo.core.guardrails.correction import CorrectionCapExceededError
+    from farna.core.guardrails.correction import CorrectionCapExceededError
 
     guardrail = _guardrail()
     correction = _correction(concurrency_cap=1)
@@ -527,7 +527,7 @@ async def test_e2e_cap_does_not_count_the_current_record():
 
 @pytest.mark.asyncio
 async def test_e2e_restricted_backend_privileged_capability_rejected():
-    from modulo.core.guardrails.correction import RestrictedBackendViolationError
+    from farna.core.guardrails.correction import RestrictedBackendViolationError
 
     guardrail = _guardrail()
     correction = _correction()
@@ -553,7 +553,7 @@ async def test_e2e_restricted_backend_privileged_capability_rejected():
 
 @pytest.mark.asyncio
 async def test_e2e_resume_revalidates_produced_output():
-    from modulo.core.guardrails.correction import build_idempotency_key
+    from farna.core.guardrails.correction import build_idempotency_key
 
     guardrail = _guardrail()
     correction = _correction()
@@ -596,7 +596,7 @@ async def test_e2e_resume_revalidates_produced_output():
 
 @pytest.mark.asyncio
 async def test_e2e_redact_correct_hard_blocked_before_lm():
-    from modulo.core.guardrails.correction import RedactCorrectBlockedError
+    from farna.core.guardrails.correction import RedactCorrectBlockedError
 
     guardrail = _guardrail(action="redact")
     correction = _correction()
@@ -621,7 +621,7 @@ async def test_e2e_redact_correct_hard_blocked_before_lm():
 
 @pytest.mark.asyncio
 async def test_e2e_resume_budget_exhausted_records_interrupted():
-    from modulo.core.guardrails.correction import build_idempotency_key
+    from farna.core.guardrails.correction import build_idempotency_key
 
     guardrail = _guardrail()
     correction = _correction(max_attempts=1)
@@ -667,7 +667,7 @@ async def test_e2e_dispatch_on_terminal_record_raises_invalid_transition():
     """Finding 3: dispatching a single-node correction on a TERMINAL record
     (``resolved``) raises ``InvalidTransitionError`` — the correction does NOT
     execute (the LM never runs) and the record is untouched."""
-    from modulo.core.feedback_manager import InvalidTransitionError
+    from farna.core.feedback_manager import InvalidTransitionError
 
     guardrail = _guardrail()
     correction = _correction()
@@ -693,8 +693,8 @@ async def test_e2e_resume_does_not_reverse_human_escalation():
     produced output that would re-validate clean. The resume must NOT silently
     flip the record back to ``resolved`` — dispatch gates on non-terminal status
     and raises ``InvalidTransitionError``, leaving the human decision intact."""
-    from modulo.core.feedback_manager import InvalidTransitionError
-    from modulo.core.guardrails.correction import build_idempotency_key
+    from farna.core.feedback_manager import InvalidTransitionError
+    from farna.core.guardrails.correction import build_idempotency_key
 
     guardrail = _guardrail()
     correction = _correction()
@@ -735,7 +735,7 @@ async def test_e2e_persist_fence_rejects_status_drift():
     once the record has drifted out of ``correcting`` — the fenced UPDATE matches
     zero rows and ``_persist_correction_outcome`` raises
     ``ConcurrentModificationError`` instead of silently writing a stale status."""
-    from modulo.core.feedback_manager import ConcurrentModificationError
+    from farna.core.feedback_manager import ConcurrentModificationError
 
     guardrail = _guardrail()
     correction = _correction()

@@ -1,5 +1,5 @@
-from modulo.db.models.other_model import OtherModel
-from modulo.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.other_model import OtherModel
+from farna.db.models.pipeline_edge import PipelineEdge
 from sqlalchemy import delete
 
 

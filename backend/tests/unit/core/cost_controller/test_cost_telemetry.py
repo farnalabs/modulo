@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pytest
 
-from modulo.core.cost_controller.breakdown.params import (
+from farna.core.cost_controller.breakdown.params import (
     _PARAM_REGISTRY,
     REPORTED_TOKEN_CHAIN,
     CostComponentConfig,
@@ -23,7 +23,7 @@ from modulo.core.cost_controller.breakdown.params import (
     build_telemetry,
     coerce_reported_token,
 )
-from modulo.core.node_output_split import TELEMETRY_FIELDS
+from farna.core.node_output_split import TELEMETRY_FIELDS
 
 
 def _comp(
@@ -514,7 +514,7 @@ def test_build_telemetry_logs_skipped_reported_values(caplog: pytest.LogCaptureF
         "n1": {"reported_input_tokens": "many", "reported_total_tokens": 7},
         "n2": {"reported_output_tokens": 4},
     }
-    with caplog.at_level(logging.DEBUG, logger="modulo.core.cost_controller.breakdown.params"):
+    with caplog.at_level(logging.DEBUG, logger="farna.core.cost_controller.breakdown.params"):
         build_telemetry(entries, [_comp()])
     skipped = [record for record in caplog.records if record.getMessage() == "cost_tokens_reported_skipped"]
     assert len(skipped) == 1

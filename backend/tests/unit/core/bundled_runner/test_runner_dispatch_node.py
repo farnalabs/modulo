@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.bundled_runner import runner_dispatch
-from modulo.core.bundled_runner.runner_dispatch import (
+from farna.core.bundled_runner import runner_dispatch
+from farna.core.bundled_runner.runner_dispatch import (
     RunnerDispatchRoute,
     _combine_raw_outputs,
     _consume_stream,
@@ -41,14 +41,14 @@ from modulo.core.bundled_runner.runner_dispatch import (
     _source_contains_sentinel,
     _write_file_via_exec,
 )
-from modulo.core.credential_issuer import IssuedRunCredential
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.credential_issuer import IssuedRunCredential
+from farna.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError as _RealSandboxNodeFailedError,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _redact_raw_output as _real_redact_raw_output,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _validate_against_schema as _real_validate_against_schema,
 )
 
@@ -85,9 +85,9 @@ class _FakeOutput:
 
 
 def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace every ``modulo.core.pipeline_engine.node_runner`` symbol that
+    """Replace every ``farna.core.pipeline_engine.node_runner`` symbol that
     ``runner_dispatch`` imports with a deterministic test double."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     stubs: dict[str, object] = {
         "_MAX_ARTIFACT_LOG": 2000,
@@ -140,13 +140,13 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_node_runner(monkeypatch)
-    import modulo.core.capability_scope as cs
+    import farna.core.capability_scope as cs
 
     monkeypatch.setattr(cs, "filter_run_context_scope", lambda rc, scope: rc, raising=False)
-    import modulo.core.pipeline_engine.event_broker as eb
+    import farna.core.pipeline_engine.event_broker as eb
 
     monkeypatch.setattr(eb, "get_registry", lambda: SimpleNamespace(get=lambda *a, **k: None), raising=False)
-    import modulo.settings as st
+    import farna.settings as st
 
     monkeypatch.setattr(
         st,
@@ -283,7 +283,7 @@ async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_n
     patch_node_runner, monkeypatch
 ) -> None:
     """FAR-1690 A1: a failed (``None``) issuance leaves the key and provenance absent."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_sandbox_issue_run_credential_for_sandbox", AsyncMock(return_value=None))
     envs, _claimed = await runner_dispatch._resolve_sandbox_envs_with_script_setup(
@@ -338,7 +338,7 @@ async def test_run_empty_rendered_command_raises(patch_node_runner, monkeypatch)
 
 
 async def test_run_dispatch_marker_denied_raises(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_sandbox_acquire_dispatch_marker", AsyncMock(return_value=None), raising=False)
     with pytest.raises(_FakeError):
@@ -352,7 +352,7 @@ async def test_run_route_without_profile_provider_raises(patch_node_runner) -> N
 
 
 async def test_run_idempotency_gate_skip(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_marker_delivery_done_for_node", lambda *a, **k: True, raising=False)
     cfg = _config(single_sandbox_node=True, delivery_sentinel="DONE")
@@ -361,7 +361,7 @@ async def test_run_idempotency_gate_skip(patch_node_runner, monkeypatch) -> None
 
 
 async def test_run_wallclock_budget_overrun_script(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_sandbox_wallclock_budget_exceeded", lambda **kw: True, raising=False)
     with pytest.raises(_FakeError):
@@ -384,7 +384,7 @@ async def test_run_output_parse_failure_llm_raises(patch_node_runner, monkeypatc
 
 
 async def test_run_schema_validation_failure_script_raises(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     def _bad_schema(*a, **k):
         raise ValueError("schema mismatch")
@@ -397,7 +397,7 @@ async def test_run_schema_validation_failure_script_raises(patch_node_runner, mo
 
 
 async def test_run_schema_validation_failure_llm_raises_retryable(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     def _bad_schema(*a, **k):
         raise ValueError("schema mismatch")
@@ -425,8 +425,8 @@ async def test_run_schema_validation_failure_llm_retryable_real_schema(patch_nod
     the node in a fresh sandbox — instead of returning the synthetic ``status=
     failed`` envelope that completed the node non-retryably and eval-blocked the
     run (``EvalBlockedError`` is a never-retryable control flow fault)."""
-    import modulo.core.pipeline_engine.node_runner as nrm
-    from modulo.core.pipeline_engine import runtime_retry
+    import farna.core.pipeline_engine.node_runner as nrm
+    from farna.core.pipeline_engine import runtime_retry
 
     monkeypatch.setattr(nrm, "SandboxNodeFailedError", _RealSandboxNodeFailedError, raising=False)
     monkeypatch.setattr(nrm, "_validate_against_schema", _real_validate_against_schema, raising=False)
@@ -454,7 +454,7 @@ async def test_run_script_mode_nonzero_exit_raises(patch_node_runner, monkeypatc
 
 
 async def test_run_delivery_sentinel_retained(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     retained = {}
 
@@ -528,7 +528,7 @@ async def test_run_llm_mode_missing_agent_status_not_failed(patch_node_runner, m
 
 
 async def test_run_llm_mode_session_lost_forces_failed(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_is_sandbox_session_lost_echo", lambda out: True, raising=False)
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value='{"summary":"ok"}'))
@@ -585,7 +585,7 @@ async def test_run_stdout_full_retention_honors_stdout_max_bytes(patch_node_runn
 async def test_run_full_retention_caps_raw_output_marker(patch_node_runner, monkeypatch) -> None:
     """FAR-792: in full mode the raw-output retention marker honours the
     node's effective cap too (E2B parity), not just the envelope artifacts."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     retained = {}
 
@@ -605,7 +605,7 @@ async def test_run_stdout_org_ceiling_clamps_cap(patch_node_runner, monkeypatch)
     is read and applied on the Bundled Runner path so the "no node can exceed the org
     ceiling" invariant holds here exactly as on the E2B path. A node requesting full
     retention at 2048 bytes is hard-clamped to the 1024-byte org ceiling."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(
         nrm,
@@ -666,7 +666,7 @@ async def test_run_stdout_redacts_before_truncation(patch_node_runner, monkeypat
     """Redaction runs on the FULL stream before the cap slice, so a tokenized
     URL whose terminating ``@`` would be cut by the cap is still masked in the
     retained artifact (FAR-792 redact-before-truncate ordering)."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_redact_raw_output", _real_redact_raw_output, raising=False)
     cfg = _config(node_def={"capability_scope": {}, "stdout_retention_mode": "full", "stdout_max_bytes": 100})
@@ -822,7 +822,7 @@ def test_resolve_stall_timeout_default(patch_node_runner) -> None:
 
 
 def test_resolve_stall_timeout_invalid_falls_back(patch_node_runner, monkeypatch) -> None:
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     monkeypatch.setattr(nrm, "_SANDBOX_IDLE_TIMEOUT", 30, raising=False)
     assert _resolve_stall_timeout("not-a-number") == 30.0
@@ -835,7 +835,7 @@ def test_resolve_stall_timeout_explicit(patch_node_runner) -> None:
 def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
     """FAR-792: the effective cap falls back to the safe legacy defaults for
     malformed / missing per-node retention config."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     assert runner_dispatch._resolve_stdout_cap({}) == nrm._MAX_ARTIFACT_LOG
     assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full"}) == nrm._FULL_MODE_DEFAULT_MAX_BYTES
@@ -855,7 +855,7 @@ def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
 
 def test_resolve_stdout_cap_pipeline_default(patch_node_runner) -> None:
     """FAR-811: pipeline default is applied when node didn't set mode."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     # Node didn't set mode -> pipeline default mode=full with max_bytes
     cap = runner_dispatch._resolve_stdout_cap(
@@ -937,7 +937,7 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(patch_node
     the envelope carries a stdout_artifact pointer (rel_path / size_bytes /
     sha256, truncated: False, redacted: True) instead of only the truncated
     head (FAR-811 parity with the E2B path)."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     cap = 2048
     big_stdout = "x" * (cap + 1)
@@ -973,7 +973,7 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(patch_node
 async def test_under_cap_stdout_stays_inline_no_artifact(patch_node_runner, monkeypatch) -> None:
     """Under-cap stdout keeps today's inline behaviour: no stdout_artifact key
     and no artifact written to the store (FAR-811 backwards compatibility)."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     cap = 8192
     small_stdout = "x" * 2048
@@ -1013,7 +1013,7 @@ async def test_flagged_node_installs_run_scoped_guard_on_runner_docker(patch_nod
     dispatch branch returns before the engine's E2B-only sandbox-policy step,
     so WITHOUT the install the guard would be silently absent. After the node
     finishes with no observed claim, its ledger hold is released."""
-    from modulo.core.pipeline_engine.sandbox_policy import (
+    from farna.core.pipeline_engine.sandbox_policy import (
         acquire_run_pr_guard,
         gh_pr_guard_marker_path,
         reset_run_pr_guard_claims,
@@ -1057,7 +1057,7 @@ async def test_flagged_node_surfaces_guard_absence_loudly_naming_the_tier(patch_
     state = _state()
     state["_run_id"] = str(uuid.uuid4())
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.bundled_runner.runner_dispatch"):
         out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
     assert out["envelope"] is True, "a failed guard install is best-effort and never wedges the run"
 
@@ -1102,7 +1102,7 @@ class _HarvestReplyProvider(_FakeProvider):
 def _fresh_flagged_state() -> tuple[str, dict]:
     """A flagged run's state with a fresh run id and an EMPTY ledger (so each
     test's acquire/spend/release assertions start from a known state)."""
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     reset_run_pr_guard_claims()
     run_id = str(uuid.uuid4())
@@ -1120,7 +1120,7 @@ async def test_flagged_node_observes_shim_produced_output_and_spends_the_run_cla
     dispatch stream capture into the REAL settle in the ``finally`` — the
     run's claim is SPENT. The harvest probe yields no token here (the default
     fake reply), i.e. the sentinel FALLBACK arm."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
     from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
     run_id, state = _fresh_flagged_state()
@@ -1137,7 +1137,7 @@ async def test_flagged_node_spends_from_the_harvested_receipt_without_a_sentinel
     """MAJOR 1 on the runner tier: no sentinel in the captured stream (lost or
     never emitted there), but the platform-side receipt harvest confirms the
     create — the run must be SPENT, not released."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     run_id, state = _fresh_flagged_state()
     provider = _HarvestReplyProvider(
@@ -1157,7 +1157,7 @@ async def test_flagged_node_shim_read_transcript_never_spends_on_the_runner_tier
     agent read the shim), but the harvest confirms no receipt — the hold is
     RELEASED and the run is NOT spent, so a later flagged node still gets its
     chance at the one PR."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
     from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
     run_id, state = _fresh_flagged_state()
@@ -1182,7 +1182,7 @@ async def test_failing_flagged_node_releases_its_run_claim_for_a_later_node(
     run's slot is free for a later node. Fail-without-fix: moving the settle
     out of the ``finally`` leaves the entry ``held`` and the assertion below
     reads ``held`` instead of ``acquired``."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     monkeypatch.setattr(runner_dispatch, "_read_file_via_exec", AsyncMock(return_value="not valid json {"))
     run_id, state = _fresh_flagged_state()
@@ -1209,7 +1209,7 @@ async def test_pr_url_never_outranks_a_definitive_receipt_false_on_the_runner_ti
 
     Fail-without-fix: the pre-fix precedence spent here, pre-planting every
     later flagged node of the run."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
 
     url = "https://github.com/org/repo/pull/42"
     monkeypatch.setattr(
@@ -1244,7 +1244,7 @@ async def test_absent_install_leaves_the_receipt_meaningless_on_the_runner_tier(
 
     Fail-without-fix: the pre-fix settle read it as definitive and RELEASED
     (``acquired``) — a genuinely unguarded create produced no second-PR block."""
-    from modulo.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import acquire_run_pr_guard, reset_run_pr_guard_claims
     from tests.unit.pipeline_engine.test_sandbox_policy import shim_created_pr_stdout
 
     run_id, state = _fresh_flagged_state()
@@ -1292,7 +1292,7 @@ async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_ti
     CancelledError escapes the ``except Exception`` handlers and unwinds the
     ``finally`` before ``_teardown_and_clear`` — the provider is never
     destroyed/closed and the dispatch marker is never cleared."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     _run_id, state = _fresh_flagged_state()
     harvest_started = asyncio.Event()
@@ -1334,7 +1334,7 @@ async def test_flagged_dispatch_logs_a_pre_planted_refusal_when_the_run_is_alrea
     gets a pre-planted refusal, and the dispatch logs it loudly (naming the
     tier) rather than silently installing a live guard that could open a
     second PR."""
-    from modulo.core.pipeline_engine.sandbox_policy import (
+    from farna.core.pipeline_engine.sandbox_policy import (
         acquire_run_pr_guard,
         reset_run_pr_guard_claims,
         settle_run_pr_guard,
@@ -1349,7 +1349,7 @@ async def test_flagged_dispatch_logs_a_pre_planted_refusal_when_the_run_is_alrea
 
     provider = _FakeProvider()
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.core.bundled_runner.runner_dispatch"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.bundled_runner.runner_dispatch"):
             out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
         assert out["envelope"] is True
         denied = [r.getMessage() for r in caplog.records if "gh_guard_run_claim_denied" in r.getMessage()]
@@ -1366,7 +1366,7 @@ async def test_flagged_dispatch_skips_the_harvest_when_the_provider_ref_is_empty
     """With an armed guard but no provider ref to probe, the dispatch skips the
     receipt harvest entirely and settles from the weaker evidence — the
     ``_harvest_ref`` guard's false arm."""
-    from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+    from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
     monkeypatch.setattr(
         runner_dispatch,
@@ -1389,7 +1389,7 @@ async def test_flagged_dispatch_survives_a_harvest_transport_error(
     """A harvest that raises a generic exception (not just returns None) is
     swallowed: the receipt is unknown and the dispatch still settles and tears
     down rather than letting the finally fall over."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     async def _boom(*args, **kwargs):
         raise RuntimeError("harvest transport down")
@@ -1401,7 +1401,7 @@ async def test_flagged_dispatch_survives_a_harvest_transport_error(
         out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
         assert out["envelope"] is True
     finally:
-        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+        from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
         reset_run_pr_guard_claims()
 
@@ -1413,7 +1413,7 @@ async def test_flagged_dispatch_survives_a_settle_failure(
     """A generic exception from ``settle_run_pr_guard`` (it is synchronous and
     runs in a ``finally``) is logged and swallowed; the node's own outcome is
     unaffected."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     def _boom(*args, **kwargs):
         raise RuntimeError("settle exploded")
@@ -1425,7 +1425,7 @@ async def test_flagged_dispatch_survives_a_settle_failure(
         out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
         assert out["envelope"] is True
     finally:
-        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+        from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
         reset_run_pr_guard_claims()
 
@@ -1437,7 +1437,7 @@ async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
     """Defence in depth: if ``settle_run_pr_guard`` itself raises
     ``CancelledError`` the dispatch records it, still tears down, then re-raises
     — a cancellation must never skip ``_teardown_and_clear``."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     def _cancel_settle(*args, **kwargs):
         raise asyncio.CancelledError
@@ -1449,7 +1449,7 @@ async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
         with pytest.raises(asyncio.CancelledError):
             await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
     finally:
-        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+        from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
         reset_run_pr_guard_claims()
     assert provider.destroyed, "teardown must run even when settle raises CancelledError"
@@ -1463,7 +1463,7 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
     """When the harvest already recorded a cancellation AND settle then raises
     another, the dispatch keeps the FIRST one (the ``_gh_settle_cancelled is
     None`` guard's false arm) and still tears down before re-raising."""
-    import modulo.core.pipeline_engine.sandbox_policy as sandbox_policy
+    import farna.core.pipeline_engine.sandbox_policy as sandbox_policy
 
     def _cancel_settle(*args, **kwargs):
         raise asyncio.CancelledError
@@ -1489,7 +1489,7 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
         with pytest.raises(asyncio.CancelledError):
             await task
     finally:
-        from modulo.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
+        from farna.core.pipeline_engine.sandbox_policy import reset_run_pr_guard_claims
 
         reset_run_pr_guard_claims()
     assert provider.destroyed, "teardown must still run when both harvest and settle are cancelled"
@@ -1508,7 +1508,7 @@ async def test_teardown_one_resource_awaits_and_returns(caplog) -> None:
     async def _ok() -> None:
         ran.set()
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.bundled_runner.runner_dispatch"):
         await runner_dispatch._teardown_one_resource(_ok(), log_event="runner_dispatch.test_step")
     assert ran.is_set()
     assert not [r for r in caplog.records if "test_step" in r.message]
@@ -1521,7 +1521,7 @@ async def test_teardown_one_resource_logs_failure_with_extra(caplog) -> None:
     async def _boom() -> None:
         raise RuntimeError("teardown boom")
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.bundled_runner.runner_dispatch"):
         await runner_dispatch._teardown_one_resource(
             _boom(),
             log_event="runner_dispatch.test_step_failed",
@@ -1551,7 +1551,7 @@ async def test_teardown_one_resource_enforces_timeout(caplog) -> None:
     async def _never() -> None:
         await asyncio.Event().wait()
 
-    with caplog.at_level(logging.ERROR, logger="modulo.core.bundled_runner.runner_dispatch"):
+    with caplog.at_level(logging.ERROR, logger="farna.core.bundled_runner.runner_dispatch"):
         await runner_dispatch._teardown_one_resource(
             _never(),
             log_event="runner_dispatch.test_step_timeout",

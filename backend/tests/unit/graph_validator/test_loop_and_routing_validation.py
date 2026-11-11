@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.core.graph_validator import GraphValidator, ValidationResult
+from farna.core.graph_validator import GraphValidator, ValidationResult
 from tests.unit.graph_validator._helpers import codes_of as _codes
 
 # ---------------------------------------------------------------------------

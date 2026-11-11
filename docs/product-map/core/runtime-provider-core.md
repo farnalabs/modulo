@@ -4,13 +4,13 @@ prd: 6
 adr: [ADR 044 (agent-dispatch-model), ADR 040 (runtime-provider-contract-and-tier-conformance)]
 delivery-tasks: []
 code:
-  - backend/src/modulo/core/runtime_provider/
-  - backend/src/modulo/db/models/environment_profile.py
-  - backend/src/modulo/db/crud/environment_profile.py
-  - backend/src/modulo/db/crud/run.py
-  - backend/src/modulo/api/routes/environment_profiles.py
-  - backend/src/modulo/core/graph_validator/__init__.py
-  - backend/src/modulo/connectors/shell/__init__.py
+  - backend/src/farna/core/runtime_provider/
+  - backend/src/farna/db/models/environment_profile.py
+  - backend/src/farna/db/crud/environment_profile.py
+  - backend/src/farna/db/crud/run.py
+  - backend/src/farna/api/routes/environment_profiles.py
+  - backend/src/farna/core/graph_validator/__init__.py
+  - backend/src/farna/connectors/shell/__init__.py
   - frontend/src/views/environment-profiles/
   - frontend/src/stores/environmentProfiles.ts
 unit-tests:

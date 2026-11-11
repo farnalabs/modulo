@@ -1,4 +1,4 @@
-"""Tests for modulo.core.stripe_fulfilment — idempotent purchase fulfilment."""
+"""Tests for farna.core.stripe_fulfilment — idempotent purchase fulfilment."""
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.email_service import EmailSendingError
-from modulo.core.license import (
+from farna.core.email_service import EmailSendingError
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     REASON_SIGNATURE_MISMATCH,
     RENEWAL_MODE_AUTO,
@@ -15,9 +15,9 @@ from modulo.core.license import (
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.license_signing import LicenseSigningError, _add_months
-from modulo.core.registry.crypto import generate_keypair
-from modulo.core.stripe_fulfilment import (
+from farna.core.license_signing import LicenseSigningError, _add_months
+from farna.core.registry.crypto import generate_keypair
+from farna.core.stripe_fulfilment import (
     REASON_STARTS_AT_IN_PAST,
     REASON_STARTS_AT_MALFORMED,
     REASON_STARTS_AT_TOO_FAR_AHEAD,
@@ -29,7 +29,7 @@ from modulo.core.stripe_fulfilment import (
     fulfil_team_purchase,
     resolve_starts_at,
 )
-from modulo.settings import Settings
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 _KP = generate_keypair()
@@ -75,7 +75,7 @@ class TestEmailContent:
 class TestEmailTeamLicense:
     async def test_sends_license_email(self) -> None:
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
             await email_team_license(settings, "bob@acme.com", "abc.def", "2999-01-01T00:00:00+00:00")
         mock_send.assert_called_once()
         args = mock_send.call_args.args
@@ -85,7 +85,7 @@ class TestEmailTeamLicense:
 
     async def test_email_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", side_effect=EmailSendingError("smtp down")):
+        with patch("farna.core.stripe_fulfilment.send_email", side_effect=EmailSendingError("smtp down")):
             await email_team_license(settings, "bob@acme.com", "abc.def", "")
         assert "email_failed" in caplog.text
 
@@ -93,7 +93,7 @@ class TestEmailTeamLicense:
 class TestFulfilTeamPurchase:
     async def test_generates_and_emails_license(self) -> None:
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
             license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_1",
@@ -110,7 +110,7 @@ class TestFulfilTeamPurchase:
 
     async def test_duplicate_event_is_skipped(self) -> None:
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
             first = await fulfil_team_purchase(
                 settings,
                 event_id="evt_dup",
@@ -134,7 +134,7 @@ class TestFulfilTeamPurchase:
         and a later Stripe retry re-attempts the email successfully."""
         settings = _make_settings()
         with patch(
-            "modulo.core.stripe_fulfilment.send_email",
+            "farna.core.stripe_fulfilment.send_email",
             new=MagicMock(side_effect=EmailSendingError("smtp down")),
         ) as mock_fail:
             first = await fulfil_team_purchase(
@@ -149,7 +149,7 @@ class TestFulfilTeamPurchase:
         assert "evt_retry" not in _processed_event_ids
 
         with patch(
-            "modulo.core.stripe_fulfilment.send_email",
+            "farna.core.stripe_fulfilment.send_email",
             new=MagicMock(return_value=True),
         ) as mock_ok:
             second = await fulfil_team_purchase(
@@ -167,10 +167,10 @@ class TestFulfilTeamPurchase:
         settings = _make_settings()
         with (
             patch(
-                "modulo.core.stripe_fulfilment.generate_team_license",
+                "farna.core.stripe_fulfilment.generate_team_license",
                 side_effect=LicenseSigningError("no key"),
             ),
-            patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
+            patch("farna.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
         ):
             result = await fulfil_team_purchase(
                 settings,
@@ -204,10 +204,10 @@ class TestFulfilTeamPurchase:
         try:
             with (
                 patch(
-                    "modulo.core.stripe_fulfilment.send_email",
+                    "farna.core.stripe_fulfilment.send_email",
                     new=MagicMock(return_value=True),
                 ) as mock_send,
-                caplog.at_level("ERROR", logger="modulo.core.stripe_fulfilment"),
+                caplog.at_level("ERROR", logger="farna.core.stripe_fulfilment"),
             ):
                 result = await fulfil_team_purchase(
                     settings,
@@ -228,7 +228,7 @@ class TestFulfilTeamPurchase:
 
     async def test_fulfilment_without_email(self) -> None:
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send:
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send:
             license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_4",
@@ -249,10 +249,10 @@ class TestFulfilTeamPurchase:
         and logs the duplicate, while the email has already been sent once."""
         settings = _make_settings()
         with (
-            patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send,
-            patch("modulo.core.stripe_fulfilment._is_event_claimed", new=AsyncMock(return_value=False)),
-            patch("modulo.core.stripe_fulfilment._claim_event_id", new=AsyncMock(return_value=False)),
-            caplog.at_level("INFO", logger="modulo.core.stripe_fulfilment"),
+            patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send,
+            patch("farna.core.stripe_fulfilment._is_event_claimed", new=AsyncMock(return_value=False)),
+            patch("farna.core.stripe_fulfilment._claim_event_id", new=AsyncMock(return_value=False)),
+            caplog.at_level("INFO", logger="farna.core.stripe_fulfilment"),
         ):
             result = await fulfil_team_purchase(
                 settings,
@@ -269,7 +269,7 @@ class TestFulfilTeamPurchase:
         """FAR-2136: a subscription purchase's key says ``auto``, so the shell's
         renewal notice states the renewal date and offers no purchase path."""
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
             license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_sub_auto",
@@ -285,7 +285,7 @@ class TestFulfilTeamPurchase:
     async def test_default_fulfilment_mints_manual_renewal(self) -> None:
         """A caller that does not state the mode can never promise a renewal."""
         settings = _make_settings()
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
             license_key = await fulfil_team_purchase(
                 settings,
                 event_id="evt_default_manual",
@@ -406,7 +406,7 @@ class TestFulfilmentWithChosenStart:
         settings = _make_settings()
         past = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
         with (
-            patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
+            patch("farna.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
             pytest.raises(StartsAtRejectedError) as raised,
         ):
             await fulfil_team_purchase(
@@ -458,7 +458,7 @@ class TestFulfilmentWithChosenStart:
         settings = _make_settings()
         start = (datetime.now(UTC) + timedelta(days=45)).date().isoformat()
 
-        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
+        with patch("farna.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
             await fulfil_team_purchase(
                 settings,
                 event_id="evt_email_start",

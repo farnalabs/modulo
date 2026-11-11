@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_EGRESS,
     SANDBOX_CAPABILITY_GIT_CREDENTIALS,
     SANDBOX_CAPABILITY_WRITE_FILES,
@@ -179,7 +179,7 @@ def test_api_validated_node_round_trip_write_and_git_certified():
     proves the enforcement surface is real (not a phantom key) and the
     conformance hard-block can certify writes are impossible.
     """
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     node = PipelineGraphNode.model_validate(
         {

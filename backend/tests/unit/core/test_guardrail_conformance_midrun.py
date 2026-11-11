@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.conformance — mid-run capability re-check.
+"""Unit tests for farna.core.guardrails.conformance — mid-run capability re-check.
 
 Covers the pure decision layer (reusing the T1 ``derive_conformance_state``),
 the live-manifest reader (present/absent/unreadable), and the node-start
@@ -15,14 +15,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorACL,
     ConnectorPermissionError,
     ConnectorType,
     canonical_capability_set,
 )
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.guardrails.conformance import (
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.guardrails.conformance import (
     ConformanceRecheckResult,
     _capabilities_for_agent,
     _capabilities_for_connector,
@@ -252,15 +252,15 @@ def _entity_of(stmt: Any) -> str:
 
 def _patch_select(monkeypatch: pytest.MonkeyPatch, session: AsyncMock) -> None:
     """Replace the module's ``select`` so it stamps each statement's entity marker."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     real_select = mod.select
 
     def _fake_select(entity: Any) -> Any:
         stmt = real_select(entity)
-        from modulo.db.models.agent import Agent
-        from modulo.db.models.connector_instance import ConnectorInstance
-        from modulo.db.models.environment_profile import EnvironmentProfile
+        from farna.db.models.agent import Agent
+        from farna.db.models.connector_instance import ConnectorInstance
+        from farna.db.models.environment_profile import EnvironmentProfile
 
         if entity is ConnectorInstance:
             stmt._conformance_entity = "connector"  # type: ignore[attr-defined]
@@ -690,7 +690,7 @@ async def test_build_live_manifest_unrestricted_unknown_type_certifies_nothing(
 
 def _patch_orchestration(monkeypatch: pytest.MonkeyPatch, guardrails: list[Any]) -> None:
     """Patch the orchestration's load + RLS so unit tests stay DB-free."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _fake_load(*args: Any, **kwargs: Any) -> list[Any]:
         return guardrails
@@ -774,7 +774,7 @@ async def test_check_node_start_present_continues(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_check_node_start_load_failure_fails_closed(monkeypatch: pytest.MonkeyPatch):
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
         raise RuntimeError("db down")
@@ -811,7 +811,7 @@ async def test_check_node_start_zero_claim_no_manifest_roundtrip(monkeypatch: py
     conformance claim — otherwise the check pays an avoidable DB read on every
     node start for pipelines that never use conformance guardrails.
     """
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _fake_load(*args: Any, **kwargs: Any) -> list[Any]:
         return [_gr("g1", "block", []), _gr("g2", "warn", None)]
@@ -883,7 +883,7 @@ def _hoist_factory(session: AsyncMock) -> MagicMock:
 async def test_load_claimed_guardrails_hoists_claimed_only(monkeypatch: pytest.MonkeyPatch):
     """The run-start hoist loads ALL guardrail rows once and returns only those
     carrying a conformance claim (non-empty ``required_capabilities``)."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
         return None
@@ -911,7 +911,7 @@ async def test_load_claimed_guardrails_hoists_claimed_only(monkeypatch: pytest.M
 async def test_load_claimed_guardrails_failure_marks_fail_closed(monkeypatch: pytest.MonkeyPatch):
     """A run-start load failure must NOT silently skip claims — it returns the
     fail-closed marker so the node gate treats capabilities as unknown."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
         return None
@@ -938,7 +938,7 @@ async def test_check_node_start_hoisted_claims_skips_guardrail_load(monkeypatch:
     """With the executor's hoisted claimed list the per-node guardrail-load
     query is skipped entirely — a non-hoisted path that touches the loader
     would raise, proving zero per-node DB round-trip."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
         raise AssertionError("load_node_guardrails must not be called on the hoisted path")
@@ -972,7 +972,7 @@ async def test_check_node_start_hoisted_claims_skips_guardrail_load(monkeypatch:
 
 async def test_check_node_start_hoisted_zero_claims_fast_path(monkeypatch: pytest.MonkeyPatch):
     """Hoisted empty claim list -> fast path: no guardrail load AND no manifest."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
         raise AssertionError("load_node_guardrails must not be called on the hoisted path")
@@ -1006,7 +1006,7 @@ async def test_check_node_start_hoisted_zero_claims_fast_path(monkeypatch: pytes
 async def test_check_node_start_claims_load_failed_fails_closed(monkeypatch: pytest.MonkeyPatch):
     """Run-start claim-discovery failure -> fail CLOSED (unknown blocks): no
     session, no load, no manifest — the node is denied, never fail-open."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _boom_load(*args: Any, **kwargs: Any) -> list[Any]:
         raise AssertionError("load_node_guardrails must not be called when claims load failed")
@@ -1042,7 +1042,7 @@ async def test_check_node_start_hoisted_claims_node_scoped(monkeypatch: pytest.M
     """The hoisted list carries every node's claims; only THIS node's bindings
     (org-level + node-bound) are evaluated — another node's block claim must
     not block this node."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
         return None
@@ -1092,7 +1092,7 @@ async def test_check_node_start_hoisted_claims_node_scoped(monkeypatch: pytest.M
 async def test_build_live_manifest_unreadable_surface_fails_closed(monkeypatch: pytest.MonkeyPatch):
     """An unreadable capability source contributes nothing (unknown), so a
     block-action guardrail fails CLOSED — never fail-open."""
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     session = AsyncMock()
 
@@ -1326,7 +1326,7 @@ async def _run_hoisted_check(
     guardrails: list[Any],
     node_def: dict[str, Any] | None,
 ) -> ConformanceRecheckResult:
-    import modulo.core.guardrails.conformance as mod
+    import farna.core.guardrails.conformance as mod
 
     async def _noop_rls(session: Any, org_id: uuid.UUID) -> None:
         return None
@@ -1423,7 +1423,7 @@ def _api_validated_sandbox_node() -> dict[str, Any]:
     ``read_only`` / ``git_credentials`` as real PipelineGraphNode fields, so they
     round-trip and the derivation mechanically certifies them.
     """
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     node = PipelineGraphNode.model_validate(
         {
@@ -1454,7 +1454,7 @@ async def test_round_trip_api_validated_node_write_and_git_certified():
     """A real API-validated node now resolves write_files/git_credentials
     CERTIFIED (PR B added the read_only/git_credentials fields + enforcement),
     while egress stays mechanical."""
-    from modulo.core.pipeline_engine.sandbox_mode import (
+    from farna.core.pipeline_engine.sandbox_mode import (
         SANDBOX_CAPABILITY_EGRESS,
         SANDBOX_CAPABILITY_GIT_CREDENTIALS,
         SANDBOX_CAPABILITY_WRITE_FILES,
@@ -1724,7 +1724,7 @@ def test_evaluate_conformance_logs_unsatisfied_qualified_claim(caplog) -> None:
         result = evaluate_conformance([gr], {"read": True})
     assert result.blocked is True
     assert "guardrail.conformance.type_qualified_claim_unsatisfied" in caplog.text
-    detection_records = [r for r in caplog.records if r.name == "modulo.core.guardrails.conformance"]
+    detection_records = [r for r in caplog.records if r.name == "farna.core.guardrails.conformance"]
     assert any(getattr(r, "claims", None) == ["github.read"] for r in detection_records)
 
 

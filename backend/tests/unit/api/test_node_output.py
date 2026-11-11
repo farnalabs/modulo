@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -48,8 +48,8 @@ def _make_run(
 
 @pytest.fixture(autouse=True)
 def _stub_blob_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.api.routes.runs as runs_module
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    import farna.api.routes.runs as runs_module
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _stub(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
         run = getattr(runs_module.get_run, "return_value", None)
@@ -126,8 +126,8 @@ class TestGetNodeOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -145,8 +145,8 @@ class TestGetNodeOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/writer/output")
 
@@ -161,8 +161,8 @@ class TestGetNodeOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/formatter/output")
 
@@ -171,8 +171,8 @@ class TestGetNodeOutput:
 
     def test_run_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=None),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=None),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{uuid.uuid4()}/nodes/planner/output")
 
@@ -183,8 +183,8 @@ class TestGetNodeOutput:
         run = _make_run(outputs_json={"planner": {"done": True}})
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/unknown/output")
 
@@ -195,8 +195,8 @@ class TestGetNodeOutput:
         run = _make_run(outputs_json=None)
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -226,8 +226,8 @@ class TestSplitRowOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -245,8 +245,8 @@ class TestSplitRowOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -263,8 +263,8 @@ class TestSplitRowOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -288,8 +288,8 @@ class TestSplitRowOutput:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -315,8 +315,8 @@ class TestSensitiveMasking:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -341,8 +341,8 @@ class TestSensitiveMasking:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/coder/output")
 
@@ -365,8 +365,8 @@ class TestSensitiveMasking:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/formatter/output")
 
@@ -391,8 +391,8 @@ class TestSensitiveMasking:
         )
 
         with (
-            patch("modulo.api.routes.runs.get_run", return_value=run),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_run", return_value=run),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
 
@@ -409,7 +409,7 @@ class TestMaskOutputValue:
     """Unit tests for the internal masking helper."""
 
     def test_masks_sensitive_keys_in_dict(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = {"api_key": "secret", "name": "safe", "nested": {"token": "hidden"}}
         result = _mask_output_value(value)
@@ -418,7 +418,7 @@ class TestMaskOutputValue:
         assert result["nested"]["token"] == SENSITIVE_VALUE_MASK
 
     def test_masks_items_in_list(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = [{"password": "p@ss", "label": "safe"}, {"key": "val"}]
         result = _mask_output_value(value)
@@ -427,7 +427,7 @@ class TestMaskOutputValue:
         assert result[1]["key"] == SENSITIVE_VALUE_MASK
 
     def test_passes_non_dict_values(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         assert _mask_output_value("hello") == "hello"
         assert _mask_output_value(42) == 42
@@ -435,7 +435,7 @@ class TestMaskOutputValue:
         assert _mask_output_value([1, 2, 3]) == [1, 2, 3]
 
     def test_limits_recursion_depth(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         deep = {"a": {}}
         inner = deep["a"]
@@ -456,7 +456,7 @@ class TestMaskOutputValueSecretValues:
     """FAR-392: value-pattern masking catches secrets regardless of key name."""
 
     def test_masks_secret_value_under_non_sensitive_key(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = {"result": "the key is AKIAIOSFODNN7EXAMPLE and also sk-Zk9f2Lm8QpXr4Tn6WbVc"}
         result = _mask_output_value(value)
@@ -465,7 +465,7 @@ class TestMaskOutputValueSecretValues:
         assert "sk-Zk9f2Lm8QpXr4Tn6WbVc" not in result["result"]
 
     def test_masks_secret_value_in_free_text(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = "logs show token eyJhbGciOiJIUzI1Ni.eyJzdWIiOiIxMjM0NTY3ODk.wiOWw40dij8"
         result = _mask_output_value(value)
@@ -473,7 +473,7 @@ class TestMaskOutputValueSecretValues:
         assert "eyJhbGciOiJIUzI1Ni" not in result
 
     def test_masks_private_key_block(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         key = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD\n-----END RSA PRIVATE KEY-----"
         value = {"debug": key}
@@ -482,7 +482,7 @@ class TestMaskOutputValueSecretValues:
         assert "BEGIN RSA PRIVATE KEY" not in result["debug"]
 
     def test_masks_connection_string_password(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = {"note": "postgres://app_user:S3cr3tP@ss@db.example.com:5432/app"}
         result = _mask_output_value(value)
@@ -493,7 +493,7 @@ class TestMaskOutputValueSecretValues:
         assert "db.example.com:5432/app" in result["note"]
 
     def test_masks_connection_string_password_with_at_in_password(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         # Password itself contains '@' — the greedy capture must consume up to
         # the FINAL '@' (host separator), not the first one.
@@ -503,7 +503,7 @@ class TestMaskOutputValueSecretValues:
         assert "host:5432/db" in result["note"]
 
     def test_masks_connection_string_password_with_colon_slash(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         # Password contains ':' and '/' — must be wholly masked.
         value = {"note": "mysql://root:P@ass:word!@1.2.3.4/app"}
@@ -512,7 +512,7 @@ class TestMaskOutputValueSecretValues:
         assert "1.2.3.4/app" in result["note"]
 
     def test_masks_bearer_token_in_free_text(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = "Authorization failed: Bearer ya29.freshtokenvalue1234567890"
         result = _mask_output_value(value)
@@ -520,7 +520,7 @@ class TestMaskOutputValueSecretValues:
         assert SENSITIVE_VALUE_MASK in result
 
     def test_does_not_overmask_legitimate_content(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = {
             "summary": "processed 42 records successfully",
@@ -537,7 +537,7 @@ class TestMaskOutputValueSecretValues:
         assert result["score"] == pytest.approx(3.14)
 
     def test_does_not_overmask_host_port_followed_by_email(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         # A ``scheme://host:PORT`` with no credentials, followed later in the SAME
         # string by an unrelated ``@`` (an email), must keep the benign span
@@ -557,7 +557,7 @@ class TestMaskOutputValueSecretValues:
         assert "pa@ss" not in result3["note"]
 
     def test_masks_secret_in_nested_list_item(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = [{"message": "xoxb-1234567890-abcdefghij-klmnopqrstuvwxyz"}]
         result = _mask_output_value(value)
@@ -565,7 +565,7 @@ class TestMaskOutputValueSecretValues:
         assert "xoxb-1234567890" not in result[0]["message"]
 
     def test_masks_fine_grained_github_pat(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         token = "github_pat_" + "A" * 50
         value = {"log": f"cloned with {token}"}
@@ -574,7 +574,7 @@ class TestMaskOutputValueSecretValues:
         assert token not in result["log"]
 
     def test_masks_aws_temp_access_key(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         value = {"log": "temp creds ASIAABCDEFGHIJKLMNOP leaked"}
         result = _mask_output_value(value)
@@ -582,7 +582,7 @@ class TestMaskOutputValueSecretValues:
         assert "ASIAABCDEFGHIJKLMNOP" not in result["log"]
 
     def test_does_not_mask_short_github_pat_like_string(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
+        from farna.api.routes.runs import _mask_output_value
 
         # github_pat_ with a short (non-secret) suffix must NOT be masked by the
         # value pattern (it requires 50+ chars after the prefix).
@@ -591,8 +591,8 @@ class TestMaskOutputValueSecretValues:
         assert result["note"] == "github_pat_11ABC"
 
     def test_does_not_truncate_long_non_secret_string(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.api.routes.runs import _mask_output_value
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # Regression: a long, benign string must be returned in full — the
         # masking helper must not silently truncate content beyond 5000 chars.
@@ -603,8 +603,8 @@ class TestMaskOutputValueSecretValues:
         assert len(result) == len(long_plain)
 
     def test_masks_secret_in_long_string_without_truncating_tail(self) -> None:
-        from modulo.api.routes.runs import _mask_output_value
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.api.routes.runs import _mask_output_value
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # A secret near the start of a long string must be masked while the
         # trailing benign content is preserved in full.
@@ -617,7 +617,7 @@ class TestMaskOutputValueSecretValues:
         assert _mask_output_value(long_value) == masked
 
     def test_masks_private_key_straddling_slice_boundary(self) -> None:
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # A private key whose block begins in one 5000-char slice and ends in the
         # next must still be masked in full (regression: it was contained by
@@ -629,7 +629,7 @@ class TestMaskOutputValueSecretValues:
         assert "END RSA PRIVATE KEY" not in masked
 
     def test_masks_connection_string_straddling_slice_boundary(self) -> None:
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # A connection string beginning near the end of one 5000-char slice must
         # be masked even though its scheme prefix falls in the previous slice.
@@ -640,7 +640,7 @@ class TestMaskOutputValueSecretValues:
         assert SENSITIVE_VALUE_MASK in masked
 
     def test_masks_connection_string_password_with_at_in_password_straddling(self) -> None:
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # Regression: a connection-string password that itself contains ``@``
         # (e.g. ``pa@ss``) must be masked in full even when the string is longer
@@ -655,7 +655,7 @@ class TestMaskOutputValueSecretValues:
         assert SENSITIVE_VALUE_MASK in masked
 
     def test_masks_redis_connection_string_with_empty_username(self) -> None:
-        from modulo.core.secret_patterns import mask_secret_values_in_text
+        from farna.core.secret_patterns import mask_secret_values_in_text
 
         # A broker/Redis URL with an empty username (``redis://:PASSWORD@host``)
         # must still have its password masked — the user segment may be blank.
@@ -664,7 +664,7 @@ class TestMaskOutputValueSecretValues:
         assert SENSITIVE_VALUE_MASK in masked
 
     def test_masks_private_key_block_longer_than_slice_cap(self) -> None:
-        from modulo.core.secret_patterns import (
+        from farna.core.secret_patterns import (
             SECRET_VALUE_REDACT_CHAR_CAP,
             mask_secret_values_in_text,
         )

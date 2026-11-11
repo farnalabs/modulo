@@ -25,8 +25,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
 
 
 async def test_llm_next_node_overrides_static_edge() -> None:
@@ -92,7 +92,7 @@ async def test_enforcement_record_survives_agent_node() -> None:
     session factory — with the payload byte-for-byte identical to what
     ``_finalize_node_result`` builds for the same inputs.
     """
-    from modulo.db.models.run_node_outputs import RunNodeOutput
+    from farna.db.models.run_node_outputs import RunNodeOutput
 
     schema = {
         "type": "object",
@@ -168,7 +168,7 @@ def test_build_repair_invoke_raises_when_hub_unavailable() -> None:
     hub is a wiring error, and the node takes its documented hard-fail path.
     """
     with patch(
-        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        "farna.core.pipeline_engine.decorator.get_model_backend_hub",
         return_value=None,
     ):
         repair_fn = nr._build_repair_invoke(str(uuid.uuid4()))

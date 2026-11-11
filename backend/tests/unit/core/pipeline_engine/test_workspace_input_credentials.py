@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.pipeline_engine.workspace_input_credentials import (
+from farna.core.pipeline_engine.workspace_input_credentials import (
     CloneCredential,
     CredentialResolutionError,
     _decrypt_connector_creds,
@@ -177,11 +177,11 @@ class TestResolveCloneCredential:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
         ):
@@ -211,11 +211,11 @@ class TestResolveCloneCredential:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="no 'token'"),
@@ -241,11 +241,11 @@ class TestResolveCloneCredential:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
         ):
@@ -370,11 +370,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
         ):
@@ -393,11 +393,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
         ):
@@ -420,16 +420,16 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             caplog.at_level(
                 logging.WARNING,
-                logger="modulo.core.pipeline_engine.workspace_input_credentials",
+                logger="farna.core.pipeline_engine.workspace_input_credentials",
             ),
         ):
             creds = await _decrypt_connector_creds(ci, session=session)
@@ -453,16 +453,16 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             caplog.at_level(
                 logging.WARNING,
-                logger="modulo.core.pipeline_engine.workspace_input_credentials",
+                logger="farna.core.pipeline_engine.workspace_input_credentials",
             ),
         ):
             creds = await _decrypt_connector_creds(ci, session=session)
@@ -482,11 +482,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="not a JSON dict"),
@@ -504,11 +504,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="not valid JSON"),
@@ -526,11 +526,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="upstream boom"),
@@ -548,11 +548,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="has no credentials"),
@@ -570,11 +570,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="has no credentials"),
@@ -592,11 +592,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="Failed to decrypt credentials"),
@@ -614,11 +614,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
             pytest.raises(CredentialResolutionError, match="decrypted credentials are not valid JSON"),
@@ -636,11 +636,11 @@ class TestDecryptConnectorCreds:
 
         with (
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._get_settings",
+                "farna.core.pipeline_engine.workspace_input_credentials._get_settings",
                 return_value=mock_settings,
             ),
             patch(
-                "modulo.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
+                "farna.core.pipeline_engine.workspace_input_credentials._create_secrets_backend",
                 return_value=mock_backend,
             ),
         ):

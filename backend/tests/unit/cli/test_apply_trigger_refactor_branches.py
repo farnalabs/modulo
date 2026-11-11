@@ -4,8 +4,8 @@ Covers the list branch of ``_resolve_value`` (success and propagated failure)
 and the ambiguous-pipeline reason in ``_trigger_block_reason``.
 """
 
-from modulo.cli.apply.models import TriggerEntity
-from modulo.cli.apply.trigger_apply import _resolve_value, _trigger_block_reason
+from farna.cli.apply.models import TriggerEntity
+from farna.cli.apply.trigger_apply import _resolve_value, _trigger_block_reason
 
 
 def test_resolve_value_resolves_list_items() -> None:

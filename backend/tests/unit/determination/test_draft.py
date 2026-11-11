@@ -1,7 +1,7 @@
 """Unit tests for pipeline draft generation from determination data."""
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.draft import DraftEdge, generate_draft
+from farna.connectors.base import ConnectorType
+from farna.determination.draft import DraftEdge, generate_draft
 
 from .helpers import draft_for, iso_days_ago, issues_sample, make_finding, make_sample
 

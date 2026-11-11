@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
+from farna.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
 from tests.unit._source_scan import iter_source_text
 
 _EXPECTED_TOOLS = frozenset(
@@ -132,7 +132,7 @@ _EXPECTED_TOOLS = frozenset(
 
 
 def _registered_tool_names() -> set[str]:
-    from modulo.api.mcp_server import mcp
+    from farna.api.mcp_server import mcp
 
     return set(mcp._tool_manager._tools.keys())
 
@@ -144,7 +144,7 @@ def _registered_resource_uris() -> set[str]:
     the gated tools, so the structural guard must enumerate them alongside
     tools.
     """
-    from modulo.api.mcp_server import mcp
+    from farna.api.mcp_server import mcp
 
     manager = mcp._resource_manager
     return set(manager._resources.keys()) | set(manager._templates.keys())
@@ -195,7 +195,7 @@ _VALID_CLASSIFICATIONS = {_ORG_ONLY, _ORG_CREDENTIAL, _CALLER_SCOPED, _ANY}
 
 
 def _classified_caller_scope(tool: str) -> str:
-    from modulo.core.mcp.scope_validator import classify_caller_scope
+    from farna.core.mcp.scope_validator import classify_caller_scope
 
     permission_key = TOOL_SCOPE_REQUIREMENTS.get(tool)
     if permission_key is None and tool in READ_ONLY_TOOLS:
@@ -231,7 +231,7 @@ def test_no_mutating_tool_classified_any_except_review_hitl_reachability_overrid
 
 
 def test_caller_scope_requirements_reference_registered_tools() -> None:
-    from modulo.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
+    from farna.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
 
     registered = _registered_tool_names()
     for tool in CALLER_SCOPE_REQUIREMENTS:
@@ -240,7 +240,7 @@ def test_caller_scope_requirements_reference_registered_tools() -> None:
 
 
 def test_caller_scope_requirements_values_are_valid() -> None:
-    from modulo.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
+    from farna.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
 
     for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
         assert classification in _VALID_CLASSIFICATIONS, (
@@ -253,7 +253,7 @@ def test_self_suffix_tools_are_registered_caller_scoped() -> None:
     REGISTERED tool that classifies caller-scoped purely through the suffix
     derivation — no parallel classification set to keep in sync, and no
     dangling ``.self`` mapping without its tool."""
-    from modulo.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, classify_caller_scope
+    from farna.core.mcp.scope_validator import _CALLER_SCOPED_SUFFIX, classify_caller_scope
 
     for tool_key in TOOL_SCOPE_REQUIREMENTS:
         if not TOOL_SCOPE_REQUIREMENTS[tool_key].endswith(_CALLER_SCOPED_SUFFIX):
@@ -276,7 +276,7 @@ def test_self_suffix_tools_are_registered_caller_scoped() -> None:
 # here instead of resurfacing as a lost-update race in production.
 # ---------------------------------------------------------------------------
 
-_SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "modulo"
+_SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "farna"
 
 # The ONLY src files allowed to lock the Account row
 # (``session.get(Account, ..., with_for_update=True)``):
@@ -376,7 +376,7 @@ _EXPECTED_SYSTEM_ADMIN_TOOLS = frozenset(
 def _system_admin_declared_tools() -> frozenset[str]:
     """Read the declaration through the MODULE (so a monkeypatch is visible)
     rather than a bound import."""
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     return sv.SYSTEM_ADMIN_TOOLS
 
@@ -390,7 +390,7 @@ def _unenforced_system_admin_declarations(declared: frozenset[str]) -> list[str]
     tool that is unmapped — or whose resolver leg was removed — cannot satisfy
     the first condition, so it is reported.
     """
-    from modulo.core.mcp.scope_validator import resolve_tool_access
+    from farna.core.mcp.scope_validator import resolve_tool_access
 
     unenforced: list[str] = []
     for tool in sorted(declared):
@@ -454,7 +454,7 @@ def test_structural_guard_catches_a_declaration_without_a_live_gate(
 
     Without this, the guard could pass vacuously for every declaration.
     """
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     monkeypatch.setattr(
         sv,
@@ -474,7 +474,7 @@ def test_system_admin_flag_is_inert_for_every_undeclared_tool() -> None:
     credential matrix and asserts the decision (allow/deny AND the resolved
     permission key) is identical whether the claim is absent or present.
     """
-    from modulo.core.mcp.scope_validator import resolve_tool_access
+    from farna.core.mcp.scope_validator import resolve_tool_access
 
     declared = _system_admin_declared_tools()
     undeclared = _registered_tool_names() - declared
@@ -987,7 +987,7 @@ def test_structural_guard_catches_a_declaration_without_wiring(
     declared in ``SYSTEM_ADMIN_TOOLS`` whose handler does NOT route through
     the chokepoint. Here ``list_pipelines`` — a real, unrouted registered
     tool — is declared and the guard reports it."""
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     monkeypatch.setattr(sv, "SYSTEM_ADMIN_TOOLS", sv.SYSTEM_ADMIN_TOOLS | {"list_pipelines"})
     graph = _build_call_graph()
@@ -1001,7 +1001,7 @@ def test_structural_guard_catches_a_declaration_gated_under_the_wrong_name(
     """Can-fail proof for the own-name guard: declaring a tool whose handler
     only ever gates a DIFFERENT tool is reported. ``list_pipelines`` is
     unrouted; declaring it fails the own-name check."""
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     monkeypatch.setattr(sv, "SYSTEM_ADMIN_TOOLS", sv.SYSTEM_ADMIN_TOOLS | {"list_pipelines"})
     graph = _build_call_graph()
@@ -1021,7 +1021,7 @@ def test_structural_guard_catches_a_declaration_gated_under_the_wrong_name(
 
 
 def test_public_views_are_derived_from_the_unified_registry() -> None:
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     requirements = sv._TOOL_REQUIREMENTS
     assert dict(sv.TOOL_SCOPE_REQUIREMENTS) == {
@@ -1034,7 +1034,7 @@ def test_public_views_are_derived_from_the_unified_registry() -> None:
 def test_unified_registry_declares_every_registered_tool() -> None:
     """One registry entry per registered tool: a new tool cannot ship
     unclassified, and no entry references a non-existent tool."""
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     base_keys = {key.split(":", 1)[0] for key in sv._TOOL_REQUIREMENTS}
     registered = _registered_tool_names()
@@ -1046,7 +1046,7 @@ def test_unified_registry_entries_are_internally_consistent() -> None:
     """Each entry is exactly one of: a permission-mapped tool/action, a
     read-only tool (no permission key), optionally with the system-admin claim.
     A ``tool:action`` key must be mapped, never read-only."""
-    import modulo.core.mcp.scope_validator as sv
+    import farna.core.mcp.scope_validator as sv
 
     for key, req in sv._TOOL_REQUIREMENTS.items():
         if req.permission_key is None:

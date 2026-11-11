@@ -25,9 +25,9 @@ import uuid
 from pathlib import Path
 from types import ModuleType
 
-from modulo.core import cron_helpers
-from modulo.core.error_tracking import saq_hooks
-from modulo.db.models import organisation
+from farna.core import cron_helpers
+from farna.core.error_tracking import saq_hooks
+from farna.db.models import organisation
 
 _NIL_UUID_LITERAL = "00000000-0000-0000-0000-000000000000"
 _NIL_UUID = uuid.UUID(int=0)
@@ -58,7 +58,7 @@ def test_dependent_modules_reuse_the_canonical_constant() -> None:
     for module in _DEPENDENT_MODULES:
         assert module.SYSTEM_ORG_ID is organisation.SYSTEM_ORG_ID, (
             f"{module.__name__}.SYSTEM_ORG_ID is not the canonical "
-            f"modulo.db.models.organisation.SYSTEM_ORG_ID — import it instead "
+            f"farna.db.models.organisation.SYSTEM_ORG_ID — import it instead "
             f"of re-declaring the nil-UUID (FAR-1505)."
         )
 
@@ -69,7 +69,7 @@ def test_nil_uuid_literal_lives_only_in_the_canonical_module() -> None:
         source = _source_of(module)
         assert _NIL_UUID_LITERAL not in source, (
             f"{module.__name__} re-types the nil-UUID literal — import "
-            f"modulo.db.models.organisation.SYSTEM_ORG_ID instead (FAR-1505)."
+            f"farna.db.models.organisation.SYSTEM_ORG_ID instead (FAR-1505)."
         )
 
 

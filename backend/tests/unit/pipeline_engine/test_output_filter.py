@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.connectors.base import ConnectorPayload
-from modulo.core.pipeline_engine.output_filter import (
+from farna.connectors.base import ConnectorPayload
+from farna.core.pipeline_engine.output_filter import (
     OutputRejectedError,
     filter_output_for_injection,
     filter_payload_for_injection,
@@ -315,7 +315,7 @@ class TestStreamGraphHandlesOutputRejectedError:
         return c
 
     async def test_returns_output_rejected_status(self):
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         compiled = self._make_compiled_raising(
             OutputRejectedError("System prompt override attempt detected (resource: test-file)")
@@ -341,7 +341,7 @@ class TestStreamGraphHandlesOutputRejectedError:
         assert "System prompt override" in error_detail
 
     async def test_publishes_run_failed_event(self):
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         compiled = self._make_compiled_raising(OutputRejectedError("Suspicious code execution pattern detected"))
         broker = MagicMock()
@@ -364,7 +364,7 @@ class TestStreamGraphHandlesOutputRejectedError:
         assert "Suspicious code execution" in payload["detail"]
 
     async def test_other_exceptions_not_affected(self):
-        from modulo.core.pipeline_engine.executor import PipelineExecutor
+        from farna.core.pipeline_engine.executor import PipelineExecutor
 
         compiled = self._make_compiled_raising(ValueError("something else"))
         broker = MagicMock()

@@ -30,10 +30,10 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.db.lifecycle_refs import canonical_work_item_id
-from modulo.db.models.journey import Journey
-from modulo.db.rls import set_rls_org
+from farna.core.lifecycle_map.advancement import advance_journeys
+from farna.db.lifecycle_refs import canonical_work_item_id
+from farna.db.models.journey import Journey
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -92,7 +92,7 @@ class TestGetHitlEmailPreferences:
     def test_absent_key_returns_all_off(self, client: TestClient) -> None:
         account = _make_account({"theme": "dark"})
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account) as mock_get,
+            patch("farna.api.routes.me.get_account_by_id", return_value=account) as mock_get,
         ):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 200
@@ -103,7 +103,7 @@ class TestGetHitlEmailPreferences:
         stored = {"hitl_email": {"default": True, "pipeline_overrides": {str(_PIPELINE_ID): False}}}
         account = _make_account(stored)
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account),
+            patch("farna.api.routes.me.get_account_by_id", return_value=account),
         ):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 200
@@ -112,7 +112,7 @@ class TestGetHitlEmailPreferences:
     def test_malformed_stored_preferences_normalise_to_off(self, client: TestClient) -> None:
         account = _make_account({"hitl_email": {"default": "yes", "pipeline_overrides": "bad"}})
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=account),
+            patch("farna.api.routes.me.get_account_by_id", return_value=account),
         ):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 200
@@ -120,7 +120,7 @@ class TestGetHitlEmailPreferences:
 
     def test_account_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.get_account_by_id", return_value=None),
+            patch("farna.api.routes.me.get_account_by_id", return_value=None),
         ):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 404

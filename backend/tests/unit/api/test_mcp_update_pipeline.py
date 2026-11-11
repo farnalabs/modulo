@@ -17,8 +17,8 @@ import pytest
 from fastapi import HTTPException as FastAPIHTTPException
 from sqlalchemy.exc import ProgrammingError
 
-import modulo.api.mcp_server as ms
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+import farna.api.mcp_server as ms
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 from tests.unit.api.test_mcp_server_coverage_gaps import _AuthContext
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -28,8 +28,8 @@ _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _TEAM_B = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
 
-_PREDICATE = "modulo.api.routes.pipelines._assert_environment_profile_bindable"
-_CRUD_UPDATE = "modulo.db.crud.pipeline.update_pipeline"
+_PREDICATE = "farna.api.routes.pipelines._assert_environment_profile_bindable"
+_CRUD_UPDATE = "farna.db.crud.pipeline.update_pipeline"
 
 
 class TestUpdatePipeline(_AuthContext):

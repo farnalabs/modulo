@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from modulo.api.dependencies import deny_break_glass_mint
+from farna.api.dependencies import deny_break_glass_mint
 
-_ROUTES_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "api" / "routes"
+_ROUTES_DIR = Path(__file__).resolve().parents[3] / "src" / "farna" / "api" / "routes"
 
 #: Route file -> handler names that MUST carry the ``deny_break_glass_mint`` marker.
 #: The secret-bearing mint surface is defined once here and in the route files —

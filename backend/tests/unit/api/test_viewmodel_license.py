@@ -17,13 +17,13 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.dependencies import get_settings as dep_get_settings
-from modulo.api.main import app
-from modulo.api.routes.viewmodel import _resolve_tier
-from modulo.core.license import LicenseData, clear_license, set_public_key, store_license
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.dependencies import get_settings as dep_get_settings
+from farna.api.main import app
+from farna.api.routes.viewmodel import _resolve_tier
+from farna.core.license import LicenseData, clear_license, set_public_key, store_license
+from farna.core.registry.crypto import generate_keypair, sign_primitive
+from farna.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
 

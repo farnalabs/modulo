@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import admin_triggers
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import admin_triggers
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -159,7 +159,7 @@ class TestListTriggerEvents:
         pipeline_id = uuid.uuid4()
         run_id = uuid.uuid4()
         event = _make_mock_event(run_id=run_id)
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result([_make_event_row(event, pipeline_id, "Release pipeline")])
             count_result = MagicMock()
@@ -199,7 +199,7 @@ class TestListTriggerEvents:
         """
         pipeline_id = uuid.uuid4()
         event = _make_mock_event()
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result([_make_event_row(event, pipeline_id, "Archived pipeline", True)])
             count_result = MagicMock()
@@ -222,7 +222,7 @@ class TestListTriggerEvents:
 
     def test_returns_200_with_filters(self, client: TestClient) -> None:
         event = _make_mock_event(trigger_type="webhook", validation_result="hmac_failed")
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result([_make_event_row(event, pipeline_name="Webhook pipeline")])
             count_result = MagicMock()
@@ -252,7 +252,7 @@ class TestListTriggerEvents:
         assert body["result_counts"]["direction"] == "flat"
 
     def test_returns_empty_when_no_events(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result([])
             count_result = MagicMock()
@@ -292,7 +292,7 @@ class TestListTriggerEvents:
     def test_programming_error_returns_501(self, client: TestClient) -> None:
         from sqlalchemy.exc import ProgrammingError
 
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             self._client_with_execute_error(client, ProgrammingError("stmt", "params", Exception("boom")))
             resp = client.get(self.URL)
         assert resp.status_code == 501
@@ -301,13 +301,13 @@ class TestListTriggerEvents:
     def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             self._client_with_execute_error(client, SQLAlchemyError("connection lost"))
             resp = client.get(self.URL)
         assert resp.status_code == 503
 
     def test_unexpected_error_returns_500(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             self._client_with_execute_error(client, RuntimeError("boom"))
             resp = client.get(self.URL)
         assert resp.status_code == 500
@@ -322,7 +322,7 @@ class TestListTriggerEvents:
         """
         kept = _make_mock_event()
         overflow = _make_mock_event()
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result(
                 [
@@ -360,7 +360,7 @@ class TestListTriggerEvents:
         """
         event = _make_mock_event()
         cursor = f"{_NOW.isoformat()}_{uuid.uuid4()}"
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
             event_result = _make_event_result([_make_event_row(event)])
             count_result = MagicMock()
@@ -405,7 +405,7 @@ class TestFetchResultCounts:
         principal = MagicMock()
         principal.organisation_id = _ORG_ID
 
-        with patch("modulo.api.routes.admin_triggers.set_rls_org"):
+        with patch("farna.api.routes.admin_triggers.set_rls_org"):
             counts = await admin_triggers._fetch_result_counts(session, principal, now=_NOW)
 
         assert counts.recent == {

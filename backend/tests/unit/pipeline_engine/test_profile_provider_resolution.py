@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.pipeline_engine import node_runner as nr
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine import node_runner as nr
+from farna.core.pipeline_engine.node_runner import (
     SandboxTierRefusedError,
     _apply_isolation_via_provider,
     _build_dispatch_provider,
@@ -40,7 +40,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _read_log_tail_via_provider,
     _write_file_via_provider,
 )
-from modulo.core.runtime_provider import (
+from farna.core.runtime_provider import (
     ExecResult,
     IsolationPolicy,
     ProviderCapabilityUnsupportedError,
@@ -180,7 +180,7 @@ async def test_build_dispatch_provider_legacy_route_without_a_key_returns_none(
     closed with its own typed refusal (never a silent other-provider build)."""
     monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    monkeypatch.setattr("modulo.core.runtime_config.key_bridge.override_or", lambda *_a, **_k: None)
+    monkeypatch.setattr("farna.core.runtime_config.key_bridge.override_or", lambda *_a, **_k: None)
 
     assert await _build_dispatch_provider() is None
     assert await _build_dispatch_provider("e2b") is None
@@ -352,7 +352,7 @@ class _CloseTrackingProvider(_RecordingProvider):
         self.close_calls += 1
 
     async def get_info(self, provider_ref: str, path: str) -> Any:
-        from modulo.core.runtime_provider import WorkspaceFileInfo
+        from farna.core.runtime_provider import WorkspaceFileInfo
 
         return WorkspaceFileInfo(path=path, size=1, is_dir=False)
 

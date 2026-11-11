@@ -1,9 +1,9 @@
 """Step definitions for the Analytics Query Surface BDD feature (FAR-102 / ADR 020).
 
 Wires the scenarios in ``query.feature`` to the REAL analytics routes
-(``modulo/api/routes/analytics.py``: ``/query``, ``/concurrency``,
+(``farna/api/routes/analytics.py``: ``/query``, ``/concurrency``,
 ``/guardrails``, ``/export``) through the shared TestClient pattern used by the
-dashboard steps. The route is a thin adapter over ``modulo.core.analytics.service``,
+dashboard steps. The route is a thin adapter over ``farna.core.analytics.service``,
 so only the four service functions are patched — every other seam is real: the
 FastAPI query-param binding (enum/date/limit validation), the ``analytics.query``
 permission gate, the org-context requirement, the ``analytics_page`` feature
@@ -28,16 +28,16 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from tests.unit.api.mock_session import configure_mock_session
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.analytics.service import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.analytics.service import (
     AnalyticsQueryTimeoutError,
     AnalyticsRateLimitedError,
     AnalyticsValidationError,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 
 scenarios("query.feature")
 
@@ -248,9 +248,9 @@ def _perform_request(request: Any, url: str, **service_mocks: AsyncMock) -> None
         org_context=not ctx.get("no_org_context", False),
     )
     client = next(client_gen)
-    engine_patch = patch("modulo.api.routes.analytics.get_or_create_engine", new=MagicMock())
+    engine_patch = patch("farna.api.routes.analytics.get_or_create_engine", new=MagicMock())
     service_patches = {
-        name: patch(f"modulo.api.routes.analytics.{name}", new=mock) for name, mock in service_mocks.items()
+        name: patch(f"farna.api.routes.analytics.{name}", new=mock) for name, mock in service_mocks.items()
     }
     try:
         engine_patch.start()

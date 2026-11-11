@@ -3,8 +3,8 @@ id: feat-core-oidc-integration
 prd: 9.4
 adr: []
 code:
-  - backend/src/modulo/auth/oidc_verify.py
-  - backend/src/modulo/auth/sso.py
+  - backend/src/farna/auth/oidc_verify.py
+  - backend/src/farna/auth/sso.py
 unit-tests:
   - backend/tests/unit/auth/test_oidc_verify.py
   - backend/tests/integration/auth/test_oidc_rls_resolution.py

@@ -17,7 +17,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modulo.api.models.error import ErrorEventInput
+from farna.api.models.error import ErrorEventInput
 from tests.unit.api.plan_stubs import all_features
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -29,10 +29,10 @@ _BREADCRUMBS = [
 
 
 def _make_ingest_app():
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.api.routes.errors import router as errors_router
-    from modulo.auth.dependencies import get_current_user
-    from modulo.auth.jwt import AuthenticatedPrincipal
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.api.routes.errors import router as errors_router
+    from farna.auth.dependencies import get_current_user
+    from farna.auth.jwt import AuthenticatedPrincipal
 
     app = FastAPI()
     app.include_router(errors_router)
@@ -65,7 +65,7 @@ def _make_ingest_app():
 
 @pytest.fixture(autouse=True)
 def _reset_key_store(monkeypatch):
-    import modulo.api.routes.errors as err_mod
+    import farna.api.routes.errors as err_mod
 
     monkeypatch.setattr(err_mod, "_key_store", None)
     err_mod._public_rate_limit.clear()
@@ -92,8 +92,8 @@ class TestIngestFoldsBreadcrumbs:
         }
         with TestClient(_make_ingest_app()) as client:
             with (
-                patch("modulo.api.routes.errors._key_store") as ks,
-                patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
+                patch("farna.api.routes.errors._key_store") as ks,
+                patch("farna.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
             ):
                 ks.verify_hmac = AsyncMock(return_value=True)
                 ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
@@ -122,8 +122,8 @@ class TestIngestFoldsBreadcrumbs:
         }
         with TestClient(_make_ingest_app()) as client:
             with (
-                patch("modulo.api.routes.errors._key_store") as ks,
-                patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
+                patch("farna.api.routes.errors._key_store") as ks,
+                patch("farna.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
             ):
                 ks.verify_hmac = AsyncMock(return_value=True)
                 ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
@@ -150,7 +150,7 @@ class TestIngestFoldsBreadcrumbs:
         }
         with TestClient(_make_ingest_app()) as client:
             with patch(
-                "modulo.api.routes.errors._service.ingest_batch",
+                "farna.api.routes.errors._service.ingest_batch",
                 new_callable=AsyncMock,
             ) as ingest:
                 ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
@@ -181,7 +181,7 @@ class TestBreadcrumbSerialization:
         return e
 
     def test_detail_returns_breadcrumbs_from_context(self):
-        from modulo.api.routes.errors import _serialize_error_event_detail
+        from farna.api.routes.errors import _serialize_error_event_detail
 
         event = self._make_event(context_json={"url": "/x", "breadcrumbs": _BREADCRUMBS})
         detail = _serialize_error_event_detail(event)
@@ -189,23 +189,23 @@ class TestBreadcrumbSerialization:
         assert detail["context_json"] == {"url": "/x", "breadcrumbs": _BREADCRUMBS}
 
     def test_detail_returns_none_when_context_has_no_breadcrumbs(self):
-        from modulo.api.routes.errors import _serialize_error_event_detail
+        from farna.api.routes.errors import _serialize_error_event_detail
 
         event = self._make_event(context_json={"url": "/x"})
         detail = _serialize_error_event_detail(event)
         assert detail["breadcrumbs"] is None
 
     def test_detail_returns_none_when_context_is_null(self):
-        from modulo.api.routes.errors import _serialize_error_event_detail
+        from farna.api.routes.errors import _serialize_error_event_detail
 
         detail = _serialize_error_event_detail(self._make_event(context_json=None))
         assert detail["breadcrumbs"] is None
 
     def test_detail_endpoint_returns_breadcrumbs(self):
-        from modulo.api.dependencies import get_db_session, get_plan_context
-        from modulo.api.routes.errors import router as errors_router
-        from modulo.auth.dependencies import get_current_user
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.api.dependencies import get_db_session, get_plan_context
+        from farna.api.routes.errors import router as errors_router
+        from farna.auth.dependencies import get_current_user
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         app = FastAPI()
         app.include_router(errors_router)
@@ -247,9 +247,9 @@ class TestBreadcrumbSerialization:
 
         sample = self._make_event(context_json={"breadcrumbs": _BREADCRUMBS})
         with (
-            patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=group)),
-            patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=sample)),
-            patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            patch("farna.api.routes.errors.get_error_group", AsyncMock(return_value=group)),
+            patch("farna.api.routes.errors._fetch_sample_event", AsyncMock(return_value=sample)),
+            patch("farna.api.routes.errors.set_rls_org", AsyncMock()),
             TestClient(app) as client,
         ):
             resp = client.get(f"/api/v1/errors/{group.id}")
@@ -257,7 +257,7 @@ class TestBreadcrumbSerialization:
         assert resp.json()["sample_event"]["breadcrumbs"] == _BREADCRUMBS
 
     def test_prepare_event_data_helper_folds_and_excludes(self):
-        from modulo.api.routes.errors import _prepare_event_data
+        from farna.api.routes.errors import _prepare_event_data
 
         event = ErrorEventInput(
             level="error",

@@ -2,8 +2,8 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from modulo.model_backends.stub import StubModelBackend, UnexpectedInputError, normalize_input
-from modulo.model_backends.stub.backend import _content_as_text
+from farna.model_backends.stub import StubModelBackend, UnexpectedInputError, normalize_input
+from farna.model_backends.stub.backend import _content_as_text
 
 
 def test_is_a_langchain_chat_model() -> None:

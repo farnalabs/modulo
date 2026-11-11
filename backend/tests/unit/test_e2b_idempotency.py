@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError, make_sandbox_agent_fn
+from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError, make_sandbox_agent_fn
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"

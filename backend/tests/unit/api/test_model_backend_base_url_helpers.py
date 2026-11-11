@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.model_backends import (
+from farna.api.routes.model_backends import (
     ModelBackendUpdate,
     _base_urls_for_backends,
     _direct_update_base_url,
@@ -31,7 +31,7 @@ from modulo.api.routes.model_backends import (
     _to_response,
     _validate_base_url,
 )
-from modulo.model_backends.base import HealthResult
+from farna.model_backends.base import HealthResult
 
 
 def _http_body(exc: HTTPException) -> str:
@@ -80,7 +80,7 @@ def test_redact_base_url_keeps_only_the_host() -> None:
 def test_stored_secret_payload_logs_and_returns_empty_on_malformed_json(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="modulo.api.routes.model_backends"):
+    with caplog.at_level(logging.WARNING, logger="farna.api.routes.model_backends"):
         assert not _stored_secret_payload("{not-json")
     assert "malformed_credential_json" in caplog.text
 
@@ -154,8 +154,8 @@ async def test_base_urls_for_backends_resolves_the_secrets_backend_once() -> Non
     second = MagicMock(id=uuid.uuid4(), provider="ollama", default_params={})
     secrets_backend = AsyncMock()
     with (
-        patch("modulo.api.routes.model_backends._try_secrets_backend", return_value=secrets_backend) as factory,
-        patch("modulo.api.routes.model_backends._read_secret_payload", new=AsyncMock(return_value={})) as read,
+        patch("farna.api.routes.model_backends._try_secrets_backend", return_value=secrets_backend) as factory,
+        patch("farna.api.routes.model_backends._read_secret_payload", new=AsyncMock(return_value={})) as read,
     ):
         result = await _base_urls_for_backends(MagicMock(), MagicMock(), [first, second])
     assert set(result) == {first.id, second.id}
@@ -211,7 +211,7 @@ async def test_health_check_on_save_forwards_only_supplied_inputs(
 ) -> None:
     backend = AsyncMock()
     backend.health_check = AsyncMock(return_value=HealthResult(ok=True))
-    with patch("modulo.api.routes.model_backends._build_backend", return_value=backend) as build:
+    with patch("farna.api.routes.model_backends._build_backend", return_value=backend) as build:
         status, detail = await _run_health_check_on_save("openai", "gpt-4o", api_key, {}, base_url=base_url)
     assert (status, detail) == ("ok", None)
     creds: dict[str, Any] = build.call_args.args[2]

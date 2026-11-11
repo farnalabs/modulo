@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.library_service import upgrade
-from modulo.core.library_service.upgrade import (
+from farna.core.library_service import upgrade
+from farna.core.library_service.upgrade import (
     CollectionUpgradeError,
     NoUpdateAvailableError,
     UpgradeInstallNotFoundError,
@@ -45,10 +45,10 @@ from modulo.core.library_service.upgrade import (
     find_newer_version,
     upgrade_collection,
 )
-from modulo.db.models.agent import Agent
-from modulo.db.models.collection_install import CollectionInstall
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.schema import Schema
+from farna.db.models.agent import Agent
+from farna.db.models.collection_install import CollectionInstall
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.schema import Schema
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -259,7 +259,7 @@ class TestSchemaSlugMap:
 
 class TestResolvePinPrimitive:
     async def test_no_visible_row(self) -> None:
-        with patch("modulo.core.library_service.get_primitive_by_slug", new_callable=AsyncMock, return_value=None):
+        with patch("farna.core.library_service.get_primitive_by_slug", new_callable=AsyncMock, return_value=None):
             prim, ptype = await _resolve_pin_primitive(AsyncMock(), uuid.uuid4(), "s", "1.0")
         assert prim is None
         assert ptype == ""
@@ -268,7 +268,7 @@ class TestResolvePinPrimitive:
         deleted = _prim(status="published")
         deleted.deleted_at = "2025-01-01"
         with patch(
-            "modulo.core.library_service.get_primitive_by_slug",
+            "farna.core.library_service.get_primitive_by_slug",
             new_callable=AsyncMock,
             return_value=deleted,
         ):
@@ -280,7 +280,7 @@ class TestResolvePinPrimitive:
         row = _prim(version="1.0")
         row.deleted_at = None
         with patch(
-            "modulo.core.library_service.get_primitive_by_slug",
+            "farna.core.library_service.get_primitive_by_slug",
             new_callable=AsyncMock,
             return_value=row,
         ):
@@ -295,7 +295,7 @@ class TestResolvePinPrimitive:
         async def _lookup(_s, _o, primitive_type, _slug, **_kw):
             return row if primitive_type == "agent" else None
 
-        with patch("modulo.core.library_service.get_primitive_by_slug", side_effect=_lookup):
+        with patch("farna.core.library_service.get_primitive_by_slug", side_effect=_lookup):
             prim, ptype = await _resolve_pin_primitive(AsyncMock(), uuid.uuid4(), "s", "1.0")
         assert prim is None
         assert ptype == "agent"
@@ -763,10 +763,10 @@ class TestReconcileAgentEntity:
         warnings: list[str] = []
         agent = SimpleNamespace(organisation_id=org)
         session = _session(get_map={(Agent, eid): agent})
-        from modulo.core.pipeline_engine.git_content import GitContentRefError
+        from farna.core.pipeline_engine.git_content import GitContentRefError
 
         with patch(
-            "modulo.core.pipeline_engine.git_content.validate_agent_git_content_values",
+            "farna.core.pipeline_engine.git_content.validate_agent_git_content_values",
             side_effect=GitContentRefError("bad ref"),
         ):
             ok = await _reconcile_agent_entity(session, org, eid, {"prompt_template": "bad"}, {}, warnings)
@@ -800,7 +800,7 @@ class TestReconcileAgentEntity:
             "input_schema": "in",
             "output_schema": "out",
         }
-        with patch("modulo.core.pipeline_engine.git_content.validate_agent_git_content_values"):
+        with patch("farna.core.pipeline_engine.git_content.validate_agent_git_content_values"):
             ok = await _reconcile_agent_entity(session, org, eid, content, schema_map, warnings)
         assert ok is True
         assert agent.prompt_template == "new-prompt"
@@ -824,7 +824,7 @@ class TestReconcileAgentEntity:
             output_schema_id="keep-out",
         )
         session = _session(get_map={(Agent, eid): agent})
-        with patch("modulo.core.pipeline_engine.git_content.validate_agent_git_content_values"):
+        with patch("farna.core.pipeline_engine.git_content.validate_agent_git_content_values"):
             ok = await _reconcile_agent_entity(
                 session, org, eid, {"input_schema": "missing", "output_schema": "missing"}, {}, []
             )

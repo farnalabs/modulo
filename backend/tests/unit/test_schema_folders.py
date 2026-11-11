@@ -22,21 +22,21 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 # before the env var above took effect; the app's CSRF middleware reads that
 # cached value at construction. Clear the cache so the middleware honours
 # MODULO_CSRF_ENABLED=false regardless of test collection order.
-from modulo.settings import get_settings
+from farna.settings import get_settings
 
 get_settings.cache_clear()
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context  # noqa: E402
-from modulo.api.main import app  # noqa: E402
-from modulo.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user  # noqa: E402
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal  # noqa: E402
-from modulo.db.crud.folder_tree import MAX_FOLDER_DEPTH  # noqa: E402
-from modulo.db.crud.schema_folder import create_folder, update_folder  # noqa: E402
-from modulo.settings import Settings  # noqa: E402
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context  # noqa: E402
+from farna.api.main import app  # noqa: E402
+from farna.auth.dependencies import get_current_tenant_user_or_api_key, get_current_user  # noqa: E402
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal  # noqa: E402
+from farna.db.crud.folder_tree import MAX_FOLDER_DEPTH  # noqa: E402
+from farna.db.crud.schema_folder import create_folder, update_folder  # noqa: E402
+from farna.settings import Settings  # noqa: E402
 from tests.unit.api.mock_session import configure_mock_session  # noqa: E402
 
-_SF_PATCH_PREFIX = "modulo.api.routes.schema_folders."
-_SCHEMAS_PATCH_PREFIX = "modulo.api.routes.schemas."
+_SF_PATCH_PREFIX = "farna.api.routes.schema_folders."
+_SCHEMAS_PATCH_PREFIX = "farna.api.routes.schemas."
 
 _VALID_32 = "b" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -302,9 +302,9 @@ async def test_update_folder_enforces_depth_limit() -> None:
     # get_folder -> folder; parent-exists check -> the parent id (exists)
     session = _session_returning(folder, uuid.uuid4())
     with (
-        patch("modulo.db.crud.schema_folder.folder_is_ancestor", new=AsyncMock(return_value=False)),
+        patch("farna.db.crud.schema_folder.folder_is_ancestor", new=AsyncMock(return_value=False)),
         patch(
-            "modulo.db.crud.folder_tree.compute_folder_depth",
+            "farna.db.crud.folder_tree.compute_folder_depth",
             new=AsyncMock(return_value=MAX_FOLDER_DEPTH),
         ),
         pytest.raises(ValueError, match="nesting depth"),

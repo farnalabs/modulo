@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     get_available_features,
     get_integration_status,
     get_org_config,
@@ -19,10 +19,10 @@ from modulo.api.mcp_server import (
     perform_housekeeping,
     search_documentation,
 )
-from modulo.core.documentation_indexer import DocEntry
-from modulo.core.feature_flags import FeatureFlag
-from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
-from modulo.db.models.secret import Secret
+from farna.core.documentation_indexer import DocEntry
+from farna.core.feature_flags import FeatureFlag
+from farna.core.housekeeping import Candidate, CategoryResult, Scanner
+from farna.db.models.secret import Secret
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
@@ -56,13 +56,13 @@ class _SystemAdminContext(AuthContext):
 
     def setup_method(self) -> None:
         super().setup_method()
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         _ctx_is_system_admin.set(False)
         super().teardown_method()
@@ -74,13 +74,13 @@ class _SystemAdminContext(AuthContext):
 
 
 class TestGetOrgConfigErrors(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_org_config()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_section_returns_invalid_section(
         self,
         mock_session: AsyncMock,
@@ -92,9 +92,9 @@ class TestGetOrgConfigErrors(_SystemAdminContext):
 
         assert result["error"] == "invalid_section"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_migration_required_on_programming_error(
         self,
         mock_list_config: AsyncMock,
@@ -110,9 +110,9 @@ class TestGetOrgConfigErrors(_SystemAdminContext):
 
 
 class TestGetOrgConfigSuccess(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_returns_table_when_config_exists(
         self,
         mock_list_config: AsyncMock,
@@ -132,9 +132,9 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
         assert "| default_plan | team |" in result["results"]
         assert "| feature_flags:parallel_branches |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_sensitive_keys_are_filtered_out(
         self,
         mock_list_config: AsyncMock,
@@ -153,9 +153,9 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
         assert "fernet_key" not in result["results"]
         assert "| app_name | modulo |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config")
     async def test_section_filter_limits_config_to_section(
         self,
         mock_list_config: AsyncMock,
@@ -174,9 +174,9 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
         assert "assistant_config:enabled" in result["results"]
         assert "default_plan" not in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.system_config.list_config", return_value=[])
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.system_config.list_config", return_value=[])
     async def test_no_config_found_message(
         self,
         mock_list_config: AsyncMock,
@@ -197,16 +197,16 @@ class TestGetOrgConfigSuccess(_SystemAdminContext):
 
 
 class TestGetAvailableFeaturesErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_available_features()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_migration_required_on_programming_error(
         self,
         mock_get_org: AsyncMock,
@@ -225,11 +225,11 @@ class TestGetAvailableFeaturesErrors(AuthContext):
 
 
 class TestGetAvailableFeaturesSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_returns_tier_and_enabled_features(
         self,
         mock_get_org: AsyncMock,
@@ -264,11 +264,11 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
         assert "| sso | team | no |" in result["results"]
         assert "lifecycle_map_journeys" not in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_internal_caller_can_see_retired_flag(
         self,
         mock_get_org: AsyncMock,
@@ -277,7 +277,7 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_key_grants
+        from farna.api.mcp_server import _ctx_key_grants
 
         mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
         plan_ctx = MagicMock()
@@ -312,11 +312,11 @@ class TestSystemMapsInternalFlagMCP:
     callers and visible only to internal dev-mode operators with the in-dev grant.
     """
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_ordinary_caller_cannot_see_system_maps(
         self,
         mock_get_org: AsyncMock,
@@ -326,7 +326,7 @@ class TestSystemMapsInternalFlagMCP:
         mock_validate_auth: AsyncMock,
     ) -> None:
         """Ordinary caller (no dev-mode, no in-dev grant) cannot see system_maps."""
-        from modulo.api.mcp_server import _ctx_org_id
+        from farna.api.mcp_server import _ctx_org_id
 
         _ctx_org_id.set(make_session_scope().org_id)
         mock_get_settings.return_value = MagicMock(modulo_dev_mode=False)
@@ -353,11 +353,11 @@ class TestSystemMapsInternalFlagMCP:
         assert "| mcp_server | community | yes |" in result["results"]
         assert "| sso | team | no |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_internal_caller_can_see_system_maps(
         self,
         mock_get_org: AsyncMock,
@@ -367,7 +367,7 @@ class TestSystemMapsInternalFlagMCP:
         mock_validate_auth: AsyncMock,
     ) -> None:
         """Internal dev-mode operator with the dedicated grant can see system_maps."""
-        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_key_grants, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(make_session_scope().org_id)
         _ctx_role.set("operator")
@@ -393,11 +393,11 @@ class TestSystemMapsInternalFlagMCP:
         assert result["feature_count"] == 1
         assert "| system_maps | community | yes |" in result["results"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.resolve_plan_context")
-    @patch("modulo.db.crud.organisation.get_organisation")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.resolve_plan_context")
+    @patch("farna.db.crud.organisation.get_organisation")
     async def test_dev_mode_without_grant_cannot_see_system_maps(
         self,
         mock_get_org: AsyncMock,
@@ -407,7 +407,7 @@ class TestSystemMapsInternalFlagMCP:
         mock_validate_auth: AsyncMock,
     ) -> None:
         """Dev-mode enabled but no dedicated grant cannot see system_maps."""
-        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id
+        from farna.api.mcp_server import _ctx_key_grants, _ctx_org_id
 
         _ctx_org_id.set(make_session_scope().org_id)
         mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
@@ -444,9 +444,9 @@ class TestSystemMapsAccessUsesSharedGrantCheck:
     """
 
     def _access(self, *, role: str, grants: frozenset[str] | None) -> bool:
-        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role, _mcp_internal_system_maps_access
+        from farna.api.mcp_server import _ctx_key_grants, _ctx_role, _mcp_internal_system_maps_access
 
-        with patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        with patch("farna.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
             _ctx_role.set(role)
             _ctx_key_grants.set(grants)
             try:
@@ -466,9 +466,9 @@ class TestSystemMapsAccessUsesSharedGrantCheck:
 
     def test_non_delegable_grant_is_denied_like_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A non-delegable marking revokes an already-minted grant, as REST does."""
-        from modulo.api.dependencies import require_in_dev_operator
-        from modulo.auth import permissions as permissions_module
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.api.dependencies import require_in_dev_operator
+        from farna.auth import permissions as permissions_module
+        from farna.auth.jwt import TenantPrincipal
 
         monkeypatch.setattr(
             permissions_module,
@@ -497,7 +497,7 @@ class TestSystemMapsAccessUsesSharedGrantCheck:
 
     def test_non_delegable_does_not_narrow_ungranted_caller(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No grant set (JWTs, legacy keys) does not narrow — identical to REST."""
-        from modulo.auth import permissions as permissions_module
+        from farna.auth import permissions as permissions_module
 
         monkeypatch.setattr(
             permissions_module,
@@ -515,12 +515,12 @@ class TestSystemMapsAccessUsesSharedGrantCheck:
 
 class TestListFeatureFlagsVisibility(AuthContext):
     @pytest.mark.parametrize("internal_access", [False, True])
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_settings")
-    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
-    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
-    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_settings")
+    @patch("farna.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("farna.db.crud.organisation.get_organisation", new_callable=AsyncMock)
     async def test_system_maps_is_visible_only_to_internal_callers(
         self,
         mock_get_org: AsyncMock,
@@ -531,7 +531,7 @@ class TestListFeatureFlagsVisibility(AuthContext):
         mock_validate_auth: AsyncMock,
         internal_access: bool,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_key_grants, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_key_grants, _ctx_role
 
         org = MagicMock(settings_json={})
         mock_get_org.return_value = org
@@ -588,13 +588,13 @@ class TestListFeatureFlagsVisibility(AuthContext):
 
 
 class TestGetIntegrationStatusErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await get_integration_status()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_migration_required_on_programming_error(
         self,
         mock_session: AsyncMock,
@@ -610,8 +610,8 @@ class TestGetIntegrationStatusErrors(AuthContext):
 
 
 class TestGetIntegrationStatusSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_returns_status_structure(
         self,
         mock_session: AsyncMock,
@@ -680,13 +680,13 @@ class TestGetIntegrationStatusSuccess(AuthContext):
 
 
 class TestSearchDocumentationErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await search_documentation(query="pipeline")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._get_doc_index")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._get_doc_index")
     async def test_search_failure_returns_internal_error(
         self,
         mock_get_index: MagicMock,
@@ -702,8 +702,8 @@ class TestSearchDocumentationErrors(AuthContext):
 
 
 class TestSearchDocumentationSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._get_doc_index")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._get_doc_index")
     async def test_returns_formatted_results(
         self,
         mock_get_index: MagicMock,
@@ -726,8 +726,8 @@ class TestSearchDocumentationSuccess(AuthContext):
         assert "### 3. Runtime > Pipelines" in result["results"]
         index.search.assert_called_once_with("pipelines", section="3. Runtime")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._get_doc_index")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._get_doc_index")
     async def test_no_results_returns_not_found_message(
         self,
         mock_get_index: MagicMock,
@@ -748,31 +748,31 @@ class TestSearchDocumentationSuccess(AuthContext):
 
 
 class TestListHousekeepingErrors(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_housekeeping()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await list_housekeeping()
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_migration_required_on_programming_error(
         self,
         mock_scan: AsyncMock,
@@ -788,9 +788,9 @@ class TestListHousekeepingErrors(_SystemAdminContext):
 
 
 class TestListHousekeepingSuccess(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_returns_categories_shape(
         self,
         mock_scan: AsyncMock,
@@ -819,8 +819,8 @@ class TestListHousekeepingSuccess(_SystemAdminContext):
         assert category["status"] == "ok"
         assert category["error"] is None
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_failed_scanner_is_distinguishable_from_clean_empty(
         self,
         mock_session: AsyncMock,
@@ -854,7 +854,7 @@ class TestListHousekeepingSuccess(_SystemAdminContext):
         ]
         mock_session.return_value = make_session_context(_make_housekeeping_session())
 
-        with patch("modulo.core.housekeeping._SCANNERS", scanners):
+        with patch("farna.core.housekeeping._SCANNERS", scanners):
             result = await list_housekeeping(limit=100)
 
         by_category = {c["category"]: c for c in result["categories"]}
@@ -875,9 +875,9 @@ class TestListHousekeepingAuthz(AuthContext):
     system admin is accepted.
     """
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_operator_rejected(
         self,
         mock_scan: AsyncMock,
@@ -890,9 +890,9 @@ class TestListHousekeepingAuthz(AuthContext):
         result = await list_housekeeping()
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_operator_with_system_admin_rejected_by_org_role_floor(
         self,
         mock_scan: AsyncMock,
@@ -905,7 +905,7 @@ class TestListHousekeepingAuthz(AuthContext):
         scope-map regression: if ``list_housekeeping`` ever resolves below
         admin again, the scope chokepoint passes and the listing succeeds.
         """
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
@@ -916,16 +916,16 @@ class TestListHousekeepingAuthz(AuthContext):
             _ctx_is_system_admin.set(False)
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_org_admin_without_system_admin_rejected(
         self,
         mock_scan: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
@@ -934,16 +934,16 @@ class TestListHousekeepingAuthz(AuthContext):
         assert result["error"] == "insufficient_scope"
         assert "system admin" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_system_admin_accepted(
         self,
         mock_scan: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         mock_scan.return_value = []
         mock_session.return_value = make_session_context(make_session_scope())
@@ -955,9 +955,9 @@ class TestListHousekeepingAuthz(AuthContext):
             _ctx_is_system_admin.set(False)
         assert result == {"categories": [], "total_count": 0}
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.scan_all")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.scan_all")
     async def test_refusal_logs_warning(
         self,
         mock_scan: AsyncMock,
@@ -971,12 +971,12 @@ class TestListHousekeepingAuthz(AuthContext):
         call-site line, so without the warning a stream of refusals would be
         indistinguishable from operational errors.
         """
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         mock_session.return_value = make_session_context(make_session_scope())
         mock_scan.return_value = []
         _ctx_role.set("admin")  # org admin, but NOT system admin
-        with caplog.at_level(logging.WARNING, logger="modulo.api.mcp_server"):
+        with caplog.at_level(logging.WARNING, logger="farna.api.mcp_server"):
             result = await list_housekeeping()
         assert result["error"] == "insufficient_scope"
         assert any(
@@ -991,30 +991,30 @@ class TestListHousekeepingAuthz(AuthContext):
 
 
 class TestPerformHousekeepingErrors(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_missing_entity_type_or_id_reports_error(
         self,
         mock_session: AsyncMock,
@@ -1028,9 +1028,9 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         assert len(result["errors"]) == 1
         assert result["errors"][0]["error"] == "item missing entity_type or id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {})
     async def test_unknown_entity_type_reports_error(
         self,
         mock_session: AsyncMock,
@@ -1043,9 +1043,9 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         assert result["deleted_count"] == 0
         assert result["errors"] == [{"entity_type": "bogus_type", "error": "Unknown entity type: bogus_type"}]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server._delete_housekeeping_group", new_callable=AsyncMock)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server._delete_housekeeping_group", new_callable=AsyncMock)
     async def test_invalid_org_fk_is_triage_only(
         self,
         mock_delete_group: AsyncMock,
@@ -1065,9 +1065,9 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
 
 
 class TestPerformHousekeepingSuccess(_SystemAdminContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
     async def test_deletes_valid_entity(
         self,
         mock_session: AsyncMock,
@@ -1085,9 +1085,9 @@ class TestPerformHousekeepingSuccess(_SystemAdminContext):
         mock_sesh.execute.assert_awaited_once()
         mock_sesh.delete.assert_awaited_once()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
     async def test_integrity_error_reports_foreign_key_violation(
         self,
         mock_session: AsyncMock,
@@ -1110,9 +1110,9 @@ class TestPerformHousekeepingSuccess(_SystemAdminContext):
             }
         ]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
     async def test_migration_required_on_programming_error(
         self,
         mock_session: AsyncMock,
@@ -1138,15 +1138,15 @@ class TestPerformHousekeepingAuthz(AuthContext):
     admin is accepted.
     """
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_operator_rejected(self, mock_validate_auth: AsyncMock) -> None:
         # AuthContext's default role is "operator" — below the admin floor.
         result = await perform_housekeeping(items=[{"id": "x", "entity_type": "secret"}])
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
     async def test_operator_with_system_admin_rejected_by_org_role_floor(
         self,
         mock_session: AsyncMock,
@@ -1158,7 +1158,7 @@ class TestPerformHousekeepingAuthz(AuthContext):
         scope-map regression: if ``perform_housekeeping`` ever resolves below
         admin again, the scope chokepoint passes and the delete body runs.
         """
-        from modulo.api.mcp_server import _ctx_is_system_admin
+        from farna.api.mcp_server import _ctx_is_system_admin
 
         mock_sesh = _make_housekeeping_session()
         mock_result = MagicMock()
@@ -1172,14 +1172,14 @@ class TestPerformHousekeepingAuthz(AuthContext):
             _ctx_is_system_admin.set(False)
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_org_admin_without_system_admin_rejected(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_role
+        from farna.api.mcp_server import _ctx_role
 
         mock_session.return_value = make_session_context(make_session_scope())
         _ctx_role.set("admin")  # passes the org-role floor, but is NOT system admin
@@ -1187,15 +1187,15 @@ class TestPerformHousekeepingAuthz(AuthContext):
         assert result["error"] == "insufficient_scope"
         assert "system admin" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.housekeeping.ENTITY_MODEL_MAP", {"secret": Secret})
     async def test_system_admin_accepted(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+        from farna.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         mock_sesh = _make_housekeeping_session()
         mock_result = MagicMock()

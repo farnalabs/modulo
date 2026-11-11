@@ -29,7 +29,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 
-from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
+from farna.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_REVISION = "0313_collection_install_drop_installed_entities"
@@ -38,7 +38,7 @@ _MIGRATION_DOWN_REVISION = "0312_memberships_active_lookups"
 _DROPPED_COLUMN = "installed_entities"
 _INSTALL_TABLE = "collection_install"
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 

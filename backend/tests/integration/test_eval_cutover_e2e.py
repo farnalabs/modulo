@@ -26,11 +26,11 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-import modulo.core.pipeline_execution as pe
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+import farna.core.pipeline_execution as pe
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 pytestmark = [
     pytest.mark.integration,
@@ -192,8 +192,8 @@ async def test_post_node_eval_persists_via_evals_cutover(
     ``eval_definitions`` table was retired with the table itself — migration
     ``0324_purge_eval_definitions``, FAR-1962.)
     """
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
-    from modulo.settings import get_settings
+    from farna.core.pipeline_engine.executor import PipelineExecutor
+    from farna.settings import get_settings
 
     org_id = await _seed_org(db_engine, "CutoverE2E")
     account_id = await _seed_account(db_engine, org_id, "cutover-e2e@test.local")

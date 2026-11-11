@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.cost_controller.system_config import (
+from farna.core.cost_controller.system_config import (
     _lock_keys,
     acquire_kv_lock,
     read_system_config,

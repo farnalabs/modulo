@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.run_context import autonomy as at
+from farna.core.run_context import autonomy as at
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,8 +63,8 @@ def _pipeline(earned: Any) -> MagicMock:
 
 
 def _patch_rls(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
-    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("farna.db.rls.set_rls_execution_context", AsyncMock())
 
 
 class TestReadLiveEarnedAutonomy:
@@ -77,7 +77,7 @@ class TestReadLiveEarnedAutonomy:
     async def test_returns_none_without_ids(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_rls(monkeypatch)
         get_pipeline = AsyncMock(return_value=_pipeline("fully_autonomous"))
-        monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", get_pipeline)
+        monkeypatch.setattr("farna.db.crud.pipeline.get_pipeline", get_pipeline)
 
         assert await at.read_live_earned_autonomy(_session_factory, org_id=None, pipeline_id=uuid.uuid4()) is None
         assert await at.read_live_earned_autonomy(_session_factory, org_id=uuid.uuid4(), pipeline_id=None) is None
@@ -88,7 +88,7 @@ class TestReadLiveEarnedAutonomy:
         org_id = uuid.uuid4()
         pipeline_id = uuid.uuid4()
         get_pipeline = AsyncMock(return_value=_pipeline("notify_on_complete"))
-        monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", get_pipeline)
+        monkeypatch.setattr("farna.db.crud.pipeline.get_pipeline", get_pipeline)
 
         result = await at.read_live_earned_autonomy(_session_factory, org_id=org_id, pipeline_id=pipeline_id)
 
@@ -100,21 +100,21 @@ class TestReadLiveEarnedAutonomy:
 
     async def test_missing_pipeline_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_rls(monkeypatch)
-        monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=None))
+        monkeypatch.setattr("farna.db.crud.pipeline.get_pipeline", AsyncMock(return_value=None))
         result = await at.read_live_earned_autonomy(_session_factory, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
         assert result is None
 
     @pytest.mark.parametrize("earned", [None, "", 42, ["fully_autonomous"]])
     async def test_non_string_or_empty_level_returns_none(self, monkeypatch: pytest.MonkeyPatch, earned: Any) -> None:
         _patch_rls(monkeypatch)
-        monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=_pipeline(earned)))
+        monkeypatch.setattr("farna.db.crud.pipeline.get_pipeline", AsyncMock(return_value=_pipeline(earned)))
         result = await at.read_live_earned_autonomy(_session_factory, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
         assert result is None
 
     async def test_db_error_fails_open_to_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_rls(monkeypatch)
         monkeypatch.setattr(
-            "modulo.db.crud.pipeline.get_pipeline",
+            "farna.db.crud.pipeline.get_pipeline",
             AsyncMock(side_effect=RuntimeError("db down")),
         )
         result = await at.read_live_earned_autonomy(_session_factory, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4())
@@ -123,7 +123,7 @@ class TestReadLiveEarnedAutonomy:
     async def test_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_rls(monkeypatch)
         monkeypatch.setattr(
-            "modulo.db.crud.pipeline.get_pipeline",
+            "farna.db.crud.pipeline.get_pipeline",
             AsyncMock(side_effect=asyncio.CancelledError()),
         )
         with pytest.raises(asyncio.CancelledError):
@@ -147,27 +147,27 @@ class TestIsAutonomyGatingEnabled:
 
     async def test_resolves_the_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         registry = _FlagRegistry(True)
-        monkeypatch.setattr("modulo.core.feature_flags.get_registry", lambda: registry)
+        monkeypatch.setattr("farna.core.feature_flags.get_registry", lambda: registry)
         org_id = uuid.uuid4()
 
         assert await at.is_autonomy_gating_enabled(org_id=org_id) is True
         assert registry.calls == [(at.AUTONOMY_GATING_FLAG, org_id)]
 
     async def test_flag_off_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("modulo.core.feature_flags.get_registry", lambda: _FlagRegistry(False))
+        monkeypatch.setattr("farna.core.feature_flags.get_registry", lambda: _FlagRegistry(False))
         assert await at.is_autonomy_gating_enabled(org_id=uuid.uuid4()) is False
 
     async def test_registry_error_defaults_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom() -> Any:
             raise RuntimeError("registry unavailable")
 
-        monkeypatch.setattr("modulo.core.feature_flags.get_registry", _boom)
+        monkeypatch.setattr("farna.core.feature_flags.get_registry", _boom)
         assert await at.is_autonomy_gating_enabled(org_id=uuid.uuid4()) is False
 
     async def test_cancellation_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom() -> Any:
             raise asyncio.CancelledError
 
-        monkeypatch.setattr("modulo.core.feature_flags.get_registry", _boom)
+        monkeypatch.setattr("farna.core.feature_flags.get_registry", _boom)
         with pytest.raises(asyncio.CancelledError):
             await at.is_autonomy_gating_enabled(org_id=uuid.uuid4())

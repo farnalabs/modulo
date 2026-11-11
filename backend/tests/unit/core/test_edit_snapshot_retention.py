@@ -1,7 +1,7 @@
 """FAR-1815: the edit-snapshot retention sweep is enumerable like its siblings.
 
 The sweep's selection is the registered housekeeping category
-``edit_snapshot_retention`` (``modulo.core.housekeeping``); ``scan_all`` — the
+``edit_snapshot_retention`` (``farna.core.housekeeping``); ``scan_all`` — the
 exact surface ``GET /api/v1/admin/housekeeping`` and the MCP ``list_housekeeping``
 tool call — must enumerate it like every other category, with the standard
 ``pipeline_snapshot`` cleanup entity stamped on its candidates.
@@ -27,18 +27,18 @@ from collections.abc import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.housekeeping import (
+from farna.core.housekeeping import (
     SCANNERS_BY_CATEGORY,
     _canonical_snapshot_id,
     _scan_edit_snapshot_retention,
     scan_all,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.trigger import Trigger
-from modulo.db.models.variant_group import VariantGroup
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.db.models.trigger import Trigger
+from farna.db.models.variant_group import VariantGroup
 
 _CATEGORY = "edit_snapshot_retention"
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000a1")

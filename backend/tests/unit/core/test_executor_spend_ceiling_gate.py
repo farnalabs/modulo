@@ -17,14 +17,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.executor import (
     FINALIZE_LOCK_RETRY_ATTEMPTS,
     PipelineExecutor,
     _is_finalize_lock_retryable,
 )
-from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED
-from modulo.db.crud.run_node_outputs import DualWriteError
-from modulo.db.models.run import Run
+from farna.core.spend_ceiling import ORG_CEILING_EXCEEDED
+from farna.db.crud.run_node_outputs import DualWriteError
+from farna.db.models.run import Run
 
 
 @asynccontextmanager
@@ -85,14 +85,14 @@ async def test_pre_gate_blocks_when_at_ceiling() -> None:
     run = _run()
     fake_self, _session = _make_self(org, run)
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(),
         ) as update_status,
         patch(
-            "modulo.core.pipeline_engine.executor.get_run",
+            "farna.core.pipeline_engine.executor.get_run",
             new=AsyncMock(return_value=run),
         ),
     ):
@@ -109,14 +109,14 @@ async def test_pre_gate_blocks_kill_switch_zero_ceiling() -> None:
     run = _run()
     fake_self, _session = _make_self(org, run)
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(),
         ) as update_status,
         patch(
-            "modulo.core.pipeline_engine.executor.get_run",
+            "farna.core.pipeline_engine.executor.get_run",
             new=AsyncMock(return_value=run),
         ),
     ):
@@ -132,14 +132,14 @@ async def test_pre_gate_allows_when_budget_remaining() -> None:
     run = _run()
     fake_self, _session = _make_self(org, run)
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(),
         ) as update_status,
         patch(
-            "modulo.core.pipeline_engine.executor.get_run",
+            "farna.core.pipeline_engine.executor.get_run",
             new=AsyncMock(return_value=run),
         ),
     ):
@@ -155,14 +155,14 @@ async def test_pre_gate_allows_when_no_ceiling() -> None:
     run = _run()
     fake_self, _session = _make_self(org, run)
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
         patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
+            "farna.core.pipeline_engine.executor.update_run_status",
             new=AsyncMock(),
         ) as update_status,
         patch(
-            "modulo.core.pipeline_engine.executor.get_run",
+            "farna.core.pipeline_engine.executor.get_run",
             new=AsyncMock(return_value=run),
         ),
     ):
@@ -234,13 +234,13 @@ def test_dual_write_error_with_deadlock_sqlstate_is_not_retryable() -> None:
 async def test_finalize_txn_retries_deadlock_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
     finalize_mock = AsyncMock(side_effect=[_SqlstateError("40P01"), None])
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
     ):
         await _run_finalize(fake_self)
 
@@ -250,13 +250,13 @@ async def test_finalize_txn_retries_deadlock_then_succeeds(monkeypatch: pytest.M
 async def test_finalize_txn_retries_lock_timeout_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
     finalize_mock = AsyncMock(side_effect=[_SqlstateError("55P03"), None])
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
     ):
         await _run_finalize(fake_self)
 
@@ -268,13 +268,13 @@ async def test_finalize_txn_persistent_deadlock_raises_after_bounded_attempts(
 ) -> None:
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
     finalize_mock = AsyncMock(side_effect=_SqlstateError("40P01"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
         pytest.raises(_SqlstateError),
     ):
         await _run_finalize(fake_self)
@@ -287,13 +287,13 @@ async def test_finalize_txn_persistent_deadlock_raises_after_bounded_attempts(
 async def test_finalize_txn_non_retryable_error_raises_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
     finalize_mock = AsyncMock(side_effect=ValueError("genuine failure"))
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
         pytest.raises(ValueError, match="genuine failure"),
     ):
         await _run_finalize(fake_self)
@@ -306,13 +306,13 @@ async def test_finalize_txn_zero_attempts_runs_no_attempt(monkeypatch: pytest.Mo
     runs no finalisation at all (it must not call ``finalize_cost``)."""
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor.FINALIZE_LOCK_RETRY_ATTEMPTS", 0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor.FINALIZE_LOCK_RETRY_ATTEMPTS", 0)
     finalize_mock = AsyncMock()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
     ):
         await _run_finalize(fake_self)
 
@@ -338,7 +338,7 @@ async def test_finalize_retry_flushes_buffered_metrics_exactly_once(
     """
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
 
     sinks: list[object] = []
 
@@ -351,10 +351,10 @@ async def test_finalize_retry_flushes_buffered_metrics_exactly_once(
             raise _SqlstateError("40P01")
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
-        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused,
     ):
         await _run_finalize(fake_self)
 
@@ -370,7 +370,7 @@ async def test_finalize_persistent_failure_flushes_no_metric(
     may be flushed (a metric must never count a finalisation that rolled back)."""
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
 
     async def _finalize(session: object, **kwargs: object) -> None:
         sink = kwargs["metric_sink"]
@@ -379,10 +379,10 @@ async def test_finalize_persistent_failure_flushes_no_metric(
         raise _SqlstateError("40P01")
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
-        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("farna.core.cost_controller.finalize.record_limit_refused") as limit_refused,
         pytest.raises(_SqlstateError),
     ):
         await _run_finalize(fake_self)
@@ -403,7 +403,7 @@ async def test_finalize_retry_flushes_buffered_finalize_deferred_exactly_once(
     """
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
 
     sinks: list[object] = []
 
@@ -416,10 +416,10 @@ async def test_finalize_retry_flushes_buffered_finalize_deferred_exactly_once(
             raise _SqlstateError("40P01")
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
-        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred,
     ):
         await _run_finalize(fake_self)
 
@@ -436,7 +436,7 @@ async def test_finalize_persistent_failure_flushes_no_finalize_deferred(
     finalisation that rolled back)."""
     session = _make_session(None)
     fake_self = _finalize_self(session)
-    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("farna.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
 
     async def _finalize(session: object, **kwargs: object) -> None:
         sink = kwargs["metric_sink"]
@@ -445,10 +445,10 @@ async def test_finalize_persistent_failure_flushes_no_finalize_deferred(
         raise _SqlstateError("40P01")
 
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
-        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("farna.core.cost_controller.finalize.record_finalize_deferred") as deferred,
         pytest.raises(_SqlstateError),
     ):
         await _run_finalize(fake_self)
@@ -468,11 +468,11 @@ async def test_finalize_work_intact_cancelled_propagates() -> None:
     session = _make_session(None)
     fake_self = _finalize_self(session)
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch(
-            "modulo.core.pipeline_engine.executor._apply_work_intact",
+            "farna.core.pipeline_engine.executor._apply_work_intact",
             new=AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -488,14 +488,14 @@ async def test_finalize_work_intact_write_error_is_swallowed() -> None:
     fake_self = _finalize_self(session)
     reclassify = AsyncMock()
     with (
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch(
-            "modulo.core.pipeline_engine.executor._apply_work_intact",
+            "farna.core.pipeline_engine.executor._apply_work_intact",
             new=AsyncMock(side_effect=RuntimeError("work_intact write failed")),
         ),
-        patch("modulo.core.pipeline_engine.executor._reclassify_after_work_intact", new=reclassify),
+        patch("farna.core.pipeline_engine.executor._reclassify_after_work_intact", new=reclassify),
     ):
         await _run_finalize(fake_self, work_intact=True)
 

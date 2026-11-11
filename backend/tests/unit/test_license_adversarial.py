@@ -23,14 +23,14 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from modulo.core.license import (
+from farna.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
     LICENCE_GRACE_DAYS,
     LicenseError,
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from farna.core.registry.crypto import generate_keypair, sign_primitive
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -85,7 +85,7 @@ class TestLicenseModuleImport:
     """Verify the license module loads without errors."""
 
     def test_parse_and_verify_importable(self) -> None:
-        from modulo.core.license import parse_and_verify
+        from farna.core.license import parse_and_verify
 
         assert callable(parse_and_verify)
 
@@ -468,6 +468,6 @@ class TestPublicKeyTampering:
             result = parse_and_verify(valid_license_key)
             assert result.valid is False
         finally:
-            from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX
+            from farna.core.license import _LICENSE_PUBLIC_KEY_HEX
 
             set_public_key(_LICENSE_PUBLIC_KEY_HEX)

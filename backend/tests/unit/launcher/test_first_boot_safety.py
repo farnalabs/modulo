@@ -3,7 +3,7 @@
 Locks the Settings-side contract of the native launcher: the pinned env_file
 (never the CWD ``.env``) and the first-boot ambient-URL refusal hook firing
 at Settings construction. These mutate module-level state in
-``modulo.settings`` — every test restores the pin/guard and the
+``farna.settings`` — every test restores the pin/guard and the
 ``get_settings`` cache via the autouse fixture.
 """
 
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from modulo.launcher.env_safety import AmbientEnvironmentError, make_first_boot_guard
-from modulo.settings import Settings, get_settings, pin_env_file, pinned_env_file, set_first_boot_guard
+from farna.launcher.env_safety import AmbientEnvironmentError, make_first_boot_guard
+from farna.settings import Settings, get_settings, pin_env_file, pinned_env_file, set_first_boot_guard
 from tests.unit.launcher.test_launcher_shared import launcher_state_reset
 
 _VALID_32 = "a" * 32

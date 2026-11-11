@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -160,7 +160,7 @@ def _make_primitive(
 
 def test_viewer_library_list_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
     result = PageResult(items=[], total=0, page=1, page_size=20)
-    with patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as list_mock:
+    with patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as list_mock:
         response = viewer_client.get("/api/v1/libraries")
 
     assert response.status_code == 200, response.text
@@ -239,9 +239,9 @@ def _stub_list_call(
         page_size=20,
     )
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         params: dict[str, str] = {}
         if primitive_type is not None:
@@ -319,7 +319,7 @@ def test_list_libraries_singular_lifecycle_map_filter_is_hidden_for_ordinary_use
 
 def test_list_libraries_dev_mode_viewer_still_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
     """Developer mode alone is not the grant: a viewer stays below the operator floor."""
-    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+    with patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
         mock_list = _stub_list_call(client=viewer_client, primitive_type="lifecycle_map")
 
     assert mock_list.await_args is not None
@@ -338,7 +338,7 @@ def test_list_libraries_multi_type_only_lifecycle_map_is_hidden(viewer_client: T
 
 
 def test_list_libraries_internal_operator_keeps_requested_types(client: TestClient) -> None:
-    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+    with patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
         mock_list = _stub_list_call(client=client, primitive_types="workflow,lifecycle_map")
 
     assert mock_list.await_args is not None
@@ -348,7 +348,7 @@ def test_list_libraries_internal_operator_keeps_requested_types(client: TestClie
 
 
 def test_list_libraries_internal_operator_singular_type_passes_through(client: TestClient) -> None:
-    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+    with patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
         mock_list = _stub_list_call(client=client, primitive_type="lifecycle_map")
 
     assert mock_list.await_args is not None
@@ -361,9 +361,9 @@ def test_list_libraries_default_excludes_in_dev(client: TestClient) -> None:
     """The list endpoint defaults to the service in_dev exclusion (excluded_tiers=None)."""
     result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/libraries")
     assert resp.status_code == 200, resp.text
@@ -376,9 +376,9 @@ def test_list_libraries_include_in_dev_passes_empty_exclusions(client: TestClien
     in_dev = _make_listable_primitive(tier="in_dev")
     result = PageResult(items=[in_dev], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/libraries", params={"include_in_dev": "true"})
     assert resp.status_code == 200, resp.text
@@ -400,9 +400,9 @@ def test_list_libraries_include_in_dev_operator_reveals_in_dev(client: TestClien
     in_dev = _make_listable_primitive(tier="in_dev")
     result = PageResult(items=[in_dev], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result),
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result),
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/libraries", params={"include_in_dev": "true"})
     assert resp.status_code == 200, resp.text
@@ -413,9 +413,9 @@ def test_list_libraries_include_in_dev_false_keeps_exclusion(client: TestClient)
     """?include_in_dev=false behaves exactly like omitting the parameter."""
     result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
-        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("farna.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.get("/api/v1/libraries", params={"include_in_dev": "false"})
     assert resp.status_code == 200, resp.text
@@ -436,10 +436,10 @@ def test_create_pipeline_from_template_returns_201(client: TestClient) -> None:
     pipeline.description = "My custom PR pipeline"
 
     with (
-        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
-        patch("modulo.api.routes.library.create_pipeline", return_value=pipeline) as create_mock,
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_primitive", return_value=primitive),
+        patch("farna.api.routes.library.create_pipeline", return_value=pipeline) as create_mock,
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
@@ -472,10 +472,10 @@ def test_create_pipeline_from_template_default_name(client: TestClient) -> None:
     pipeline.name = "Release Checklist"
 
     with (
-        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
-        patch("modulo.api.routes.library.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_primitive", return_value=primitive),
+        patch("farna.api.routes.library.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
@@ -488,9 +488,9 @@ def test_create_pipeline_from_template_default_name(client: TestClient) -> None:
 
 def test_create_pipeline_from_primitive_not_found(client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.library.get_primitive", return_value=None),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_primitive", return_value=None),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/libraries/{uuid.uuid4()}/create-pipeline",
@@ -505,9 +505,9 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     primitive = _make_primitive(pid=primitive_id, primitive_type="schema")
 
     with (
-        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
+        patch("farna.api.routes.library.get_primitive", return_value=primitive),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
     ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",
@@ -538,11 +538,11 @@ def test_create_pipeline_from_template_strips_declared_policy_gate(
     pipeline = _make_pipeline()
 
     with (
-        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
-        patch("modulo.api.routes.library.create_pipeline", return_value=pipeline),
-        patch("modulo.api.routes.library.set_rls_org"),
-        patch("modulo.api.routes.library.set_rls_user_context"),
-        caplog.at_level(logging.WARNING, logger="modulo.api.routes.library"),
+        patch("farna.api.routes.library.get_primitive", return_value=primitive),
+        patch("farna.api.routes.library.create_pipeline", return_value=pipeline),
+        patch("farna.api.routes.library.set_rls_org"),
+        patch("farna.api.routes.library.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="farna.api.routes.library"),
     ):
         resp = client.post(
             f"/api/v1/libraries/{primitive_id}/create-pipeline",

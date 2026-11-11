@@ -10,7 +10,7 @@ from importlib import import_module
 
 import pytest
 
-from modulo.core.pipeline_engine.error_codes import (
+from farna.core.pipeline_engine.error_codes import (
     ERROR_CODE_REGISTRY,
     KNOWN_FIXES,
     LEGACY_ALIASES,
@@ -77,7 +77,7 @@ def test_class_for_unknown_missing_registry_entry(monkeypatch):
     assert class_for("nonexistent.code") == "harness"
     # When the resolved code is missing from the registry entirely, the class
     # tag falls back to "unknown" (the registry entry itself is absent).
-    monkeypatch.setattr("modulo.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
+    monkeypatch.setattr("farna.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
     assert class_for("anything") == "unknown"
 
 
@@ -85,7 +85,7 @@ def test_is_retryable_unknown_missing_registry_entry(monkeypatch):
     """Unmapped codes default to the harness.unknown retryable value (False)."""
     assert is_retryable("nonexistent.code") is False
     # A code missing from the registry entirely defaults to False too.
-    monkeypatch.setattr("modulo.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
+    monkeypatch.setattr("farna.core.pipeline_engine.error_codes.map_legacy_code", lambda _c: "totally.missing")
     assert is_retryable("anything") is False
 
 
@@ -232,7 +232,7 @@ def test_non_idempotent_suppression_is_dispatch_site_guard():
     by a dedicated registry code. ``node_cancelled`` stays retryable in the
     registry (policy-level), and the executor guard is what prevents the
     re-dispatch of a run whose graph contains a node with ``idempotent: false``."""
-    from modulo.core.pipeline_engine.executor import _graph_is_idempotent
+    from farna.core.pipeline_engine.executor import _graph_is_idempotent
 
     assert _graph_is_idempotent({"nodes": [{"id": "node-a", "idempotent": False}]}) is False
     assert is_retryable("node_cancelled") is True
@@ -357,7 +357,7 @@ def test_sanitize_sk_pattern_keeps_short_innocuous_strings():
 
 def test_sanitize_redacts_slack_rotateable_token_shape():
     """The ``xox`` Slack pattern is aligned with the canonical shared list in
-    ``modulo.core.secret_patterns`` (``xox[baprs]-``) — the ``r`` (rotateable)
+    ``farna.core.secret_patterns`` (``xox[baprs]-``) — the ``r`` (rotateable)
     shape had drifted out of the sanitizer's char class."""
     sanitized = sanitize_error_text("token xoxr-abcdefghij1234 here")
     assert "<redacted>" in sanitized
@@ -743,7 +743,7 @@ def test_dispatch_unbound_exception_class_name_maps_to_its_own_code():
     # The alias key is pinned to the REAL exception class, so renaming the
     # class without updating LEGACY_ALIASES fails here rather than silently
     # dropping runs back into the unknown slice.
-    from modulo.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
+    from farna.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
 
     assert SandboxDispatchUnboundError.__name__ == raw_name
     assert SandboxDispatchUnboundError.__name__ in LEGACY_ALIASES
@@ -800,7 +800,7 @@ def test_error_code_map_conflicts_catches_cross_map_key_conflict(monkeypatch):
     """A bare name claimed by BOTH maps is a conflict even to the same target �
     map_legacy_code checks LEGACY_ALIASES first, so which table owns the name
     must be unambiguous."""
-    import modulo.core.pipeline_engine.error_codes as ec
+    import farna.core.pipeline_engine.error_codes as ec
 
     monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "capacity.org": ec._CODE_CAPACITY_ORG})
     conflicts = ec.error_code_map_conflicts()
@@ -810,7 +810,7 @@ def test_error_code_map_conflicts_catches_cross_map_key_conflict(monkeypatch):
 def test_error_code_map_conflicts_catches_conflicting_targets(monkeypatch):
     """A key in both maps with DIFFERENT targets is the drift the guard exists
     for: the alias silently shadows the registry entry's meaning."""
-    import modulo.core.pipeline_engine.error_codes as ec
+    import farna.core.pipeline_engine.error_codes as ec
 
     monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "agent.failed": "contract.no_output"})
     conflicts = ec.error_code_map_conflicts()
@@ -820,7 +820,7 @@ def test_error_code_map_conflicts_catches_conflicting_targets(monkeypatch):
 def test_error_code_map_conflicts_catches_unresolvable_alias_target(monkeypatch):
     """An alias pointing OUTSIDE the registry would silently degrade
     class_for/is_retryable to "unknown"/False � the guard rejects it."""
-    import modulo.core.pipeline_engine.error_codes as ec
+    import farna.core.pipeline_engine.error_codes as ec
 
     monkeypatch.setattr(ec, "LEGACY_ALIASES", {**ec.LEGACY_ALIASES, "SomeNewError": "runner.missing_code"})
     conflicts = ec.error_code_map_conflicts()
@@ -830,7 +830,7 @@ def test_error_code_map_conflicts_catches_unresolvable_alias_target(monkeypatch)
 @pytest.fixture(autouse=False)
 def _clean_unmapped_signal():
     """Isolate the per-process seen-set for the signal tests."""
-    ec_module = import_module("modulo.core.pipeline_engine.error_codes")
+    ec_module = import_module("farna.core.pipeline_engine.error_codes")
     ec_module._reset_unmapped_code_signal_for_tests()
     yield ec_module
     ec_module._reset_unmapped_code_signal_for_tests()
@@ -1020,7 +1020,7 @@ def test_every_judge_error_code_is_registered():
     "Unknown error", so every JudgeErrorCode value must have an entry (the
     ``provider.*`` values already do and are asserted too).
     """
-    from modulo.core.eval_engine.typed_judge import JudgeErrorCode
+    from farna.core.eval_engine.typed_judge import JudgeErrorCode
 
     missing = [code.value for code in JudgeErrorCode if code.value not in ERROR_CODE_REGISTRY]
     assert not missing, missing

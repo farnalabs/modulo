@@ -38,22 +38,22 @@ from sqlalchemy import Table, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.lifecycle_map.reconcile as reconcile_mod
-from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.core.lifecycle_map.journeys import dismiss_journey
-from modulo.core.lifecycle_map.reconcile import (
+import farna.core.lifecycle_map.reconcile as reconcile_mod
+from farna.core.lifecycle_map.advancement import advance_journeys
+from farna.core.lifecycle_map.journeys import dismiss_journey
+from farna.core.lifecycle_map.reconcile import (
     _canonical_refs,
     _drift_predicate,
     _drift_refs,
     reconcile_journeys,
 )
-from modulo.db.lifecycle_refs import canonical_work_item_id
-from modulo.db.models.base import Base
-from modulo.db.models.journey import Journey
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run import Run
-from modulo.db.models.run_daily_facts import JourneyFact
+from farna.db.lifecycle_refs import canonical_work_item_id
+from farna.db.models.base import Base
+from farna.db.models.journey import Journey
+from farna.db.models.lifecycle_map_stage import LifecycleMapStage
+from farna.db.models.organisation import Organisation
+from farna.db.models.run import Run
+from farna.db.models.run_daily_facts import JourneyFact
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -393,8 +393,8 @@ class TestFailOpen:
                 raise RuntimeError("journey advance exploded")
             return await real_advance(*args, **kwargs)
 
-        monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.advance_journeys", _boom_for_one)
-        with caplog.at_level("ERROR", logger="modulo.core.lifecycle_map.reconcile"):
+        monkeypatch.setattr("farna.core.lifecycle_map.reconcile.advance_journeys", _boom_for_one)
+        with caplog.at_level("ERROR", logger="farna.core.lifecycle_map.reconcile"):
             advanced = await reconcile_journeys(session, batch_size=10)
 
         # One run advanced, one failed open — no exception escaped.
@@ -413,7 +413,7 @@ class TestReconcileEdgeCases:
         async def _cancel(*args: Any, **kwargs: Any) -> int:
             raise asyncio.CancelledError
 
-        monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.advance_journeys", _cancel)
+        monkeypatch.setattr("farna.core.lifecycle_map.reconcile.advance_journeys", _cancel)
         with pytest.raises(asyncio.CancelledError):
             await reconcile_journeys(session, batch_size=10)
 
@@ -472,7 +472,7 @@ class TestAdvanceJourneysDirect:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         run_id = uuid.uuid4()
-        with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.advancement"):
+        with caplog.at_level("WARNING", logger="farna.core.lifecycle_map.advancement"):
             advanced = await advance_journeys(
                 session,
                 _ORG,
@@ -623,7 +623,7 @@ class TestCanonicalRefs:
         assert not _canonical_refs({"kind": "github_pr", "ref": "1"})
 
     def test_malformed_entries_dropped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.reconcile"):
+        with caplog.at_level("WARNING", logger="farna.core.lifecycle_map.reconcile"):
             result = _canonical_refs(
                 [
                     {"kind": "", "ref": "1"},
@@ -659,7 +659,7 @@ class TestAgentMintFlagReconcile:
 
     @pytest.fixture(autouse=True)
     def _clear_flag_caches(self) -> Generator[None]:
-        from modulo.core.runtime_config import org_flags as org_flags_mod
+        from farna.core.runtime_config import org_flags as org_flags_mod
 
         org_flags_mod.clear_org_flag_cache()
         yield
@@ -701,7 +701,7 @@ class TestAgentMintFlagReconcile:
         assert journey.run_count == 1
 
     async def test_flag_error_fails_closed(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
-        from modulo.core.runtime_config import org_flags as org_flags_mod
+        from farna.core.runtime_config import org_flags as org_flags_mod
 
         async def _boom(*_a: Any, **_k: Any) -> Any:
             raise RuntimeError("db outage")

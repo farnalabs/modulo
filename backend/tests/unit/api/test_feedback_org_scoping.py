@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.feedback import (
+from farna.api.routes.feedback import (
     _build_node_name_map,
     _load_eval_suite,
     _resolve_pipeline_name,
     _resolve_producing_node_uuid,
     _resolve_publish_context,
 )
-from modulo.core.feedback_manager import FeedbackManager
+from farna.core.feedback_manager import FeedbackManager
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN_ID = uuid.uuid4()
@@ -150,9 +150,9 @@ async def test_publish_eval_proposal_binding_violation_returns_400() -> None:
     (chunk 3b write-cutover)."""
     from fastapi import HTTPException
 
-    from modulo.api.routes import feedback as feedback_routes
-    from modulo.api.routes.feedback import PublishEvalProposalRequest, publish_eval_proposal
-    from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+    from farna.api.routes import feedback as feedback_routes
+    from farna.api.routes.feedback import PublishEvalProposalRequest, publish_eval_proposal
+    from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
 
     session = AsyncMock()
     begin_cm = AsyncMock()
@@ -173,7 +173,7 @@ async def test_publish_eval_proposal_binding_violation_returns_400() -> None:
         patch.object(feedback_routes, "set_rls_user_context", new=AsyncMock()),
         patch.object(feedback_routes, "_resolve_publish_context", new=AsyncMock(return_value=(run, uuid.uuid4()))),
         patch(
-            "modulo.core.eval_engine.eval_definition_write.create_or_update_eval",
+            "farna.core.eval_engine.eval_definition_write.create_or_update_eval",
             new=AsyncMock(side_effect=PolicyGateBindingViolationError([{"exclusion": "node_id_mismatch"}])),
         ),
         pytest.raises(HTTPException) as excinfo,

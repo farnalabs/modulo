@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.base import PageResult
-from modulo.db.models.publisher import Publisher
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.base import PageResult
+from farna.db.models.publisher import Publisher
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -127,8 +127,8 @@ class TestListPublishers:
         pubs = [_make_mock_publisher(name="Pub One"), _make_mock_publisher(name="Pub Two")]
         page_result = PageResult(items=pubs, total=2, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.admin.list_publishers", return_value=page_result),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.list_publishers", return_value=page_result),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.get(LIST_URL)
         assert resp.status_code == 200
@@ -149,8 +149,8 @@ class TestListPublishers:
         pubs = [_make_mock_publisher(name="Green Pub", tier="green")]
         page_result = PageResult(items=pubs, total=1, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.admin.list_publishers", return_value=page_result),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.list_publishers", return_value=page_result),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.get(f"{LIST_URL}?trust_tier=green")
         assert resp.status_code == 200
@@ -172,10 +172,10 @@ class TestCreatePublisher:
     def test_admin_creates_publisher_returns_201(self, client: TestClient) -> None:
         pub = _make_mock_publisher(name="New Publisher", tier="green")
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=None),
-            patch("modulo.api.routes.admin.get_publisher_by_key", return_value=None),
-            patch("modulo.api.routes.admin.create_publisher", return_value=pub),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=None),
+            patch("farna.api.routes.admin.get_publisher_by_key", return_value=None),
+            patch("farna.api.routes.admin.create_publisher", return_value=pub),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.post(CREATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 201
@@ -195,8 +195,8 @@ class TestCreatePublisher:
     def test_duplicate_name_returns_409(self, client: TestClient) -> None:
         existing = _make_mock_publisher(name="New Publisher")
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=existing),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=existing),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.post(CREATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 409
@@ -204,25 +204,25 @@ class TestCreatePublisher:
     def test_duplicate_key_returns_409(self, client: TestClient) -> None:
         existing = _make_mock_publisher(name="Other")
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=None),
-            patch("modulo.api.routes.admin.get_publisher_by_key", return_value=existing),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=None),
+            patch("farna.api.routes.admin.get_publisher_by_key", return_value=existing),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.post(CREATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 409
 
     def test_invalid_tier_returns_422(self, client: TestClient) -> None:
         bad = {**self.PAYLOAD, "trust_tier": "purple"}
-        with patch("modulo.api.routes.admin.set_rls_org"):
+        with patch("farna.api.routes.admin.set_rls_org"):
             resp = client.post(CREATE_URL, json=bad)
         assert resp.status_code == 422
 
     def test_crud_raises_value_error_returns_422(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=None),
-            patch("modulo.api.routes.admin.get_publisher_by_key", return_value=None),
-            patch("modulo.api.routes.admin.create_publisher", side_effect=ValueError("Invalid tier")),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=None),
+            patch("farna.api.routes.admin.get_publisher_by_key", return_value=None),
+            patch("farna.api.routes.admin.create_publisher", side_effect=ValueError("Invalid tier")),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.post(CREATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 422
@@ -237,10 +237,10 @@ class TestUpdatePublisher:
     def test_admin_updates_publisher_returns_200(self, client: TestClient) -> None:
         pub = _make_mock_publisher(name="Updated", tier="amber")
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=None),
-            patch("modulo.api.routes.admin.get_publisher_by_key", return_value=None),
-            patch("modulo.api.routes.admin.crud_update_publisher", return_value=pub),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=None),
+            patch("farna.api.routes.admin.get_publisher_by_key", return_value=None),
+            patch("farna.api.routes.admin.crud_update_publisher", return_value=pub),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.put(UPDATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 200
@@ -258,10 +258,10 @@ class TestUpdatePublisher:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=None),
-            patch("modulo.api.routes.admin.get_publisher_by_key", return_value=None),
-            patch("modulo.api.routes.admin.crud_update_publisher", return_value=None),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=None),
+            patch("farna.api.routes.admin.get_publisher_by_key", return_value=None),
+            patch("farna.api.routes.admin.crud_update_publisher", return_value=None),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.put(UPDATE_URL, json=self.PAYLOAD)
         assert resp.status_code == 404
@@ -269,8 +269,8 @@ class TestUpdatePublisher:
     def test_duplicate_name_returns_409(self, client: TestClient) -> None:
         existing = _make_mock_publisher(name="Other Pub")
         with (
-            patch("modulo.api.routes.admin.get_publisher_by_name", return_value=existing),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.get_publisher_by_name", return_value=existing),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.put(UPDATE_URL, json={"name": "Other Pub"})
         assert resp.status_code == 409
@@ -282,8 +282,8 @@ DELETE_URL = "/api/v1/admin/publishers/00000000-0000-0000-0000-000000000003"
 class TestDeletePublisher:
     def test_admin_deletes_publisher_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin.crud_delete_publisher", return_value=True),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.crud_delete_publisher", return_value=True),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.delete(DELETE_URL)
         assert resp.status_code == 204
@@ -298,8 +298,8 @@ class TestDeletePublisher:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.admin.crud_delete_publisher", return_value=False),
-            patch("modulo.api.routes.admin.set_rls_org"),
+            patch("farna.api.routes.admin.crud_delete_publisher", return_value=False),
+            patch("farna.api.routes.admin.set_rls_org"),
         ):
             resp = client.delete(DELETE_URL)
         assert resp.status_code == 404

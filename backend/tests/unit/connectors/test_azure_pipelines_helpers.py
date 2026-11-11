@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from modulo.connectors.azure_pipelines import AzurePipelinesConnector
+from farna.connectors.azure_pipelines import AzurePipelinesConnector
 
 
 def _connector():

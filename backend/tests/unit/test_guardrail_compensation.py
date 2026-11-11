@@ -24,8 +24,8 @@ import respx
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-import modulo.core.guardrails.compensation as comp
-from modulo.connectors.base import (
+import farna.core.guardrails.compensation as comp
+from farna.connectors.base import (
     CompensationContext,
     CompensationOperation,
     CompensationOutcome,
@@ -36,10 +36,10 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.github import GitHubConnector
-from modulo.core.guardrails.compensation import compensate_blocked_run
-from modulo.db.models.base import Base
-from modulo.db.models.run import Run
+from farna.connectors.github import GitHubConnector
+from farna.core.guardrails.compensation import compensate_blocked_run
+from farna.db.models.base import Base
+from farna.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RUN = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
@@ -273,7 +273,7 @@ async def test_compensate_blocked_run_no_hub_writes_summary(audit_patch: Any):
     # reader â€” stub it (the _FakeSession cannot serve the real query); the
     # run carries no stored outputs.
     with patch(
-        "modulo.db.crud.run_node_outputs.read_run_outputs",
+        "farna.db.crud.run_node_outputs.read_run_outputs",
         new=AsyncMock(return_value=None),
     ):
         summary = await compensate_blocked_run(
@@ -521,7 +521,7 @@ async def test_compensate_blocked_run_executed_nodes_falls_back_to_outputs(audit
     # reader â€” stub it with the run's reassembled outputs (the _FakeSession
     # cannot serve the real query).
     with patch(
-        "modulo.db.crud.run_node_outputs.read_run_outputs",
+        "farna.db.crud.run_node_outputs.read_run_outputs",
         new=AsyncMock(return_value=run.outputs_json),
     ):
         connector = _StubConnector(result=CompensationResult(outcome=CompensationOutcome.COMPENSATED, detail="closed"))
@@ -606,7 +606,7 @@ async def _seed_run(
 
 @pytest.mark.asyncio
 async def test_is_guardrail_blocked_run_true(session: AsyncSession):
-    from modulo.core.trigger_engine import is_guardrail_blocked_run
+    from farna.core.trigger_engine import is_guardrail_blocked_run
 
     blocked_id = uuid.uuid4()
     await _seed_run(session, run_id=blocked_id, status="eval_failed", error_code="eval_blocked", run_number=1)
@@ -615,7 +615,7 @@ async def test_is_guardrail_blocked_run_true(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_is_guardrail_blocked_run_false_for_other_states(session: AsyncSession):
-    from modulo.core.trigger_engine import is_guardrail_blocked_run
+    from farna.core.trigger_engine import is_guardrail_blocked_run
 
     complete_id = uuid.uuid4()
     plain_failed_id = uuid.uuid4()

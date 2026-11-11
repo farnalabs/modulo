@@ -3,7 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.core.graph_validator import GraphValidator
+from farna.core.graph_validator import GraphValidator
 from tests.unit.graph_validator._helpers import (
     session_returning,
 )
@@ -151,7 +151,7 @@ async def test_higher_profile_cap_accepts_node_timeout_within_transport_ceiling(
     pid = uuid.uuid4()
     profile = _mock_profile(pid, max_node_seconds=5000)
     session = _session_with_profile(profile, [])
-    monkeypatch.setattr("modulo.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
+    monkeypatch.setattr("farna.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
 
     result = await GraphValidator().validate_definition(
         {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 3300}], "edges": []},
@@ -166,7 +166,7 @@ async def test_profile_above_transport_ceiling_is_rejected(monkeypatch):
     pid = uuid.uuid4()
     profile = _mock_profile(pid, max_node_seconds=5000)
     session = _session_with_profile(profile, [])
-    monkeypatch.setattr("modulo.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
+    monkeypatch.setattr("farna.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
 
     result = await GraphValidator().validate_definition(
         {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 3301}], "edges": []},

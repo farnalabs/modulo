@@ -260,7 +260,7 @@ jobs:
             -e 'CREATE[[:space:]]+EXTENSION' \
             -e 'required_extensions?' \
             -e 'extension_requirements?' \
-            backend/src/modulo > "$extension_hits" || true
+            backend/src/farna > "$extension_hits" || true
           if [ -s "$extension_hits" ]; then
             while IFS= read -r hit; do
               extension_name="$(printf '%s\n' "$hit" | sed -nE 's/.*CREATE[[:space:]]+EXTENSION([[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS)?[[:space:]]+([a-zA-Z0-9_]+).*/\2/p' | head -n1)"
@@ -458,7 +458,7 @@ jobs:
 
            # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
            # shipped command uses the bundled CPython runtime and dependencies,
-           # while the implementation remains in modulo.cli.main.
+           # while the implementation remains in farna.cli.main.
             cat > "$BUNDLE/launcher" <<'LAUNCHER'
           #!/bin/sh
           set -eu
@@ -474,7 +474,7 @@ jobs:
           export MODULO_BUNDLED_BIN_DIR="$BUNDLE_ROOT/pg/bin"
 
           exec "$BUNDLE_ROOT/runtime/bin/python3" -c \
-            'from modulo.cli.main import cli; cli()' "$@"
+            'from farna.cli.main import cli; cli()' "$@"
           LAUNCHER
           chmod 755 "$BUNDLE/launcher"
 
@@ -824,7 +824,7 @@ jobs:
           set -euo pipefail
           if [ -z "${MANIFEST_SIGNING_KEY}" ]; then
             echo "::error::BUNDLE_MANIFEST_SIGNING_KEY is NOT set - refusing to publish an UNSIGNED release manifest."
-            echo "::error::Provisioning is the ONE-TIME owner task (Duncan): generate an ed25519 keypair; add the private key's hex as the repo secret BUNDLE_MANIFEST_SIGNING_KEY; paste the public half into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS) and scripts/install.sh (TRUST_KEY_CURRENT_B64/NEXT_B64). Rotation per ADR 031 Decision 3."
+            echo "::error::Provisioning is the ONE-TIME owner task (Duncan): generate an ed25519 keypair; add the private key's hex as the repo secret BUNDLE_MANIFEST_SIGNING_KEY; paste the public half into backend/src/farna/launcher/manifest.py (_TRUST_ROWS) and scripts/install.sh (TRUST_KEY_CURRENT_B64/NEXT_B64). Rotation per ADR 031 Decision 3."
             exit 1
           fi
           cd backend
@@ -832,7 +832,7 @@ jobs:
           import hashlib, json, os, sys
 
           sys.path.insert(0, "src")
-          from modulo.launcher import manifest as manifest_module
+          from farna.launcher import manifest as manifest_module
 
           version = os.environ["VERSION_NUM"]
           arch = os.environ["ARCH"]

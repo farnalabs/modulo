@@ -30,11 +30,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.dialects import postgresql
 
-import modulo.core.pipeline_execution as pe
-import modulo.core.saq_worker as sw
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
-from modulo.core.pipeline_engine.executor import PipelineExecutor, _StreamContext, _StreamState
-from modulo.core.pipeline_execution import (
+import farna.core.pipeline_execution as pe
+import farna.core.saq_worker as sw
+from farna.core.pipeline_engine.event_broker import RunEventBroker
+from farna.core.pipeline_engine.executor import PipelineExecutor, _StreamContext, _StreamState
+from farna.core.pipeline_execution import (
     _DROP_COUNTER_UPDATE_SQL,
     _PHASE_UPDATE_SQL,
     DROP_COUNTER_WRITE_TIMEOUT_SECONDS,
@@ -53,7 +53,7 @@ from modulo.core.pipeline_execution import (
 _RUN_ID = "7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f"
 _ORG_ID = "8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
 _TOK = "tok-abc"
-_LOGGER = "modulo.core.pipeline_execution"
+_LOGGER = "farna.core.pipeline_execution"
 
 
 class _FakeResult:
@@ -272,7 +272,7 @@ class TestFailSoft:
         def _boom() -> Any:
             raise ValueError("simulated scheduling fault")
 
-        monkeypatch.setattr("modulo.core.pipeline_execution.asyncio.get_running_loop", _boom)
+        monkeypatch.setattr("farna.core.pipeline_execution.asyncio.get_running_loop", _boom)
         with caplog.at_level(logging.DEBUG, logger=_LOGGER):
             writer.record(PHASE_LOADING_SETUP)
         assert "dispatch_phase.record scheduling failed" in caplog.text
@@ -723,11 +723,11 @@ class TestExecuteRunWiresWriter:
 
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=_TOK),
-            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
-            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=_TOK),
+            patch("farna.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock),
             patch(
-                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                "farna.core.pipeline_execution.run_executor_with_watchdog",
                 side_effect=_pass_through,
             ) as watchdog,
         ):
@@ -760,11 +760,11 @@ class TestExecuteRunWiresWriter:
 
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=_TOK),
-            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
-            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch("farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=_TOK),
+            patch("farna.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
             patch(
-                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                "farna.core.pipeline_execution.run_executor_with_watchdog",
                 side_effect=_clear_writer,
             ),
         ):

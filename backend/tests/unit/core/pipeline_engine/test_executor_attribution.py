@@ -8,7 +8,7 @@ no-op.
 
 from __future__ import annotations
 
-from modulo.core.pipeline_engine import executor as ex
+from farna.core.pipeline_engine import executor as ex
 
 
 class TestAttributionWiring:

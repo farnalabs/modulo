@@ -9,11 +9,11 @@ code:
   - frontend/src/router/index.ts
   - frontend/src/config/navigation.ts
   - frontend/tests/e2e/login.spec.ts
-  - backend/src/modulo/api/routes/admin_sso.py
-  - backend/src/modulo/api/routes/sso.py
-  - backend/src/modulo/auth/sso.py
-  - backend/src/modulo/db/crud/sso_provider.py
-  - backend/src/modulo/db/models/sso_provider.py
+  - backend/src/farna/api/routes/admin_sso.py
+  - backend/src/farna/api/routes/sso.py
+  - backend/src/farna/auth/sso.py
+  - backend/src/farna/db/crud/sso_provider.py
+  - backend/src/farna/db/models/sso_provider.py
 unit-tests:
   - backend/tests/unit/api/test_admin_sso.py
   - backend/tests/unit/api/test_sso_gating.py

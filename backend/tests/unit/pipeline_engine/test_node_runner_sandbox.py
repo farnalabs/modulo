@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.artifacts.store import LocalArtifactStore
-from modulo.core.pipeline_engine.event_broker import get_registry
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.artifacts.store import LocalArtifactStore
+from farna.core.pipeline_engine.event_broker import get_registry
+from farna.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
     _MAX_ARTIFACT_LOG,
     SandboxNodeFailedError,
@@ -157,7 +157,7 @@ async def test_sandbox_agent_passes_node_def_to_conformance_gate(monkeypatch):
     are not certified from node keys (no enforced surface yet — FAR-212 PR B).
     Without the forwarding the sandbox surface would stay absent entirely and
     even the egress guarantee could not be certified."""
-    import modulo.core.pipeline_engine.node_runner as nr
+    import farna.core.pipeline_engine.node_runner as nr
 
     node_def = _base_node_def(egress_policy="deny_all", read_only=True)
     fn = make_sandbox_agent_fn(node_def)
@@ -328,10 +328,10 @@ async def test_env_var_secret_ref_resolves_from_vault():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=backend),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
     ):
         result = await fn(_run_state())
 
@@ -362,10 +362,10 @@ async def test_env_var_secret_ref_does_not_fall_back_to_host_env(caplog):
     with (
         caplog.at_level(logging.WARNING),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=backend),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="test-key")),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
         patch.dict(os.environ, {"FOO": "host-value"}),
     ):
         result = await fn(_run_state())
@@ -447,7 +447,7 @@ async def test_unresolved_secret_ref_does_not_clobber_system_default(caplog):
 async def test_sandbox_resolve_secret_ref_warns_on_missing_db_context(caplog):
     """_sandbox_resolve_secret_ref with no session_factory returns None and
     logs a warning naming the secret key (FAR-480 — was silent)."""
-    from modulo.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
+    from farna.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
 
     with caplog.at_level(logging.WARNING):
         result = await _sandbox_resolve_secret_ref("GITHUB_TOKEN", session_factory=None, org_id=_ORG_ID)
@@ -459,7 +459,7 @@ async def test_sandbox_resolve_secret_ref_warns_on_missing_db_context(caplog):
 async def test_sandbox_resolve_secret_ref_warns_on_invalid_org_id(caplog):
     """_sandbox_resolve_secret_ref with an unparseable org_id returns None and
     logs a warning naming the secret key (FAR-480 — was silent)."""
-    from modulo.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
+    from farna.core.pipeline_engine.node_runner import _sandbox_resolve_secret_ref
 
     session = MagicMock()
 
@@ -528,8 +528,8 @@ async def test_idle_watchdog_kills_stalled_command_and_raises():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -655,12 +655,12 @@ async def test_drain_probe_keeps_silent_live_agent_alive():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
         # Tick must stay above the Windows monotonic-clock quantum (15.6ms): at
         # 0.01 the per-slice shield timeout fires immediately and loses the
         # mock's result, so the command appears to time out at the full 30s.
         # 0.05 keeps the test fast (<2s) while staying above the quantum.
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
     ):
         result = await fn(_run_state())
 
@@ -747,7 +747,7 @@ async def test_drain_no_double_emit_when_log_grows_between_probe_and_read():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
     ):
         result = await fn(_run_state())
 
@@ -818,8 +818,8 @@ async def test_drain_window_lossless_when_truncation_and_probe_lag_race():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._MAX_DRAIN_WINDOW", 100),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._MAX_DRAIN_WINDOW", 100),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
     ):
         result = await fn(_run_state())
 
@@ -844,7 +844,7 @@ async def test_stall_timeout_seconds_config_passed_to_watchdog():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._wait_command_with_exec_process",
+            "farna.core.pipeline_engine.node_runner._wait_command_with_exec_process",
             new=AsyncMock(return_value=(cmd_result, None)),
         ) as watchdog,
     ):
@@ -874,7 +874,7 @@ async def test_stalled_command_raises_with_stall_reason():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -962,7 +962,7 @@ async def _run_with_live_stream(fn, sandbox, feed, state):
 async def test_on_stdout_buffers_and_flushes_joined_chunk():
     """Within the flush interval chunks are buffered; crossing the boundary
     flushes the joined buffer in a single node.stdout_chunk event (FAR-98)."""
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
@@ -994,7 +994,7 @@ async def test_on_stdout_buffers_and_flushes_joined_chunk():
 
 async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
     """With a zero flush interval, each stdout chunk publishes its own event."""
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
@@ -1011,7 +1011,7 @@ async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
         # each chunk is pumped, not when it is pushed.
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+            patch("farna.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
@@ -1026,7 +1026,7 @@ async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
 
 async def test_on_stderr_publishes_stderr_chunk_event():
     """on_stderr publishes a node.stderr_chunk event with the chunk."""
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
@@ -1077,7 +1077,7 @@ async def test_stream_redacts_credentials_from_live_stdout_chunk():
     """A credential-bearing stdout chunk is scrubbed before the broker payload
     is published, so live output in the Run UI never exposes injected tokens
     (tokenized git URLs, ghp_/Bearer tokens). (FAR-306)"""
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
@@ -1091,7 +1091,7 @@ async def test_stream_redacts_credentials_from_live_stdout_chunk():
     try:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+            patch("farna.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
@@ -1114,7 +1114,7 @@ async def test_stream_redaction_is_idempotent_on_already_redacted_chunk():
     """Re-publishing an already-redacted chunk does not double-scrub it into
     mojibake — redacting an already-redacted chunk yields the same output
     (drained content can be re-streamed safely). (FAR-306)"""
-    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from farna.core.pipeline_engine.event_broker import RunEventBroker
 
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
@@ -1135,7 +1135,7 @@ async def test_stream_redaction_is_idempotent_on_already_redacted_chunk():
     try:
         with (
             patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-            patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
+            patch("farna.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0),
         ):
             result = await _run_with_live_stream(fn, sandbox, _feed, _with_registered_broker(broker))
 
@@ -1308,7 +1308,7 @@ async def test_over_cap_stdout_written_to_artifact_store_with_pointer(tmp_path):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
     ):
         result = await fn(_run_state())
 
@@ -1338,7 +1338,7 @@ async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
     the side-car (the ABC pump feeds the output callbacks), which is
     production behaviour, not a retention artefact.
     """
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     monkeypatch.setattr(get_settings(), "modulo_artifacts_enabled", False)
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
@@ -1348,7 +1348,7 @@ async def test_under_cap_stdout_stays_inline_no_artifact(tmp_path, monkeypatch):
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
     ):
         result = await fn(_run_state())
 
@@ -1373,7 +1373,7 @@ def _fake_store_with_pointer() -> MagicMock:
     return store
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_happy_path_returns_pointer(mock_get_store):
     """FAR-811: a successful store write returns the pointer with the
     truncated: False / redacted: True flags and the full pre-truncation size."""
@@ -1400,7 +1400,7 @@ def test_persist_full_stdout_artifact_happy_path_returns_pointer(mock_get_store)
     store.finalize.assert_called_once_with("org", "run", "node", "a1:full:2048", "stdout")
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_store_failure_returns_none(mock_get_store):
     """A store failure must be non-fatal: return None so the caller keeps the
     inline (truncated) behaviour with no stdout_artifact key (FAR-811)."""
@@ -1418,7 +1418,7 @@ def test_persist_full_stdout_artifact_store_failure_returns_none(mock_get_store)
     assert pointer is None
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_none_pointer_returns_none(mock_get_store):
     """If finalize yields no pointer (store could not materialize the artifact),
     return None rather than publishing a half-built envelope (FAR-811)."""
@@ -1436,7 +1436,7 @@ def test_persist_full_stdout_artifact_none_pointer_returns_none(mock_get_store):
     assert pointer is None
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_missing_attempt_key_returns_none(mock_get_store):
     """Without an attempt key there is no stable overflow key to write under,
     so skip the store write and return None (FAR-811)."""
@@ -1454,7 +1454,7 @@ def test_persist_full_stdout_artifact_missing_attempt_key_returns_none(mock_get_
     store.append.assert_not_called()
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_empty_redacted_stdout_returns_none(mock_get_store):
     """Nothing to retain if the redacted transcript is empty; return None and do
     not touch the store (FAR-811)."""
@@ -1472,7 +1472,7 @@ def test_persist_full_stdout_artifact_empty_redacted_stdout_returns_none(mock_ge
     store.append.assert_not_called()
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stdout_artifact_propagates_cancelled_error(mock_get_store):
     """A CancelledError during the store write must propagate (not be swallowed
     into the non-fatal None path) so task cancellation is honoured (FAR-811)."""
@@ -1504,7 +1504,7 @@ def _fake_store_with_stderr_pointer() -> MagicMock:
     return store
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_happy_path_returns_pointer(mock_get_store):
     """FAR-879: a successful store write returns the stderr pointer with the
     truncated: False / redacted: True flags and the full pre-truncation size."""
@@ -1531,7 +1531,7 @@ def test_persist_full_stderr_artifact_happy_path_returns_pointer(mock_get_store)
     store.finalize.assert_called_once_with("org", "run", "node", "a1:full:stderr:2048", "stderr")
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_store_failure_returns_none(mock_get_store):
     """A store failure must be non-fatal: return None so the caller keeps the
     inline (truncated) behaviour with no stderr_artifact key (FAR-879)."""
@@ -1549,7 +1549,7 @@ def test_persist_full_stderr_artifact_store_failure_returns_none(mock_get_store)
     assert pointer is None
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_none_pointer_returns_none(mock_get_store):
     """If finalize yields no pointer (store could not materialize the artifact),
     return None rather than publishing a half-built envelope (FAR-879)."""
@@ -1567,7 +1567,7 @@ def test_persist_full_stderr_artifact_none_pointer_returns_none(mock_get_store):
     assert pointer is None
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_missing_attempt_key_returns_none(mock_get_store):
     """Without an attempt key there is no stable overflow key to write under,
     so skip the store write and return None (FAR-879)."""
@@ -1585,7 +1585,7 @@ def test_persist_full_stderr_artifact_missing_attempt_key_returns_none(mock_get_
     store.append.assert_not_called()
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_empty_redacted_stderr_returns_none(mock_get_store):
     """Nothing to retain if the redacted transcript is empty; return None and do
     not touch the store (FAR-879)."""
@@ -1603,7 +1603,7 @@ def test_persist_full_stderr_artifact_empty_redacted_stderr_returns_none(mock_ge
     store.append.assert_not_called()
 
 
-@patch("modulo.core.artifacts.store.get_store")
+@patch("farna.core.artifacts.store.get_store")
 def test_persist_full_stderr_artifact_propagates_cancelled_error(mock_get_store):
     """A CancelledError during the store write must propagate (not be swallowed
     into the non-fatal None path) so task cancellation is honoured (FAR-879)."""
@@ -1682,7 +1682,7 @@ async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -1740,7 +1740,7 @@ async def test_no_output_json_message_includes_stdout_stderr_tail_and_sandbox_id
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="sample log line"),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1767,7 +1767,7 @@ async def test_invalid_output_json_includes_what_was_read_bounded():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1791,7 +1791,7 @@ async def test_exit_code_zero_with_no_output_json_still_raises():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1815,7 +1815,7 @@ async def test_no_output_json_message_is_bounded_for_huge_stdout():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="x" * 50_000),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1862,7 +1862,7 @@ async def test_no_output_json_message_bounded_with_huge_raw_readback():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value="x" * 50_000),
         ),
         pytest.raises(SandboxNodeFailedError) as excinfo,
@@ -1904,7 +1904,7 @@ async def test_no_output_log_tail_fetched_before_kill():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=_fake_tail),
         pytest.raises(SandboxNodeFailedError),
     ):
         await fn(_run_state())
@@ -1923,10 +1923,10 @@ async def test_no_output_json_log_includes_lengths_and_sandbox_id(caplog):
     sandbox.sandbox_id = "sbx-log"
 
     with (
-        caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.node_runner"),
+        caplog.at_level(logging.INFO, logger="farna.core.pipeline_engine.node_runner"),
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
         pytest.raises(SandboxNodeFailedError),
@@ -1953,8 +1953,8 @@ def test_no_output_json_message_survives_executor_terminal_fail_surface():
     diagnostic — including the kill-reason log tail, which is the first thing
     a 500-char cap would have cut — survives in full (FAR-197 review).
     """
-    from modulo.core.pipeline_engine.executor import _sanitize_detail
-    from modulo.core.pipeline_engine.node_runner import _build_no_output_message
+    from farna.core.pipeline_engine.executor import _sanitize_detail
+    from farna.core.pipeline_engine.node_runner import _build_no_output_message
 
     message = _build_no_output_message(
         exit_code=1,
@@ -2336,7 +2336,7 @@ async def test_watch_log_growth_keeps_silent_run_alive():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
     ):
         result = await fn(_run_state())
 
@@ -2452,11 +2452,11 @@ async def test_watch_log_growth_keeps_silent_strict_run_alive_end_to_end():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
         # Replace node_runner's ``time`` binding so the idle watchdog reads the
         # probe-driven clock (other attributes still delegate to the real time
         # module, so nothing else in the module changes behaviour).
-        patch("modulo.core.pipeline_engine.node_runner.time", clock),
+        patch("farna.core.pipeline_engine.node_runner.time", clock),
     ):
         result = await fn(_run_state())
 
@@ -2505,8 +2505,8 @@ async def test_heartbeat_off_no_detector_stalls_end_to_end():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.1),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 0.1),
         pytest.raises(SandboxNodeFailedError, match="no output"),
     ):
         await fn(_run_state())
@@ -2525,7 +2525,7 @@ async def test_heartbeat_disabled_silent_connected_agent_stalls():
     with a ``_StallDetector`` that has ONLY the ``output`` channel enabled (the
     exact configuration the node builds when heartbeat is opted out) - a
     connected but silent agent leaves ``output`` stale, so the watchdog fires."""
-    from modulo.core.runtime_provider import ExecProcess
+    from farna.core.runtime_provider import ExecProcess
 
     process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
 
@@ -2604,7 +2604,7 @@ def test_heartbeat_enabled_default_silent_connected_agent_does_not_stall():
     frozen at the enable-time seed and fail the assertions below.
     """
     now: list[float] = [0.0]
-    with patch("modulo.core.pipeline_engine.node_runner.time.monotonic", new=lambda: now[0]):
+    with patch("farna.core.pipeline_engine.node_runner.time.monotonic", new=lambda: now[0]):
         detector = _configure_stall_detector(
             enable_heartbeat=True,
             watch_log_path=None,
@@ -2843,7 +2843,7 @@ async def test_rate_limit_retry_loop_leaves_no_sandbox_behind():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0.001),
+        patch("farna.core.pipeline_engine.node_runner._SANDBOX_RATE_LIMIT_BASE_BACKOFF_S", 0.001),
     ):
         result = await fn(_run_state())
 
@@ -2858,14 +2858,14 @@ async def test_rate_limit_retry_loop_leaves_no_sandbox_behind():
 
 
 def test_classify_no_output_cause_missing_file():
-    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+    from farna.core.pipeline_engine.node_runner import _classify_no_output_cause
 
     cause = _classify_no_output_cause(read_error="NotFoundException: file not found", read_raw="")
     assert "MISSING" in cause
 
 
 def test_classify_no_output_cause_unreadable():
-    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+    from farna.core.pipeline_engine.node_runner import _classify_no_output_cause
 
     cause = _classify_no_output_cause(read_error="OSError: connection reset", read_raw="")
     assert "could not be read" in cause
@@ -2873,14 +2873,14 @@ def test_classify_no_output_cause_unreadable():
 
 
 def test_classify_no_output_cause_invalid_json():
-    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+    from farna.core.pipeline_engine.node_runner import _classify_no_output_cause
 
     cause = _classify_no_output_cause(read_error="", read_raw="<<< not json >>>")
     assert "NOT valid JSON" in cause
 
 
 def test_classify_no_output_cause_json_null():
-    from modulo.core.pipeline_engine.node_runner import _classify_no_output_cause
+    from farna.core.pipeline_engine.node_runner import _classify_no_output_cause
 
     cause = _classify_no_output_cause(read_error="", read_raw="null")
     assert "JSON null" in cause
@@ -2910,7 +2910,7 @@ async def test_missing_output_json_message_names_missing_file():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2940,7 +2940,7 @@ async def test_unreadable_output_json_message_names_read_error():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2959,7 +2959,7 @@ async def test_invalid_json_output_message_says_invalid():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -2977,7 +2977,7 @@ async def test_json_null_output_message_says_null():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        patch("farna.core.pipeline_engine.node_runner._read_log_tail_via_provider", new=AsyncMock(return_value="")),
         pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
         await fn(_run_state())
@@ -3022,7 +3022,7 @@ async def test_schema_validation_missing_pr_url_raises_retryable():
     Graduated lenient mode: 'required' violations raise even in lenient
     (pre-existing enforcement contract).  No monkeypatch needed.
     """
-    from modulo.core.pipeline_engine import runtime_retry
+    from farna.core.pipeline_engine import runtime_retry
 
     node_def = _base_node_def(timeout_seconds=30)
     node_def["output_schema_json"] = {"required": ["pr_url"]}
@@ -3053,7 +3053,7 @@ async def test_sandbox_lifetime_exceeds_command_timeout():
     event stream, ``handle.wait()`` fabricated a zero-exit completion, and the
     node misreported the failure as "no parseable output.json (exit code 0)"
     (15+ production PR-Reviewer runs, 2026-08-29)."""
-    from modulo.core.pipeline_engine.node_runner import _SANDBOX_LIFETIME_GRACE_S
+    from farna.core.pipeline_engine.node_runner import _SANDBOX_LIFETIME_GRACE_S
 
     node_def = _base_node_def(timeout_seconds=60)
     fn = make_sandbox_agent_fn(node_def)
@@ -3119,7 +3119,7 @@ async def test_sandbox_generic_exception_envelope_includes_error_type_and_messag
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_BoomError("connection reset"))),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3166,13 +3166,13 @@ async def test_exception_path_over_cap_stdout_written_to_artifact_store_with_poi
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch(
-            "modulo.core.pipeline_engine.node_runner._compute_sandbox_cost",
+            "farna.core.pipeline_engine.node_runner._compute_sandbox_cost",
             side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
         ),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3205,7 +3205,7 @@ async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path
     The FAR-582 stdout side-car is switched off so only FAR-811 retention can
     populate the store - see ``test_under_cap_stdout_stays_inline_no_artifact``.
     """
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     monkeypatch.setattr(get_settings(), "modulo_artifacts_enabled", False)
     node_def = _base_node_def(timeout_seconds=30, stdout_retention_mode="full", stdout_max_bytes=8192)
@@ -3215,13 +3215,13 @@ async def test_exception_path_under_cap_stdout_stays_inline_no_artifact(tmp_path
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch("modulo.core.artifacts.store.get_store", return_value=store),
+        patch("farna.core.artifacts.store.get_store", return_value=store),
         patch(
-            "modulo.core.pipeline_engine.node_runner._compute_sandbox_cost",
+            "farna.core.pipeline_engine.node_runner._compute_sandbox_cost",
             side_effect=_raise_once_then_compute(_compute_sandbox_cost, RuntimeError("boom after capture")),
         ),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3253,7 +3253,7 @@ async def test_sandbox_provider_exception_message_visible_in_output():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=exc)),
         patch(
-            "modulo.core.pipeline_engine.node_runner._read_log_tail_via_provider",
+            "farna.core.pipeline_engine.node_runner._read_log_tail_via_provider",
             new=AsyncMock(return_value=""),
         ),
     ):
@@ -3373,13 +3373,13 @@ async def test_agent_command_dispatched_under_bash(monkeypatch):
     """
     # Log-tail seam: keep the dispatch off the real urllib tail probe.
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        "farna.core.pipeline_engine.node_runner._build_log_tail_provider",
         MagicMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"far1470-tail"))),
     )
     # File-I/O seam: serve output.json so the run completes cleanly.
     file_io = FakeFileIOProvider(files={"/home/user/output.json": _FAR1470_OUTPUT})
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        "farna.core.pipeline_engine.node_runner._build_file_io_provider",
         MagicMock(return_value=file_io),
     )
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-far1470", exit_code=0)

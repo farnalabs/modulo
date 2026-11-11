@@ -9,8 +9,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorQuery
-from modulo.connectors.github import (
+from farna.connectors.base import ConnectorQuery
+from farna.connectors.github import (
     GitHubAPIError,
     GitHubAuthError,
     GitHubConnector,
@@ -131,7 +131,7 @@ async def test_query_exhausted_429_raises_rate_limit_error(connector, monkeypatc
     async def no_sleep(delay: float) -> None:
         pass
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", no_sleep)
     route = respx.get("https://api.github.com/user/repos")
     route.mock(return_value=httpx.Response(429, text="Rate limit"))
     with pytest.raises(GitHubRateLimitError) as excinfo:
@@ -147,7 +147,7 @@ async def test_query_timeout_raises_network_error(connector, monkeypatch):
     async def no_sleep(delay: float) -> None:
         pass
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", no_sleep)
     respx.get("https://api.github.com/user/repos").mock(side_effect=httpx.TimeoutException("Timed out"))
     with pytest.raises(GitHubNetworkError) as excinfo:
         await connector.query(ConnectorQuery(resource="repos"))
@@ -161,7 +161,7 @@ async def test_query_connect_error_raises_network_error(connector, monkeypatch):
     async def no_sleep(delay: float) -> None:
         pass
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", no_sleep)
     respx.get("https://api.github.com/user/repos").mock(side_effect=httpx.ConnectError("Connection refused"))
     with pytest.raises(GitHubNetworkError) as excinfo:
         await connector.query(ConnectorQuery(resource="repos"))
@@ -208,7 +208,7 @@ async def test_health_check_rate_limited(connector, monkeypatch):
     async def no_sleep(delay: float) -> None:
         pass
 
-    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("farna.connectors.github.asyncio.sleep", no_sleep)
     respx.get("https://api.github.com/user").mock(return_value=httpx.Response(429, text="Rate limit"))
     result = await connector.health_check()
     assert result.ok is False

@@ -2,7 +2,7 @@
 
 Wires the scenarios in ``daily_run_counts.feature`` to the real
 ``GET /api/v1/dashboard/daily-run-counts`` route
-(``modulo/api/routes/dashboard.py``) through the shared TestClient +
+(``farna/api/routes/dashboard.py``) through the shared TestClient +
 mock-session pattern. The mock session returns ``(day, status, count)`` rows
 for the route's single grouping query, so the scenarios assert the actual
 API contract — day/status keying, cross-status accumulation, the default 30
@@ -19,11 +19,11 @@ from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from tests.bdd.conftest import harden_session_double
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 
 scenarios("daily_run_counts.feature")
 

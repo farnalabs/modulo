@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from modulo.db.models.system_map import (
+from farna.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
     SystemMapLoopAdmissionAttempt,

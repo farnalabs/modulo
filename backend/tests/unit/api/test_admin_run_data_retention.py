@@ -19,12 +19,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import admin_run_retention as route
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import admin_run_retention as route
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import all_features
 
@@ -122,9 +122,9 @@ class TestCandidates:
             "terminal_estimated_bytes": 1234,
         }
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.list_retention_candidates",
+                "farna.api.routes.admin_run_retention.list_retention_candidates",
                 new=AsyncMock(return_value=result),
             ),
         ):
@@ -145,9 +145,9 @@ class TestCandidates:
         session = _make_session()
         client = _build(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()) as mock_rls,
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()) as mock_rls,
             patch(
-                "modulo.api.routes.admin_run_retention.list_retention_candidates",
+                "farna.api.routes.admin_run_retention.list_retention_candidates",
                 new=AsyncMock(return_value={"runs": [], "total_count": 0, "total_estimated_bytes": 0}),
             ) as mock_list,
         ):
@@ -169,9 +169,9 @@ class TestCandidates:
         session = _make_session()
         client = _build(session, _principal(system_admin=True))
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.list_retention_candidates",
+                "farna.api.routes.admin_run_retention.list_retention_candidates",
                 new=AsyncMock(return_value={"runs": [], "total_count": 0, "total_estimated_bytes": 0}),
             ) as mock_list,
         ):
@@ -190,9 +190,9 @@ class TestCandidates:
         session = _make_session()
         client = _build(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.list_retention_candidates",
+                "farna.api.routes.admin_run_retention.list_retention_candidates",
                 side_effect=RuntimeError("boom"),
             ),
         ):
@@ -229,8 +229,8 @@ class TestExport:
             yield '{"id":"run-2","status":"failed"}\n'
 
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
             resp = client.post(EXPORT_URL, json={"status": "complete"})
 
@@ -252,8 +252,8 @@ class TestExport:
             yield '{"id":"run-1"}\n'
 
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
             resp = client.post(EXPORT_URL, json={})
 
@@ -270,8 +270,8 @@ class TestExport:
                 yield ""
 
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
             resp = client.post(EXPORT_URL, json={})
 
@@ -289,9 +289,9 @@ class TestExport:
         session = _make_session()
         client = _build_unhandled(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.iter_run_export",
+                "farna.api.routes.admin_run_retention.iter_run_export",
                 new=_raising_export(SQLAlchemyError("boom")),
             ),
         ):
@@ -305,9 +305,9 @@ class TestExport:
         session = _make_session()
         client = _build_unhandled(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.iter_run_export",
+                "farna.api.routes.admin_run_retention.iter_run_export",
                 new=_raising_export(ProgrammingError("s", {}, Exception())),
             ),
         ):
@@ -329,9 +329,9 @@ class TestExport:
         session = _make_session()
         client = _build_unhandled(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.iter_run_export",
+                "farna.api.routes.admin_run_retention.iter_run_export",
                 new=_raising_export(IntegrityError("s", {}, Exception())),
             ),
         ):
@@ -346,10 +346,10 @@ class TestExport:
         client = _build_unhandled(session, _principal())
         with (
             patch(
-                "modulo.api.routes.admin_run_retention.set_rls_org",
+                "farna.api.routes.admin_run_retention.set_rls_org",
                 new=AsyncMock(side_effect=HTTPException(status_code=403, detail="nope")),
             ),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=_raising_export(RuntimeError())),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=_raising_export(RuntimeError())),
         ):
             resp = client.post(EXPORT_URL, json={})
 
@@ -361,9 +361,9 @@ class TestExport:
         session = _make_session()
         client = _build_unhandled(session, _principal())
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.iter_run_export",
+                "farna.api.routes.admin_run_retention.iter_run_export",
                 new=_raising_export(RuntimeError("boom")),
             ),
         ):
@@ -388,8 +388,8 @@ class TestExport:
             raise SQLAlchemyError("mid-stream boom")
 
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
             resp = client.post(EXPORT_URL, json={})
 
@@ -414,8 +414,8 @@ class TestExport:
             yield "[]\n"
 
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
-            patch("modulo.api.routes.admin_run_retention.iter_run_export", new=fake_export),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
             resp = client.post(
                 EXPORT_URL, json={"organisation_id": str(_OTHER_ORG), "date_from": "2026-01-01T00:00:00Z"}
@@ -443,12 +443,12 @@ class TestPurge:
         client = _build(session, _principal())
         result = {"purged_runs": 2, "purged_checkpoints": 10, "freed_estimated_bytes": 99999}
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.purge_terminal_runs",
+                "farna.api.routes.admin_run_retention.purge_terminal_runs",
                 new=AsyncMock(return_value=result),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
         ):
             resp = client.post(PURGE_URL, json={"confirm": True, "status": "complete"})
 
@@ -467,12 +467,12 @@ class TestPurge:
         client = _build(session, _principal(system_admin=True))
         result = {"purged_runs": 1, "purged_checkpoints": 0, "freed_estimated_bytes": 100}
         with (
-            patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+            patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch(
-                "modulo.api.routes.admin_run_retention.purge_terminal_runs",
+                "farna.api.routes.admin_run_retention.purge_terminal_runs",
                 new=AsyncMock(return_value=result),
             ),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()) as audit,
         ):
             resp = client.post(PURGE_URL, json={"confirm": True})
 
@@ -563,7 +563,7 @@ def test_backstop_maps_escaping_db_error_to_standard_status(
     session = _make_session()
     client = _build_unhandled(session, _principal())
     try:
-        with patch("modulo.api.routes.admin_run_retention._resolve_org_id", side_effect=exc):
+        with patch("farna.api.routes.admin_run_retention._resolve_org_id", side_effect=exc):
             resp = _issue(client, method, url, body)
         assert resp.status_code == expected, resp.text
         assert resp.json()["detail"] == detail
@@ -585,9 +585,9 @@ def test_backstop_does_not_shadow_purge_conflict_verdict() -> None:
     session = _make_session()
     client = _build(session, _principal())
     with (
-        patch("modulo.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
         patch(
-            "modulo.api.routes.admin_run_retention.purge_terminal_runs",
+            "farna.api.routes.admin_run_retention.purge_terminal_runs",
             new=AsyncMock(side_effect=IntegrityError("s", {}, Exception())),
         ),
     ):

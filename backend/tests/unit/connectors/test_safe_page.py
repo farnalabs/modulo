@@ -1,6 +1,6 @@
 """Unit tests for the shared safe-page extraction helpers.
 
-``modulo.connectors._safe_page.safe_records`` guards list-pagination parsing
+``farna.connectors._safe_page.safe_records`` guards list-pagination parsing
 in the Azure Repos (``value``) and Bitbucket (``values``) connectors against
 corrupt or hostile response bodies. A non-dict body (list, string, number,
 ...) would otherwise crash the connector with ``AttributeError`` on the bare
@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from modulo.connectors._safe_page import safe_paging_total, safe_records
+from farna.connectors._safe_page import safe_paging_total, safe_records
 
 KEYS = ["value", "values"]
 

@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
-from modulo.core.pipeline_engine.decorator import (
+from farna.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
+from farna.core.pipeline_engine.decorator import (
     ContextSetterViolationError,
     cancellable_node,
 )

@@ -1,7 +1,7 @@
 """Unit tests for the Bundled Runner dispatch helpers (FAR-590 D4).
 
 Covers the provider-backed file IO helpers and the pure timeout/uuid
-validators in ``modulo.core.bundled_runner.runner_dispatch`` that are not
+validators in ``farna.core.bundled_runner.runner_dispatch`` that are not
 exercised by the route-resolution or streaming suites.
 """
 
@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from modulo.core.bundled_runner import runner_dispatch as rd
+from farna.core.bundled_runner import runner_dispatch as rd
 
 
 class _FakeResult:
@@ -64,7 +64,7 @@ def test_validate_e2b_dispatch_timeout_none_passes() -> None:
 
 
 def test_validate_e2b_dispatch_timeout_over_cap_raises() -> None:
-    from modulo.core.bundled_runner.runner_dispatch import _E2B_MAX_TIMEOUT_SECONDS
+    from farna.core.bundled_runner.runner_dispatch import _E2B_MAX_TIMEOUT_SECONDS
 
     with pytest.raises(rd.SandboxDispatchTimeoutValidationError):
         rd.validate_e2b_dispatch_timeout(_E2B_MAX_TIMEOUT_SECONDS + 1)
@@ -88,7 +88,7 @@ def test_render_agent_template_uses_shared_sandbox_jinja_environment(
     node-runner path. Spying on the helper fails loudly if the renderer
     regresses to an inline ``SandboxedEnvironment()``.
     """
-    from modulo.core.pipeline_engine import sandbox_mode
+    from farna.core.pipeline_engine import sandbox_mode
 
     calls: list[None] = []
     real_env = sandbox_mode.sandbox_jinja_environment()
@@ -196,7 +196,7 @@ def test_output_parse_error_empty_output() -> None:
 def test_runner_retention_artifacts_persists_over_cap_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """An over-cap stderr stream gets its own side-car pointer while stdout
     stays inline (FAR-879 parity on the Bundled Runner path)."""
-    import modulo.core.pipeline_engine.node_runner as nrm
+    import farna.core.pipeline_engine.node_runner as nrm
 
     persisted: dict[str, dict[str, object]] = {}
     stderr_pointer = {"rel_path": "stderr.zst", "stream": "stderr", "truncated": False, "redacted": True}

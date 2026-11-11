@@ -3,14 +3,14 @@ id: feat-mcp
 prd: N/A
 adr: [ADR 047 (centralized-authorization)]
 code:
-  - backend/src/modulo/api/mcp_server.py
-  - backend/src/modulo/api/mcp_tool_registry.py
-  - backend/src/modulo/api/db_error_handling.py
-  - backend/src/modulo/api/routes/run_ws.py
-  - backend/src/modulo/core/mcp/scope_validator.py
-  - backend/src/modulo/api/routes/mcp_oauth.py
-  - backend/src/modulo/api/routes/mcp_setup.py
-  - backend/src/modulo/api/routes/oauth_metadata.py
+  - backend/src/farna/api/mcp_server.py
+  - backend/src/farna/api/mcp_tool_registry.py
+  - backend/src/farna/api/db_error_handling.py
+  - backend/src/farna/api/routes/run_ws.py
+  - backend/src/farna/core/mcp/scope_validator.py
+  - backend/src/farna/api/routes/mcp_oauth.py
+  - backend/src/farna/api/routes/mcp_setup.py
+  - backend/src/farna/api/routes/oauth_metadata.py
   - frontend/src/views/SettingsMcpView.vue
   - frontend/src/components/settings/McpOauthClientsCard.vue
 unit-tests:
@@ -154,7 +154,7 @@ applications. Built on the auth + model-backend core.
       team-private row is visible only to a member of the owning team; a viewer read
       whose account context is unset fails closed with `McpAuthContextError` rather
       than degrading to an org-wide read
-      (`backend/src/modulo/api/mcp_server.py`,
+      (`backend/src/farna/api/mcp_server.py`,
       `backend/tests/unit/mcp/test_team_scope_enforcement.py`,
       `backend/tests/unit/mcp/test_get_trigger_events.py`)
 
@@ -247,8 +247,8 @@ applications. Built on the auth + model-backend core.
       `migration_required` (`ProgrammingError`), `database_unavailable` (any other
       `SQLAlchemyError`, incl. a transient `OperationalError` /
       `PendingRollbackError`), and `server_error` as the ONLY reserved catch-all
-      (`backend/src/modulo/api/mcp_server.py` `_tool_error` /
-      `_tool_exception_error`, `backend/src/modulo/api/db_error_handling.py`
+      (`backend/src/farna/api/mcp_server.py` `_tool_error` /
+      `_tool_exception_error`, `backend/src/farna/api/db_error_handling.py`
       `session_contract_error_payload`; `test_mcp_tool_exception_error.py`,
       `test_mcp_session_contract_errors.py`)
 - [x] The run WebSocket control-frame vocabulary aligns to the MCP codes
@@ -258,7 +258,7 @@ applications. Built on the auth + model-backend core.
       SAME shared session-contract classifier so a programming bug gets the
       specific `session_contract_error` frame instead of a retry-inviting outage
       frame - no consumer of the old keys exists outside the backend
-      (`backend/src/modulo/api/routes/run_ws.py`; `test_run_ws.py`);
+      (`backend/src/farna/api/routes/run_ws.py`; `test_run_ws.py`);
       `backend/tests/architecture/test_mcp_error_codes.py` structurally forbids
       the `internal_error` payload in both sources and keeps `_tool_error`'s
       `code` keyword-only with no default
@@ -292,8 +292,8 @@ applications. Built on the auth + model-backend core.
       `registration_endpoint` is advertised: there is no RFC 7591 dynamic
       client registration, so a client is configured with an explicit
       client id rather than sent down a 404 path
-      (`backend/src/modulo/api/routes/oauth_metadata.py`,
-      `backend/src/modulo/api/mcp_server.py`, `backend/src/modulo/api/main.py`;
+      (`backend/src/farna/api/routes/oauth_metadata.py`,
+      `backend/src/farna/api/mcp_server.py`, `backend/src/farna/api/main.py`;
       `backend/tests/unit/api/test_oauth_metadata.py`)
 - [x] Browser OAuth consent screen (2026-10-10, FAR-1476): the SPA consent
       route `/oauth/authorize` is a real grant-review page, not a placeholder.
@@ -357,8 +357,8 @@ applications. Built on the auth + model-backend core.
       registration picker is backend-driven: `GET /api/v1/mcp/oauth/scopes`
       serves the delegable keys + role floors filtered to the caller's role,
       and the card renders them grouped by namespace and searchable with no
-      hardcoded vocabulary (`backend/src/modulo/auth/permissions.py`,
-      `backend/src/modulo/api/routes/mcp_oauth.py`,
+      hardcoded vocabulary (`backend/src/farna/auth/permissions.py`,
+      `backend/src/farna/api/routes/mcp_oauth.py`,
       `frontend/src/components/settings/McpOauthClientsCard.vue`;
       `backend/tests/unit/mcp/test_hitl_delegation_boundary.py`,
       `backend/tests/unit/api/test_mcp_oauth.py`,

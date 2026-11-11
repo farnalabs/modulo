@@ -9,7 +9,7 @@ import jwt as pyjwt
 import pytest
 from jwt import InvalidTokenError as JWTError
 
-from modulo.auth.jwt import (
+from farna.auth.jwt import (
     _ALGORITHM,
     create_access_token,
     create_claim_token,
@@ -318,7 +318,7 @@ def test_default_refresh_ttl_matches_settings_default() -> None:
     """FAR-1170 drift guard: the jwt module fallback must equal the
     Settings.modulo_refresh_token_ttl_hours production default (single source
     of truth), so the two cannot silently diverge."""
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     settings = Settings(
         database_url="postgresql+asyncpg://localhost/test",

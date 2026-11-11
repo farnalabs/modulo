@@ -11,10 +11,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from modulo.connectors.base import ConnectorType
-from modulo.determination.draft import PipelineDraft, generate_draft
-from modulo.determination.inference import Finding, infer
-from modulo.determination.scanner import ScanSample
+from farna.connectors.base import ConnectorType
+from farna.determination.draft import PipelineDraft, generate_draft
+from farna.determination.inference import Finding, infer
+from farna.determination.scanner import ScanSample
 
 FIXTURES_DIR = Path(__file__).parent.parent / "tests" / "determination" / "fixtures"
 

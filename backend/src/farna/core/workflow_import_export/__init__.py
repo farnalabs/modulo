@@ -1,0 +1,2550 @@
+"""Workflow bundle export and import service.
+
+Produces portable .zip bundles that carry pipeline + agent + schema definitions
+but strip org-private details (owner_team_id, connector credentials, api keys).
+Import resolves local equivalents via a binding wizard.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import copy
+import io
+import json
+import logging
+import re
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, TypeGuard
+
+import yaml
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from farna.core.agent_command_sync import is_clean_agent_commands, sync_agent_row_commands
+from farna.core.audit_logger import append_audit_event
+from farna.core.connector_refs import connector_ref_type_id
+from farna.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
+from farna.core.graph_validator._types import ValidationResult
+from farna.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
+from farna.core.runner_bindings import BindingValidationError, validate_binding_pair
+from farna.core.secret_patterns import is_sensitive_env_key, is_sensitive_key, mask_secret_values_in_text
+from farna.core.team_visibility import extract_connector_bindings
+from farna.db.crud.account import get_account_by_email
+from farna.db.crud.agent import create_agent
+from farna.db.crud.agent_runner_binding import replace_agent_bindings
+from farna.db.crud.library_primitive import create_library_primitive
+from farna.db.crud.pipeline import (
+    ManualNodeOutputSchemaError,
+    create_pipeline,
+    enforce_manual_node_output_schemas,
+    strip_declared_policy_gates,
+)
+from farna.db.crud.pipeline_owner import validate_accountability_owner
+from farna.db.crud.schema import create_schema, create_schema_version
+from farna.db.models.account import Account
+from farna.db.models.agent import Agent
+from farna.db.models.agent_runner_binding import AgentRunnerBinding
+from farna.db.models.connector_instance import ConnectorInstance
+from farna.db.models.model_backend import ModelBackend
+from farna.db.models.pipeline import Pipeline
+from farna.db.models.pipeline_edge import PipelineEdge
+from farna.db.models.schema import Schema, SchemaVersion
+from farna.db.models.team import Team
+from farna.db.models.trigger import Trigger
+from farna.util import sanitise_log_value as _sanitise_log_value
+
+logger = logging.getLogger(__name__)
+
+BUNDLE_FORMAT_VERSION = "1"
+MANIFEST_FILENAME = "bundle.json"
+DEFAULT_SCHEMA_VERSION = "1.0"
+
+# Suffix appended to imported names that collide with existing entities.
+_IMPORTED_SUFFIX = "(imported)"
+DEFAULT_NODE_TIMEOUT = 300
+_MAX_NAME_RETRIES = 5
+VALID_EDGE_TYPES: frozenset[str] = frozenset({"normal", "reject", "conditional", "loop"})
+
+# ---------------------------------------------------------------------------
+# Shared value objects
+# ---------------------------------------------------------------------------
+
+
+class _V2ExportParts(NamedTuple):
+    """Pieces of a v2 YAML bundle gathered from the database."""
+
+    agents: list[dict[str, Any]]
+    schemas: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
+    triggers: list[dict[str, Any]]
+    owner_team_name: str | None
+    author: str
+    business_owner_email: str | None = None
+    reliability_owner_email: str | None = None
+
+
+@dataclass(frozen=True)
+class _ImportOverrides:
+    """Override maps applied while materialising an import bundle."""
+
+    model_backends: dict[str, str] = field(default_factory=dict)
+    schema_ids: dict[str, str] = field(default_factory=dict)
+    schema_versions: dict[str, str] = field(default_factory=dict)
+    connector_instances: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ImportSections:
+    """Parsed top-level sections of an import bundle."""
+
+    pipeline_info: dict[str, Any]
+    agents_data: list[dict[str, Any]]
+    schemas_data: list[dict[str, Any]]
+    edges_data: list[dict[str, Any]]
+    name: str
+
+
+@dataclass(frozen=True)
+class _ImportContext:
+    """Ambient state shared by every import-materialisation helper."""
+
+    session: AsyncSession
+    org_id: uuid.UUID
+    created_by: uuid.UUID
+    warnings: list[str]
+    owner_team_id: uuid.UUID | None = None
+    overrides: _ImportOverrides = field(default_factory=_ImportOverrides)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _get_latest_published_version(
+    session: AsyncSession,
+    schema_id: uuid.UUID,
+) -> SchemaVersion | None:
+    try:
+        sv_result = await session.execute(
+            select(SchemaVersion)
+            .where(
+                SchemaVersion.schema_id == schema_id,
+                SchemaVersion.published.is_(True),
+            )
+            .order_by(SchemaVersion.version_number.desc())
+            .limit(1)
+        )
+        return sv_result.scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Failed to fetch latest published version for schema %s", schema_id)
+        raise
+
+
+async def _get_existing_names(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    model_cls: type[Any],
+    *,
+    for_update: bool = False,
+) -> set[str]:
+    try:
+        stmt = select(model_cls.name).where(model_cls.organisation_id == org_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        result = await session.execute(stmt)
+        return {row[0] for row in result}
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("_get_existing_names: failed to fetch names for %s", model_cls.__name__)
+        raise
+
+
+def _safe_uuid(value: Any, label: str = "field") -> uuid.UUID:
+    """Convert a value to UUID, raising ValueError with a descriptive message."""
+    try:
+        return uuid.UUID(value) if not isinstance(value, uuid.UUID) else value
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError(f"Invalid UUID for {label}: {value!r}") from exc
+
+
+def _sanitize_slug(name: str) -> str:
+    """Produce a URL-safe slug from a pipeline name."""
+    slug = name.lower().replace(" ", "-").replace("_", "-")
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+    slug = re.sub(r"-+", "-", slug)
+    return slug.strip("-") or "imported-pipeline"
+
+
+def _retries_exhausted(attempt: int) -> bool:
+    """True when the name-collision retry budget is exhausted."""
+    return attempt == _MAX_NAME_RETRIES - 1
+
+
+def _has_matching_definition(existing_sv: SchemaVersion | None, definition: Any) -> TypeGuard[SchemaVersion]:
+    """True when an existing published schema version equals the exported definition."""
+    return existing_sv is not None and existing_sv.definition_json == definition
+
+
+def _is_unresolved_ref(ref_id: str, resolved_id: str | None) -> bool:
+    """True when a referenced id has no resolved local equivalent."""
+    return bool(ref_id) and not resolved_id
+
+
+def _is_valid_edge_type(edge_type: str) -> bool:
+    """True when the edge type is one of the supported graph edge kinds."""
+    return edge_type in VALID_EDGE_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Export — pipeline_id → ZIP bytes
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_owner_emails_for_export(
+    session: AsyncSession,
+    pipeline: Pipeline,
+) -> tuple[str | None, str | None]:
+    """Resolve the pipeline's accountability-owner ids to emails (FAR-1161).
+
+    Export carries owner EMAILS (the human-writable, portable key — import
+    resolves them back to local accounts and re-applies the full eligibility
+    invariant). Returns ``(business_owner_email, reliability_owner_email)``
+    with None where no owner is set. Non-UUID attribute values (partial ORM
+    stand-ins / test doubles) are treated as unassigned, so this issues NO
+    query when neither owner is set — existing export test sequences are
+    unaffected.
+    """
+    business_id = getattr(pipeline, "business_owner_id", None)
+    reliability_id = getattr(pipeline, "reliability_owner_id", None)
+    if not isinstance(business_id, uuid.UUID):
+        business_id = None
+    if not isinstance(reliability_id, uuid.UUID):
+        reliability_id = None
+    if business_id is None and reliability_id is None:
+        return None, None
+    ids = {owner_id for owner_id in (business_id, reliability_id) if owner_id is not None}
+    rows = list((await session.execute(select(Account).where(Account.id.in_(ids)))).scalars())
+    emails = {row.id: row.email for row in rows}
+    business_email = emails.get(business_id) if business_id is not None else None
+    reliability_email = emails.get(reliability_id) if reliability_id is not None else None
+    if business_id is not None and business_email is None:
+        logger.warning(
+            "export: business owner account %s not found; email omitted from bundle",
+            business_id,
+        )
+    if reliability_id is not None and reliability_email is None:
+        logger.warning(
+            "export: reliability owner account %s not found; email omitted from bundle",
+            reliability_id,
+        )
+    return business_email, reliability_email
+
+
+async def _resolve_owner_emails_for_import(
+    ctx: _ImportContext,
+    pipeline_info: dict[str, Any],
+) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """Resolve bundled owner emails to eligible account ids (FAR-1161).
+
+    Unresolvable or ineligible owners are STRIPPED (left unassigned) with a
+    disclosed warning in the import result — one bad owner never fails the
+    whole import, and an ineligible owner is NEVER imported. Eligibility runs
+    the FULL invariant via ``validate_accountability_owner`` (active org
+    member + visibility scope) against the pipeline's post-create shape
+    (the import always creates ``visibility="org"``).
+    """
+    resolved: list[uuid.UUID | None] = []
+    for email_key, owner_field in (
+        ("business_owner_email", "business_owner_id"),
+        ("reliability_owner_email", "reliability_owner_id"),
+    ):
+        email = pipeline_info.get(email_key)
+        if email is None or email == "":
+            resolved.append(None)
+            continue
+        if not isinstance(email, str):
+            ctx.warnings.append(f"Pipeline {email_key} is not a string; {owner_field} left unassigned.")
+            resolved.append(None)
+            continue
+        account_id = await get_account_by_email(ctx.session, email)
+        if account_id is None:
+            ctx.warnings.append(
+                f"Owner email '{email}' ({email_key}) does not resolve to an account; {owner_field} left unassigned."
+            )
+            resolved.append(None)
+            continue
+        try:
+            await validate_accountability_owner(
+                ctx.session,
+                owner_account_id=account_id.id,
+                field=owner_field,
+                org_id=ctx.org_id,
+                visibility="org",
+                owner_team_id=ctx.owner_team_id,
+            )
+        except HTTPException as exc:
+            ctx.warnings.append(
+                f"Owner email '{email}' ({email_key}) is not an eligible owner ({exc.detail}); "
+                f"{owner_field} left unassigned."
+            )
+            resolved.append(None)
+            continue
+        resolved.append(account_id.id)
+    return resolved[0], resolved[1]
+
+
+async def _load_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline:
+    """Fetch a pipeline by id, raising ValueError when it does not exist."""
+    stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+    pipeline = (await session.execute(stmt)).scalar_one_or_none()
+    if pipeline is None:
+        raise ValueError(f"Pipeline {pipeline_id} not found")
+    return pipeline
+
+
+async def _fetch_and_project_edges(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
+    edge_result = await session.execute(
+        select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
+    )
+    edges = list(edge_result.scalars())
+    return [
+        {
+            "id": str(e.id),
+            "source_node_id": str(e.source_node_id),
+            "target_node_id": str(e.target_node_id),
+            "edge_type": e.edge_type,
+            "hitl_review_config": e.hitl_review_config,
+        }
+        for e in edges
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Credential stripping for the v1 portability bundle (FAR-1181)
+# ---------------------------------------------------------------------------
+
+# Node fields that can carry instance-scoped credentials.
+_GRAPH_NODE_CREDENTIAL_FIELDS: tuple[str, ...] = (
+    "env_vars",
+    "context_files",
+    "composite_parameter_values",
+    "parameter_overrides",
+)
+
+
+def _has_secret_value(value: Any) -> bool:
+    """True when the canonical secret-VALUE patterns match anywhere in *value*.
+
+    Reuses :func:`mask_secret_values_in_text` as the detector rather than
+    writing new detection logic: every pattern it applies replaces its match
+    with the mask, so a returned string that differs from the input proves at
+    least one secret pattern matched, while clean text is returned unchanged.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    return mask_secret_values_in_text(value) != value
+
+
+def _redaction(node_id: str, field: str, path: str, reason: str) -> dict[str, str]:
+    """Build one redaction record: which credential was removed and why.
+
+    ``path`` is relative to ``field`` (a bare key for ``env_vars`` /
+    ``context_files``, a dotted / indexed key path for the deep fields), so the
+    import-side warning can name exactly what the operator must re-provision.
+    """
+    return {"node_id": node_id, "field": field, "path": path, "reason": reason}
+
+
+def _strip_env_vars(node_id: str, env: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove credential-bearing env entries (key tier, then value tier)."""
+    kept: dict[str, Any] = {}
+    redactions: list[dict[str, str]] = []
+    for key, value in env.items():
+        name = str(key)
+        if is_sensitive_env_key(name):
+            redactions.append(_redaction(node_id, "env_vars", name, "sensitive_key"))
+            continue
+        if _has_secret_value(value):
+            redactions.append(_redaction(node_id, "env_vars", name, "secret_value"))
+            continue
+        kept[key] = value
+    return kept, redactions
+
+
+def _strip_context_files(node_id: str, files: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Remove context files whose CONTENT carries a secret (value tier only).
+
+    Mirrors :func:`modulo.api.middleware.sensitive_mask.mask_pipeline_graph_node`,
+    which runs only the value patterns over file content — a file NAME is not a
+    credential, its bytes are.
+    """
+    kept: dict[str, Any] = {}
+    redactions: list[dict[str, str]] = []
+    for name, content in files.items():
+        if _has_secret_value(content):
+            redactions.append(_redaction(node_id, "context_files", str(name), "secret_value"))
+            continue
+        kept[name] = content
+    return kept, redactions
+
+
+def _strip_deep_values(
+    node_id: str,
+    field: str,
+    value: Any,
+    path: str,
+    redactions: list[dict[str, str]],
+) -> Any:
+    """Strip secret-shaped entries from a deep parameter value, in place of masking.
+
+    Applies the same two tiers as the shipped :func:`mask_config_json` at every
+    nesting depth — an entry is removed when its own key is sensitive OR its
+    string value matches a secret pattern — but REMOVES the entry instead of
+    writing a mask placeholder: a portability bundle is cross-instance, where a
+    mask literal would be silently dropped on import with no warning. A dict's
+    own keys govern its entries; a list's elements are walked the same way (the
+    governing key never outlives its dict entry, because a sensitive key drops
+    its whole value above).
+    """
+    if isinstance(value, dict):
+        return _strip_deep_dict(node_id, field, value, path, redactions)
+    if isinstance(value, list):
+        return _strip_deep_list(node_id, field, value, path, redactions)
+    return value
+
+
+def _strip_deep_dict(
+    node_id: str,
+    field: str,
+    value: dict[Any, Any],
+    path: str,
+    redactions: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Strip a dict's sensitive-key / secret-value entries (recursing into values)."""
+    kept: dict[str, Any] = {}
+    for key, item in value.items():
+        key_name = str(key)
+        child_path = f"{path}.{key_name}" if path else key_name
+        if is_sensitive_key(key_name):
+            redactions.append(_redaction(node_id, field, child_path, "sensitive_key"))
+            continue
+        if isinstance(item, str) and _has_secret_value(item):
+            redactions.append(_redaction(node_id, field, child_path, "secret_value"))
+            continue
+        kept[key] = _strip_deep_values(node_id, field, item, child_path, redactions)
+    return kept
+
+
+def _strip_deep_list(
+    node_id: str,
+    field: str,
+    value: list[Any],
+    path: str,
+    redactions: list[dict[str, str]],
+) -> list[Any]:
+    """Strip secret-shaped string elements from a list (recursing into elements)."""
+    kept_list: list[Any] = []
+    for index, element in enumerate(value):
+        element_path = f"{path}[{index}]"
+        if isinstance(element, str) and _has_secret_value(element):
+            redactions.append(_redaction(node_id, field, element_path, "secret_value"))
+            continue
+        kept_list.append(_strip_deep_values(node_id, field, element, element_path, redactions))
+    return kept_list
+
+
+def _strip_node_credentials(node: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Return ``(stripped_node, redactions)`` for one graph node.
+
+    The caller's ``node`` is never mutated. Non-dict values for a credential
+    field are left untouched, exactly as the masker leaves them.
+    """
+    node_id = str(node.get("id", ""))
+    redactions: list[dict[str, str]] = []
+    stripped = dict(node)
+
+    env = node.get("env_vars")
+    if isinstance(env, dict):
+        kept_env, env_redactions = _strip_env_vars(node_id, env)
+        stripped["env_vars"] = kept_env
+        redactions.extend(env_redactions)
+
+    files = node.get("context_files")
+    if isinstance(files, dict):
+        kept_files, file_redactions = _strip_context_files(node_id, files)
+        stripped["context_files"] = kept_files
+        redactions.extend(file_redactions)
+
+    for node_field in ("composite_parameter_values", "parameter_overrides"):
+        values = node.get(node_field)
+        if isinstance(values, dict):
+            stripped[node_field] = _strip_deep_values(node_id, node_field, values, "", redactions)
+
+    return stripped, redactions
+
+
+def _fail_closed_scrub(node: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Drop every credential-bearing field wholesale when stripping raised (FAR-1181).
+
+    Mirrors the fail-closed posture of ``mask_pipeline_graph_node``: an export
+    must never emit a raw credential because a detector misfired, so the whole
+    field goes — recorded as a redaction, surfaced as an import warning.
+    """
+    node_id = str(node.get("id", ""))
+    stripped = dict(node)
+    redactions: list[dict[str, str]] = []
+    for node_field in _GRAPH_NODE_CREDENTIAL_FIELDS:
+        if node_field in stripped:
+            stripped.pop(node_field)
+            redactions.append(_redaction(node_id, node_field, "", "stripping_failed"))
+    return stripped, redactions
+
+
+def strip_graph_node_credentials(
+    graph_nodes: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Remove instance-scoped credentials from graph nodes for a portability bundle.
+
+    Returns ``(stripped_nodes, redactions)``. Entries are REMOVED, never masked:
+    a bundle is exported from one instance and imported on another, so the
+    "unchanged, restore the stored value" meaning of a mask placeholder would
+    silently drop the credential on the importing instance with no warning.
+
+    Per field (all detection reuses the shipped helpers — no new logic):
+
+    - ``env_vars`` — an entry whose KEY is classified sensitive
+      (:func:`is_sensitive_env_key`), or whose VALUE matches the canonical
+      secret patterns, is removed. Non-secret env values survive so the
+      exported pipeline stays reconstructible.
+    - ``context_files`` — an entry whose file CONTENT matches a secret pattern
+      is removed.
+    - ``composite_parameter_values`` / ``parameter_overrides`` — secret-shaped
+      entries removed recursively through nested dicts and lists (key tier and
+      value tier at every depth).
+
+    Every removal is recorded as ``{node_id, field, path, reason}`` so the
+    import path can tell the operator exactly what to re-provision.
+    """
+    stripped_nodes: list[dict[str, Any]] = []
+    redactions: list[dict[str, str]] = []
+    for node in graph_nodes or []:
+        if not isinstance(node, dict):
+            stripped_nodes.append(node)
+            continue
+        try:
+            stripped, node_redactions = _strip_node_credentials(node)
+        except Exception:
+            logger.exception(
+                "strip_graph_node_credentials: stripping failed for node %s; fail-closed scrub applied",
+                node.get("id"),
+            )
+            stripped, node_redactions = _fail_closed_scrub(node)
+        stripped_nodes.append(stripped)
+        redactions.extend(node_redactions)
+    return stripped_nodes, redactions
+
+
+async def export_pipeline_bundle(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> bytes:
+    """Build a portable ZIP bundle from a pipeline.
+
+    Strips owner_team_id and other org-private fields; carries the
+    accountability-owner EMAILS (FAR-1161) so owners survive the round-trip.
+    Also REMOVES the graph nodes' instance-scoped credentials (FAR-1181): a
+    bundle is cross-instance, so it must never carry secrets. The removed keys
+    are recorded in the bundle's top-level ``redacted_credentials`` list and
+    re-surfaced as an import warning.
+    """
+    try:
+        pipeline = await _load_pipeline(session, pipeline_id)
+        business_owner_email, reliability_owner_email = await _resolve_owner_emails_for_export(session, pipeline)
+
+        agent_ids, schema_ids, model_backend_ids = _collect_referenced_ids(pipeline.graph_nodes_json)
+
+        agents_list = await _build_agents_list(session, agent_ids, schema_ids, model_backend_ids)
+        schemas_list = await _build_schemas_list(session, schema_ids)
+        model_backends_list = await _build_model_backends_list(session, model_backend_ids)
+
+        edges_list = await _fetch_and_project_edges(session, pipeline_id)
+
+        stripped_nodes, redacted_credentials = strip_graph_node_credentials(pipeline.graph_nodes_json)
+
+        bundle: dict[str, Any] = {
+            "format_version": BUNDLE_FORMAT_VERSION,
+            "pipeline": {
+                "name": pipeline.name,
+                "description": pipeline.description,
+                "graph_nodes_json": stripped_nodes,
+                "run_context_defaults": dict(pipeline.run_context_defaults or {}),
+                "node_timeout_seconds": pipeline.node_timeout_seconds,
+                # FAR-1257: nullable override survives the round-trip (absent on
+                # bundles exported before this column existed -> import inherits
+                # the org/instance default, the shipped behaviour).
+                "hitl_review_window_seconds": getattr(pipeline, "hitl_review_window_seconds", None),
+                # FAR-1883: the capacity-queue timeout is threaded through
+                # exactly like its HITL sibling (absent on bundles exported
+                # before this column existed -> import reads NULL, the shipped
+                # default "never expire"). Without this a bounded queue timeout
+                # silently reverted to "wait forever" on import.
+                "queue_timeout_seconds": getattr(pipeline, "queue_timeout_seconds", None),
+                "retry_policy": dict(pipeline.retry_policy or {}),
+                "visibility": "org",  # Always strip team scoping
+                "business_owner_email": business_owner_email,
+                "reliability_owner_email": reliability_owner_email,
+            },
+            "agents": agents_list,
+            "schemas": schemas_list,
+            "model_backends": model_backends_list,
+            "edges": edges_list,
+            "redacted_credentials": redacted_credentials,
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("export_pipeline_bundle: failed while building bundle for pipeline %s", pipeline_id)
+        raise
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(MANIFEST_FILENAME, json.dumps(bundle, indent=2, default=str))
+
+    logger.info(
+        "Exported pipeline %s with %d agents, %d edges, %d credential(s) stripped",
+        pipeline_id,
+        len(agents_list),
+        len(edges_list),
+        len(redacted_credentials),
+    )
+    return buf.getvalue()
+
+
+def _collect_referenced_ids(
+    graph_nodes_json: list[dict[str, Any]] | None,
+) -> tuple[set[uuid.UUID], set[uuid.UUID], set[uuid.UUID]]:
+    """Collect agent/schema/model-backend ids referenced by the graph nodes."""
+    agent_ids: set[uuid.UUID] = set()
+    schema_ids: set[uuid.UUID] = set()
+    model_backend_ids: set[uuid.UUID] = set()
+
+    if not graph_nodes_json:
+        return agent_ids, schema_ids, model_backend_ids
+
+    for node in graph_nodes_json:
+        agent_id_str = node.get("agent_id")
+        if agent_id_str:
+            try:
+                agent_ids.add(_safe_uuid(agent_id_str, "node.agent_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                continue
+
+        schema_id_str = node.get("output_schema_id")
+        if schema_id_str:
+            try:
+                schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+
+    return agent_ids, schema_ids, model_backend_ids
+
+
+async def _build_agents_list(
+    session: AsyncSession,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+    model_backend_ids: set[uuid.UUID],
+) -> list[dict[str, Any]]:
+    """Build the bundle's agents section, extending the referenced-id sets."""
+    agents_list: list[dict[str, Any]] = []
+    if not agent_ids:
+        return agents_list
+    agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+    for a in agent_result.scalars():
+        agents_list.append(_agent_export_dict(a))
+        if a.input_schema_id:
+            schema_ids.add(a.input_schema_id)
+        if a.output_schema_id:
+            schema_ids.add(a.output_schema_id)
+        if a.model_backend_id:
+            model_backend_ids.add(a.model_backend_id)
+        bindings_list, bound_used_ids = await _agent_runner_bindings(session, a)
+        model_backend_ids.update(bound_used_ids)
+        if bindings_list:
+            agents_list[-1]["model_backend_bindings"] = bindings_list
+    return agents_list
+
+
+def _agent_export_dict(a: Agent) -> dict[str, Any]:
+    """Serialise one agent row into the bundle's agents-section shape."""
+    return {
+        "id": str(a.id),
+        "name": a.name,
+        "description": a.description,
+        "input_schema_id": str(a.input_schema_id) if a.input_schema_id else None,
+        "input_schema_version": a.input_schema_version or DEFAULT_SCHEMA_VERSION,
+        "output_schema_id": str(a.output_schema_id) if a.output_schema_id else None,
+        "output_schema_version": a.output_schema_version or DEFAULT_SCHEMA_VERSION,
+        "prompt_template": a.prompt_template,
+        "model_backend_id": str(a.model_backend_id) if a.model_backend_id else None,
+        "connector_type_refs": list(a.connector_type_refs or []),
+        "evals": list(a.evals or []),
+        "retry_policy": dict(a.retry_policy or {}),
+        "token_budget": a.token_budget,
+    }
+
+
+async def _agent_runner_bindings(
+    session: AsyncSession,
+    a: Agent,
+) -> tuple[list[dict[str, Any]], set[uuid.UUID]]:
+    """Export an agent's runner bindings NAME-BASED (FAR-592 D6).
+
+    Returns ``(bindings_list, used_backend_ids)``. A binding whose model backend
+    row is not visible is warned about (symmetric with the import-side omit
+    warning) rather than silently dropped from the export.
+    """
+    binding_rows = await session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.agent_id == a.id))
+    bindings_list: list[dict[str, Any]] = []
+    bound_used_ids: set[uuid.UUID] = set()
+    for binding_row in binding_rows.scalars():
+        backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
+        if backend_row is None:
+            logger.warning(
+                "export_pipeline_bundle: agent '%s' binding references an invisible model "
+                "backend '%s'; the binding is omitted from the export",
+                _sanitise_log_value(a.name),
+                binding_row.model_backend_id,
+            )
+            continue
+        bindings_list.append(
+            {
+                "model_backend_name": backend_row.name,
+                "target_env_var": binding_row.target_env_var,
+                "source_field": binding_row.source_field,
+            }
+        )
+        bound_used_ids.add(binding_row.model_backend_id)
+    return bindings_list, bound_used_ids
+
+
+async def _build_schemas_list(session: AsyncSession, schema_ids: set[uuid.UUID]) -> list[dict[str, Any]]:
+    """Build the bundle's schemas section from the referenced schema ids."""
+    schemas_list: list[dict[str, Any]] = []
+    if not schema_ids:
+        return schemas_list
+    schema_result = await session.execute(select(Schema).where(Schema.id.in_(schema_ids)))
+    schemas = list(schema_result.scalars())
+    for s in schemas:
+        latest_version = await _get_latest_published_version(session, s.id)
+        schemas_list.append(
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "description": s.description,
+                "abstract_name": s.abstract_name,
+                "latest_version": latest_version.version if latest_version else None,
+                "definition_json": latest_version.definition_json if latest_version else None,
+            }
+        )
+    return schemas_list
+
+
+async def _build_model_backends_list(session: AsyncSession, model_backend_ids: set[uuid.UUID]) -> list[dict[str, Any]]:
+    """Build the bundle's model-backends section from the referenced ids."""
+    if not model_backend_ids:
+        return []
+    mb_result = await session.execute(select(ModelBackend).where(ModelBackend.id.in_(model_backend_ids)))
+    backends = list(mb_result.scalars())
+    return [
+        {
+            "id": str(b.id),
+            "name": b.name,
+            "provider": b.provider,
+            "model_id": b.model_id,
+        }
+        for b in backends
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Export v2 — pipeline_id → YAML string
+# ---------------------------------------------------------------------------
+
+
+async def export_pipeline_bundle_v2(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> str:
+    """Build a v2 YAML bundle from a pipeline per ADR 015.
+
+    Returns a YAML string with the v2 bundle format including triggers,
+    owner_team, visibility, lifecyle_map_ref, composite_template_refs,
+    and partial bundle support.
+    """
+    try:
+        pipeline = await _load_pipeline(session, pipeline_id)
+        agent_ids, schema_ids = _collect_agent_and_schema_ids(pipeline.graph_nodes_json)
+        parts = await _gather_v2_export_parts(session, pipeline, agent_ids, schema_ids)
+        bundle = _build_v2_bundle(pipeline, parts)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("export_pipeline_bundle_v2: failed while building bundle for pipeline %s", pipeline_id)
+        raise
+
+    yaml_str = yaml.safe_dump(bundle, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    logger.info(
+        "Exported v2 bundle for pipeline %s with %d agents, %d edges",
+        pipeline_id,
+        len(parts.agents),
+        len(parts.edges),
+    )
+    return yaml_str
+
+
+async def _gather_v2_export_parts(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+) -> _V2ExportParts:
+    """Fetch and project every piece of a v2 bundle for a pipeline."""
+    business_owner_email, reliability_owner_email = await _resolve_owner_emails_for_export(session, pipeline)
+    agents_list = await _build_v2_agents_list(session, agent_ids, schema_ids)
+    schemas_list = await _build_schemas_list(session, schema_ids)
+    edges_list = await _fetch_and_project_edges_v2(session, pipeline.id)
+    triggers_list = await _fetch_v2_triggers(session, pipeline.id)
+    owner_team_name = await _resolve_owner_team_name(session, pipeline.owner_team_id)
+    author = await _resolve_author_email(session, pipeline)
+    return _V2ExportParts(
+        agents=agents_list,
+        schemas=schemas_list,
+        edges=edges_list,
+        triggers=triggers_list,
+        owner_team_name=owner_team_name,
+        author=author,
+        business_owner_email=business_owner_email,
+        reliability_owner_email=reliability_owner_email,
+    )
+
+
+def _build_v2_bundle(pipeline: Pipeline, parts: _V2ExportParts) -> dict[str, Any]:
+    """Assemble the v2 ``modulo_workflow`` envelope from gathered parts."""
+    requires = _build_v2_requires(parts.agents, parts.schemas)
+    return {
+        "modulo_workflow": {
+            "id": str(pipeline.id),
+            "name": pipeline.name,
+            "version": "1.0.0",
+            "author": parts.author,
+            "owner_team": parts.owner_team_name,
+            "business_owner_email": parts.business_owner_email,
+            "reliability_owner_email": parts.reliability_owner_email,
+            "visibility": pipeline.visibility,
+            "lifecycle_map_ref": None,
+            "composite_template_refs": [],
+            "partial": False,
+            "requires": requires,
+            "triggers": parts.triggers,
+            "agents": parts.agents,
+            "edges": parts.edges,
+            "schemas": parts.schemas,
+        }
+    }
+
+
+def _collect_agent_and_schema_ids(
+    graph_nodes_json: list[dict[str, Any]] | None,
+) -> tuple[set[uuid.UUID], set[uuid.UUID]]:
+    """Collect agent + schema ids referenced by the v2 bundle graph nodes."""
+    agent_ids: set[uuid.UUID] = set()
+    schema_ids: set[uuid.UUID] = set()
+    if not graph_nodes_json:
+        return agent_ids, schema_ids
+    for node in graph_nodes_json:
+        agent_id_str = node.get("agent_id")
+        if agent_id_str:
+            try:
+                agent_ids.add(_safe_uuid(agent_id_str, "node.agent_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid agent_id: %s", agent_id_str)
+                continue
+        schema_id_str = node.get("output_schema_id")
+        if schema_id_str:
+            try:
+                schema_ids.add(_safe_uuid(schema_id_str, "node.output_schema_id"))
+            except ValueError:
+                logger.warning("Skipping node with invalid output_schema_id: %s", schema_id_str)
+    return agent_ids, schema_ids
+
+
+async def _build_v2_agents_list(
+    session: AsyncSession,
+    agent_ids: set[uuid.UUID],
+    schema_ids: set[uuid.UUID],
+) -> list[dict[str, Any]]:
+    """Build the v2 bundle's agents section, extending the schema-id set."""
+    agents_list: list[dict[str, Any]] = []
+    if not agent_ids:
+        return agents_list
+    agent_result = await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))
+    agents = list(agent_result.scalars())
+    for a in agents:
+        agent_entry: dict[str, Any] = {
+            "id": str(a.id),
+            "name": a.name,
+            "description": a.description,
+            "input_schema": str(a.input_schema_id) if a.input_schema_id else None,
+            "output_schema": str(a.output_schema_id) if a.output_schema_id else None,
+            "prompt_template": a.prompt_template,
+            "template_id": a.template_id,
+            "agent_commands": a.agent_commands,
+            "connector_type_refs": list(a.connector_type_refs or []),
+            "evals": list(a.evals or []),
+            "retry_policy": dict(a.retry_policy or {}),
+            "token_budget": a.token_budget,
+        }
+        agents_list.append(agent_entry)
+        if a.input_schema_id:
+            schema_ids.add(a.input_schema_id)
+        if a.output_schema_id:
+            schema_ids.add(a.output_schema_id)
+    return agents_list
+
+
+async def _fetch_and_project_edges_v2(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Project a pipeline's edges into the v2 bundle shape (source/target)."""
+    edge_result = await session.execute(
+        select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
+    )
+    edges = list(edge_result.scalars())
+    return [
+        {
+            "source": str(e.source_node_id),
+            "target": str(e.target_node_id),
+            "edge_type": e.edge_type,
+            "hitl_review_config": e.hitl_review_config,
+        }
+        for e in edges
+    ]
+
+
+def _build_v2_requires(
+    agents_list: list[dict[str, Any]],
+    schemas_list: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """Collect the v2 bundle's required connector types and abstract schemas."""
+    connector_type_refs_set: set[str] = set()
+    for a_entry in agents_list:
+        for ref in a_entry.get("connector_type_refs", []):
+            ctid = connector_ref_type_id(ref)
+            if ctid:
+                connector_type_refs_set.add(ctid)
+
+    abstract_schema_names_set: set[str] = set()
+    for s_entry in schemas_list:
+        aname = s_entry.get("abstract_name")
+        if aname:
+            abstract_schema_names_set.add(aname)
+
+    return {
+        "connector_types": sorted(connector_type_refs_set),
+        "abstract_schemas": sorted(abstract_schema_names_set),
+    }
+
+
+async def _fetch_v2_triggers(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Fetch the pipeline's triggers for the v2 bundle (best-effort)."""
+    try:
+        trig_stmt = select(Trigger).where(Trigger.pipeline_id == pipeline_id)
+        triggers = (await session.execute(trig_stmt)).scalars().all()
+        return [
+            {
+                "name": t.name,
+                "trigger_type": t.trigger_type,
+                "config": dict(t.config_json or {}),
+                "active": t.active,
+            }
+            for t in triggers
+        ]
+    except Exception:
+        logger.warning(
+            "Could not fetch triggers for v2 bundle export (table may not exist yet)",
+            exc_info=True,
+        )
+        return []
+
+
+async def _resolve_owner_team_name(session: AsyncSession, owner_team_id: uuid.UUID | None) -> str | None:
+    """Resolve the pipeline's owner-team name (best-effort)."""
+    if not owner_team_id:
+        return None
+    try:
+        team_result = await session.execute(select(Team).where(Team.id == owner_team_id))
+        team = team_result.scalar_one_or_none()
+        return team.name if team else None
+    except Exception:
+        logger.warning("Could not resolve owner_team for v2 bundle export", exc_info=True)
+        return None
+
+
+async def _resolve_author_email(session: AsyncSession, pipeline: Pipeline) -> str:
+    """Resolve the pipeline's creator email for the v2 bundle author field."""
+    author = str(pipeline.account_id)
+    try:
+        acct_result = await session.execute(select(Account).where(Account.id == pipeline.account_id))
+        creator = acct_result.scalar_one_or_none()
+        if creator:
+            author = creator.email or author
+    except Exception:
+        logger.warning("Could not resolve creator email for v2 bundle export", exc_info=True)
+    return author
+
+
+# ---------------------------------------------------------------------------
+# Import helpers — resolve references from a bundle to local equivalents
+# ---------------------------------------------------------------------------
+
+
+async def resolve_schema(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    export_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Find a local schema matching the exported one.
+
+    Returns mapping with schema_id, version, and a warning string.
+    """
+    definition = export_schema.get("definition_json")
+    abstract_name = export_schema.get("abstract_name")
+    name = export_schema.get("name")
+    if not name:
+        return {
+            "schema_id": None,
+            "version": None,
+            "warning": "Schema entry missing 'name' field.",
+        }
+
+    try:
+        # First try abstract_name match
+        if abstract_name:
+            matched = await _resolve_schema_by_abstract_name(session, org_id, abstract_name)
+            if matched is not None:
+                return matched
+
+        # Try matching by same definition structure — batch load all schema versions
+        if definition:
+            matched = await _resolve_schema_by_definition(session, org_id, definition)
+            if matched is not None:
+                return matched
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("resolve_schema: DB query failed for schema '%s'", name)
+        raise
+
+    return {
+        "schema_id": None,
+        "version": None,
+        "warning": f"Schema '{name}' not found locally. It will need to be created.",
+    }
+
+
+async def _resolve_schema_by_abstract_name(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    abstract_name: str,
+) -> dict[str, Any] | None:
+    """Match an exported schema by its abstract_name (most specific)."""
+    stmt = (
+        select(Schema)
+        .where(
+            Schema.organisation_id == org_id,
+            Schema.abstract_name == abstract_name,
+        )
+        .order_by(Schema.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    schema = result.scalar_one_or_none()
+    if schema is None:
+        return None
+    sv = await _get_latest_published_version(session, schema.id)
+    return {
+        "schema_id": str(schema.id),
+        "version": sv.version if sv else DEFAULT_SCHEMA_VERSION,
+        "warning": None,
+    }
+
+
+async def _resolve_schema_by_definition(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    definition: Any,
+) -> dict[str, Any] | None:
+    """Match an exported schema by its published definition JSON structure."""
+    all_schemas = (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
+    schema_ids = [s.id for s in all_schemas]
+    if not schema_ids:
+        return None
+    all_svs = (
+        (
+            await session.execute(
+                select(SchemaVersion)
+                .where(
+                    SchemaVersion.schema_id.in_(schema_ids),
+                    SchemaVersion.published.is_(True),
+                )
+                .order_by(SchemaVersion.schema_id, SchemaVersion.version_number.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    published: dict[uuid.UUID, SchemaVersion] = {}
+    for sv in all_svs:
+        if sv.schema_id not in published:
+            published[sv.schema_id] = sv
+
+    for s in all_schemas:
+        candidate_sv = published.get(s.id)
+        if candidate_sv and candidate_sv.definition_json == definition:
+            return {
+                "schema_id": str(s.id),
+                "version": candidate_sv.version,
+                "warning": None,
+            }
+    return None
+
+
+async def resolve_connector_type(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    connector_type_id: str,
+) -> dict[str, Any]:
+    """Find a local connector instance matching the given type."""
+    try:
+        stmt = (
+            select(ConnectorInstance)
+            .where(
+                ConnectorInstance.organisation_id == org_id,
+                ConnectorInstance.connector_type_id == connector_type_id,
+                ConnectorInstance.status == "active",
+            )
+            .order_by(ConnectorInstance.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        instances = list(result.scalars())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("resolve_connector_type: DB query failed for type '%s'", connector_type_id)
+        raise
+
+    if instances:
+        return {
+            "instance_id": str(instances[0].id),
+            "instance_name": instances[0].name,
+            "warning": None,
+        }
+    return {
+        "instance_id": None,
+        "instance_name": None,
+        "warning": (f"Connector type '{connector_type_id}' not found locally. A matching instance must be created."),
+    }
+
+
+async def resolve_model_backend(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    export_backend: dict[str, Any],
+) -> dict[str, Any]:
+    """Find a local model backend matching the exported one by name or provider+model_id."""
+    name = export_backend.get("name")
+    provider = export_backend.get("provider")
+    model_id = export_backend.get("model_id")
+    if not name or not provider or not model_id:
+        return {
+            "model_backend_id": None,
+            "warning": "Model backend entry is missing required fields (name, provider, model_id).",
+        }
+
+    try:
+        # Try by name first
+        stmt = (
+            select(ModelBackend)
+            .where(
+                ModelBackend.organisation_id == org_id,
+                ModelBackend.name == name,
+                ModelBackend.status == "active",
+            )
+            .order_by(ModelBackend.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        backend = result.scalar_one_or_none()
+        if backend is not None:
+            return {
+                "model_backend_id": str(backend.id),
+                "warning": None,
+            }
+
+        # Try by provider+model_id
+        stmt2 = select(ModelBackend).where(
+            ModelBackend.organisation_id == org_id,
+            ModelBackend.provider == provider,
+            ModelBackend.model_id == model_id,
+            ModelBackend.status == "active",
+        )
+        result2 = await session.execute(stmt2)
+        backend2 = result2.scalar_one_or_none()
+        if backend2 is not None:
+            return {
+                "model_backend_id": str(backend2.id),
+                "warning": None,
+            }
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("resolve_model_backend: DB query failed for '%s' (%s/%s)", name, provider, model_id)
+        raise
+
+    return {
+        "model_backend_id": None,
+        "warning": f"Model backend '{name}' ({provider}/{model_id}) not found locally.",
+    }
+
+
+def suggest_import_name(
+    existing_names: set[str],
+    proposed_name: str,
+    *,
+    suffix: str = _IMPORTED_SUFFIX,
+    max_length: int = 255,
+) -> str:
+    """Suggest a non-colliding name by appending a suffix.
+
+    When a suffix must be added, the base name is clamped so the candidate
+    always fits *max_length* (the name-column width, e.g. ``String(255)``) —
+    otherwise a max-width imported name would overflow the column after
+    suffixing. Reserved counter room keeps the numbered form within bounds too.
+    """
+    if proposed_name not in existing_names:
+        return proposed_name
+    # Reserve room for " <suffix>" and the dedupe counter so every numbered
+    # candidate stays within max_length. With max_length=255 and
+    # suffix="(imported)" that is 4 counter digits, so the loop stops at 9999 —
+    # allowing idx=10000 (5 digits) would overflow the name column.
+    reserved = len(suffix) + 2 + 4
+    base = proposed_name[: max_length - reserved]
+    candidate = f"{base} {suffix}"
+    if candidate not in existing_names:
+        return candidate
+    max_idx = 10 ** (reserved - len(suffix) - 2) - 1
+    idx = 2
+    while f"{base} {suffix} {idx}" in existing_names and idx < max_idx:
+        idx += 1
+    return f"{base} {suffix} {idx}"
+
+
+def _sanitize_retry_policy(imported: Any) -> tuple[dict[str, Any], str | None]:
+    """Validate an imported pipeline ``retry_policy``; sanitise by fault class (FAR-525).
+
+    A malformed policy is a hard pre-run failure at execute time
+    (``GraphValidator.check_retry_policy`` -> ``GraphValidationError``), which
+    would break EVERY run of an imported pipeline. Import is best-effort copy:
+    never let a malformed bundled policy permanently break the imported
+    pipeline's runs.
+
+    Returns ``(policy, fault_class)``:
+      - absent (``None``): ``({}, None)`` — "no policy" is NOT a fault (the
+        legacy warning only fired for a PRESENT malformed policy).
+      - no fault: ``(canonicalised copy, None)`` — canonicalisation-only deltas
+        (e.g. ``300.0`` -> ``300``) are NOT faults.
+      - schedule-level fault (the OPTIONAL ``backoff_schedule`` is malformed):
+        NESTED DROP — the schedule key is removed but ``on``/``max_retries``/
+        ``backoff`` are KEPT (``"schedule"``). A bad pacing schedule must not
+        cost the caller its entire retry policy.
+      - any TOP-LEVEL core fault (``on``/``max_retries``/present non-dict):
+        WHOLE DROP to ``{}`` UNCHANGED from the legacy behaviour (``"core"``).
+
+    A mixed-error payload (core AND schedule faults) whole-drops: the core
+    fault is the fatal one, and keeping ``on``/``max_retries`` beside a
+    schedule we had to drop anyway buys nothing.
+    """
+    from farna.core.pipeline_engine import retry_compensation
+
+    if imported is None:
+        return {}, None
+    if not isinstance(imported, dict):
+        return {}, "core"
+    core_check = ValidationResult()
+    GraphValidator.check_retry_policy(imported, core_check)
+    if not core_check.is_valid:
+        return {}, "core"
+    schedule_check = ValidationResult()
+    canonical_schedule: dict[str, Any] | None = None
+    schedule_valid = True
+    try:
+        GraphValidator.check_retry_policy_schedule(imported, schedule_check)
+        schedule_valid = schedule_check.is_valid
+        if schedule_valid:
+            # Canonicalise type-stable storage via the SINGLE shared helper
+            # (retry_compensation.canonicalise_backoff_schedule): integral float
+            # -> int, int -> float — identical to the API write site. Inside the
+            # same containment try: a canonicalise ValueError (an
+            # un-representable value the validator let through) is a SCHEDULE
+            # fault — the schedule key drops, the core policy survives.
+            canonical_schedule = retry_compensation.canonicalise_backoff_schedule(imported.get("backoff_schedule"))
+    except Exception:
+        # Defense-in-depth (FAR-525 qa gate): neither the schedule validator nor
+        # the canonicaliser may break the import with an unexpected exception —
+        # ANY escape degrades to the schedule-fault class (nested drop +
+        # schedule warning). The warning distinguishes a genuine validator
+        # defect from malformed bundled data. The CORE check above keeps its
+        # exact semantics (a core fault whole-drops, unchanged) — only
+        # unexpected-exception containment is broadened.
+        logger.warning("workflow_import.retry_policy_schedule_check_failed", exc_info=True)
+        schedule_valid = False
+    policy = dict(imported)
+    if schedule_valid:
+        if canonical_schedule is not None:
+            policy["backoff_schedule"] = canonical_schedule
+        return policy, None
+    policy.pop("backoff_schedule", None)
+    return policy, "schedule"
+
+
+async def get_existing_pipeline_names(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> set[str]:
+    return await _get_existing_names(session, org_id, Pipeline)
+
+
+async def get_existing_agent_names(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+) -> set[str]:
+    return await _get_existing_names(session, org_id, Agent)
+
+
+# ---------------------------------------------------------------------------
+# ZIP extraction and analysis (server-side)
+# ---------------------------------------------------------------------------
+
+
+def extract_bundle_json_from_zip(zip_bytes: bytes) -> dict[str, Any]:
+    """Extract bundle.json from a .modulo.zip archive."""
+    if len(zip_bytes) > 100 * 1024 * 1024:
+        raise ValueError(f"Bundle too large: {len(zip_bytes)} bytes (max 100 MB)")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            names = zf.namelist()
+            if MANIFEST_FILENAME not in names:
+                raise LookupError(f"{MANIFEST_FILENAME} not found in archive (found: {names})")
+            result: dict[str, Any] = json.loads(zf.read(MANIFEST_FILENAME))
+            return result
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Invalid bundle: not a valid ZIP archive") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid bundle: {MANIFEST_FILENAME} contains malformed JSON") from exc
+
+
+# ---------------------------------------------------------------------------
+# Materialize — create real database entities from a bundle
+# ---------------------------------------------------------------------------
+
+
+async def materialize_import(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    created_by: uuid.UUID,
+    bundle: dict[str, Any],
+    *,
+    owner_team_id: uuid.UUID | None = None,
+    pipeline_name_override: str | None = None,
+    model_backend_overrides: dict[str, str] | None = None,
+    schema_id_overrides: dict[str, str] | None = None,
+    schema_version_overrides: dict[str, str] | None = None,
+    connector_instance_overrides: dict[str, str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create pipeline, agents, schemas, and edges from an import bundle.
+
+    Returns a dict with created entity IDs and any warnings. Accountability
+    owners (FAR-1161) are carried as emails in the bundle: each is resolved
+    to a local account and re-validated against the full eligibility
+    invariant; an unresolvable or ineligible owner is STRIPPED with a
+    disclosed warning (never fails the import, never imports ineligible).
+    """
+    _validate_bundle_format(bundle)
+    await _validate_owner_team(session, org_id, owner_team_id)
+
+    ctx = _ImportContext(
+        session=session,
+        org_id=org_id,
+        created_by=created_by,
+        # NOT ``warnings or []``: an EMPTY caller-supplied list is falsy, so
+        # that idiom silently swaps in a fresh list and the caller (e.g.
+        # ``install_collection``, which persists this list as the install's
+        # warnings) never sees anything the import appended. An omitted/None
+        # still gets its own list.
+        warnings=[] if warnings is None else warnings,
+        owner_team_id=owner_team_id,
+        overrides=_ImportOverrides(
+            model_backends=model_backend_overrides or {},
+            schema_ids=schema_id_overrides or {},
+            schema_versions=schema_version_overrides or {},
+            connector_instances=connector_instance_overrides or {},
+        ),
+    )
+    sections = _resolve_bundle_sections(bundle, pipeline_name_override)
+
+    # FAR-1846: reject a bundle that smuggles a sandbox-only field onto a
+    # non-sandbox node BEFORE anything is materialised. The schema and agent
+    # steps below INSERT + flush, and a collection install has already written
+    # its ``CollectionInstall`` row before it calls in — so validating inside
+    # the pipeline step (the original placement) left nothing persisted only
+    # because every HTTP caller happens to wrap the import in one transaction.
+    # The guarantee must not depend on each caller remembering to do that.
+    #
+    # Checking the raw nodes here is equivalent to the old post-processing
+    # check: nothing between this point and the pipeline step can add or remove
+    # one of the checked fields — ``_rewire_graph_nodes`` only rewrites
+    # ``agent_id`` / ``output_schema_id`` / the connector instance id, and
+    # ``strip_declared_policy_gates`` only pops ``policy_gate``.
+    graph_nodes = _normalize_graph_nodes(sections.pipeline_info, ctx.warnings)
+    _reject_sandbox_only_fields_off_sandbox(graph_nodes)
+
+    existing_agent_names = await get_existing_agent_names(session, org_id)
+    existing_pipeline_names = await get_existing_pipeline_names(session, org_id)
+
+    pname = suggest_import_name(existing_pipeline_names, sections.name)
+    _log_import_start(pname, sections)
+
+    schema_id_map, schema_version_map = await _materialize_schemas(ctx, sections.schemas_data)
+
+    agent_id_map = await _materialize_agents(
+        ctx,
+        sections.agents_data,
+        existing_agent_names,
+        schema_id_map,
+        schema_version_map,
+        bundle_model_backends=[mb for mb in bundle.get("model_backends", []) if isinstance(mb, dict)],
+    )
+
+    pipeline, pipeline_edges_added, prim = await _materialize_pipeline_and_edges(
+        ctx,
+        sections,
+        graph_nodes,
+        pname,
+        existing_pipeline_names,
+        agent_id_map,
+        schema_id_map,
+        bundle,
+    )
+
+    return _build_import_result(
+        pname,
+        pipeline,
+        prim,
+        sections,
+        pipeline_edges_added,
+        agent_id_map,
+        schema_id_map,
+        ctx.warnings,
+    )
+
+
+def _log_import_start(pname: str, sections: _ImportSections) -> None:
+    """Log the materialisation start with section counts."""
+    logger.info(
+        "Materializing import: pipeline='%s' (%d agents, %d schemas, %d edges)",
+        _sanitise_log_value(pname),
+        len(sections.agents_data),
+        len(sections.schemas_data),
+        len(sections.edges_data),
+    )
+
+
+def _reject_sandbox_only_fields_off_sandbox(graph_nodes: list[dict[str, Any]]) -> None:
+    """Fail an import whose graph declares a sandbox-only field elsewhere.
+
+    FAR-1846: the shared graph-validator rule (also applied on the save and
+    run paths) rejects ``read_only`` / ``git_credentials`` /
+    ``single_pr_per_run`` / ``egress_policy`` / ``egress_allowlist`` on a node
+    that is not a ``sandbox_agent``. A bundle bypasses the Pydantic node model,
+    so the importer must apply the same check itself or persist a declared
+    control nothing enforces.
+
+    Raises:
+        ValueError: the bundle's graph carries one of those fields on a
+            non-sandbox_agent node. The message names every offending node and
+            field so an operator can repair the bundle.
+    """
+    placement = check_sandbox_only_field_placement({"nodes": graph_nodes, "edges": []})
+    if placement.is_valid:
+        return
+    problems = "; ".join(issue.message for issue in placement.issues if issue.severity == "error")
+    raise ValueError("Invalid bundle: sandbox-only node fields are set on non-sandbox_agent nodes — " + problems)
+
+
+def _strip_malformed_node_agent_commands(
+    graph_nodes: list[dict[str, Any]],
+    created_agent_ids: set[str],
+    pname: str,
+    warnings: list[str],
+) -> None:
+    """Drop a malformed node-level ``agent_commands`` from imported nodes (FAR-2008).
+
+    Bundle import hands raw bundle node dicts to the shared Agent-row sync with
+    no typed validation (the Pydantic ``PipelineGraphNode`` model is bypassed),
+    and the shared sync accepts a node value only when it is a clean
+    ``list[str]``. A value that is not — a mixed list such as ``["ok", 3]``, a
+    scalar, ``[None]`` — is therefore stripped HERE, in place, with a disclosed
+    warning: the sync silently skips it, so leaving it on the persisted node
+    would make the graph claim a command the Agent row does not hold (the node
+    value stands only while the row is NULL, and it cannot be materialised).
+
+    Only nodes bound to an Agent CREATED by this import are touched — the same
+    trust boundary the sync itself uses; a node bound to a pre-existing Agent
+    is never modified.
+
+    A clean list (every item a ``str``, at least one non-empty) is left
+    untouched so it still syncs into the created Agent row.
+    """
+    for node in graph_nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("agent_id")) not in created_agent_ids:
+            continue
+        if "agent_commands" not in node:
+            continue
+        if is_clean_agent_commands(node["agent_commands"]):
+            continue
+        del node["agent_commands"]
+        warnings.append(
+            f"Node '{node.get('id')}' in imported pipeline '{pname}' declares malformed "
+            "agent_commands (expected a list of strings with at least one non-empty string). "
+            "The node commands will be omitted."
+        )
+
+
+async def _materialize_pipeline_and_edges(
+    ctx: _ImportContext,
+    sections: _ImportSections,
+    graph_nodes: list[dict[str, Any]],
+    pname: str,
+    existing_pipeline_names: set[str],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    bundle: dict[str, Any],
+) -> tuple[Pipeline, list[PipelineEdge], Any]:
+    """Create the imported pipeline, its edges, and the library primitive."""
+    _warn_redacted_credentials(bundle, ctx.warnings)
+    graph_nodes = _rewire_graph_nodes(
+        graph_nodes,
+        agent_id_map,
+        schema_id_map,
+        ctx.overrides.connector_instances,
+    )
+
+    # FAR-1666: an imported pipeline cannot carry gate rows — the bundle
+    # exports no ``policy_gates`` section and evals are not imported, so a
+    # declared block would persist INERT (governing nothing) or reference a
+    # foreign eval. Strip the blocks through the shared helper, consistent with
+    # the module's credential-stripping, and disclose it in the import warnings.
+    graph_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_nodes)
+    if dropped_policy_gates:
+        warning = (
+            f"{len(dropped_policy_gates)} policy_gate declaration(s) were removed on import "
+            f"(evals and gates are not part of a bundle): {'; '.join(dropped_policy_gates)}."
+        )
+        ctx.warnings.append(warning)
+        logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
+
+    pipeline = await _create_imported_pipeline(
+        ctx,
+        pname,
+        sections.pipeline_info,
+        existing_pipeline_names,
+        sections.name,
+    )
+
+    # FAR-2008: bundle import is a graph writer too. Keep the imported nodes'
+    # bound Agent rows in step with the node-level ``agent_commands`` they
+    # declare, in the SAME transaction and BEFORE the graph is persisted —
+    # ``_apply_agent_fields`` lets a non-NULL Agent-row command win at run
+    # snapshot time, so without this an imported graph could claim one command
+    # and every run execute another (FAR-488-class). The sync is the shared
+    # ``core.agent_command_sync`` helper every other graph writer uses, which
+    # is why it lives in core rather than api.
+    #
+    # TRUST BOUNDARY (FAR-2008 security): a bundle is untrusted input, and
+    # ``_rewire_graph_nodes`` only rewrites an ``agent_id`` that the bundle
+    # DECLARED (present in ``agent_id_map``). An unrecognised id is left
+    # verbatim — which, in an attacker-crafted bundle, can name ANY Agent
+    # already in this organisation. Feeding every node to the org-scoped sync
+    # would then let the bundle overwrite that pre-existing Agent's commands
+    # and silently change unrelated pipelines. So only nodes bound to an Agent
+    # CREATED by this import are eligible; a node bound to a pre-existing Agent
+    # is left untouched (the pre-FAR-2008 behaviour), never silently synced.
+    created_agent_ids = set(agent_id_map.values())
+    # A bundle bypasses the Pydantic node model, so the node path needs the
+    # same type check the Agent declaration path (``_base_agent_args``) already
+    # applies: the target column is ``list[str] | None``, and a mixed list such
+    # as ``["ok", 3]`` written through the sync would break ``AgentResponse``
+    # validation for EVERY read of the org's agents (``GET /api/v1/agents``).
+    # Strip the malformed value from the imported node and disclose it, rather
+    # than persist a graph that claims a command the row cannot hold.
+    _strip_malformed_node_agent_commands(graph_nodes, created_agent_ids, pname, ctx.warnings)
+    import_bound_nodes = [
+        node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids
+    ]
+    synced_agent_ids = await sync_agent_row_commands(
+        ctx.session,
+        org_id=ctx.org_id,
+        nodes=import_bound_nodes,
+        pipeline_id=pipeline.id,
+    )
+    # Attribution (FAR-2008): import is the untrusted-input writer, so a sync
+    # that rewrites a newly created Agent row must leave a durable audit trail
+    # naming the pipeline, the actor and every changed Agent id — the same
+    # event/payload shape the rollback writer emits.
+    if synced_agent_ids:
+        await append_audit_event(
+            ctx.session,
+            org_id=ctx.org_id,
+            event_type="pipeline.agent_commands_synced",
+            actor_user_id=ctx.created_by,
+            resource_type="pipeline",
+            resource_id=pipeline.id,
+            payload_json={
+                "agent_count": len(synced_agent_ids),
+                "agent_ids": [str(agent_id) for agent_id in synced_agent_ids],
+            },
+        )
+    pipeline.graph_nodes_json = list(graph_nodes)
+    # FAR-889: detect imports that recreate schema-less manual nodes.  Unlike
+    # the REST write path, import tolerates legacy bundles (FAR-874) and keeps
+    # the node, surfacing a warning instead of rejecting the whole import; the
+    # node will fail at execution time until an output schema is attached.
+    try:
+        enforce_manual_node_output_schemas(graph_nodes)
+    except ManualNodeOutputSchemaError as exc:
+        ctx.warnings.append(
+            f"Imported pipeline contains a manual node without an output schema: {exc}. "
+            "The node has been included but will fail at execution time."
+        )
+    _apply_imported_retry_policy(pipeline, sections.pipeline_info, ctx.warnings)
+    await ctx.session.flush()
+
+    pipeline_edges_added = _materialize_edges(ctx, pipeline, sections.edges_data)
+    await ctx.session.flush()
+
+    prim = await _create_import_primitive(ctx, pipeline, bundle, pname, sections.pipeline_info)
+
+    return pipeline, pipeline_edges_added, prim
+
+
+def _build_import_result(
+    pname: str,
+    pipeline: Pipeline,
+    prim: Any,
+    sections: _ImportSections,
+    pipeline_edges_added: list[PipelineEdge],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Build the import result dict and log the completion summary.
+
+    ``connector_bindings`` (FAR-1515 MAJOR 4) carries the REWIRED connector
+    bindings of the just-created pipeline (snapshot binding shape) so the
+    confirm endpoint can run the connector-team gate on exactly what was
+    written — after rewiring, inside the import transaction — without a
+    second read of the session. Callers that patch ``materialize_import``
+    and omit the key are treated as importing a graph with no bindings.
+    """
+    logger.info(
+        "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
+        _sanitise_log_value(pname),
+        pipeline.id,
+        len(sections.agents_data),
+        len(pipeline_edges_added),
+        len(sections.schemas_data),
+    )
+
+    return {
+        "pipeline_id": str(pipeline.id),
+        "pipeline_name": pname,
+        "primitive_id": str(prim.id),
+        "agent_count": len(sections.agents_data),
+        "edge_count": len(pipeline_edges_added),
+        "schema_count": len(sections.schemas_data),
+        "agents": agent_id_map,
+        "schemas": schema_id_map,
+        "warnings": warnings,
+        "connector_bindings": extract_connector_bindings(list(pipeline.graph_nodes_json or [])),
+    }
+
+
+def _validate_bundle_format(bundle: dict[str, Any]) -> None:
+    """Reject bundles whose format version is unsupported."""
+    fmt_version = bundle.get("format_version")
+    if fmt_version == BUNDLE_FORMAT_VERSION:
+        return
+    msg = (
+        f"Unsupported bundle format version '{fmt_version}'. "
+        f"Expected '{BUNDLE_FORMAT_VERSION}'. "
+        "This bundle may have been created by a different version of Modulo."
+    )
+    raise ValueError(msg)
+
+
+async def _validate_owner_team(session: AsyncSession, org_id: uuid.UUID, owner_team_id: uuid.UUID | None) -> None:
+    """Ensure an owner team, if provided, belongs to the organisation."""
+    if owner_team_id is None:
+        return
+    team_exists = await session.execute(
+        select(Team).where(
+            Team.id == owner_team_id,
+            Team.organisation_id == org_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    if team_exists.scalar_one_or_none() is None:
+        raise ValueError(f"Team {owner_team_id} not found in this organisation.")
+
+
+def _resolve_bundle_sections(
+    bundle: dict[str, Any],
+    pipeline_name_override: str | None,
+) -> _ImportSections:
+    """Pull the bundle's top-level sections and resolve the pipeline name."""
+    pipeline_info = bundle.get("pipeline") or {}
+    return _ImportSections(
+        pipeline_info=pipeline_info,
+        agents_data=bundle.get("agents") or [],
+        schemas_data=bundle.get("schemas") or [],
+        edges_data=bundle.get("edges") or [],
+        name=pipeline_name_override or pipeline_info.get("name", "Imported Pipeline"),
+    )
+
+
+def _normalize_graph_nodes(pipeline_info: dict[str, Any], warnings: list[str]) -> list[dict[str, Any]]:
+    """Return the graph nodes list, warning and defaulting to empty on non-list input."""
+    raw_graph_nodes = pipeline_info.get("graph_nodes_json")
+    if isinstance(raw_graph_nodes, list):
+        return raw_graph_nodes
+    warnings.append("Pipeline 'graph_nodes_json' is not a list; nodes will be empty.")
+    return []
+
+
+# Cap the paths listed in the credential-redaction warning so a graph with
+# hundreds of redacted entries cannot produce an unusable wall of text.
+_MAX_LISTED_REDACTIONS = 10
+
+
+def _redaction_label(entry: dict[str, Any]) -> str:
+    """Render one redaction record as ``<node_id>.<field>[.<path>]``."""
+    node_id = str(entry.get("node_id") or "?")
+    field = str(entry.get("field") or "?")
+    path = str(entry.get("path") or "")
+    return f"{node_id}.{field}.{path}" if path else f"{node_id}.{field}"
+
+
+def _warn_redacted_credentials(bundle: dict[str, Any], warnings: list[str]) -> None:
+    """Warn that the bundle's credentials were stripped at export (FAR-1181).
+
+    The v1 portability bundle never carries instance-scoped node credentials
+    (:func:`strip_graph_node_credentials`), so an imported pipeline arrives
+    with those env vars / context files / parameter values ABSENT — unlike a
+    mask echo, there is nothing on this instance to restore them from. The
+    warning names every removed key/path so the operator re-provisions them
+    instead of discovering the gap at first run.
+    """
+    raw = bundle.get("redacted_credentials")
+    if not isinstance(raw, list):
+        return
+    entries = [entry for entry in raw if isinstance(entry, dict)]
+    if not entries:
+        return
+    labels = [_redaction_label(entry) for entry in entries]
+    shown = ", ".join(labels[:_MAX_LISTED_REDACTIONS])
+    remainder = f" (and {len(labels) - _MAX_LISTED_REDACTIONS} more)" if len(labels) > _MAX_LISTED_REDACTIONS else ""
+    warnings.append(
+        f"{len(labels)} credential(s) were not exported with this bundle; "
+        f"re-provision them on this instance: {shown}{remainder}."
+    )
+
+
+def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, Any], warnings: list[str]) -> None:
+    """Sanitise the imported retry_policy so a malformed policy never breaks runs.
+
+    FAR-525: warnings derive from the sanitiser's fault class — a schedule-only
+    fault nested-drops (schedule removed, policy kept) with its own warning;
+    a core fault whole-drops to {} with the legacy warning. A
+    canonicalisation-only delta (no fault) emits NO warning.
+    """
+    imported_retry_policy = pipeline_info.get("retry_policy")
+    sanitized_retry_policy, fault_class = _sanitize_retry_policy(imported_retry_policy)
+    if fault_class == "core":
+        warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
+    elif fault_class == "schedule":
+        warnings.append(
+            "Imported pipeline 'retry_policy' contained a malformed 'backoff_schedule'; "
+            "the schedule was removed but the retry policy (on/max_retries) was kept."
+        )
+    pipeline.retry_policy = sanitized_retry_policy
+
+
+async def _create_import_primitive(
+    ctx: _ImportContext,
+    pipeline: Pipeline,
+    bundle: dict[str, Any],
+    pname: str,
+    pipeline_info: dict[str, Any],
+) -> Any:
+    """Create the library primitive wrapping the imported workflow."""
+    try:
+        return await create_library_primitive(
+            ctx.session,
+            org_id=ctx.org_id,
+            source="local",
+            primitive_type="workflow",
+            name=pname,
+            slug=_sanitize_slug(pname),
+            description=pipeline_info.get("description", ""),
+            author=ctx.created_by.hex[:8],
+            version=DEFAULT_SCHEMA_VERSION,
+            tags=["imported"],
+            content_json={
+                "pipeline_id": str(pipeline.id),
+                "bundle": bundle,
+            },
+            source_url=None,
+            forked_from=None,
+            checksum=None,
+            ed25519_signature=None,
+            verified=None,
+            download_count=None,
+            average_rating=None,
+            review_count=None,
+            owner_team_id=ctx.owner_team_id,
+            visibility="org",
+            account_id=ctx.created_by,
+        )
+    except Exception:
+        logger.exception("Failed to create library primitive for pipeline '%s'", _sanitise_log_value(pname))
+        raise
+
+
+async def _reconcile_existing_schema(
+    ctx: _ImportContext,
+    sname: str,
+    definition: Any,
+    export_schema_id: str,
+    existing_schema_names: set[str] | None,
+) -> tuple[set[str] | None, str, dict[str, dict[str, str]] | None]:
+    """Resolve a schema name collision against an existing local schema.
+
+    Returns ``(existing_schema_names, resolved_sname, reuse)``. When a local
+    schema with a matching definition exists, ``reuse`` holds the id/version
+    mapping fragments keyed by ``export_schema_id`` and the schema should be
+    reused rather than created. Otherwise ``reuse`` is ``None`` and
+    ``resolved_sname`` is the (possibly suffixed) name to create.
+    """
+    existing_stmt = select(Schema).where(Schema.organisation_id == ctx.org_id, Schema.name == sname)
+    existing_result = await ctx.session.execute(existing_stmt)
+    existing_schema = existing_result.scalar_one_or_none()
+    if existing_schema is None:
+        return existing_schema_names, sname, None
+
+    existing_sv = await _get_latest_published_version(ctx.session, existing_schema.id)
+    if existing_sv is not None and existing_sv.definition_json != definition:
+        if existing_schema_names is None:
+            existing_schema_names = await _load_schema_names(ctx)
+        sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
+        existing_schema_names.add(sname)
+        ctx.warnings.append(
+            f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
+        )
+        return existing_schema_names, sname, None
+
+    if _has_matching_definition(existing_sv, definition):
+        return (
+            existing_schema_names,
+            sname,
+            {
+                "schema_id_map": {export_schema_id: str(existing_schema.id)},
+                "schema_version_map": {export_schema_id: existing_sv.version},
+            },
+        )
+
+    return existing_schema_names, sname, None
+
+
+async def _materialize_schemas(
+    ctx: _ImportContext,
+    schemas_data: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Create any schemas that don't exist locally; return the id/version maps."""
+    schema_id_map: dict[str, str] = {}
+    schema_version_map: dict[str, str] = {}
+    existing_schema_names: set[str] | None = None
+
+    for sd in schemas_data:
+        export_schema_id = sd.get("id", "")
+        if not export_schema_id:
+            ctx.warnings.append("Skipping schema with no 'id' field in bundle.")
+            continue
+
+        if _resolve_schema_without_create(ctx, sd, export_schema_id, schema_id_map, schema_version_map):
+            continue
+
+        definition = sd.get("definition_json")
+        if not definition:
+            ctx.warnings.append(
+                f"Schema '{sd.get('name', 'unknown')}' has no definition JSON and will be skipped. "
+                "Agents referencing this schema may fail."
+            )
+            continue
+
+        sname: str = sd.get("name", "Imported Schema")
+
+        # Check for existing schema with same name but different definition
+        existing_schema_names, sname, reuse = await _reconcile_existing_schema(
+            ctx,
+            sname,
+            definition,
+            export_schema_id,
+            existing_schema_names,
+        )
+        if reuse is not None:
+            schema_id_map.update(reuse["schema_id_map"])
+            schema_version_map.update(reuse["schema_version_map"])
+            continue
+
+        new_schema = await _create_schema_with_retry(ctx, sname, sd, existing_schema_names)
+
+        schema_id_map[export_schema_id] = str(new_schema.id)
+
+        try:
+            new_sv = await create_schema_version(
+                ctx.session,
+                org_id=ctx.org_id,
+                schema_id=new_schema.id,
+                version=sd.get("latest_version") or DEFAULT_SCHEMA_VERSION,
+                version_number=1,
+                definition_json=definition,
+                account_id=ctx.created_by,
+                published=True,
+            )
+        except Exception:
+            logger.exception("Failed to create schema version for '%s'", sname)
+            raise
+
+        schema_version_map[export_schema_id] = new_sv.version
+
+    return schema_id_map, schema_version_map
+
+
+def _resolve_schema_without_create(
+    ctx: _ImportContext,
+    sd: dict[str, Any],
+    export_schema_id: str,
+    schema_id_map: dict[str, str],
+    schema_version_map: dict[str, str],
+) -> bool:
+    """Resolve an override- or ``_resolved_id``-backed schema without creating it.
+
+    Returns ``True`` when the schema was fully handled (the caller skips it).
+    """
+    if export_schema_id in ctx.overrides.schema_ids:
+        schema_id_map[export_schema_id] = ctx.overrides.schema_ids[export_schema_id]
+        if export_schema_id in ctx.overrides.schema_versions:
+            schema_version_map[export_schema_id] = ctx.overrides.schema_versions[export_schema_id]
+        return True
+
+    existing_schema_id = sd.get("_resolved_id")
+    if existing_schema_id:
+        schema_id_map[export_schema_id] = existing_schema_id
+        existing_version = sd.get("_resolved_version")
+        if existing_version:
+            schema_version_map[export_schema_id] = existing_version
+        return True
+
+    return False
+
+
+async def _load_schema_names(ctx: _ImportContext) -> set[str]:
+    """Load all local schema names for collision-avoiding suggestions."""
+    all_existing = (
+        (await ctx.session.execute(select(Schema).where(Schema.organisation_id == ctx.org_id))).scalars().all()
+    )
+    return {s.name for s in all_existing}
+
+
+async def _create_schema_with_retry(
+    ctx: _ImportContext,
+    sname: str,
+    sd: dict[str, Any],
+    existing_schema_names: set[str] | None,
+) -> Schema:
+    """Create a schema, retrying with a suffixed name on IntegrityError collision."""
+    attempt_sc = 0
+    while True:
+        try:
+            async with ctx.session.begin_nested():
+                return await create_schema(
+                    ctx.session,
+                    org_id=ctx.org_id,
+                    name=sname,
+                    account_id=ctx.created_by,
+                    description=sd.get("description"),
+                    abstract_name=sd.get("abstract_name"),
+                )
+        except IntegrityError:
+            if _retries_exhausted(attempt_sc):
+                raise
+            attempt_sc += 1
+            if existing_schema_names is None:
+                existing_schema_names = await _load_schema_names(ctx)
+            existing_schema_names.add(sname)
+            new_sname = suggest_import_name(existing_schema_names, sname, suffix=_IMPORTED_SUFFIX)
+            ctx.warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
+            sname = new_sname
+            existing_schema_names.add(sname)
+        except Exception:
+            logger.exception("Failed to create schema '%s'", sname)
+            raise
+
+
+async def _materialize_agents(
+    ctx: _ImportContext,
+    agents_data: list[dict[str, Any]],
+    existing_agent_names: set[str],
+    schema_id_map: dict[str, str],
+    schema_version_map: dict[str, str],
+    bundle_model_backends: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    """Create the bundle's agents; return the export→local agent id map."""
+    agent_id_map: dict[str, str] = {}
+    for ad in agents_data:
+        export_agent_id = ad.get("id", "")
+        aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
+        existing_agent_names.add(aname)
+
+        agent_args = _base_agent_args(ctx, aname, ad)
+        try:
+            validate_agent_git_content_values(prompt_template=agent_args.get("prompt_template"))
+        except GitContentRefError as exc:
+            msg = f"Agent '{aname}' prompt_template git content ref was rejected: {exc}"
+            raise GitContentRefError(msg) from exc
+        # FAR-2008/FAR-220: ``agent_commands`` is imported now, so the bundle's
+        # commands pass the same save-time pin gate every Agent write path runs —
+        # otherwise a bundle could store an unpinned ``git+`` ref that fails
+        # closed only when a bound node renders it (and is then materialised
+        # onto every node bound to the Agent at snapshot time).
+        try:
+            validate_agent_git_content_values(agent_commands=agent_args.get("agent_commands"))
+        except GitContentRefError as exc:
+            msg = f"Agent '{aname}' agent_commands git content ref was rejected: {exc}"
+            raise GitContentRefError(msg) from exc
+        _apply_agent_references(
+            agent_args,
+            ad,
+            schema_id_map,
+            schema_version_map,
+            ctx.overrides.model_backends,
+            ctx.warnings,
+        )
+
+        agent = await _create_agent_with_retry(ctx, agent_args, existing_agent_names, ad.get("name", "Imported Agent"))
+
+        agent_id_map[export_agent_id] = str(agent.id)
+
+        # FAR-592 (D6): name-based runner-binding rebind — the backend for
+        # each binding resolves through the override map (bundle export id),
+        # a stamped id, or the org backend by name, in that order.
+        if ad.get("model_backend_bindings"):
+            bundle_backend_rows = await ctx.session.execute(
+                select(ModelBackend).where(
+                    ModelBackend.organisation_id == ctx.org_id,
+                    ModelBackend.name.in_([str(b.get("model_backend_name", "")) for b in ad["model_backend_bindings"]]),
+                )
+            )
+            backends_by_name = {row.name: row for row in bundle_backend_rows.scalars()}
+            await _apply_agent_bindings(
+                ctx,
+                agent,
+                ad,
+                backends_by_name,
+                ctx.warnings,
+                bundle_model_backends=bundle_model_backends,
+            )
+
+    return agent_id_map
+
+
+def _base_agent_args(
+    ctx: _ImportContext,
+    aname: str,
+    ad: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the base create_agent keyword arguments for an imported agent.
+
+    FAR-2008: ``agent_commands`` is carried over too. Export writes it into the
+    bundle and import used to drop it, so an imported Agent bound by a node
+    that relies on its row-level command started with a NULL ``agent_commands``
+    — which ``_apply_agent_fields`` then cannot materialise, losing the
+    bundle's command entirely.
+
+    A bundle is untrusted input, so the value is accepted only when it is a
+    non-empty list whose every item is a non-empty string. Anything else
+    (a scalar, a mixed-type list, ``[None]``, an empty list) is DROPPED with a
+    disclosed warning rather than silently coerced: persisting a malformed or
+    empty list would make snapshot materialisation overwrite the bound node's
+    command with junk or with no command at all (FAR-488-class).
+    """
+    agent_commands = ad.get("agent_commands")
+    resolved_commands: list[str] | None = None
+    if agent_commands is not None:
+        # ``any`` rather than ``all``: an EMPTY list must be rejected too, and
+        # ``all`` over an empty list is vacuously true (semgrep
+        # all-empty-iterable). ``any`` over the negated predicate is False for
+        # an empty list, and the separate emptiness check below rejects it.
+        malformed = not isinstance(agent_commands, list) or any(
+            not isinstance(command, str) or not command for command in agent_commands
+        )
+        if malformed or not agent_commands:
+            ctx.warnings.append(
+                f"Agent '{aname}' declares malformed agent_commands (expected a non-empty list of "
+                "non-empty strings). The commands will be omitted."
+            )
+        else:
+            resolved_commands = list(agent_commands)
+    return {
+        "session": ctx.session,
+        "org_id": ctx.org_id,
+        "name": aname,
+        "account_id": ctx.created_by,
+        "prompt_template": ad.get("prompt_template", ""),
+        "description": ad.get("description"),
+        "connector_type_refs": ad.get("connector_type_refs"),
+        "evals": ad.get("evals"),
+        "retry_policy": ad.get("retry_policy"),
+        "token_budget": ad.get("token_budget"),
+        "agent_commands": resolved_commands,
+    }
+
+
+def _apply_agent_references(
+    agent_args: dict[str, Any],
+    ad: dict[str, Any],
+    schema_id_map: dict[str, str],
+    schema_version_map: dict[str, str],
+    mb_overrides: dict[str, str],
+    warnings: list[str],
+) -> None:
+    """Resolve an agent's schema/model-backend references onto agent_args.
+
+    Appends a warning for every unresolved reference; the reference is then
+    omitted from the created agent.
+    """
+    aname = agent_args["name"]
+    input_schema_id_str = ad.get("input_schema_id", "")
+    output_schema_id_str = ad.get("output_schema_id", "")
+    resolved_input_id = schema_id_map.get(input_schema_id_str)
+    resolved_output_id = schema_id_map.get(output_schema_id_str)
+    resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get(
+        "input_schema_version", DEFAULT_SCHEMA_VERSION
+    )
+    resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get(
+        "output_schema_version", DEFAULT_SCHEMA_VERSION
+    )
+
+    export_mb_id = ad.get("model_backend_id", "")
+    resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id)
+
+    if _is_unresolved_ref(input_schema_id_str, resolved_input_id):
+        warnings.append(
+            f"Agent '{aname}' references unresolved input schema '{input_schema_id_str}'. "
+            "The schema reference will be omitted."
+        )
+    if _is_unresolved_ref(output_schema_id_str, resolved_output_id):
+        warnings.append(
+            f"Agent '{aname}' references unresolved output schema '{output_schema_id_str}'. "
+            "The schema reference will be omitted."
+        )
+    if _is_unresolved_ref(export_mb_id, resolved_mb_id):
+        warnings.append(
+            f"Agent '{aname}' references unresolved model backend '{export_mb_id}'. "
+            "The model backend reference will be omitted."
+        )
+    if resolved_input_id:
+        agent_args["input_schema_id"] = _safe_uuid(resolved_input_id, "agent.input_schema_id")
+        agent_args["input_schema_version"] = resolved_input_version
+    if resolved_output_id:
+        agent_args["output_schema_id"] = _safe_uuid(resolved_output_id, "agent.output_schema_id")
+        agent_args["output_schema_version"] = resolved_output_version
+    if resolved_mb_id:
+        agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
+
+
+async def _resolve_agent_ids(
+    ctx: _ImportContext,
+    binding_payloads: list[Any],
+    export_id_by_name: dict[str, str],
+) -> dict[uuid.UUID, ModelBackend]:
+    """Load org model backends for every id-resolvable binding candidate.
+
+    One RLS-scoped query for every id-resolved candidate (overrides + stamped
+    ids) so the resolution chain can consult org rows directly.
+    """
+    resolved_ids: set[uuid.UUID] = set()
+    for binding_payload in binding_payloads:
+        if not isinstance(binding_payload, dict):
+            continue
+        bname = str(binding_payload.get("model_backend_name", "") or "")
+        export_id = export_id_by_name.get(bname, "")
+        override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
+        for candidate in (override_id, binding_payload.get("_resolved_model_backend_id")):
+            with contextlib.suppress(ValueError):
+                resolved_ids.add(uuid.UUID(str(candidate)))
+    if not resolved_ids:
+        return {}
+    id_rows = await ctx.session.execute(
+        select(ModelBackend).where(
+            ModelBackend.organisation_id == ctx.org_id,
+            ModelBackend.id.in_(resolved_ids),
+        )
+    )
+    return {row.id: row for row in id_rows.scalars()}
+
+
+def _id_backend(
+    candidate: Any,
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+) -> ModelBackend | None:
+    """Resolve a candidate value to an org backend by id, or None."""
+    if candidate is None:
+        return None
+    try:
+        cand_uuid = uuid.UUID(str(candidate))
+    except ValueError:
+        return None
+    return org_backends_by_id.get(cand_uuid)
+
+
+def _resolve_binding_spec(
+    ctx: _ImportContext,
+    agent_name: str,
+    binding_payload: Any,
+    export_id_by_name: dict[str, str],
+    backends_by_name: dict[str, ModelBackend],
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    """Resolve one binding payload to a validated persistence spec, or None.
+
+    Backend resolution order per binding (FAR-592 qa F9):
+    ``ctx.overrides.model_backends`` (the operator's per-backend override,
+    keyed by the BUNDLE's model-backend export id looked up by the binding's
+    backend name) -> a stamped ``_resolved_model_backend_id`` on the payload
+    (honoured when an upstream resolver set it) -> the org backend by NAME.
+    Unresolvable, malformed, or validator-rejected bindings are OMITTED with
+    a warning — never raised as an import-crashing error.
+    """
+    if not isinstance(binding_payload, dict):
+        warnings.append(f"Agent '{agent_name}' has a malformed runner-binding spec (not an object); omitted.")
+        return None
+    # Malformed bundle specs (missing keys) warn + omit — a bare KeyError
+    # would crash the whole import with a 500.
+    try:
+        bname = str(binding_payload["model_backend_name"])
+        raw_target = str(binding_payload["target_env_var"])
+        raw_source = str(binding_payload["source_field"])
+    except KeyError as exc:
+        warnings.append(f"Agent '{agent_name}' runner binding is missing key '{exc}'; the binding will be omitted.")
+        return None
+
+    try:
+        export_id = export_id_by_name.get(bname, "")
+        override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
+        backend = (
+            _id_backend(override_id, org_backends_by_id)
+            or _id_backend(binding_payload.get("_resolved_model_backend_id"), org_backends_by_id)
+            or backends_by_name.get(bname)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        warnings.append(
+            f"Agent '{agent_name}' binding to model backend '{bname}' "
+            f"could not be resolved ({exc}); the binding will be omitted."
+        )
+        return None
+    if backend is None:
+        warnings.append(
+            f"Agent '{agent_name}' binding to model backend "
+            f"'{bname}' did not resolve "
+            "(overrides, stamped id, or name all missed); the binding will be omitted."
+        )
+        return None
+    try:
+        target, source = validate_binding_pair(
+            target_env_var=raw_target,
+            source_field=raw_source,
+            provider=backend.provider,
+        )
+    except BindingValidationError as exc:
+        warnings.append(f"Agent '{agent_name}' runner binding rejected at import ({exc}); the binding will be omitted.")
+        return None
+    # The CANONICAL pair from the validator is what persists — the raw
+    # payload spelling is never written through untouched.
+    return {
+        "_backend_id": backend.id,
+        "_account_id": ctx.created_by,
+        "target_env_var": target,
+        "source_field": source,
+    }
+
+
+def _build_binding_specs(
+    ctx: _ImportContext,
+    agent_name: str,
+    binding_payloads: list[Any],
+    export_id_by_name: dict[str, str],
+    backends_by_name: dict[str, ModelBackend],
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    """Resolve every binding payload to a validated persistence spec."""
+    specs: list[dict[str, Any]] = []
+    for binding_payload in binding_payloads:
+        spec = _resolve_binding_spec(
+            ctx,
+            agent_name,
+            binding_payload,
+            export_id_by_name,
+            backends_by_name,
+            org_backends_by_id,
+            warnings,
+        )
+        if spec is not None:
+            specs.append(spec)
+    return specs
+
+
+async def _persist_bindings(
+    ctx: _ImportContext,
+    agent_name: str,
+    agent_id: uuid.UUID,
+    specs: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    """Replace the agent's runner bindings with the resolved specs.
+
+    FAR-1825: the binding replace takes the Agent row ``FOR UPDATE`` and is now
+    bounded, so a contended row raises SQLSTATE 55P03. This path is deliberately
+    FAIL-OPEN (a bindings problem must not abort an otherwise valid import), but
+    a swallowed 55P03 would abort the CALLER's transaction and every later
+    statement in the import would then fail — the import would report success
+    around a dead transaction. A SAVEPOINT confines the failure: only the
+    bindings roll back, the import continues, and the existing warning records
+    the degradation.
+    """
+    if not specs:
+        return
+    try:
+        async with ctx.session.begin_nested():
+            await replace_agent_bindings(
+                ctx.session,
+                org_id=ctx.org_id,
+                agent_id=agent_id,
+                bindings_specs=specs,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        warnings.append(f"Agent '{agent_name}' runner bindings were not imported: {exc}.")
+
+
+async def _apply_agent_bindings(
+    ctx: _ImportContext,
+    agent: Agent,
+    ad: dict[str, Any],
+    backends_by_name: dict[str, ModelBackend],
+    warnings: list[str],
+    *,
+    bundle_model_backends: list[dict[str, Any]] | None = None,
+) -> None:
+    """Rebind the bundle's runner bindings onto the freshly imported agent."""
+    export_id_by_name = {
+        str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)
+    }
+    binding_payloads = list(ad.get("model_backend_bindings", []))
+    org_backends_by_id = await _resolve_agent_ids(ctx, binding_payloads, export_id_by_name)
+    specs = _build_binding_specs(
+        ctx, agent.name, binding_payloads, export_id_by_name, backends_by_name, org_backends_by_id, warnings
+    )
+    await _persist_bindings(ctx, agent.name, agent.id, specs, warnings)
+
+
+async def _create_agent_with_retry(
+    ctx: _ImportContext,
+    agent_args: dict[str, Any],
+    existing_agent_names: set[str],
+    base_name: str,
+) -> Agent:
+    """Create an agent, retrying with a suffixed name on IntegrityError collision."""
+    aname = agent_args["name"]
+    attempt_a = 0
+    while True:
+        try:
+            async with ctx.session.begin_nested():
+                return await create_agent(**agent_args)
+        except IntegrityError:
+            if _retries_exhausted(attempt_a):
+                raise
+            attempt_a += 1
+            existing_agent_names.add(aname)
+            aname = suggest_import_name(existing_agent_names, base_name)
+            existing_agent_names.add(aname)
+            agent_args["name"] = aname
+            ctx.warnings.append(f"Agent name collided; retrying as '{aname}'.")
+        except (ValueError, SQLAlchemyError):
+            logger.exception("Failed to create agent '%s'", _sanitise_log_value(aname))
+            raise
+
+
+def _rewire_graph_nodes(
+    graph_nodes: list[dict[str, Any]],
+    agent_id_map: dict[str, str],
+    schema_id_map: dict[str, str],
+    conn_overrides: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Rewire agent/schema/connector references in the imported graph nodes."""
+    graph_nodes = copy.deepcopy(graph_nodes)
+    for node in graph_nodes:
+        node_export_id = node.get("agent_id")
+        if node_export_id and node_export_id in agent_id_map:
+            node["agent_id"] = agent_id_map[node_export_id]
+        node_output_schema = node.get("output_schema_id")
+        if node_output_schema and node_output_schema in schema_id_map:
+            node["output_schema_id"] = schema_id_map[node_output_schema]
+        _rewire_connector_binding(node, conn_overrides)
+    return graph_nodes
+
+
+def _rewire_connector_binding(node: dict[str, Any], conn_overrides: dict[str, str]) -> None:
+    """Rewrite a node's connector binding instance id from an override map."""
+    connector_binding = node.get("connector_binding")
+    if not isinstance(connector_binding, dict):
+        return
+    existing_id = connector_binding.get("instance_id", "")
+    if existing_id and existing_id in conn_overrides:
+        connector_binding["instance_id"] = conn_overrides[existing_id]
+
+
+async def _create_imported_pipeline(
+    ctx: _ImportContext,
+    pname: str,
+    pipeline_info: dict[str, Any],
+    existing_pipeline_names: set[str],
+    base_name: str,
+) -> Pipeline:
+    """Create the imported pipeline, retrying with a suffixed name on collision."""
+    # FAR-1161: resolve owner emails ONCE before the retry loop (name
+    # collisions must not re-run resolution); unresolvable/ineligible owners
+    # are stripped with a disclosed warning, never failing the import.
+    business_owner_id, reliability_owner_id = await _resolve_owner_emails_for_import(ctx, pipeline_info)
+    attempt_p = 0
+    while True:
+        try:
+            async with ctx.session.begin_nested():
+                return await create_pipeline(
+                    ctx.session,
+                    org_id=ctx.org_id,
+                    name=pname,
+                    account_id=ctx.created_by,
+                    description=pipeline_info.get("description"),
+                    visibility="org",
+                    owner_team_id=ctx.owner_team_id,
+                    node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
+                    # FAR-1257: deliberately a bare ``.get`` (NOT ``or ...``) —
+                    # None IS the meaningful "no override" value here, and an
+                    # absent key on a pre-FAR-1257 bundle maps to the same None.
+                    hitl_review_window_seconds=pipeline_info.get("hitl_review_window_seconds"),
+                    # FAR-1883: bare ``.get`` for the same reason as its HITL
+                    # sibling — None is the meaningful "never expire" default,
+                    # and an absent key on a pre-FAR-1883 bundle maps to NULL.
+                    queue_timeout_seconds=pipeline_info.get("queue_timeout_seconds"),
+                    run_context_defaults=pipeline_info.get("run_context_defaults"),
+                    business_owner_id=business_owner_id,
+                    reliability_owner_id=reliability_owner_id,
+                )
+        except IntegrityError:
+            if _retries_exhausted(attempt_p):
+                raise
+            attempt_p += 1
+            existing_pipeline_names.add(pname)
+            pname = suggest_import_name(existing_pipeline_names, base_name)
+            ctx.warnings.append(f"Pipeline name '{base_name}' conflicted; retrying as '{pname}'.")
+        except Exception:
+            logger.exception("Failed to create pipeline '%s'", _sanitise_log_value(pname))
+            raise
+
+
+def _materialize_edges(
+    ctx: _ImportContext,
+    pipeline: Pipeline,
+    edges_data: list[dict[str, Any]],
+) -> list[PipelineEdge]:
+    """Create the imported edges; returns the edges added.
+
+    Sync by design: it only builds ORM rows and stages them on the session —
+    there is no await work (S7503).
+    """
+    pipeline_edges_added: list[PipelineEdge] = []
+    for ed in edges_data:
+        try:
+            source_id = _safe_uuid(ed.get("source_node_id", ""), "edge.source_node_id")
+            target_id = _safe_uuid(ed.get("target_node_id", ""), "edge.target_node_id")
+            edge_id = _safe_uuid(ed["id"]) if ed.get("id") else uuid.uuid4()
+        except ValueError as exc:
+            ctx.warnings.append(f"Skipping edge with invalid UUID: {exc}")
+            continue
+        edge_type = ed.get("edge_type", "normal")
+        if not _is_valid_edge_type(edge_type):
+            ctx.warnings.append(f"Unknown edge type '{edge_type}', defaulting to 'normal'.")
+            edge_type = "normal"
+        edge = PipelineEdge(
+            id=edge_id,
+            organisation_id=ctx.org_id,
+            pipeline_id=pipeline.id,
+            source_node_id=source_id,
+            target_node_id=target_id,
+            edge_type=edge_type,
+            condition_expression=ed.get("condition_expression"),
+            hitl_review_config=ed.get("hitl_review_config"),
+            source_port=ed.get("source_port", "out"),
+            target_port=ed.get("target_port", "in"),
+        )
+        ctx.session.add(edge)
+        pipeline_edges_added.append(edge)
+    return pipeline_edges_added

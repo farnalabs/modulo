@@ -32,14 +32,14 @@ def ctx() -> dict:
 
 @given("a TeamCity connector with valid token")
 def teamcity_connector(ctx: dict) -> None:
-    from modulo.connectors.teamcity import TeamCityConnector
+    from farna.connectors.teamcity import TeamCityConnector
 
     ctx["connector"] = TeamCityConnector(token=_TOKEN, base_url=_BASE)
 
 
 @when(parsers.parse('I query resource "{resource}"'))
 def teamcity_query_resource(ctx: dict, resource: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     if resource == "projects":
@@ -83,7 +83,7 @@ def teamcity_query_resource(ctx: dict, resource: str) -> None:
 
 @when(parsers.parse('I query resource "{resource}" with filters project_id "{project_id}"'))
 def teamcity_query_resource_with_filters(ctx: dict, resource: str, project_id: str) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     with respx.mock:
@@ -103,7 +103,7 @@ def teamcity_query_resource_with_filters(ctx: dict, resource: str, project_id: s
 
 @when(parsers.parse('I write resource "{resource}" with buildTypeId "{build_type_id}"'))
 def teamcity_write_build(ctx: dict, resource: str, build_type_id: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     with respx.mock:
@@ -122,7 +122,7 @@ def teamcity_write_build(ctx: dict, resource: str, build_type_id: str) -> None:
     )
 )
 def teamcity_write_build_type(ctx: dict, resource: str, build_type_id: str, project_id: str, name: str) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     with respx.mock:

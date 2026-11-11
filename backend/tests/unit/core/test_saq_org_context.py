@@ -22,12 +22,12 @@ import pytest
 from saq.job import Job, Status
 from saq.worker import Worker
 
-import modulo.core.saq_worker as sw
-from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+import farna.core.saq_worker as sw
+from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
 _ORG_ID = "8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f71"
 _JOB_LOGGER = "test.saq_org_context.job"
-_FUNCTION_NAME = "modulo.core.saq_worker.org_context_probe"
+_FUNCTION_NAME = "farna.core.saq_worker.org_context_probe"
 
 
 class _FakeQueue:

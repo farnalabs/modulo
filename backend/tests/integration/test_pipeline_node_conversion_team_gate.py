@@ -44,7 +44,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 from tests.integration.test_pipeline_conversion_connector_team_gate import (
     _auth_headers as _conv_auth_headers,
 )
@@ -118,8 +118,8 @@ async def _seed_team(
     label: str,
 ) -> uuid.UUID:
     """A committed team, plus an optional membership row, via the ORM CRUD layer."""
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -334,7 +334,7 @@ async def _seed_member_behind_a_conversion(
     lets them see exactly those rows — a row the gate would need to judge must
     not be hidden from the caller first.
     """
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team_membership import add_team_member
 
     member = await _seed_operator_account(db_engine, test_org, label)
     scenario = await _seed_conv_scenario(

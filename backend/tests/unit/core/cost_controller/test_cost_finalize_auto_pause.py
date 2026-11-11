@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller import finalize, org_auto_pause
-from modulo.core.cost_controller.finalize import _handle_limit_refused, _ledger_block
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.organisation_cost_state import OrganisationCostState
-from modulo.db.models.run import Run
+from farna.core.cost_controller import finalize, org_auto_pause
+from farna.core.cost_controller.finalize import _handle_limit_refused, _ledger_block
+from farna.db.models.organisation import Organisation
+from farna.db.models.organisation_cost_state import OrganisationCostState
+from farna.db.models.run import Run
 
 
 def _make_run() -> MagicMock:
@@ -58,7 +58,7 @@ def _cost_state(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumula
     state.max_run_cost_cents = max_run_cost_cents
     state.spend_ceiling_cents = spend_ceiling_cents
     state.org_cumulative_spend_cents = org_cumulative_spend_cents
-    return patch("modulo.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
+    return patch("farna.core.cost_controller.finalize.get_org_cost_state", new=AsyncMock(return_value=state))
 
 
 def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:

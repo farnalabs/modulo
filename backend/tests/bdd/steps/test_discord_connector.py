@@ -32,7 +32,7 @@ def ctx() -> dict:
 
 @given("a Discord connector configured with valid credentials")
 def discord_connector_valid(ctx: dict) -> None:
-    from modulo.connectors.discord import DiscordConnector
+    from farna.connectors.discord import DiscordConnector
 
     ctx["connector"] = DiscordConnector(token="discord_bot_token")
     ctx["valid"] = True
@@ -40,7 +40,7 @@ def discord_connector_valid(ctx: dict) -> None:
 
 @given("a Discord connector configured with invalid credentials")
 def discord_connector_invalid(ctx: dict) -> None:
-    from modulo.connectors.discord import DiscordConnector
+    from farna.connectors.discord import DiscordConnector
 
     ctx["connector"] = DiscordConnector(token="bad_token")
     ctx["valid"] = False
@@ -60,7 +60,7 @@ def discord_health_check(ctx: dict) -> None:
 
 @when("the connector queries guilds")
 def discord_query_guilds(ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     guilds = [
         {"id": "111", "name": "Modulo Dev"},
@@ -73,7 +73,7 @@ def discord_query_guilds(ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries channels for guild "{guild_id}"'))
 def discord_query_channels(guild_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     channels = [
         {"id": "333", "name": "general", "type": 0},
@@ -88,7 +88,7 @@ def discord_query_channels(guild_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries messages in channel "{channel_id}"'))
 def discord_query_messages(channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     messages = [
         {"id": "555", "content": "Hello", "author": {"id": "U1"}},
@@ -103,7 +103,7 @@ def discord_query_messages(channel_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries members of guild "{guild_id}"'))
 def discord_query_members(guild_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     members = [
         {"user": {"id": "U1", "username": "Alice"}, "roles": []},
@@ -118,7 +118,7 @@ def discord_query_members(guild_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries roles for guild "{guild_id}"'))
 def discord_query_roles(guild_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     roles = [
         {"id": "R1", "name": "Admin", "color": 0xFF0000},
@@ -133,7 +133,7 @@ def discord_query_roles(guild_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector queries guild with guild_id "{guild_id}"'))
 def discord_query_guild(guild_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorQuery
+    from farna.connectors.base import ConnectorQuery
 
     guild = {"id": guild_id, "name": "Modulo Dev", "member_count": 42}
     with respx.mock:
@@ -145,7 +145,7 @@ def discord_query_guild(guild_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector sends a message "{content}" to channel "{channel_id}"'))
 def discord_write_message(content: str, channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(
@@ -160,7 +160,7 @@ def discord_write_message(content: str, channel_id: str, ctx: dict) -> None:
 
 @when(parsers.parse('the connector adds a reaction "{emoji}" to message "{message_id}" in channel "{channel_id}"'))
 def discord_write_reaction(emoji: str, message_id: str, channel_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.put(f"{_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me").mock(
@@ -178,7 +178,7 @@ def discord_write_reaction(emoji: str, message_id: str, channel_id: str, ctx: di
 
 @when(parsers.parse('the connector creates a channel "{name}" in guild "{guild_id}"'))
 def discord_write_channel(name: str, guild_id: str, ctx: dict) -> None:
-    from modulo.connectors.base import ConnectorPayload
+    from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
         respx.post(f"{_BASE}/guilds/{guild_id}/channels").mock(

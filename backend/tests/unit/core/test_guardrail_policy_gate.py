@@ -40,13 +40,13 @@ from typing import Any
 
 import pytest
 
-from modulo.core.eval_engine import (
+from farna.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
     EvalEngine,
     EvalType,
 )
-from modulo.core.guardrails import (
+from farna.core.guardrails import (
     GuardrailBlockedError,
     GuardrailConfigError,
     _resolve_detection,
@@ -273,7 +273,7 @@ class TestC3ResolverAuthorityRegardlessOfPin:
     """Enforcement outcome is invariant to the mirror's failure_behaviour pin."""
 
     def test_pinless_mirror_resolver_still_blocks(self: Any, monkeypatch: Any) -> None:
-        monkeypatch.setattr("modulo.core.guardrails._detect_one", _pinless_detect_one)
+        monkeypatch.setattr("farna.core.guardrails._detect_one", _pinless_detect_one)
         engine = EvalEngine()
         d = _guardrail(name="block-gr", action="block")
         _assert_mirror_is_actually_engine_armed(engine, d)
@@ -291,7 +291,7 @@ class TestC3ResolverAuthorityRegardlessOfPin:
         # Discriminator: blocking config + WARN gate row. Only the wired
         # resolver yields "warn" here — an engine-path or config-fallback
         # implementation would raise instead.
-        monkeypatch.setattr("modulo.core.guardrails._detect_one", _pinless_detect_one)
+        monkeypatch.setattr("farna.core.guardrails._detect_one", _pinless_detect_one)
         engine = EvalEngine()
         d = _guardrail(name="warn-gr", action="block")
         results = evaluate_guardrails(
@@ -519,7 +519,7 @@ class TestUndefinedResolution:
             node_id=uuid.uuid4(),
             action="warn",
         )
-        with caplog.at_level(logging.WARNING, logger="modulo.core.guardrails"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.guardrails"):
             results = evaluate_guardrails(
                 engine,
                 [d],

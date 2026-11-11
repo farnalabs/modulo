@@ -23,8 +23,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from modulo.launcher import doctor as doctor_module
-from modulo.launcher.doctor import (
+from farna.launcher import doctor as doctor_module
+from farna.launcher.doctor import (
     EXIT_DEGRADED,
     EXIT_HEALTHY,
     EXIT_UNHEALTHY,
@@ -49,8 +49,8 @@ from modulo.launcher.doctor import (
     default_probes,
     run_doctor,
 )
-from modulo.launcher.secrets_file import LauncherSecrets
-from modulo.launcher.state import LauncherState, save_state
+from farna.launcher.secrets_file import LauncherSecrets
+from farna.launcher.state import LauncherState, save_state
 from tests.unit.launcher.test_launcher_shared import all_pass_probes
 
 
@@ -416,14 +416,14 @@ def test_password_from_url():
 
 
 def test_port_owner_descriptions_no_foreign():
-    from modulo.launcher.doctor import _port_owner_descriptions
+    from farna.launcher.doctor import _port_owner_descriptions
 
     # No foreign listeners in the sandbox -> empty list, but the scan runs.
     assert not _port_owner_descriptions(15432)
 
 
 def test_exit_code_for():
-    from modulo.launcher.doctor import _exit_code_for
+    from farna.launcher.doctor import _exit_code_for
 
     ok = [doctor_module.CheckResult("x", True)]
     assert _exit_code_for(healthy=True, results=ok, state_kind=None) == EXIT_HEALTHY
@@ -435,7 +435,7 @@ def test_exit_code_for():
 
 
 def test_state_integrity_detail():
-    from modulo.launcher.doctor import _state_integrity_detail
+    from farna.launcher.doctor import _state_integrity_detail
 
     assert "HMAC" in _state_integrity_detail("err", "hmac-mismatch")
     assert "CORRUPT" in _state_integrity_detail("err", "corrupt")
@@ -443,7 +443,7 @@ def test_state_integrity_detail():
 
 
 def test_state_problem_kind(tmp_path: Path):
-    from modulo.launcher.doctor import _state_problem_kind
+    from farna.launcher.doctor import _state_problem_kind
 
     assert _state_problem_kind(tmp_path, "data dir is not initialized (no secrets file)") == "missing"
     assert _state_problem_kind(tmp_path, "secrets file unreadable: x") == "secrets-unreadable"
@@ -455,7 +455,7 @@ def test_state_problem_kind(tmp_path: Path):
 
 
 def test_payload_json_and_print_report():
-    from modulo.launcher.doctor import _payload_json, _print_report
+    from farna.launcher.doctor import _payload_json, _print_report
 
     results = [doctor_module.CheckResult("x", True, "ok")]
     payload = _payload_json(Path("/d"), True, results, 0)

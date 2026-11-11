@@ -14,7 +14,7 @@
 #      and runs container-structure-test before publishing the digest.
 #   2. The published tag advances the per-minor `released-<minor>` tag AND
 #     updates the digest constant (`BUNDLED_RUNNER_IMAGE_REF` in
-#     backend/src/modulo/db/bundled_runner_template.py). The release job's
+#     backend/src/farna/db/bundled_runner_template.py). The release job's
 #     digest-drift guard asserts the constant matches `released-<minor>`.
 #   3. Support window: the image supports the CURRENT opencode minor and
 #     N-1. A pin advance that moves past N-1 is a release-note item.

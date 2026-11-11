@@ -21,14 +21,14 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.pipelines import PipelineUpdate
-from modulo.cli.apply import pipeline_apply
-from modulo.cli.apply.__init__ import render_table
-from modulo.cli.apply.drift import build_drift_detail, has_drift
-from modulo.cli.apply.executor import ApplyExecutor
-from modulo.cli.apply.loader import parse_apply_documents
-from modulo.cli.apply.models import ApplyEntityResolutionError, PipelineEntity
-from modulo.cli.apply.plan import KIND_PIPELINE, build_plan
+from farna.api.routes.pipelines import PipelineUpdate
+from farna.cli.apply import pipeline_apply
+from farna.cli.apply.__init__ import render_table
+from farna.cli.apply.drift import build_drift_detail, has_drift
+from farna.cli.apply.executor import ApplyExecutor
+from farna.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.models import ApplyEntityResolutionError, PipelineEntity
+from farna.cli.apply.plan import KIND_PIPELINE, build_plan
 
 _SHA_A = "a" * 40
 _SHA_B = "b" * 40
@@ -181,7 +181,7 @@ def test_resolve_graph_malformed_ref_is_resolution_error() -> None:
 
 
 def test_resolve_graph_resolution_failure_is_resolution_error() -> None:
-    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from farna.core.pipeline_engine.git_content import GitContentRefError
 
     def _fail(_ref) -> str:
         raise GitContentRefError("remote unreachable")
@@ -203,7 +203,7 @@ def test_desired_view_carries_pinned_sha() -> None:
 
 
 def test_plan_blocks_on_resolution_failure() -> None:
-    from modulo.core.pipeline_engine.git_content import GitContentRefError
+    from farna.core.pipeline_engine.git_content import GitContentRefError
 
     entity_set = _entity_set()
     current = _current_entities(stored_prompt=_PINNED_PROMPT_A)
@@ -274,7 +274,7 @@ def test_drift_renders_git_content_line() -> None:
 
 def test_diff_git_content_renders_absent_side_as_placeholder() -> None:
     """An absent side renders as ``(none)``, never the literal ``None`` (Minor 5)."""
-    from modulo.cli.apply.drift import _diff_git_content
+    from farna.cli.apply.drift import _diff_git_content
 
     desired = {"nodes": [{"id": _NODE_ID, "agent_prompt": _PINNED_PROMPT_A}], "edges": []}
     current = {"nodes": [{"id": _NODE_ID}], "edges": []}
@@ -291,7 +291,7 @@ def test_diff_git_content_renders_absent_side_as_placeholder() -> None:
 
 def test_diff_git_content_skips_equal_scalar_ref() -> None:
     """Two identical pinned prompts are not drift — the whole-graph hash agrees."""
-    from modulo.cli.apply.drift import _diff_git_content
+    from farna.cli.apply.drift import _diff_git_content
 
     graph = {"nodes": [{"id": _NODE_ID, "agent_prompt": _PINNED_PROMPT_A}], "edges": []}
     assert not _diff_git_content(graph, graph)
@@ -299,7 +299,7 @@ def test_diff_git_content_skips_equal_scalar_ref() -> None:
 
 def test_diff_git_content_reports_command_list_commit_move() -> None:
     """A git-sourced ``agent_commands`` item that moved commits is named."""
-    from modulo.cli.apply.drift import _diff_git_content
+    from farna.cli.apply.drift import _diff_git_content
 
     desired = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_B]}], "edges": []}
     current = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
@@ -315,7 +315,7 @@ def test_diff_git_content_reports_command_list_commit_move() -> None:
 
 def test_diff_git_content_skips_equal_command_ref() -> None:
     """Identical git-sourced command items are not drift."""
-    from modulo.cli.apply.drift import _diff_git_content
+    from farna.cli.apply.drift import _diff_git_content
 
     graph = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
     assert not _diff_git_content(graph, graph)
@@ -323,7 +323,7 @@ def test_diff_git_content_skips_equal_command_ref() -> None:
 
 def test_diff_git_content_reports_command_added_on_one_side() -> None:
     """A command present on only one side renders the absent side as ``(none)``."""
-    from modulo.cli.apply.drift import _diff_git_content
+    from farna.cli.apply.drift import _diff_git_content
 
     desired = {"nodes": [{"id": _NODE_ID, "agent_commands": []}], "edges": []}
     current = {"nodes": [{"id": _NODE_ID, "agent_commands": [_PINNED_PROMPT_A]}], "edges": []}
@@ -353,7 +353,7 @@ def test_write_payload_carries_pinned_sha(monkeypatch: pytest.MonkeyPatch) -> No
     ``PipelineGraphUpdate`` models, not a hand-built fixture.
     """
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.git_content.default_git_content_resolver",
+        "farna.core.pipeline_engine.git_content.default_git_content_resolver",
         lambda ref: _SHA_A,
     )
     respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(

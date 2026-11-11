@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import modulo.core.error_tracking.metrics as metrics_mod
+import farna.core.error_tracking.metrics as metrics_mod
 
 _METRIC_HANDLES = (
     "_errors_total",

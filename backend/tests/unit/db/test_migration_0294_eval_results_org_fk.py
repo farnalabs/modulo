@@ -31,11 +31,11 @@ from unittest.mock import patch
 
 from sqlalchemy import UniqueConstraint
 
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0294_eval_results_org_fk"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0293_oauth_clients_team_id"

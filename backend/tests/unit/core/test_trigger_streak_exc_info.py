@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.trigger_streak`` (PR #97).
+``farna.core.trigger_streak`` (PR #97).
 
 Each test forces the best-effort ``except Exception`` branch to execute by
 making the underlying dependency (redis client, DB session factory, settings)
@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import trigger_streak as ts
+from farna.core import trigger_streak as ts
 
 
 def _ch_mock(**raised: object) -> MagicMock:

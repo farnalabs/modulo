@@ -29,12 +29,12 @@ from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.core.secrets_backend.fernet import FernetSecretsBackend
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.secret import Secret
-from modulo.db.rls import set_rls_org
+from farna.core.secrets_backend import create_secrets_backend
+from farna.core.secrets_backend.fernet import FernetSecretsBackend
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.secret import Secret
+from farna.db.rls import set_rls_org
 
 # Distinctive value that must never appear in logs / exceptions / the store.
 _SECRET_VALUE = "modulo-secret-42-<s3cr3t>-v0"

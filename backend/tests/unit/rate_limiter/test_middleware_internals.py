@@ -13,8 +13,8 @@ import pytest
 from fastapi import FastAPI
 from tests.unit.rate_limiter.helpers import ANONYMOUS_GET_RULES, make_mock_request, make_settings
 
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.core.rate_limiter import RateLimiterRegistry, RateLimitRule
+from farna.api.middleware.rate_limiter import RateLimitMiddleware
+from farna.core.rate_limiter import RateLimiterRegistry, RateLimitRule
 
 
 @pytest.fixture

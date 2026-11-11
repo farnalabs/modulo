@@ -8,9 +8,9 @@ settings, independent of CORS ordering.
 
 from __future__ import annotations
 
-from modulo.api.frontend_url import resolve_frontend_url
-from modulo.api.routes.sso import _frontend_url, _redirect_to_frontend
-from modulo.settings import Settings
+from farna.api.frontend_url import resolve_frontend_url
+from farna.api.routes.sso import _frontend_url, _redirect_to_frontend
+from farna.settings import Settings
 
 _VALID_32 = "a" * 32
 

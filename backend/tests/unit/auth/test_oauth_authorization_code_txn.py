@@ -21,17 +21,17 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.auth.oauth import (
+from farna.auth.oauth import (
     InvalidGrantError,
     compute_pkce_challenge,
     consume_authorization_code,
     create_authorization_code,
     create_oauth_client,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.oauth_token import OAuthAuthorizationCode
-from modulo.db.models.organisation import Organisation
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.oauth_token import OAuthAuthorizationCode
+from farna.db.models.organisation import Organisation
 
 _REDIRECT_URI = "http://localhost/callback"
 _CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"

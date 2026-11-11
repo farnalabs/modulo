@@ -97,7 +97,7 @@ import pytest
 from tests.unit._source_scan import iter_source_text
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-SRC_DIR = BACKEND_DIR / "src" / "modulo"
+SRC_DIR = BACKEND_DIR / "src" / "farna"
 SAQ_WORKER_PATH = SRC_DIR / "core" / "saq_worker.py"
 DISPATCH_PHASES_PATH = SRC_DIR / "core" / "dispatch_phases.py"
 
@@ -205,11 +205,11 @@ def _path(function: str, rel_path: str, marker: str, *, kind: str = _TERMINALISE
     return TerminaliserPath(function=function, evidence=(rel_path, marker), kind=kind)
 
 
-_CRON = "src/modulo/core/cron_helpers.py"
-_EXEC = "src/modulo/core/pipeline_execution.py"
-_ADMISSION = "src/modulo/core/run_admission.py"
-_CAPACITY = "src/modulo/core/runner_capacity.py"
-_EXPIRY = "src/modulo/core/hitl_manager/expiry_job.py"
+_CRON = "src/farna/core/cron_helpers.py"
+_EXEC = "src/farna/core/pipeline_execution.py"
+_ADMISSION = "src/farna/core/run_admission.py"
+_CAPACITY = "src/farna/core/runner_capacity.py"
+_EXPIRY = "src/farna/core/hitl_manager/expiry_job.py"
 
 #: The generic ``running`` selector shared by the batch terminalisers — a run in
 #: ANY dispatch phase (other than the shielded node-started one) is collected by
@@ -354,7 +354,7 @@ _PHASE_COVERAGE: dict[str, PhaseHandling] = {
 
 
 def _model_status_sets() -> tuple[frozenset[str], frozenset[str]]:
-    from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES
+    from farna.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES
 
     return ACTIVE_RUN_STATUSES, TERMINAL_STATUSES
 
@@ -363,7 +363,7 @@ def _model_status_vocabulary() -> frozenset[str]:
     """The closed status vocabulary the DB CHECK constraint enforces."""
     from sqlalchemy import CheckConstraint
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     checks = [c for c in Run.__table_args__ if isinstance(c, CheckConstraint)]
     check = next(c for c in checks if c.name == "ck_runs_status")
@@ -400,13 +400,13 @@ def _dispatch_phase_constants() -> dict[str, str]:
 
 
 def _terminalizer_specs() -> tuple[Any, ...]:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     return ch._TERMINALIZERS
 
 
 def _batch_terminalizer_keys() -> set[str]:
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     return {spec.key for spec in ch._BATCH_TERMINALIZER_SPECS}
 
@@ -442,7 +442,7 @@ def _system_cron_function_names() -> set[str]:
 
 def _periodic_root_names() -> set[str]:
     """Names registered on the SAQ periodic/worker paths (settings-free)."""
-    from modulo.core import saq_worker as sw
+    from farna.core import saq_worker as sw
 
     names = {fn.__name__ for fn in sw._system_functions()}
     names |= {fn.__name__ for _registered_name, fn in sw._runs_functions()}
@@ -451,7 +451,7 @@ def _periodic_root_names() -> set[str]:
 
 
 def _call_graph() -> dict[str, set[str]]:
-    """Module-level function name -> the names its body calls (all of src/modulo)."""
+    """Module-level function name -> the names its body calls (all of src/farna)."""
     graph: dict[str, set[str]] = {}
     for path, source in iter_source_text(SRC_DIR):
         if "migrations" in path.parts:
@@ -657,7 +657,7 @@ def _registered_running_terminalizer_sql() -> list[str]:
     constants) keeps this mechanical: a relocated or renamed SQL constant still
     resolves, so the check cannot rot silently into a no-op.
     """
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     tree = ast.parse(Path(ch.__file__).read_text(encoding="utf-8"))
     constants = {
@@ -706,7 +706,7 @@ def _path_violations(
     for path in record.paths:
         rel_path, marker = path.evidence
         if not function_exists(path.function):
-            violations.append(f"{label}: path function {path.function!r} not found in src/modulo")
+            violations.append(f"{label}: path function {path.function!r} not found in src/farna")
         if not is_wired(path.function):
             violations.append(f"{label}: path {path.function!r} is not reachable from a periodic path")
         if not marker_present(rel_path, marker):
@@ -743,7 +743,7 @@ def test_terminalizer_registry_is_consistent_and_batch_wired() -> None:
     production caller). A coroutine name that does not resolve fails loudly even
     under ``python -O`` (the resolver uses ``if`` guards, not ``assert``).
     """
-    from modulo.core import cron_helpers as ch
+    from farna.core import cron_helpers as ch
 
     specs = _terminalizer_specs()
     keys = {spec.key for spec in specs}
@@ -915,8 +915,8 @@ def test_resolve_py_anchor_normalises_separators_both_directions() -> None:
     still resolves to nothing.
     """
     files = [
-        Path("backend/src/modulo/db/models/run.py"),
-        Path("backend/src/modulo/db/crud/run.py"),
+        Path("backend/src/farna/db/models/run.py"),
+        Path("backend/src/farna/db/crud/run.py"),
     ]
     assert _resolve_py_anchor("db/models/run.py", files) == [files[0]]
     assert not _resolve_py_anchor("db/models/missing.py", files)
@@ -1047,7 +1047,7 @@ def test_synthetic_unwired_terminaliser_fails_the_path_check() -> None:
         marker_present=_evidence_present,
         label="status:synthetic",
     )
-    assert any("not found in src/modulo" in v for v in violations)
+    assert any("not found in src/farna" in v for v in violations)
     assert any("not reachable from a periodic path" in v for v in violations)
 
 

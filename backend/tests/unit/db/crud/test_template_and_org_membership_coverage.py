@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.org_membership import (
+from farna.db.crud.org_membership import (
     create_membership,
     get_membership_by_account_and_org,
     list_memberships_for_account,
@@ -19,16 +19,16 @@ from modulo.db.crud.org_membership import (
     resolve_role_from_membership,
     update_membership_role,
 )
-from modulo.db.crud.template import (
+from farna.db.crud.template import (
     _agent_count_from_content,
     _preview_data_from_content,
     get_template,
     list_templates,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.org_membership import OrgMembership
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.org_membership import OrgMembership
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-0000000000a2")

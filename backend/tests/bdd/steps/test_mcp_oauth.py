@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
-from modulo.core.rate_limiter import RateLimiterRegistry
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.auth.oauth import InvalidGrantError, OAuthAccessTokenClaims
+from farna.core.rate_limiter import RateLimiterRegistry
 from tests.bdd.conftest import ORG_ID, USER_ID, harden_session_double, make_mock_session, make_settings
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -35,8 +35,8 @@ def _stub_audit_session() -> Generator[None, None, None]:
     """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
     fresh ``audit_session`` (a real engine — these steps run without a database),
     so stub that seam; the dependency itself still runs."""
-    from modulo.api.main import app
-    from modulo.core.audit_coverage import audit_session
+    from farna.api.main import app
+    from farna.core.audit_coverage import audit_session
 
     async def _override() -> AsyncGenerator[AsyncMock, None]:
         session = AsyncMock()
@@ -80,7 +80,7 @@ def _store_resp(request, resp):
 
 
 def _make_oauth_settings():
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     base = make_settings()
     return Settings(
@@ -92,8 +92,8 @@ def _make_oauth_settings():
 
 
 def _override_oauth_settings():
-    from modulo.api.main import app
-    from modulo.settings import get_settings
+    from farna.api.main import app
+    from farna.settings import get_settings
 
     app.dependency_overrides[get_settings] = _make_oauth_settings
 
@@ -280,8 +280,8 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
             account_id=USER_ID,
             org_role="admin",
         )
-    from modulo.api.main import app
-    from modulo.auth.jwt import TenantPrincipal
+    from farna.api.main import app
+    from farna.auth.jwt import TenantPrincipal
 
     app.dependency_overrides[get_current_user] = lambda: auth_principal
     app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
@@ -293,9 +293,9 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
     _override_oauth_settings()
 
     with (
-        patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
-        patch("modulo.api.routes.mcp_oauth.set_rls_org"),
-        patch("modulo.api.routes.mcp_oauth.normalize_scopes", return_value=scope_list),
+        patch("farna.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+        patch("farna.api.routes.mcp_oauth.set_rls_org"),
+        patch("farna.api.routes.mcp_oauth.normalize_scopes", return_value=scope_list),
     ):
         mock_create.return_value = (mock_client, mock_raw_secret)
         resp = client.post(
@@ -319,10 +319,10 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
 def authorize_get(cid: str, ru: str, scope: str, cc: str, ccm: str, state: str, client, request):
     client_mock = getattr(request.node, "_oauth_client", None) or _make_mock_client(client_id=cid, redirect_uris=ru)
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
-        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=client_mock)),
-        patch("modulo.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
+        patch("farna.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("farna.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id", new=AsyncMock(return_value=client_mock)),
+        patch("farna.auth.oauth.create_consent_state", new=AsyncMock()) as mock_create_state,
     ):
         resp = client.get(
             "/mcp/oauth/authorize",
@@ -351,20 +351,20 @@ def approve_consent(state: str, client, request):
     if is_unauth:
         # Drop the authenticated-principal overrides so the real HTTPBearer
         # dependency (auto_error=True) rejects the approve POST.
-        from modulo.api.main import app
+        from farna.api.main import app
 
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_current_tenant_user, None)
     with (
         patch(
-            "modulo.auth.oauth.consume_consent_state",
+            "farna.auth.oauth.consume_consent_state",
             new=AsyncMock(return_value=None if consumed else consent_state),
         ),
         patch(
-            "modulo.api.routes.mcp_oauth.create_authorization_code",
+            "farna.api.routes.mcp_oauth.create_authorization_code",
             new=AsyncMock(return_value="code-abc"),
         ) as mock_code,
-        patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        patch("farna.api.routes.mcp_oauth.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/mcp/oauth/consent/approve",
@@ -384,21 +384,21 @@ def approve_consent(state: str, client, request):
     )
 )
 def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, client, request):
-    from modulo.auth.oauth import InvalidClientError
+    from farna.auth.oauth import InvalidClientError
 
     auth_code = getattr(request.node, "_auth_code", None)
     is_used = auth_code is not None and auth_code.used
     is_unknown = cid == "unknown_client"
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
-        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
-        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
-        patch("modulo.auth.oauth.consume_authorization_code") as mock_consume,
-        patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
-        patch("modulo.auth.oauth.create_oauth_token_family", new=AsyncMock(return_value=("family_uuid", 0))),
-        patch("modulo.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_abc"),
-        patch("modulo.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_abc"),
+        patch("farna.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("farna.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id") as mock_get,
+        patch("farna.auth.oauth.validate_client_secret") as mock_validate,
+        patch("farna.auth.oauth.consume_authorization_code") as mock_consume,
+        patch("farna.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
+        patch("farna.auth.oauth.create_oauth_token_family", new=AsyncMock(return_value=("family_uuid", 0))),
+        patch("farna.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_abc"),
+        patch("farna.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_abc"),
     ):
         if is_unknown:
             mock_validate.side_effect = InvalidClientError("Unknown client_id")
@@ -447,17 +447,17 @@ def refresh_token_flow(gt: str, rt: str, cid: str, secret: str, client, request)
             token_sequence=0,
         )
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
-        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
-        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
-        patch("modulo.auth.oauth.decode_oauth_refresh_token") as mock_decode,
-        patch("modulo.auth.oauth.verify_live_role_covers_scopes") as mock_verify,
+        patch("farna.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("farna.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("farna.auth.oauth.validate_client_secret") as mock_validate,
+        patch("farna.auth.oauth.decode_oauth_refresh_token") as mock_decode,
+        patch("farna.auth.oauth.verify_live_role_covers_scopes") as mock_verify,
         patch(
-            "modulo.auth.oauth.rotate_oauth_token_family",
+            "farna.auth.oauth.rotate_oauth_token_family",
             new=AsyncMock(return_value=("family_1", 1)),
         ),
-        patch("modulo.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_def"),
-        patch("modulo.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_def"),
+        patch("farna.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_def"),
+        patch("farna.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_def"),
     ):
         mock_validate.return_value = _make_mock_client(client_id=cid)
         mock_decode.return_value = claims
@@ -483,12 +483,12 @@ def refresh_token_flow(gt: str, rt: str, cid: str, secret: str, client, request)
 @when(parsers.parse('I POST /mcp/oauth/token with authorization code "{code}" and no code_verifier'))
 def token_exchange_no_verifier(code: str, client, request):
     with (
-        patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
-        patch("modulo.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
-        patch("modulo.auth.oauth.get_oauth_client_by_client_id") as mock_get,
-        patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+        patch("farna.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
+        patch("farna.api.mcp_server.get_settings", return_value=_make_oauth_settings()),
+        patch("farna.auth.oauth.get_oauth_client_by_client_id") as mock_get,
+        patch("farna.auth.oauth.validate_client_secret") as mock_validate,
         patch(
-            "modulo.auth.oauth.consume_authorization_code",
+            "farna.auth.oauth.consume_authorization_code",
             new=AsyncMock(side_effect=InvalidGrantError("PKCE code_verifier is required")),
         ),
     ):
@@ -511,8 +511,8 @@ def token_exchange_no_verifier(code: str, client, request):
 @when(parsers.parse("I DELETE /api/v1/mcp/oauth/clients/{client_id}"))
 def delete_oauth_client(client_id: str, client, request):
     with (
-        patch("modulo.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
-        patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        patch("farna.api.routes.mcp_oauth.delete_oauth_client") as mock_delete,
+        patch("farna.api.routes.mcp_oauth.set_rls_org"),
     ):
         mock_delete.return_value = True
         resp = client.delete(f"/api/v1/mcp/oauth/clients/{client_id}")

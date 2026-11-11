@@ -24,7 +24,7 @@ import pytest
 from saq.job import Status
 from saq.queue.redis import RedisQueue
 
-from modulo.core import dispatch
+from farna.core import dispatch
 
 _QUEUED_JOB_ID = "saq:job:runs:run:abc"
 
@@ -48,7 +48,7 @@ def _redis() -> fakeredis.FakeRedis:
 def _job_payload(status: str) -> str:
     # saq serializes with json.dumps (default separators) — the Lua script
     # cjson-decodes it, so the exact spacing does not matter.
-    return json.dumps({"function": "modulo.core.saq_worker.execute_run", "status": status})
+    return json.dumps({"function": "farna.core.saq_worker.execute_run", "status": status})
 
 
 async def test_queued_ttl_bounds_a_queued_job_hash() -> None:
@@ -91,7 +91,7 @@ async def test_dequeue_then_active_clears_the_queued_ttl() -> None:
     queue = RedisQueue(redis, name="runs")
 
     job = await queue.enqueue(
-        "modulo.core.saq_worker.execute_run",
+        "farna.core.saq_worker.execute_run",
         key="run:abc",
         timeout=dispatch.SAQ_RUN_TIMEOUT,
     )

@@ -49,14 +49,14 @@ MODE="${2:-run}"
 check_module_thresholds() {
   echo "::group::Per-module coverage checks"
 
-  echo "Checking modulo.auth (threshold: 93%)"
-  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/auth/*" --fail-under=93
+  echo "Checking farna.auth (threshold: 93%)"
+  uv run --no-sync --frozen --no-build coverage report --include="src/farna/auth/*" --fail-under=93
 
-  echo "Checking modulo.core.pipeline_engine (threshold: 91%)"
-  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/core/pipeline_engine/*" --fail-under=91
+  echo "Checking farna.core.pipeline_engine (threshold: 91%)"
+  uv run --no-sync --frozen --no-build coverage report --include="src/farna/core/pipeline_engine/*" --fail-under=91
 
-  echo "Checking modulo.db.rls (threshold: 95%)"
-  uv run --no-sync --frozen --no-build coverage report --include="src/modulo/db/rls.py" --fail-under=95
+  echo "Checking farna.db.rls (threshold: 95%)"
+  uv run --no-sync --frozen --no-build coverage report --include="src/farna/db/rls.py" --fail-under=95
 
   echo "::endgroup::"
   echo "All coverage thresholds met."
@@ -91,7 +91,7 @@ if [[ "$MODE" = "combine" ]]; then
   exit 0
 fi
 
-COV_ARGS=(--cov=src/modulo)
+COV_ARGS=(--cov=src/farna)
 SHARD_ARGS=()
 
 if [[ "$MODE" = "shard" ]]; then
@@ -148,7 +148,7 @@ if [[ "$MODE" = "run" ]]; then
   # every module's branches and a whole-module floor fails there by
   # construction, no matter how correct the code is. (Observed in the first
   # sharded run, 41598150598: shard 1 measured 69% over the files it happened
-  # to touch and `--fail-under=93` for modulo.auth failed the job while every
+  # to touch and `--fail-under=93` for farna.auth failed the job while every
   # test passed.) Both thresholds - the 89 whole-suite floor and these
   # 93/91/95 per-module floors - stay exactly as they are in `run`/`combine`.
   check_module_thresholds

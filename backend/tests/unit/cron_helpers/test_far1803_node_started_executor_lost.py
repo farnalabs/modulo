@@ -46,9 +46,9 @@ from unittest.mock import MagicMock
 import pytest
 import sqlalchemy as sa
 
-from modulo.core import cron_helpers as ch
-from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
-from modulo.db.models.run import Run
+from farna.core import cron_helpers as ch
+from farna.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from farna.db.models.run import Run
 from tests.unit.cron_helpers.test_node_started_redispatch_guard import _run_reconcile, _run_row
 
 STALE_WINDOW_SECONDS = 600  # the harness's 2 * saq_job_heartbeat (300s)
@@ -239,7 +239,7 @@ class TestFar1803Regression:
         """Direct callers (and the integration suite) that omit
         ``stale_seconds`` get the SAME bound the reconcile scan's
         stale-heartbeat legs use: ``2 * SAQ_JOB_HEARTBEAT``."""
-        from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, get_settings
+        from farna.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, get_settings
 
         session = _CaptureSession()
         await ch._terminalize_mid_graph_wedges(session, uuid.uuid4(), max_age_minutes=135, max_rows=None)

@@ -15,8 +15,8 @@ from subprocess import Popen
 
 import pytest
 
-import modulo.launcher.initdb as initdb_module
-from modulo.launcher.initdb import (
+import farna.launcher.initdb as initdb_module
+from farna.launcher.initdb import (
     BOOTSTRAP_USERNAME,
     GATE_INITDB_PRE_RENAME,
     INITDB_LOCALE,
@@ -33,7 +33,7 @@ from tests.unit.launcher.test_launcher_shared import bypass_platform_seams
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seam."""
-    bypass_platform_seams(monkeypatch, "modulo.launcher.initdb")
+    bypass_platform_seams(monkeypatch, "farna.launcher.initdb")
 
 
 def _touch(path: Path, name: str = "content.bin") -> Path:
@@ -283,7 +283,7 @@ _DRIVER_SCRIPT = """
 import sys
 from pathlib import Path
 
-import modulo.launcher.initdb as initdb
+import farna.launcher.initdb as initdb
 
 def _fake_run(argv):
     tmp_index = argv.index("--pgdata")

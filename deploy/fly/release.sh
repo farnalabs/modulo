@@ -27,7 +27,7 @@ if [[ -f /tmp/database_admin_url.env ]]; then
 fi
 
 # Create the modulo_app role if missing (non-fatal on failure).
-python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
+python3 -m farna.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 # Run migrations ONCE with a bounded retry loop (3 attempts, 5s apart).
 #

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.run_context.autonomy import (
+from farna.core.run_context.autonomy import (
     AUTONOMY_GATING_FLAG,
     AUTONOMY_LEVEL_VALUES,
     PIPELINE_EARNED_AT_START_KEY,
@@ -357,7 +357,7 @@ class TestMaxAutonomyReservedKey:
     def test_pipeline_max_autonomy_is_reserved(self) -> None:
         """FAR-1163: a context-setter may never overwrite the pinned ceiling
         (it would lift the cap on its own recommendation)."""
-        from modulo.core.pipeline_engine.decorator import _RESERVED_RUN_CONTEXT_KEYS
+        from farna.core.pipeline_engine.decorator import _RESERVED_RUN_CONTEXT_KEYS
 
         assert PIPELINE_MAX_AUTONOMY_KEY in _RESERVED_RUN_CONTEXT_KEYS
         assert PIPELINE_MAX_AUTONOMY_KEY == "_pipeline_max_autonomy"
@@ -488,7 +488,7 @@ class TestEarnedAutonomyReservedKey:
     def test_earned_at_start_is_reserved(self) -> None:
         """FAR-1175: a context-setter may never overwrite the pinned earned
         level (it would let the agent erase its own in-flight ceiling)."""
-        from modulo.core.pipeline_engine.decorator import _RESERVED_RUN_CONTEXT_KEYS
+        from farna.core.pipeline_engine.decorator import _RESERVED_RUN_CONTEXT_KEYS
 
         assert PIPELINE_EARNED_AT_START_KEY in _RESERVED_RUN_CONTEXT_KEYS
         assert PIPELINE_EARNED_AT_START_KEY == "_pipeline_earned_at_start"

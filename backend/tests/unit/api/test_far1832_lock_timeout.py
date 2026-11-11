@@ -29,13 +29,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-from modulo.api import routes as _routes_package
-from modulo.api.db_error_handling import raise_lock_timeout_conflict_if
-from modulo.api.dependencies import get_db_session
-from modulo.api.routes import product_analytics as pa_module
-from modulo.api.routes.admin import _run_admin_rls_txn
-from modulo.api.routes.product_analytics import post_consent
-from modulo.auth.jwt import TenantPrincipal
+from farna.api import routes as _routes_package
+from farna.api.db_error_handling import raise_lock_timeout_conflict_if
+from farna.api.dependencies import get_db_session
+from farna.api.routes import product_analytics as pa_module
+from farna.api.routes.admin import _run_admin_rls_txn
+from farna.api.routes.product_analytics import post_consent
+from farna.auth.jwt import TenantPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

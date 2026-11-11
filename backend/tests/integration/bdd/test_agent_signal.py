@@ -12,8 +12,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.trigger_engine.agent_signal import fire_agent_signal
-from modulo.db.rls import set_rls_org
+from farna.core.trigger_engine.agent_signal import fire_agent_signal
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

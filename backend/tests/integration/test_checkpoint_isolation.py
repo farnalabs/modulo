@@ -25,7 +25,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from farna.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
 pytestmark = [
     pytest.mark.integration,

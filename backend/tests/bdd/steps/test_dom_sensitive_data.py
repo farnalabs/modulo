@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.middleware.sensitive_mask import (
+from farna.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
     is_sensitive_key,
 )
@@ -81,11 +81,11 @@ def retrieve_connector(client: Any, request: Any) -> None:
 
     with (
         patch(
-            "modulo.api.routes.connectors.get_connector_instance",
+            "farna.api.routes.connectors.get_connector_instance",
             return_value=mock_connector,
         ),
-        patch("modulo.api.routes.connectors.set_rls_org"),
-        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/connectors/{connector_id}")
 
@@ -178,7 +178,7 @@ def request_reveal_sso(
         mock_redis.aclose = AsyncMock()
 
         with patch(
-            "modulo.api.middleware.sensitive_mask.Redis.from_url",
+            "farna.api.middleware.sensitive_mask.Redis.from_url",
             return_value=mock_redis,
         ):
             resp = target_client.post("/api/v1/admin/sensitive/reveal", json=kwargs)

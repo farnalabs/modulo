@@ -14,20 +14,20 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes import (
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes import (
     admin_email,
     admin_system_config,
     contributions,
     error_notification_rules,
     notifications,
 )
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.email_service import EmailSendingError
-from modulo.db.models.system_config import SystemConfig
-from modulo.settings import Settings, get_settings
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.email_service import EmailSendingError
+from farna.db.models.system_config import SystemConfig
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 from tests.unit.api.plan_stubs import all_features
 
@@ -145,7 +145,7 @@ def test_org_settings_http_flows() -> None:
         guardrails_kill_switch=True,
         guardrails_kill_switch_at=datetime(2025, 1, 1, tzinfo=UTC),
     )
-    with patch("modulo.api.routes.org_settings.get_organisation", new_callable=AsyncMock, return_value=org):
+    with patch("farna.api.routes.org_settings.get_organisation", new_callable=AsyncMock, return_value=org):
         resp = client.get("/api/v1/org/settings")
         assert resp.status_code == 200
         assert resp.json()["currency"] == "EUR"
@@ -161,7 +161,7 @@ def test_org_settings_http_flows() -> None:
         {"cost_controls": {"currency": 123}},
     ):
         with patch(
-            "modulo.api.routes.org_settings.get_organisation",
+            "farna.api.routes.org_settings.get_organisation",
             new_callable=AsyncMock,
             return_value=SimpleNamespace(settings_json=bad),
         ):
@@ -169,7 +169,7 @@ def test_org_settings_http_flows() -> None:
             assert resp.status_code == 200
             assert resp.json()["currency"] == "USD"
 
-    with patch("modulo.api.routes.org_settings.get_organisation", new_callable=AsyncMock, return_value=None):
+    with patch("farna.api.routes.org_settings.get_organisation", new_callable=AsyncMock, return_value=None):
         assert client.get("/api/v1/org/settings").status_code == 200
         assert client.get("/api/v1/org/settings/guardrails/kill-switch").status_code == 404
 

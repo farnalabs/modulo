@@ -14,12 +14,12 @@ from unittest.mock import MagicMock
 
 from langchain_core.messages import BaseMessage
 
-from modulo.core.model_backend_hub import ModelBackendHub
-from modulo.core.pipeline_engine.decorator import set_model_backend_hub
-from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
-from modulo.core.pipeline_engine.node_runner import make_node_fn
-from modulo.model_backends.base import ModelBackendBase
-from modulo.model_backends.stub.backend import StubModelBackend
+from farna.core.model_backend_hub import ModelBackendHub
+from farna.core.pipeline_engine.decorator import set_model_backend_hub
+from farna.core.pipeline_engine.graph_cache import build_graph_from_json
+from farna.core.pipeline_engine.node_runner import make_node_fn
+from farna.model_backends.base import ModelBackendBase
+from farna.model_backends.stub.backend import StubModelBackend
 
 
 class _StubAdapter(ModelBackendBase):

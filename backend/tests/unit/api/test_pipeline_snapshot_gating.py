@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 from tests.unit.api.plan_stubs import all_features, community_features
 
@@ -133,9 +133,9 @@ def _empty_diff_response() -> dict[str, Any]:
 
 def test_diff_succeeds_for_community_tier(community_client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.diff_snapshots", return_value=_empty_diff_response()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.diff_snapshots", return_value=_empty_diff_response()),
     ):
         resp = community_client.post(_diff_url(), json=_diff_payload())
     _assert_not_feature_gated(resp)
@@ -156,10 +156,10 @@ def test_rollback_succeeds_for_community_tier(community_client: TestClient) -> N
     new_snapshot.draft = False
     new_snapshot.channel = "none"
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         patch(
-            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            "farna.api.routes.pipelines.rollback_to_snapshot",
             return_value=new_snapshot,
         ),
     ):
@@ -185,11 +185,11 @@ def test_save_edit_succeeds_for_community_tier(community_client: TestClient) -> 
     snapshot.channel = "none"
 
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
         patch(
-            "modulo.api.routes.pipelines.create_snapshot_edit",
+            "farna.api.routes.pipelines.create_snapshot_edit",
             return_value=snapshot,
         ),
     ):
@@ -207,9 +207,9 @@ def test_save_edit_succeeds_for_community_tier(community_client: TestClient) -> 
 
 def test_diff_succeeds_when_enabled(team_client: TestClient) -> None:
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.diff_snapshots", return_value=_empty_diff_response()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.diff_snapshots", return_value=_empty_diff_response()),
     ):
         resp = team_client.post(_diff_url(), json=_diff_payload())
     assert resp.status_code == 200, resp.text
@@ -229,10 +229,10 @@ def test_rollback_succeeds_when_enabled(team_client: TestClient) -> None:
     new_snapshot.draft = False
     new_snapshot.channel = "none"
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
         patch(
-            "modulo.api.routes.pipelines.rollback_to_snapshot",
+            "farna.api.routes.pipelines.rollback_to_snapshot",
             return_value=new_snapshot,
         ),
     ):
@@ -261,11 +261,11 @@ def test_save_edit_endpoint_round_trips_edit_body(team_client: TestClient) -> No
     snapshot.channel = "canary"
 
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
         patch(
-            "modulo.api.routes.pipelines.create_snapshot_edit",
+            "farna.api.routes.pipelines.create_snapshot_edit",
             return_value=snapshot,
         ),
     ):
@@ -285,8 +285,8 @@ def test_save_edit_endpoint_rejects_invalid_channel(team_client: TestClient) -> 
     """An arbitrary (<=10-char) channel value must be rejected with 422 rather
     than persisted; only VALID_RELEASE_CHANNELS are accepted (FAR-420 P6)."""
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = team_client.post(
             _save_edit_url(),
@@ -300,8 +300,8 @@ def test_save_edit_endpoint_rejects_overlong_channel(team_client: TestClient) ->
     """A >10-char channel value must be rejected with 422 rather than surfacing
     a DB-level error (FAR-420 P6)."""
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = team_client.post(
             _save_edit_url(),
@@ -326,10 +326,10 @@ def test_snapshot_list_is_community_tier(community_client: TestClient) -> None:
     snapshot.channel = "none"
 
     with (
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
-        patch("modulo.api.routes.pipelines.list_snapshots", return_value=([snapshot], 1)),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=MagicMock()),
+        patch("farna.api.routes.pipelines.list_snapshots", return_value=([snapshot], 1)),
     ):
         resp = community_client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots")
     assert resp.status_code == 200, resp.text

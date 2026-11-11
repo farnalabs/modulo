@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
-from modulo.db.crud.base import PageResult
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import DbPlanContext, FeatureFlagRegistry
+from farna.db.crud.base import PageResult
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -161,11 +161,11 @@ class TestOrgProfile:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_organisation",
+                "farna.api.routes.admin.get_organisation",
                 AsyncMock(return_value=fake_org),
             ),
             patch(
-                "modulo.api.routes.admin.update_organisation",
+                "farna.api.routes.admin.update_organisation",
                 AsyncMock(return_value=fake_org),
             ),
         ):
@@ -186,7 +186,7 @@ class TestOrgProfile:
 
     def test_update_org_not_found(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin.get_organisation",
+            "farna.api.routes.admin.get_organisation",
             AsyncMock(return_value=None),
         ):
             resp = client.put(self.URL, json={"name": "Test"})
@@ -199,7 +199,7 @@ class TestRegenerateApiKey:
 
     def test_regenerate_success(self, client: TestClient) -> None:
         with patch(
-            "modulo.auth.api_key.create_api_key",
+            "farna.auth.api_key.create_api_key",
             AsyncMock(return_value=(MagicMock(), "mk_testkey1234567890abc")),
         ):
             resp = client.post(self.URL)
@@ -235,7 +235,7 @@ class TestUserList:
         fake_membership.deactivated_at = None
 
         with patch(
-            "modulo.api.routes.admin._list_org_accounts",
+            "farna.api.routes.admin._list_org_accounts",
             AsyncMock(return_value=([(fake_account, fake_membership)], 1)),
         ):
             resp = client.get(self.URL)
@@ -276,15 +276,15 @@ class TestUserUpdate:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=fake_account),
             ),
             patch(
-                "modulo.api.routes.admin.assert_not_last_admin",
+                "farna.api.routes.admin.assert_not_last_admin",
                 AsyncMock(),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
         ):
@@ -294,7 +294,7 @@ class TestUserUpdate:
 
     def test_update_user_not_found(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin.get_account_by_id",
+            "farna.api.routes.admin.get_account_by_id",
             AsyncMock(return_value=None),
         ):
             resp = client.put(
@@ -335,27 +335,27 @@ class TestUserDeactivate:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=fake_account),
             ),
             patch(
-                "modulo.api.routes.admin.assert_not_last_admin",
+                "farna.api.routes.admin.assert_not_last_admin",
                 AsyncMock(),
             ),
             patch(
-                "modulo.api.routes.admin.list_families_for_account",
+                "farna.api.routes.admin.list_families_for_account",
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "modulo.api.routes.admin.list_team_memberships_for_account",
+                "farna.api.routes.admin.list_team_memberships_for_account",
                 AsyncMock(return_value=[]),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 AsyncMock(),
             ),
         ):
@@ -371,7 +371,7 @@ class TestUserDeactivate:
     def test_deactivate_not_found(self, client: TestClient) -> None:
         target_id = uuid.uuid4()
         with patch(
-            "modulo.api.routes.admin.get_account_by_id",
+            "farna.api.routes.admin.get_account_by_id",
             AsyncMock(return_value=None),
         ):
             resp = client.post(f"{self.URL}/{target_id}/deactivate")
@@ -401,15 +401,15 @@ class TestUserReactivate:
 
         with (
             patch(
-                "modulo.api.routes.admin.get_account_by_id",
+                "farna.api.routes.admin.get_account_by_id",
                 AsyncMock(return_value=fake_account),
             ),
             patch(
-                "modulo.api.routes.admin.get_membership_by_account_and_org",
+                "farna.api.routes.admin.get_membership_by_account_and_org",
                 AsyncMock(return_value=fake_membership),
             ),
             patch(
-                "modulo.core.audit_logger.append_audit_event",
+                "farna.core.audit_logger.append_audit_event",
                 AsyncMock(),
             ),
         ):
@@ -435,7 +435,7 @@ class TestAdminTeamList:
 
         with (
             patch(
-                "modulo.api.routes.admin.list_teams",
+                "farna.api.routes.admin.list_teams",
                 AsyncMock(return_value=fake_result),
             ),
         ):
@@ -458,7 +458,7 @@ class TestAdminTeamUpdate:
         fake_team = _fake_team(name="Updated Team", description="Updated description")
 
         with patch(
-            "modulo.api.routes.admin.crud_update_team",
+            "farna.api.routes.admin.crud_update_team",
             AsyncMock(return_value=fake_team),
         ):
             resp = client.put(
@@ -471,7 +471,7 @@ class TestAdminTeamUpdate:
 
     def test_update_team_not_found(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.admin.crud_update_team",
+            "farna.api.routes.admin.crud_update_team",
             AsyncMock(return_value=None),
         ):
             resp = client.put(
@@ -488,7 +488,7 @@ class TestAdminTeamDelete:
     def test_delete_team_success(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.delete_team",
+                "farna.api.routes.admin.delete_team",
                 AsyncMock(return_value=True),
             ),
         ):
@@ -499,7 +499,7 @@ class TestAdminTeamDelete:
     def test_delete_team_not_found(self, client: TestClient) -> None:
         with (
             patch(
-                "modulo.api.routes.admin.delete_team",
+                "farna.api.routes.admin.delete_team",
                 AsyncMock(return_value=False),
             ),
         ):
@@ -539,7 +539,7 @@ class TestBillingOverview:
         fake_org.settings_json = {"license_key": "LIC-1234-ABCD"}
 
         with patch(
-            "modulo.api.routes.admin.get_organisation",
+            "farna.api.routes.admin.get_organisation",
             AsyncMock(return_value=fake_org),
         ):
             resp = client.get(self.URL)
@@ -557,7 +557,7 @@ class TestBillingOverview:
         fake_org.settings_json = {}
 
         with patch(
-            "modulo.api.routes.admin.get_organisation",
+            "farna.api.routes.admin.get_organisation",
             AsyncMock(return_value=fake_org),
         ):
             resp = client.get(self.URL)

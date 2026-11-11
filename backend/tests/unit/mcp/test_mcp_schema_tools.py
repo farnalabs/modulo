@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException as FastAPIHTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.mcp_server import (
+from farna.api.mcp_server import (
     create_agent,
     create_model_backend,
     create_schema,
@@ -18,8 +18,8 @@ from modulo.api.mcp_server import (
     update_model_backend,
     validate_payload,
 )
-from modulo.core.seed_data.library_schemas import SCHEMAS
-from modulo.db.crud.base import PageResult
+from farna.core.seed_data.library_schemas import SCHEMAS
+from farna.db.crud.base import PageResult
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import FERNET_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
@@ -37,23 +37,23 @@ def _make_settings(*, dev_mode: bool = True) -> MagicMock:
 
 
 class TestCreateAgentErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_agent(name="qa", prompt_template="Review PRs")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_agent(name="qa", prompt_template="Review PRs")
@@ -87,9 +87,9 @@ class TestCreateAgentErrors(AuthContext):
         mock_create.assert_not_called()
         mock_session.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_malformed_model_backend_id_returns_invalid_id(
         self,
         mock_create: AsyncMock,
@@ -100,9 +100,9 @@ class TestCreateAgentErrors(AuthContext):
             mock_create, mock_session, "model_backend_id", "not-a-uuid"
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_malformed_input_schema_id_returns_invalid_id(
         self,
         mock_create: AsyncMock,
@@ -113,9 +113,9 @@ class TestCreateAgentErrors(AuthContext):
             mock_create, mock_session, "input_schema_id", "not-a-uuid"
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_malformed_output_schema_id_returns_invalid_id(
         self,
         mock_create: AsyncMock,
@@ -126,9 +126,9 @@ class TestCreateAgentErrors(AuthContext):
             mock_create, mock_session, "output_schema_id", "not-a-uuid"
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_malformed_template_id_returns_invalid_id_not_silent_drop(
         self,
         mock_create: AsyncMock,
@@ -141,9 +141,9 @@ class TestCreateAgentErrors(AuthContext):
             mock_create, mock_session, "template_id", "opencode"
         )
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_rejects_unpinned_git_content_ref_before_db_write(
         self,
         mock_create: AsyncMock,
@@ -162,9 +162,9 @@ class TestCreateAgentErrors(AuthContext):
         assert "not pinned" in result["detail"]
         mock_create.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_rejects_malformed_git_content_ref_before_db_write(
         self,
         mock_create: AsyncMock,
@@ -180,9 +180,9 @@ class TestCreateAgentErrors(AuthContext):
         assert "invalid git content ref" in result["detail"]
         mock_create.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_rejects_git_ref_among_several_commands_before_db_write(
         self,
         mock_create: AsyncMock,
@@ -201,9 +201,9 @@ class TestCreateAgentErrors(AuthContext):
 
 
 class TestCreateAgentSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_returns_created_agent_shape(
         self,
         mock_create: AsyncMock,
@@ -243,9 +243,9 @@ class TestCreateAgentSuccess(AuthContext):
 class TestCreateAgentNullableSchemaIds(AuthContext):
     """FAR-31: creating an agent without schema IDs must not send a sentinel UUID."""
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_omitted_ids_pass_none_not_sentinel(
         self,
         mock_create: AsyncMock,
@@ -273,9 +273,9 @@ class TestCreateAgentNullableSchemaIds(AuthContext):
         assert call_kwargs["input_schema_version"] == "latest"
         assert call_kwargs["output_schema_version"] == "latest"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.agent.create_agent")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.agent.create_agent")
     async def test_provided_ids_are_parsed_to_uuid(
         self,
         mock_create: AsyncMock,
@@ -318,23 +318,23 @@ class TestCreateAgentNullableSchemaIds(AuthContext):
 
 
 class TestCreateModelBackendErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_model_backend(name="openai", display_name="OpenAI", provider="openai", model_id="gpt-4o")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_model_backend(
@@ -344,10 +344,10 @@ class TestCreateModelBackendErrors(AuthContext):
 
 
 class TestCreateModelBackendSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.core.mcp_setup_handoff.create_handoff")
-    @patch("modulo.api.mcp_server.db_create_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.core.mcp_setup_handoff.create_handoff")
+    @patch("farna.api.mcp_server.db_create_model_backend")
     async def test_returns_pending_setup_with_handoff(
         self,
         mock_create: AsyncMock,
@@ -401,10 +401,10 @@ class TestCreateModelBackendSuccess(AuthContext):
 
 
 class TestUpdateModelBackend(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_updates_non_secret_fields_and_fallbacks(
         self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -431,7 +431,7 @@ class TestUpdateModelBackend(AuthContext):
         mock_update.return_value = backend
         mock_session.return_value = make_session_context(make_session_scope())
 
-        with patch("modulo.api.routes.model_backends._validate_fallback_ids"):
+        with patch("farna.api.routes.model_backends._validate_fallback_ids"):
             result = await update_model_backend(
                 model_backend_id=str(backend_id),
                 display_name="Updated",
@@ -448,7 +448,7 @@ class TestUpdateModelBackend(AuthContext):
         assert updates["fallback_backend_ids"] == [str(fallback_id)]
         assert "api_key" not in updates
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rejects_endpoint_mutation_through_default_params(self, mock_validate: AsyncMock) -> None:
         result = await update_model_backend(
             model_backend_id=str(uuid.uuid4()),
@@ -459,9 +459,9 @@ class TestUpdateModelBackend(AuthContext):
         assert result["field"] == "default_params.base_url"
         assert "credential-rebinding setup flow" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_rejects_invalid_and_self_fallbacks(
         self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -474,7 +474,7 @@ class TestUpdateModelBackend(AuthContext):
         assert invalid["error"] == "invalid_id"
 
         with patch(
-            "modulo.api.routes.model_backends._validate_fallback_ids",
+            "farna.api.routes.model_backends._validate_fallback_ids",
             side_effect=FastAPIHTTPException(422, "self"),
         ):
             self_ref = await update_model_backend(
@@ -482,10 +482,10 @@ class TestUpdateModelBackend(AuthContext):
             )
         assert self_ref["error"] == "validation_error"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_clear_fallback_chain_clears_the_chain(
         self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -506,8 +506,8 @@ class TestUpdateModelBackend(AuthContext):
         assert not result["fallback_backend_ids"]
         assert not mock_update.call_args.args[2]["fallback_backend_ids"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_uuid_rejected_even_when_clearing_chain(
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -527,10 +527,10 @@ class TestUpdateModelBackend(AuthContext):
             ({"visibility": "team"}, None, "owner_team_id is required"),
         ],
     )
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_rejects_invalid_scalar_fields_using_http_contract(
         self,
         mock_get: AsyncMock,
@@ -557,10 +557,10 @@ class TestUpdateModelBackend(AuthContext):
         assert matches, result["detail"]
         mock_update.assert_not_called()
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_duplicate_name_maps_to_conflict(
         self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -576,25 +576,25 @@ class TestUpdateModelBackend(AuthContext):
 
 
 class TestUpdateModelBackendErrorPaths(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
 
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_insufficient_scope(self, mock_validate: AsyncMock) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await update_model_backend(model_backend_id=str(uuid.uuid4()), name="renamed")
 
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rejects_fallback_and_clear_together(self, mock_validate: AsyncMock) -> None:
         result = await update_model_backend(
             model_backend_id=str(uuid.uuid4()),
@@ -606,7 +606,7 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
         assert result["field"] == "fallback_backend_ids"
         assert "not both" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rejects_non_string_fallback_ids(self, mock_validate: AsyncMock) -> None:
         result = await update_model_backend(
             model_backend_id=str(uuid.uuid4()),
@@ -617,9 +617,9 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
         assert result["field"] == "fallback_backend_ids"
         assert "must be strings" in result["detail"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_missing_backend_returns_not_found(
         self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -630,9 +630,9 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_cross_org_backend_reads_as_not_found(
         self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -643,10 +643,10 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_vanished_backend_after_validation_returns_not_found(
         self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -659,9 +659,9 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_migration_required_on_programming_error(
         self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -672,9 +672,9 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
         assert result["error"] == "migration_required"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_unexpected_error_is_mapped_to_server_error(
         self, mock_get: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -685,10 +685,10 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
         assert result["error"] == "server_error"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.db.crud.model_backend.update_model_backend")
-    @patch("modulo.db.crud.model_backend.get_model_backend")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.db.crud.model_backend.update_model_backend")
+    @patch("farna.db.crud.model_backend.get_model_backend")
     async def test_team_visibility_carries_existing_owner(
         self, mock_get: AsyncMock, mock_update: AsyncMock, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
@@ -727,31 +727,31 @@ class TestUpdateModelBackendErrorPaths(AuthContext):
 
 
 class TestInferSchemaErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await infer_schema(input_sample={"name": "x"})
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await infer_schema(input_sample={"name": "x"})
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.settings.get_settings")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.settings.get_settings")
     async def test_dev_mode_required(
         self,
         mock_get_settings: MagicMock,
@@ -766,10 +766,10 @@ class TestInferSchemaErrors(AuthContext):
         assert result["error"] == "feature_required"
         assert "developer mode" in result.get("detail", "")
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.settings.get_settings")
-    @patch("modulo.db.crud.model_backend.list_model_backends")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.settings.get_settings")
+    @patch("farna.db.crud.model_backend.list_model_backends")
     async def test_no_backend_returns_no_backend(
         self,
         mock_list_backends: AsyncMock,
@@ -785,14 +785,14 @@ class TestInferSchemaErrors(AuthContext):
 
         assert result["error"] == "no_backend"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.settings.get_settings")
-    @patch("modulo.db.crud.model_backend.list_model_backends")
-    @patch("modulo.core.schema_registry.SchemaInferenceService")
-    @patch("modulo.core.model_backend_hub.ModelBackendHub")
-    @patch("modulo.core.secrets_backend.create_secrets_backend")
-    @patch("modulo.api.mcp_server.set_rls_org")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.settings.get_settings")
+    @patch("farna.db.crud.model_backend.list_model_backends")
+    @patch("farna.core.schema_registry.SchemaInferenceService")
+    @patch("farna.core.model_backend_hub.ModelBackendHub")
+    @patch("farna.core.secrets_backend.create_secrets_backend")
+    @patch("farna.api.mcp_server.set_rls_org")
     async def test_inference_failure_returns_inference_failed(
         self,
         mock_set_rls: MagicMock,
@@ -804,7 +804,7 @@ class TestInferSchemaErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.schema_registry import SchemaInferenceError
+        from farna.core.schema_registry import SchemaInferenceError
 
         mb = MagicMock()
         mb.id = uuid.uuid4()
@@ -828,14 +828,14 @@ class TestInferSchemaErrors(AuthContext):
 
 
 class TestInferSchemaSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.settings.get_settings")
-    @patch("modulo.db.crud.model_backend.list_model_backends")
-    @patch("modulo.core.schema_registry.SchemaInferenceService")
-    @patch("modulo.core.model_backend_hub.ModelBackendHub")
-    @patch("modulo.core.secrets_backend.create_secrets_backend")
-    @patch("modulo.api.mcp_server.set_rls_org")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.settings.get_settings")
+    @patch("farna.db.crud.model_backend.list_model_backends")
+    @patch("farna.core.schema_registry.SchemaInferenceService")
+    @patch("farna.core.model_backend_hub.ModelBackendHub")
+    @patch("farna.core.secrets_backend.create_secrets_backend")
+    @patch("farna.api.mcp_server.set_rls_org")
     async def test_returns_inferred_definition(
         self,
         mock_set_rls: MagicMock,
@@ -869,14 +869,14 @@ class TestInferSchemaSuccess(AuthContext):
         assert result["definition"] == definition
         assert result["sample_count"] == 1
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.settings.get_settings")
-    @patch("modulo.db.crud.model_backend.list_model_backends")
-    @patch("modulo.core.schema_registry.SchemaInferenceService")
-    @patch("modulo.core.model_backend_hub.ModelBackendHub")
-    @patch("modulo.core.secrets_backend.create_secrets_backend")
-    @patch("modulo.api.mcp_server.set_rls_org")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.settings.get_settings")
+    @patch("farna.db.crud.model_backend.list_model_backends")
+    @patch("farna.core.schema_registry.SchemaInferenceService")
+    @patch("farna.core.model_backend_hub.ModelBackendHub")
+    @patch("farna.core.secrets_backend.create_secrets_backend")
+    @patch("farna.api.mcp_server.set_rls_org")
     async def test_decrypt_threads_session_and_org_scope(
         self,
         mock_set_rls: MagicMock,
@@ -948,31 +948,31 @@ def _make_schema_obj(*, name: str, description: str | None = None, abstract_name
 
 
 class TestCreateSchemaErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await create_schema(name="customer")
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         mock_session.return_value = make_session_context(make_session_scope())
         with patch(
-            "modulo.api.mcp_server.check_tool_scope",
+            "farna.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
             result = await create_schema(name="customer")
         assert result["error"] == "insufficient_scope"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.db_create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.db_create_schema")
     async def test_conflict_on_duplicate_name(
         self,
         mock_create: AsyncMock,
@@ -986,9 +986,9 @@ class TestCreateSchemaErrors(AuthContext):
 
         assert result["error"] == "conflict"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.db_create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.db_create_schema")
     async def test_migration_required_on_programming_error(
         self,
         mock_create: AsyncMock,
@@ -1004,9 +1004,9 @@ class TestCreateSchemaErrors(AuthContext):
 
 
 class TestCreateSchemaSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.db_create_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.db_create_schema")
     async def test_returns_created_schema_and_latest_version(
         self,
         mock_create: AsyncMock,
@@ -1062,14 +1062,14 @@ def _make_schema(*, name: str, abstract_name: str) -> MagicMock:
 
 
 class TestListSchemasErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await list_schemas()
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.db_list_schemas")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.db_list_schemas")
     async def test_migration_required_on_programming_error(
         self,
         mock_list: AsyncMock,
@@ -1085,9 +1085,9 @@ class TestListSchemasErrors(AuthContext):
 
 
 class TestListSchemasSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.db_list_schemas")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.db_list_schemas")
     async def test_returns_paginated_schema_metadata(
         self,
         mock_list: AsyncMock,
@@ -1140,13 +1140,13 @@ def _dogfood_definition(name: str) -> dict:
 
 
 class TestValidatePayloadErrors(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
         assert result["error"] == "auth_expired"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_id_returns_invalid_id(
         self,
         mock_session: AsyncMock,
@@ -1159,9 +1159,9 @@ class TestValidatePayloadErrors(AuthContext):
         assert result["error"] == "invalid_id"
         assert result["field"] == "schema_id"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema", return_value=None)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema", return_value=None)
     async def test_not_found_when_schema_missing(
         self,
         mock_get_schema: AsyncMock,
@@ -1174,9 +1174,9 @@ class TestValidatePayloadErrors(AuthContext):
 
         assert result["error"] == "not_found"
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_no_version_when_schema_has_no_versions(
         self,
         mock_get_schema: AsyncMock,
@@ -1199,9 +1199,9 @@ class TestValidatePayloadErrors(AuthContext):
 
 
 class TestValidatePayloadSuccess(AuthContext):
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_valid_payload_returns_valid(
         self,
         mock_get_schema: AsyncMock,
@@ -1223,9 +1223,9 @@ class TestValidatePayloadSuccess(AuthContext):
 
         assert result == {"valid": True, "errors": []}
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_invalid_payload_returns_validation_errors(
         self,
         mock_get_schema: AsyncMock,
@@ -1250,9 +1250,9 @@ class TestValidatePayloadSuccess(AuthContext):
         assert result["errors"][0]["path"] == "name"
         assert "not of type" in result["errors"][0]["message"]
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_invalid_schema_definition_returns_invalid_schema(
         self,
         mock_get_schema: AsyncMock,
@@ -1311,9 +1311,9 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
             ),
         ],
     )
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_seeded_dogfood_schema_accepts_valid_payload(
         self,
         mock_get_schema: AsyncMock,
@@ -1343,9 +1343,9 @@ class TestValidatePayloadDogfoodSchemas(AuthContext):
             ("pr-review-input", {"number": "not-an-int", "repository": "farnalabs/modulo"}),
         ],
     )
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
-    @patch("modulo.api.mcp_server.get_schema")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
+    @patch("farna.api.mcp_server.get_schema")
     async def test_seeded_dogfood_schema_rejects_invalid_payload(
         self,
         mock_get_schema: AsyncMock,

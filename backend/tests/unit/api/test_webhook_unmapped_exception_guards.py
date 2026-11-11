@@ -17,7 +17,7 @@ import uuid
 
 import pytest
 
-from modulo.api.routes.webhooks import (
+from farna.api.routes.webhooks import (
     _handle_receive_dispatch_failure,
     _handle_replay_dispatch_failure,
     _raise_intake_http_error,

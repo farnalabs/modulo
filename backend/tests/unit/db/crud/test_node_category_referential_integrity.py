@@ -13,15 +13,15 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.node_category import (
+from farna.db.crud.node_category import (
     NodeCategoryInUseError,
     get_node_category,
     node_category_in_use,
     soft_delete_node_category,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.node_category import NodeCategory
-from modulo.db.models.pipeline import Pipeline
+from farna.db.models.base import Base
+from farna.db.models.node_category import NodeCategory
+from farna.db.models.pipeline import Pipeline
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")

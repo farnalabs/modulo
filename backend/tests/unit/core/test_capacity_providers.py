@@ -11,8 +11,8 @@ from typing import Any, Self
 
 import pytest
 
-from modulo.core.capacity_providers import build_platform_capacity_probe
-from modulo.core.capacity_providers.fly import (
+from farna.core.capacity_providers import build_platform_capacity_probe
+from farna.core.capacity_providers.fly import (
     DEFAULT_CACHE_TTL_SECONDS,
     FlyVolumeCapacityProbe,
     capacity_bytes_from_volumes,

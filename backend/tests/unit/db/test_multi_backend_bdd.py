@@ -13,15 +13,15 @@ import pytest
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.repositories import RepositoryHub
-from modulo.db.repositories.generic import GenericRepository
-from modulo.db.repositories.locks import (
+from farna.db.repositories import RepositoryHub
+from farna.db.repositories.generic import GenericRepository
+from farna.db.repositories.locks import (
     GenericLock,
     PostgresLock,
     _build_lock_service,
     _generic_locks,
 )
-from modulo.db.repositories.postgres import PostgresRepository
+from farna.db.repositories.postgres import PostgresRepository
 
 _TENANT_KEY = "org_id"
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -248,22 +248,22 @@ class TestMigrationBackendConfig:
     """Verify env.py backend detection, async-to-sync conversion, batch mode."""
 
     def test_detect_postgres(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         assert _detect_backend("postgresql+asyncpg://user:pass@localhost/db") == "postgresql"
 
     def test_detect_mysql(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         assert _detect_backend("mysql+aiomysql://user:pass@localhost/db") == "mysql"
 
     def test_detect_sqlite(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         assert _detect_backend("sqlite:///test.db") == "sqlite"
 
     def test_detect_unknown(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         assert _detect_backend("oracle://user:pass@localhost/db") == "unknown"
 
@@ -275,7 +275,7 @@ class TestMigrationBackendConfig:
 
     @pytest.mark.parametrize("driver", ["aiomysql", "asyncmy"])
     def test_async_mysql_driver_converts_to_pymysql(self, driver: str) -> None:
-        from modulo.db.migrations.env import _to_sync_url
+        from farna.db.migrations.env import _to_sync_url
 
         converted = _to_sync_url(f"mysql+{driver}://user:pass@localhost/db")
         assert "+async" not in converted
@@ -286,18 +286,18 @@ class TestMigrationBackendConfig:
         assert "+async" not in url
 
     def test_render_as_batch_enabled_for_sqlite(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         assert _detect_backend("sqlite:///test.db") == "sqlite"
 
     def test_render_as_batch_disabled_for_postgres(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         backend = _detect_backend("postgresql+asyncpg://user:pass@localhost/db")
         assert backend == "postgresql"
 
     def test_render_as_batch_disabled_for_mysql(self) -> None:
-        from modulo.db.migrations.env import _detect_backend
+        from farna.db.migrations.env import _detect_backend
 
         backend = _detect_backend("mysql+aiomysql://user:pass@localhost/db")
         assert backend == "mysql"
@@ -418,7 +418,7 @@ class TestAdvisoryLockAbstraction:
         result.scalar_one.return_value = False
         session.execute = AsyncMock(return_value=result)
 
-        from modulo.db.repositories.locks import LockAcquireError
+        from farna.db.repositories.locks import LockAcquireError
 
         with pytest.raises(LockAcquireError, match="Could not acquire lock"):
             await lock.acquire_lock(session, "timeout-key", lock_timeout=0.05)
@@ -473,7 +473,7 @@ class TestTimeFunctionsMultiBackend:
         assert now.tzinfo is not None
 
     def test_created_at_column_uses_default_factory(self) -> None:
-        from modulo.db.models.base import Base
+        from farna.db.models.base import Base
 
         assert hasattr(Base, "metadata")
 
@@ -488,7 +488,7 @@ class TestRepositoryHubDispatch:
 
     def test_postgres_repo_is_postgres_repository(self) -> None:
         hub = RepositoryHub(session_factory=MagicMock(), db_type="postgres")
-        from modulo.db.repositories.postgres import PostgresRepository
+        from farna.db.repositories.postgres import PostgresRepository
 
         assert isinstance(hub.repo, PostgresRepository)
 
@@ -529,16 +529,16 @@ class TestRegisterTenantFilter:
 
         from unittest.mock import patch
 
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
-        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+        with patch("farna.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)
             mock_settings.modulo_db = "postgres"
             mock_get_settings.return_value = mock_settings
 
-            from modulo.db.rls import register_tenant_filter
+            from farna.db.rls import register_tenant_filter
 
-            with patch("modulo.db.rls.event.listen") as mock_listen:
+            with patch("farna.db.rls.event.listen") as mock_listen:
                 register_tenant_filter()
 
             mock_listen.assert_not_called()
@@ -546,16 +546,16 @@ class TestRegisterTenantFilter:
     def test_registers_for_sqlite(self) -> None:
         from unittest.mock import patch
 
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
-        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+        with patch("farna.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)
             mock_settings.modulo_db = "sqlite"
             mock_get_settings.return_value = mock_settings
 
-            from modulo.db.rls import register_tenant_filter
+            from farna.db.rls import register_tenant_filter
 
-            with patch("modulo.db.rls.event.listen") as mock_listen:
+            with patch("farna.db.rls.event.listen") as mock_listen:
                 register_tenant_filter()
 
             mock_listen.assert_called_once()
@@ -563,16 +563,16 @@ class TestRegisterTenantFilter:
     def test_registers_for_mariadb(self) -> None:
         from unittest.mock import patch
 
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
-        with patch("modulo.db.rls.get_settings") as mock_get_settings:
+        with patch("farna.db.rls.get_settings") as mock_get_settings:
             mock_settings = MagicMock(spec=Settings)
             mock_settings.modulo_db = "mariadb"
             mock_get_settings.return_value = mock_settings
 
-            from modulo.db.rls import register_tenant_filter
+            from farna.db.rls import register_tenant_filter
 
-            with patch("modulo.db.rls.event.listen") as mock_listen:
+            with patch("farna.db.rls.event.listen") as mock_listen:
                 register_tenant_filter()
 
             mock_listen.assert_called_once()
@@ -595,7 +595,7 @@ class TestOrganisationRootEntityModel:
     def test_created_by_column_is_nullable_and_not_a_foreign_key(self) -> None:
         from sqlalchemy import ForeignKey
 
-        from modulo.db.models.organisation import Organisation
+        from farna.db.models.organisation import Organisation
 
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
@@ -610,7 +610,7 @@ class TestOrganisationRootEntityModel:
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
         """The first org is created with no creator (``_ensure_default_org``
         builds ``Organisation(name=..., slug=...)`` without ``created_by``)."""
-        from modulo.db.models.organisation import Organisation
+        from farna.db.models.organisation import Organisation
 
         org = Organisation(name="Default Organisation", slug="default")
         assert org.created_by is None
@@ -619,7 +619,7 @@ class TestOrganisationRootEntityModel:
         """The tenant filter keys on ``organisation_id``; the root entity has
         none, so a scoped SELECT over ``organisations`` is never injected with
         a WHERE clause (RLS is not applied to the organisations table)."""
-        from modulo.db.models.organisation import Organisation
+        from farna.db.models.organisation import Organisation
 
         assert "organisation_id" not in Organisation.__table__.columns
 
@@ -627,7 +627,7 @@ class TestOrganisationRootEntityModel:
         """``_inject_tenant_filter`` must skip entities without an
         ``organisation_id`` column — the ``Organisation`` model is the concrete
         instance of the generic ``EntityWithoutOrg`` skip case."""
-        from modulo.db.rls import _inject_tenant_filter
+        from farna.db.rls import _inject_tenant_filter
 
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = [{"entity": EntityWithoutOrg}]
@@ -655,9 +655,9 @@ class TestRegisterRlsResetHookSkip:
         engine.dialect.name = "sqlite"
         engine.sync_engine = MagicMock()
 
-        from modulo.db.rls import register_rls_reset_hook
+        from farna.db.rls import register_rls_reset_hook
 
-        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+        with patch("farna.db.rls.event.listens_for") as mock_listens:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_not_called()
@@ -667,9 +667,9 @@ class TestRegisterRlsResetHookSkip:
         engine.dialect.name = "mysql"
         engine.sync_engine = MagicMock()
 
-        from modulo.db.rls import register_rls_reset_hook
+        from farna.db.rls import register_rls_reset_hook
 
-        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+        with patch("farna.db.rls.event.listens_for") as mock_listens:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_not_called()
@@ -679,9 +679,9 @@ class TestRegisterRlsResetHookSkip:
         engine.dialect.name = "postgresql"
         engine.sync_engine = MagicMock()
 
-        from modulo.db.rls import register_rls_reset_hook
+        from farna.db.rls import register_rls_reset_hook
 
-        with patch("modulo.db.rls.event.listens_for") as mock_listens:
+        with patch("farna.db.rls.event.listens_for") as mock_listens:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_called_once()

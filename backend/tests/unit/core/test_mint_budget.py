@@ -1,6 +1,6 @@
 """FAR-795 unit tests: atomic per-org agent-mint budget primitive.
 
-Covers the :mod:`modulo.core.runtime_config.mint_budget` contract on SQLite
+Covers the :mod:`farna.core.runtime_config.mint_budget` contract on SQLite
 (``aiosqlite``): within-budget allowance + recording, denial WITHOUT
 recording, window rollover, fail-open on a guard error, and the
 no-oversubscription guarantee with interleaved independent sessions (SQLite
@@ -34,11 +34,11 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.runtime_config import mint_budget
-from modulo.core.runtime_config.mint_budget import consume_agent_mint_budget
+from farna.core.runtime_config import mint_budget
+from farna.core.runtime_config.mint_budget import consume_agent_mint_budget
 from tests.unit.api.mock_session import configure_mock_session
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_STEM = "0242_org_mint_budget_usage"
 
 # Postgres-only throwaway DB for the concurrency proof (CI-DEFERRED).
@@ -382,16 +382,16 @@ class TestBudgetWiredIntoMintPaths:
     async def test_upsert_ref_provenances_consults_budget_and_suppresses_when_denied(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from modulo.core.lifecycle_map.advancement import upsert_ref_provenances
+        from farna.core.lifecycle_map.advancement import upsert_ref_provenances
 
         consume = AsyncMock(return_value=False)
         events: list[tuple[str, dict[str, Any]]] = []
         monkeypatch.setattr(
-            "modulo.core.lifecycle_map.advancement.consume_agent_mint_budget",
+            "farna.core.lifecycle_map.advancement.consume_agent_mint_budget",
             consume,
         )
         monkeypatch.setattr(
-            "modulo.core.lifecycle_map.advancement.notify_refs_event",
+            "farna.core.lifecycle_map.advancement.notify_refs_event",
             lambda event, **attrs: events.append((event, attrs)),
         )
 

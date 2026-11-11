@@ -26,8 +26,8 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from modulo.launcher.state import LauncherState, load_state, save_state
-from modulo.launcher.upgrade import (
+from farna.launcher.state import LauncherState, load_state, save_state
+from farna.launcher.upgrade import (
     SNAPSHOT_MANIFEST_NAME,
     SNAPSHOT_PREFIX,
     UpgradeError,
@@ -75,7 +75,7 @@ def _seed_data_dir(tmp_path: Path) -> Path:
 def _allow_windows_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """The secrets-file platform gate is P3-gated; the helper's own Linux
     contract must stay testable on every developer platform (TODO(P3))."""
-    from modulo.launcher import secrets_file
+    from farna.launcher import secrets_file
 
     monkeypatch.setattr(secrets_file, "assert_supported_platform", lambda: None)
 
@@ -90,13 +90,13 @@ def _fake_run(returncode: int = 0, payload: bytes = b"-- pg_dump output\n") -> C
 
 
 def _enter_fake_run(stack: contextlib.ExitStack, **kwargs: Any) -> MagicMock:
-    runner = patch("modulo.launcher.upgrade.subprocess.run", new=_fake_run(**kwargs))
+    runner = patch("farna.launcher.upgrade.subprocess.run", new=_fake_run(**kwargs))
     return stack.enter_context(runner)
 
 
 def _settings_env_ready() -> bool:
-    """The restore e2e imports ``modulo.cli.backup``; the ``modulo.cli`` package
-    transitively imports ``modulo.db.session``, which builds its module-global
+    """The restore e2e imports ``farna.cli.backup``; the ``farna.cli`` package
+    transitively imports ``farna.db.session``, which builds its module-global
     engine from ``Settings`` at import time. ``Settings`` requires
     ``DATABASE_URL`` / ``SECRET_KEY`` / ``FERNET_KEY`` — the CI test jobs export
     them, but a bare developer checkout may not — so probe the env instead of
@@ -173,7 +173,7 @@ def test_dump_carries_the_bundled_state(tmp_path: Path, monkeypatch: pytest.Monk
             stdout.write(b"-- pg_dump output\n")
         return MagicMock(returncode=0)
 
-    with patch("modulo.launcher.upgrade.subprocess.run", new=_capture):
+    with patch("farna.launcher.upgrade.subprocess.run", new=_capture):
         pre_upgrade_dump(data_dir)
     argv = seen["argv"]
     assert argv[0].endswith("pg_dump") or argv[0].endswith("pg_dump.exe")
@@ -291,7 +291,7 @@ def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.Monk
             stdout.write(b"-- pg_dump output\n")
         return MagicMock(returncode=0)
 
-    with patch("modulo.launcher.upgrade.subprocess.run", new=_capture):
+    with patch("farna.launcher.upgrade.subprocess.run", new=_capture):
         pre_upgrade_dump(data_dir)
     joined = " ".join(str(a) for a in seen["argv"])
     assert "pw" not in joined
@@ -303,7 +303,7 @@ def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
     """FAR-672 forward-compat: the optional field stamps v2 so an OLD
     launcher refuses via the DESIGNED version gate (a clear "written by a
     NEWER launcher" refusal) — not an "unknown field(s)" integrity error."""
-    from modulo.launcher.state import (
+    from farna.launcher.state import (
         SCHEMA_VERSION,
         SCHEMA_VERSION_WITH_LAST_BACKUP,
         StateVersionError,
@@ -341,7 +341,7 @@ def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     not _settings_env_ready(),
-    reason="modulo.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
+    reason="farna.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
 )
 def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """E2E: pre_upgrade_dump -> `modulo restore <snapshot> --yes` succeeds,
@@ -352,7 +352,7 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setenv("SECRET_KEY", "dev-secret-key-not-a-real-production-value-0001")
     monkeypatch.setenv("FERNET_KEY", "MrqQRrGCmUJ8YjA1OZ0mu23deGU0ZgGLT9oFyVAmA_k=")
 
-    from modulo.cli.backup import cli as backup_cli
+    from farna.cli.backup import cli as backup_cli
 
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -368,7 +368,7 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
     with contextlib.ExitStack() as stack:
         stack.enter_context(
             patch(
-                "modulo.cli.backup.get_settings",
+                "farna.cli.backup.get_settings",
                 **{
                     "return_value.fernet_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     # The restore resolves the APPLICATION role from
@@ -380,20 +380,20 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
             )
         )
         stack.enter_context(
-            patch("modulo.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"])
+            patch("farna.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"])
         )
-        stack.enter_context(patch("modulo.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
+        stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
         stack.enter_context(
             patch(
-                "modulo.cli.backup._run_pg_dump",
+                "farna.cli.backup._run_pg_dump",
                 side_effect=lambda _url, output, timeout=300: Path(output).write_text(
                     "-- safety dump", encoding="utf-8"
                 ),
             )
         )
-        stack.enter_context(patch("modulo.cli.backup._run_psql"))
-        stack.enter_context(patch("modulo.cli.backup._ensure_restore_posture"))
-        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        stack.enter_context(patch("farna.cli.backup._run_psql"))
+        stack.enter_context(patch("farna.cli.backup._ensure_restore_posture"))
+        stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
         result = CliRunner().invoke(backup_cli, ["restore", str(snapshot.directory), "--yes"])
     assert result.exit_code == 0, result.output
     assert "Restore complete" in result.output
@@ -406,7 +406,7 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
 # test_launcher_shared and are imported below; boot seams stay local.
 # ---------------------------------------------------------------------------
 
-from modulo.launcher import upgrade as upgrade_module  # noqa: E402 (appended flow tests)
+from farna.launcher import upgrade as upgrade_module  # noqa: E402 (appended flow tests)
 from tests.unit.launcher.test_launcher_shared import (  # noqa: E402 (appended flow tests)
     _UPGRADE_SIGNING_KEY_HEX,
     _upgrade_dump_seam,
@@ -557,7 +557,7 @@ def test_perform_upgrade_from_file_flow(upgrade_plant, patched_trust_store):
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patched_trust_store):
     """PG major (17 target) vs the data dir's PG_VERSION (16): HARD refusal."""
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
@@ -568,7 +568,7 @@ def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patche
     staging = tmp_path / "releases"
     staging.mkdir()
     release_fixture = _upgrade_release_fixture(staging)
-    from modulo.launcher import manifest as manifest_module
+    from farna.launcher import manifest as manifest_module
 
     manifest_body = json.loads(release_fixture.manifest.read_text(encoding="utf-8"))
     manifest_body["components"]["postgres"] = "17"
@@ -591,7 +591,7 @@ def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patche
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_perform_upgrade_downgrade_refuses(tmp_path, monkeypatch, patched_trust_store):
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
@@ -620,7 +620,7 @@ def test_perform_upgrade_downgrade_refuses(tmp_path, monkeypatch, patched_trust_
 def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch, patched_trust_store):
     from types import SimpleNamespace
 
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
@@ -649,7 +649,7 @@ def test_perform_upgrade_disk_preflight_refuses(tmp_path, monkeypatch, patched_t
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch, patched_trust_store):
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     def _no_live_refusing(_root):
         raise upgrade_module.UpgradeError("Refusing: still-running processes live inside the target - pid 4242")
@@ -682,7 +682,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
     executes VERBATIM end-to-end (the PATH shim's `modulo` records its argv)."""
     import subprocess
 
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
@@ -738,7 +738,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_upgrade_marker_written_before_boot(tmp_path, monkeypatch, patched_trust_store):
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
@@ -766,7 +766,7 @@ def test_upgrade_marker_written_before_boot(tmp_path, monkeypatch, patched_trust
 
 
 def test_prune_versions_keeps_last_two_and_never_the_referenced(tmp_path):
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     install_root = tmp_path
     versions = install_root / "versions"
@@ -785,7 +785,7 @@ def test_prune_versions_keeps_last_two_and_never_the_referenced(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 def test_repair_current_symlink_repairs_a_dangling_link(tmp_path):
-    from modulo.launcher import upgrade as upgrade_module
+    from farna.launcher import upgrade as upgrade_module
 
     install_root = tmp_path
     versions = install_root / "versions"
@@ -812,7 +812,7 @@ def _manifest_triple(staging, target_version="1.2.0", *, manifest_release=None):
     import tarfile as tarfile_module
     from types import SimpleNamespace
 
-    from modulo.launcher import manifest as manifest_module
+    from farna.launcher import manifest as manifest_module
 
     bundle_root = staging / f"modulo-{target_version}-linux-amd64"
     bundle_root.mkdir(parents=True, exist_ok=True)
@@ -887,7 +887,7 @@ def test_verify_release_stage_refuses_a_cross_version_manifest(tmp_path, patched
 def test_verify_release_stage_tampered_manifest_is_a_clean_upgrade_error(tmp_path, patched_trust_store):
     """Finding 7: a tampered manifest NEVER escapes as ManifestSecurityError -
     the CLI's error handling turns UpgradeError into a clean ClickException."""
-    from modulo.launcher.manifest import ManifestSecurityError
+    from farna.launcher.manifest import ManifestSecurityError
 
     release = _manifest_triple(tmp_path)
     original = release.manifest.read_bytes()
@@ -936,7 +936,7 @@ def test_check_no_downgrade_falls_back_to_the_snapshot_when_live_unknown(tmp_pat
 
 @pytest.mark.skipif(
     not _settings_env_ready(),
-    reason="modulo.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
+    reason="farna.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
 )
 def test_cli_upgrade_surfaces_a_clean_click_exception(monkeypatch, tmp_path):
     """Finding 7 (CLI level): a verification security error (even one
@@ -944,15 +944,15 @@ def test_cli_upgrade_surfaces_a_clean_click_exception(monkeypatch, tmp_path):
     a raw traceback."""
     from click.testing import CliRunner
 
-    from modulo.cli.main import cli
-    from modulo.launcher import manifest as manifest_module
+    from farna.cli.main import cli
+    from farna.launcher import manifest as manifest_module
 
     def _raise(_data_dir, **_kwargs):
         raise manifest_module.ManifestSecurityError("signature FAILED to verify - tampered manifest")
 
     monkeypatch.setattr(upgrade_module, "perform_upgrade", _raise)
     monkeypatch.setattr(upgrade_module, "default_install_root", lambda: tmp_path / "install-root")
-    monkeypatch.setattr("modulo.cli.main._resolve_data_dir", lambda _override: tmp_path / "data")
+    monkeypatch.setattr("farna.cli.main._resolve_data_dir", lambda _override: tmp_path / "data")
     result = CliRunner().invoke(cli, ["upgrade", "bundle-v1.2.0"])
     assert result.exit_code == 1
     assert "Error" in result.output
@@ -2064,11 +2064,11 @@ class TestAlembicHeads:
     def test_missing_ini_returns_unknown(self, monkeypatch, tmp_path, caplog):
         # Point the module's __file__ so Path(__file__).resolve().parents[3]
         # (the backend/ dir) lands under tmp_path, where no alembic.ini exists.
-        fake_file = tmp_path / "a" / "b" / "c" / "backend" / "src" / "modulo" / "launcher" / "upgrade.py"
+        fake_file = tmp_path / "a" / "b" / "c" / "backend" / "src" / "farna" / "launcher" / "upgrade.py"
         fake_file.parent.mkdir(parents=True)
         fake_file.write_text("", encoding="utf-8")
         monkeypatch.setattr(upgrade_module, "__file__", str(fake_file))
-        with caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"):
+        with caplog.at_level(logging.WARNING, logger="farna.launcher.upgrade"):
             result = upgrade_module._alembic_heads()
         assert result == ["unknown"]
         # The early return (`if not alembic_ini.exists()`) returns the
@@ -2092,7 +2092,7 @@ class TestRunDumpTimeout:
             raise upgrade_module.subprocess.TimeoutExpired(cmd="pg_dump", timeout=1800)
 
         with (
-            patch("modulo.launcher.upgrade.subprocess.run", side_effect=_timeout_run),
+            patch("farna.launcher.upgrade.subprocess.run", side_effect=_timeout_run),
             pytest.raises(UpgradeError, match="timed out"),
         ):
             upgrade_module._run_dump(["pg_dump"], dump_path)
@@ -2215,7 +2215,7 @@ class TestBundleAlembicRevisions:
 
     def test_exception_returns_empty(self, tmp_path):
         bundle_dir = tmp_path / "bundle"
-        migrations_dir = bundle_dir / "backend" / "src" / "modulo" / "db" / "migrations"
+        migrations_dir = bundle_dir / "backend" / "src" / "farna" / "db" / "migrations"
         migrations_dir.mkdir(parents=True)
         with patch("alembic.config.Config", side_effect=RuntimeError("boom")):
             result = upgrade_module._bundle_alembic_revisions(bundle_dir)
@@ -2323,12 +2323,12 @@ class TestRunBootHealthy:
         stderr_file.close = MagicMock()
 
         with (
-            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
-            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
-            patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=mock_response),
-            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
-            patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 0.2)),
+            patch("farna.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("farna.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("farna.launcher.upgrade.urllib.request.urlopen", return_value=mock_response),
+            patch("farna.launcher.upgrade._terminate_boot_process_group"),
+            patch("farna.launcher.upgrade.time.sleep"),
+            patch("farna.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 0.2)),
         ):
             result = upgrade_module.run_boot(
                 [str(launcher), "start"],
@@ -2356,11 +2356,11 @@ class TestRunBootHealthy:
         stderr_file.close = MagicMock()
 
         with (
-            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
-            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
-            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
-            patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 10.0)),
+            patch("farna.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("farna.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("farna.launcher.upgrade._terminate_boot_process_group"),
+            patch("farna.launcher.upgrade.time.sleep"),
+            patch("farna.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 10.0)),
             pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
         ):
             upgrade_module.run_boot(
@@ -2394,12 +2394,12 @@ class TestRunBootHealthy:
         stderr_file.close = MagicMock()
 
         with (
-            patch("modulo.launcher.upgrade.subprocess.Popen", return_value=mock_process),
-            patch("modulo.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
-            patch("modulo.launcher.upgrade.urllib.request.urlopen", return_value=bad_response),
-            patch("modulo.launcher.upgrade._terminate_boot_process_group"),
-            patch("modulo.launcher.upgrade.time.sleep"),
-            patch("modulo.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 10.0)),
+            patch("farna.launcher.upgrade.subprocess.Popen", return_value=mock_process),
+            patch("farna.launcher.upgrade.tempfile.TemporaryFile", return_value=stderr_file),
+            patch("farna.launcher.upgrade.urllib.request.urlopen", return_value=bad_response),
+            patch("farna.launcher.upgrade._terminate_boot_process_group"),
+            patch("farna.launcher.upgrade.time.sleep"),
+            patch("farna.launcher.upgrade.time.monotonic", side_effect=clock_steps(0.0, 0.1, 10.0)),
             pytest.raises(UpgradeError, match="did not reach a healthy /healthz"),
         ):
             upgrade_module.run_boot(
@@ -2572,7 +2572,7 @@ class TestExtractAndVerifyBundle:
 
 class TestVerifyExtractedBundleArtifacts:
     def test_calls_verify_artifacts(self, tmp_path):
-        from modulo.launcher.manifest import ReleaseManifest
+        from farna.launcher.manifest import ReleaseManifest
 
         manifest = ReleaseManifest(
             release="bundle-v1.0.0",
@@ -2590,7 +2590,7 @@ class TestVerifyExtractedBundleArtifacts:
         assert "bundle.tar.gz" not in called_manifest.artifact_checksums
 
     def test_manifest_error_wrapped(self, tmp_path):
-        from modulo.launcher.manifest import ReleaseManifest
+        from farna.launcher.manifest import ReleaseManifest
 
         manifest = ReleaseManifest(
             release="bundle-v1.0.0",
@@ -2627,8 +2627,8 @@ class TestDarwinServiceLifecycle:
 
         monkeypatch.setattr(upgrade_module.subprocess, "run", run_service)
         with (
-            patch("modulo.launcher.supervisor.request_stop"),
-            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+            patch("farna.launcher.supervisor.request_stop"),
+            patch("farna.launcher.supervisor._read_lock_holder", return_value=None),
             patch.object(upgrade_module, "_service_unit_path", return_value=plist_path),
         ):
             upgrade_module.stop_running_stack(data_dir, unit_file=plist_path)
@@ -2651,10 +2651,10 @@ class TestStopRunningStack:
         unit_file = tmp_path / "no.unit"
 
         with (
-            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
-            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
-            patch("modulo.launcher.supervisor.request_stop", side_effect=_fake_stop),
-            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+            patch("farna.launcher.service.default_unit_path", return_value=unit_file),
+            patch("farna.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("farna.launcher.supervisor.request_stop", side_effect=_fake_stop),
+            patch("farna.launcher.supervisor._read_lock_holder", return_value=None),
         ):
             upgrade_module.stop_running_stack(data_dir)
         assert called["stop"]
@@ -2669,11 +2669,11 @@ class TestStopRunningStack:
             raise subprocess.TimeoutExpired(cmd="systemctl", timeout=30)
 
         with (
-            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
-            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
-            patch("modulo.launcher.upgrade.subprocess.run", side_effect=_fake_subprocess_run),
-            patch("modulo.launcher.supervisor.request_stop"),
-            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+            patch("farna.launcher.service.default_unit_path", return_value=unit_file),
+            patch("farna.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("farna.launcher.upgrade.subprocess.run", side_effect=_fake_subprocess_run),
+            patch("farna.launcher.supervisor.request_stop"),
+            patch("farna.launcher.supervisor._read_lock_holder", return_value=None),
         ):
             upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
 
@@ -2686,13 +2686,13 @@ class TestStopRunningStack:
         holder = MagicMock(pid=4242)
 
         with (
-            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
-            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
-            patch("modulo.launcher.upgrade.subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("modulo.launcher.supervisor.request_stop"),
-            patch("modulo.launcher.upgrade._read_lock_holder", return_value=holder),
-            patch("modulo.launcher.upgrade._pid_alive", return_value=True),
-            patch("modulo.launcher.upgrade._restart_unit_best_effort") as mock_restart,
+            patch("farna.launcher.service.default_unit_path", return_value=unit_file),
+            patch("farna.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("farna.launcher.upgrade.subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("farna.launcher.supervisor.request_stop"),
+            patch("farna.launcher.upgrade._read_lock_holder", return_value=holder),
+            patch("farna.launcher.upgrade._pid_alive", return_value=True),
+            patch("farna.launcher.upgrade._restart_unit_best_effort") as mock_restart,
             pytest.raises(UpgradeError, match="STILL locked by a live launcher"),
         ):
             upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
@@ -2702,25 +2702,25 @@ class TestStopRunningStack:
 
 class TestRestartUnitBestEffort:
     def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch, caplog):
-        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
-        no_restart = patch("modulo.launcher.upgrade.subprocess.run")
-        with no_restart as restart_mock, caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"):
+        monkeypatch.setattr("farna.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
+        no_restart = patch("farna.launcher.upgrade.subprocess.run")
+        with no_restart as restart_mock, caplog.at_level(logging.WARNING, logger="farna.launcher.upgrade"):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
         # Nothing to restart means NOTHING ran and NOTHING was logged.
         restart_mock.assert_not_called()
-        probes = [r for r in caplog.records if r.name == "modulo.launcher.upgrade"]
+        probes = [r for r in caplog.records if r.name == "farna.launcher.upgrade"]
         assert not probes
 
     def test_unit_restart_success(self, tmp_path, monkeypatch, caplog):
         unit_file = tmp_path / "test.service"
         unit_file.write_text("[Unit]\n", encoding="utf-8")
-        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
-        monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
+        monkeypatch.setattr("farna.launcher.service.default_unit_path", lambda: unit_file)
+        monkeypatch.setattr("farna.launcher.service.UNIT_FILENAME", "test.service")
 
         mock_result = MagicMock(returncode=0)
         with (
-            caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"),
-            patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result),
+            caplog.at_level(logging.WARNING, logger="farna.launcher.upgrade"),
+            patch("farna.launcher.upgrade.subprocess.run", return_value=mock_result),
         ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
 
@@ -2730,13 +2730,13 @@ class TestRestartUnitBestEffort:
     def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch, caplog):
         unit_file = tmp_path / "test.service"
         unit_file.write_text("[Unit]\n", encoding="utf-8")
-        monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
-        monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
+        monkeypatch.setattr("farna.launcher.service.default_unit_path", lambda: unit_file)
+        monkeypatch.setattr("farna.launcher.service.UNIT_FILENAME", "test.service")
 
         mock_result = MagicMock(returncode=1, stderr=b"failed")
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.launcher.upgrade"),
-            patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result),
+            caplog.at_level(logging.ERROR, logger="farna.launcher.upgrade"),
+            patch("farna.launcher.upgrade.subprocess.run", return_value=mock_result),
         ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
 
@@ -2750,17 +2750,17 @@ class TestRestartUnitBestEffort:
         is reached and the AttributeError path is exercised (the broad
         `except Exception` fallback that must never mask the primary error).
         """
-        monkeypatch.delattr("modulo.launcher.service.default_unit_path", raising=False)
+        monkeypatch.delattr("farna.launcher.service.default_unit_path", raising=False)
         with (
-            caplog.at_level(logging.ERROR, logger="modulo.launcher.upgrade"),
-            patch("modulo.launcher.upgrade.subprocess.run"),
+            caplog.at_level(logging.ERROR, logger="farna.launcher.upgrade"),
+            patch("farna.launcher.upgrade.subprocess.run"),
         ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
 
         fallback_errors = [
             record.getMessage()
             for record in caplog.records
-            if record.name == "modulo.launcher.upgrade" and record.levelno == logging.ERROR
+            if record.name == "farna.launcher.upgrade" and record.levelno == logging.ERROR
         ]
         assert any("unit_restart_best_effort_failed" in m for m in fallback_errors)
 

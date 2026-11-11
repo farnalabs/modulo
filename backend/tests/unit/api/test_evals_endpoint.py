@@ -12,13 +12,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Select
 
-import modulo.api.routes.evals as evals_routes
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
-from modulo.settings import Settings, get_settings
+import farna.api.routes.evals as evals_routes
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session, make_empty_execute_result
 
 _VALID_32 = "a" * 32
@@ -68,7 +68,7 @@ def _make_result(scalar_one_value=None, scalar_value=None, all_value=None) -> Ma
 
 class TestEvalDefinitionJudgeDisplay:
     def test_typed_judge_exposes_the_composed_display(self) -> None:
-        from modulo.api.routes.evals import _eval_def_to_dict
+        from farna.api.routes.evals import _eval_def_to_dict
 
         row = _make_eval_def(
             eval_type="model_judge",
@@ -88,7 +88,7 @@ class TestEvalDefinitionJudgeDisplay:
         assert "System One" not in body["judge"]["display"]
 
     def test_legacy_judge_exposes_the_legacy_display(self) -> None:
-        from modulo.api.routes.evals import _eval_def_to_dict
+        from farna.api.routes.evals import _eval_def_to_dict
 
         row = _make_eval_def(
             eval_type="model_judge",
@@ -102,7 +102,7 @@ class TestEvalDefinitionJudgeDisplay:
 
 class TestEvalDefinitionGuardrailMasking:
     def test_pre_version_raw_without_config_json_is_untouched(self) -> None:
-        from modulo.api.routes.evals import _eval_def_to_dict
+        from farna.api.routes.evals import _eval_def_to_dict
 
         row = _make_eval_def(
             eval_type="guardrail",
@@ -116,7 +116,7 @@ class TestEvalDefinitionGuardrailMasking:
         assert body["pre_version_raw"] == {"other": "value"}
 
     def test_non_guardrail_row_is_not_masked(self) -> None:
-        from modulo.api.routes.evals import _eval_def_to_dict
+        from farna.api.routes.evals import _eval_def_to_dict
 
         row = _make_eval_def(eval_type="regex", config_json={"pattern": r"\d+"})
 
@@ -1224,7 +1224,7 @@ class TestInsertEvalDefinitionBindingViolation:
     async def test_insert_binding_violation_returns_400(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.evals import _insert_eval_definition
+        from farna.api.routes.evals import _insert_eval_definition
 
         session = _make_mock_session()
         principal = MagicMock()

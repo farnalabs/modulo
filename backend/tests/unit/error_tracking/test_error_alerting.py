@@ -9,10 +9,10 @@ import pytest
 from fastapi import FastAPI
 from pydantic import ValidationError
 
-from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert, _CooldownKey
-from modulo.db.models.error_notification_rule import ErrorNotificationRule
+from farna.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.error_tracking.alerting import AlertEngine, TriggeredAlert, _CooldownKey
+from farna.db.models.error_notification_rule import ErrorNotificationRule
 from tests.unit.api.plan_stubs import all_features
 from tests.unit.error_tracking._factories import make_rule as _make_rule
 from tests.unit.error_tracking._factories import make_session as _make_session
@@ -25,7 +25,7 @@ _RULE_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 
 def _make_rules_app_with_count(rule_count: int) -> FastAPI:
     """Build the notification-rules router against a session reporting *rule_count* existing rules."""
-    from modulo.api.routes.error_notification_rules import router as rules_router
+    from farna.api.routes.error_notification_rules import router as rules_router
 
     app = FastAPI()
     app.include_router(rules_router)
@@ -53,8 +53,8 @@ def _make_rules_app_with_count(rule_count: int) -> FastAPI:
             org_role="admin",
         )
 
-    from modulo.api.dependencies import get_db_session, get_plan_context
-    from modulo.auth.dependencies import get_current_user
+    from farna.api.dependencies import get_db_session, get_plan_context
+    from farna.auth.dependencies import get_current_user
 
     app.dependency_overrides[get_current_user] = _override_user
     app.dependency_overrides[get_db_session] = _override_db
@@ -331,7 +331,7 @@ class TestAlertEngineCooldownErrorPaths:
 
         engine._get_last_fired = _boom  # type: ignore[assignment]
 
-        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+        with caplog.at_level("ERROR", logger="farna.core.error_tracking.alerting"):
             alerts = await engine.evaluate(
                 org_id=_ORG_ID,
                 session=session,
@@ -354,7 +354,7 @@ class TestAlertEngineCooldownErrorPaths:
 
         engine._set_last_fired = _boom  # type: ignore[assignment]
 
-        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+        with caplog.at_level("ERROR", logger="farna.core.error_tracking.alerting"):
             alerts = await engine.evaluate(
                 org_id=_ORG_ID,
                 session=session,
@@ -404,7 +404,7 @@ class TestAlertEngineCooldownErrorPaths:
 
         engine = AlertEngine(redis_client=redis)
 
-        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+        with caplog.at_level("ERROR", logger="farna.core.error_tracking.alerting"):
             last_fired = await engine._get_last_fired(_CooldownKey(org_id=_ORG_ID, rule_id=_RULE_ID, fingerprint="abc"))
 
         assert last_fired is None
@@ -416,7 +416,7 @@ class TestAlertEngineCooldownErrorPaths:
 
         engine = AlertEngine(redis_client=redis)
 
-        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+        with caplog.at_level("ERROR", logger="farna.core.error_tracking.alerting"):
             await engine._set_last_fired(_CooldownKey(org_id=_ORG_ID, rule_id=_RULE_ID, fingerprint="abc"), 100.0)
 
         assert any("alert.cooldown_redis_set_failed" in rec.message for rec in caplog.records)
@@ -438,8 +438,8 @@ class TestDispatchAll:
         session = _make_session()
 
         with (
-            patch("modulo.core.error_tracking.alerting.record_error_alert") as mock_record,
-            patch("modulo.core.error_tracking.alerting.dispatch_alert", new=AsyncMock()) as mock_dispatch,
+            patch("farna.core.error_tracking.alerting.record_error_alert") as mock_record,
+            patch("farna.core.error_tracking.alerting.dispatch_alert", new=AsyncMock()) as mock_dispatch,
         ):
             await engine.dispatch_all(_ORG_ID, [alert], session)
 
@@ -461,12 +461,12 @@ class TestDispatchAll:
         session = _make_session()
 
         with (
-            patch("modulo.core.error_tracking.alerting.record_error_alert") as mock_record,
+            patch("farna.core.error_tracking.alerting.record_error_alert") as mock_record,
             patch(
-                "modulo.core.error_tracking.alerting.dispatch_alert",
+                "farna.core.error_tracking.alerting.dispatch_alert",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ),
-            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"),
+            caplog.at_level("ERROR", logger="farna.core.error_tracking.alerting"),
         ):
             await engine.dispatch_all(_ORG_ID, [alert], session)
 

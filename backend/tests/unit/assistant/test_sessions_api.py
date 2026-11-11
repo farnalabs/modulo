@@ -14,12 +14,12 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_mock_session
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.assistant.config_service import AssistantConfig
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.assistant.config_service import AssistantConfig
+from farna.settings import Settings, get_settings
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -102,8 +102,8 @@ class TestCreateSession:
         created: dict[str, Any] = {}
 
         with (
-            patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.assistant.ChatSession", side_effect=_make_chat_session(created)),
+            patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.assistant.ChatSession", side_effect=_make_chat_session(created)),
         ):
             resp = client.post(
                 "/api/v1/assistant/sessions",
@@ -124,9 +124,9 @@ class TestCreateSession:
         created: dict[str, Any] = {}
 
         with (
-            patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.assistant.AssistantConfigService") as mock_svc,
-            patch("modulo.api.routes.assistant.ChatSession", side_effect=_make_chat_session(created)),
+            patch("farna.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.assistant.AssistantConfigService") as mock_svc,
+            patch("farna.api.routes.assistant.ChatSession", side_effect=_make_chat_session(created)),
         ):
             mock_svc.return_value.get_config = AsyncMock(
                 return_value=AssistantConfig(default_provider="opencode", default_model="")

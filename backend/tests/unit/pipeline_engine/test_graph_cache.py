@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.core.pipeline_engine import graph_cache as _graph_cache
-from modulo.core.pipeline_engine.graph_cache import (
+from farna.core.pipeline_engine import graph_cache as _graph_cache
+from farna.core.pipeline_engine.graph_cache import (
     _CACHE,
     _CACHE_LOCK,
     _MAX_SIZE,
@@ -23,7 +23,7 @@ from modulo.core.pipeline_engine.graph_cache import (
     get_or_compile,
     struct_hash_with_eval_defs,
 )
-from modulo.core.pipeline_engine.node_runner import _connector_inputs
+from farna.core.pipeline_engine.node_runner import _connector_inputs
 
 
 @pytest.fixture(autouse=True)
@@ -161,7 +161,7 @@ def test_evict_removes_all_node_timeout_variants():
 
 def test_port_topology_hash_forces_recompile():
     """FAR-416 / F1: a distinct port topology must recompile, not serve a stale graph."""
-    from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
+    from farna.core.pipeline_engine.port_resolver import compute_port_topology_hash
 
     pid, sid = uuid.uuid4(), uuid.uuid4()
     calls: list[str] = []
@@ -261,7 +261,7 @@ def test_node_null_timeout_uses_pipeline_default():
         "nodes": [{"id": "node-a", "role": None, "timeout_seconds": None}],
         "edges": [],
     }
-    with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
+    with patch("farna.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
         mock_make.return_value = lambda state: state
         build_graph_from_json(graph_json, pipeline_node_timeout_seconds=1234)
         _, kwargs = mock_make.call_args
@@ -274,7 +274,7 @@ def test_node_explicit_timeout_wins_over_pipeline_default():
         "nodes": [{"id": "node-a", "role": None, "timeout_seconds": 77}],
         "edges": [],
     }
-    with patch("modulo.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
+    with patch("farna.core.pipeline_engine.graph_cache.make_node_fn") as mock_make:
         mock_make.return_value = lambda state: state
         build_graph_from_json(graph_json, pipeline_node_timeout_seconds=1234)
         _, kwargs = mock_make.call_args
@@ -754,7 +754,7 @@ def test_queued_waiter_cannot_repopulate_after_eviction():
 
     evict_thread = threading.Thread(target=lambda: evict(pid, sid))
     with patch(
-        "modulo.core.pipeline_engine.graph_cache._advance_invalidation_generation",
+        "farna.core.pipeline_engine.graph_cache._advance_invalidation_generation",
         side_effect=advance_and_signal,
     ):
         evict_thread.start()
@@ -804,7 +804,7 @@ def test_inner_cache_check_returns_prepopulated_value():
             pass
 
     race_cache = _RaceCache()
-    with patch("modulo.core.pipeline_engine.graph_cache._CACHE", race_cache):
+    with patch("farna.core.pipeline_engine.graph_cache._CACHE", race_cache):
         result = get_or_compile(pid, sid, lambda: "factory-value")
     assert result == "race-value"
     assert race_cache.gets == 2
@@ -881,7 +881,7 @@ def test_connector_node_routes_its_binding_to_the_connector_fn():
     sentinel = object()
 
     with patch(
-        "modulo.core.pipeline_engine.graph_cache.make_connector_fn",
+        "farna.core.pipeline_engine.graph_cache.make_connector_fn",
         return_value=sentinel,
     ) as make_connector:
         node_fn = _make_node_fn(node_def, timeout=30, session_factory=None, single_sandbox_node=False)
@@ -990,7 +990,7 @@ def _eval_def(
     org_id: uuid.UUID | None = None,
     pipeline_id: uuid.UUID | None = None,
 ) -> Any:
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     return EvalDefDTO(
         id=eval_id or uuid.uuid4(),
@@ -1078,7 +1078,7 @@ def _predicted_gate_nodes(graph_json: dict[str, Any]) -> set[str]:
     inserts, otherwise a desync silently reopens the no-pause hole §3.3
     exists to close.
     """
-    from modulo.core.pipeline_engine.graph_cache import (
+    from farna.core.pipeline_engine.graph_cache import (
         _group_forwarding_edges,
         _make_review_id,
         classify_source_dispatch,
@@ -1198,7 +1198,7 @@ def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
     classifier (not re-state the precedence). If a future edit re-implements
     the dispatch chain inside ``_effective_gate_edges_for_source``, this fails
     and the two sources of truth are forced back together."""
-    from modulo.core.pipeline_engine.graph_cache import (
+    from farna.core.pipeline_engine.graph_cache import (
         SourceDispatch,
         _effective_gate_edges_for_source,
     )
@@ -1212,7 +1212,7 @@ def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
         gate_edges=[sentinel_edge],
     )
     with patch(
-        "modulo.core.pipeline_engine.graph_cache.classify_source_dispatch",
+        "farna.core.pipeline_engine.graph_cache.classify_source_dispatch",
         return_value=dispatch,
     ) as classifier:
         result = _effective_gate_edges_for_source([sentinel_edge], {"node_type": "agent"})
@@ -1228,7 +1228,7 @@ def test_effective_gate_edges_delegates_to_the_shared_classifier() -> None:
 
 def _human_mode_dto(node_id: str, *, mode: str = "human") -> Any:
     """A governed EvalDefDTO whose governing gate carries *mode*."""
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     return EvalDefDTO(
         id=uuid.uuid4(),
@@ -1268,7 +1268,7 @@ def test_validate_human_mode_returns_when_no_eval_is_human_governed() -> None:
 def test_validate_human_mode_rejects_a_human_eval_with_no_gate_edge() -> None:
     """A human-governed eval whose node has no edge compiling an HITL gate
     would never be decided (the silent no-decision hole) — fail closed."""
-    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+    from farna.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
 
     human = _human_mode_dto("node-a", mode="human")
 
@@ -1283,7 +1283,7 @@ def test_validate_human_mode_rejects_a_human_eval_with_no_gate_edge() -> None:
 def test_validate_human_mode_rejects_two_gate_edges() -> None:
     """An HITL-typed source with two normal edges compiles TWO gates for one
     evaluation — two interrupts for a single decision. Fail closed."""
-    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+    from farna.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
 
     human = _human_mode_dto("node-a", mode="human")
     nodes = [
@@ -1325,7 +1325,7 @@ def test_validate_human_mode_rejects_a_falsy_human_only_opt_out() -> None:
     """``human_only`` resolved falsy (``""`` here — the runtime's
     ``human_only_effective`` treats any falsy value as opt-out) is
     definitionally incompatible with a human-decided gate — fail closed."""
-    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+    from farna.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
 
     human = _human_mode_dto("node-a", mode="human")
     opted_out_edge = {
@@ -1348,7 +1348,7 @@ def test_validate_human_mode_reads_node_level_config_when_the_edge_has_none() ->
     edges at compile time; when the edge carries no config the validator must
     validate the STAMP SOURCE — a node-level falsy ``human_only`` (the
     Pydantic-model bypass) is rejected the same way."""
-    from modulo.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
+    from farna.core.pipeline_engine.graph_cache import _validate_human_mode_pause_edges
 
     human = _human_mode_dto("node-a", mode="human")
     nodes = [

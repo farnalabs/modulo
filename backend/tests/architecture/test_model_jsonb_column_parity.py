@@ -83,7 +83,7 @@ Two structural invariants are enforced:
    shown, from its named migration's OWN source, to actually ``DROP TABLE`` it —
    so a rename recorded as a drop fails rather than passing the absence check.
 2. **One shared definition** — the ``JSON().with_variant(JSONB(), "postgresql")``
-   expression is constructed exactly once (``modulo.db.models.base.JSONB_COL``,
+   expression is constructed exactly once (``farna.db.models.base.JSONB_COL``,
    plus its ``none_as_null=True`` sibling ``JSONB_COL_NONE_AS_NULL``).
    Enforced over the whole backend source tree (migrations excluded) by AST, so
    a direct ``mapped_column(JSONB())`` or a qualified
@@ -112,12 +112,12 @@ from types import ModuleType
 from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 
-import modulo.db.models  # noqa: F401  (registers every mapper on Base.metadata)
-from modulo.db.models.base import Base
+import farna.db.models  # noqa: F401  (registers every mapper on Base.metadata)
+from farna.db.models.base import Base
 from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parent.parent.parent
-_SRC = _BACKEND / "src" / "modulo"
+_SRC = _BACKEND / "src" / "farna"
 _MIGRATION_PATH = _SRC / "db" / "migrations" / "versions" / "0147_json_to_jsonb_standardize.py"
 _MIGRATIONS_DIR = _SRC / "db" / "migrations"
 _MIGRATION_VERSIONS_DIR = _MIGRATIONS_DIR / "versions"
@@ -578,7 +578,7 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
     )
     extra = {path: lines for path, lines in offenders.items() if path != alias_key}
     assert not extra, (
-        "A JSONB() call outside the shared alias (modulo.db.models.base.JSONB_COL). "
+        "A JSONB() call outside the shared alias (farna.db.models.base.JSONB_COL). "
         f"Import JSONB_COL instead of constructing JSONB locally: {extra}"
     )
 

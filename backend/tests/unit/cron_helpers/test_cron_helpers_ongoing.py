@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 from tests.unit.cron_helpers._helpers import _Begin, _mock_result, _settings
 
 ORG = uuid.uuid4()
@@ -34,7 +34,7 @@ PIPELINE_ID = uuid.uuid4()
 
 def _make_trigger(**overrides: Any) -> MagicMock:
     """Trigger-like double with the defaults the top-up reads."""
-    from modulo.db.models.trigger import Trigger
+    from farna.db.models.trigger import Trigger
 
     defaults: dict[str, Any] = {
         "id": TRIGGER_ID,
@@ -172,7 +172,7 @@ async def _run_topup(
         patch.object(ch, "_count_ongoing_runs", new_callable=AsyncMock, return_value=in_flight),
         patch.object(ch, "_org_is_paused_degraded", new_callable=AsyncMock, return_value=paused),
         patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock) as log_event,
-        patch("modulo.db.crud.run.create_run", create_run),
+        patch("farna.db.crud.run.create_run", create_run),
     ):
         created = await ch._ongoing_topup(
             session,
@@ -403,7 +403,7 @@ class TestOngoingTopup:
         """TOCTOU race backstop: the org pauses MID top-up -> the loop stops, the
         runs already created are returned (they dispatch below), no SAQ retry
         storm from an unhandled exception."""
-        from modulo.core.exceptions import TriggersPausedError
+        from farna.core.exceptions import TriggersPausedError
 
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=5))
@@ -421,7 +421,7 @@ class TestOngoingTopup:
         SAME way the pause backstop does — the loop stops, runs already created
         stay, and the refusal lands in the outcome as a typed skip instead of
         escaping as an SAQ job failure on every tick."""
-        from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
+        from farna.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
 
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=5))
@@ -440,7 +440,7 @@ class TestOngoingTopup:
     ) -> None:
         """First refusal (nothing created yet) -> empty result + typed skip and
         NO accepted/on-going TriggerEvent."""
-        from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
+        from farna.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
 
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
@@ -461,7 +461,7 @@ class TestOngoingTopup:
         outcome envelope (outcome=None) — there is nothing to record it in, but
         the top-up job must still return instead of escaping as an SAQ job
         failure on every tick."""
-        from modulo.core.exceptions import PipelineNotRunnableError
+        from farna.core.exceptions import PipelineNotRunnableError
 
         now = datetime.now(UTC)
         session = _RoutedSession(trigger=_make_trigger())
@@ -535,7 +535,7 @@ class TestOngoingSnapshotResolution:
         auto_id = uuid.uuid4()
         session = _RoutedSession(trigger=_make_trigger(config_json={}))
         with patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=SimpleNamespace(id=auto_id),
         ) as auto_create:
@@ -551,7 +551,7 @@ class TestOngoingSnapshotResolution:
         session = _RoutedSession(trigger=_make_trigger(config_json={}))
         outcome: dict[str, Any] = {}
         with patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             return_value=None,
         ) as auto_create:
@@ -624,7 +624,7 @@ class TestDispatchOngoingRuns:
         with (
             patch.object(ch, "get_settings", return_value=_settings()),
             patch(
-                "modulo.core.dispatch.dispatch_run",
+                "farna.core.dispatch.dispatch_run",
                 new_callable=AsyncMock,
                 side_effect=[RuntimeError("redis down"), ("ok", "job-2"), ("ok", "job-3")],
             ),
@@ -640,7 +640,7 @@ class TestDispatchOngoingRuns:
     async def test_empty_run_list_returns_empty(self) -> None:
         with (
             patch.object(ch, "get_settings", return_value=_settings()),
-            patch("modulo.core.dispatch.dispatch_run", new_callable=AsyncMock) as dispatch,
+            patch("farna.core.dispatch.dispatch_run", new_callable=AsyncMock) as dispatch,
         ):
             outcomes = await ch._dispatch_ongoing_runs(None, ORG, [])
         assert outcomes == []
@@ -679,7 +679,7 @@ class TestFireOngoingTrigger:
             patch.object(ch, "_count_ongoing_runs", new_callable=AsyncMock, side_effect=fake_count),
             patch.object(ch, "_org_is_paused_degraded", new_callable=AsyncMock, return_value=False),
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, side_effect=_make_run_side_effect),
+            patch("farna.db.crud.run.create_run", new_callable=AsyncMock, side_effect=_make_run_side_effect),
             patch.object(ch, "AsyncRedis") as redis_cls,
             patch.object(ch, "_dispatch_ongoing_runs", new_callable=AsyncMock, side_effect=fake_dispatch),
         ):
@@ -723,7 +723,7 @@ class TestFireOngoingTrigger:
             patch.object(ch, "_count_ongoing_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_org_is_paused_degraded", new_callable=AsyncMock, return_value=False),
             patch.object(ch, "_log_ongoing_event", new_callable=AsyncMock),
-            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, side_effect=_make_run_side_effect),
+            patch("farna.db.crud.run.create_run", new_callable=AsyncMock, side_effect=_make_run_side_effect),
             patch.object(ch, "AsyncRedis") as redis_cls,
             patch.object(ch, "_dispatch_ongoing_runs", new_callable=AsyncMock, return_value=[]),
         ):
@@ -859,12 +859,10 @@ class TestAdvanceOngoingNextFire:
 class TestSaqWorkerWiring:
     @pytest.mark.asyncio
     async def test_wrapper_delegates_to_cron_helpers(self) -> None:
-        from modulo.core import saq_worker as sw
+        from farna.core import saq_worker as sw
 
         summary = {"status": "fired", "created": 1, "dispatched": [], "run_ids": [str(uuid.uuid4())]}
-        with patch(
-            "modulo.core.cron_helpers.fire_ongoing_trigger", new_callable=AsyncMock, return_value=summary
-        ) as chf:
+        with patch("farna.core.cron_helpers.fire_ongoing_trigger", new_callable=AsyncMock, return_value=summary) as chf:
             result = await sw.fire_ongoing_trigger(
                 _ctx={},
                 trigger_id=str(TRIGGER_ID),
@@ -876,7 +874,7 @@ class TestSaqWorkerWiring:
         assert result == summary
 
     def test_runs_functions_registers_ongoing(self) -> None:
-        from modulo.core import saq_worker as sw
+        from farna.core import saq_worker as sw
 
         names = [f[0] for f in sw._runs_functions()]
-        assert "modulo.core.saq_worker.fire_ongoing_trigger" in names
+        assert "farna.core.saq_worker.fire_ongoing_trigger" in names

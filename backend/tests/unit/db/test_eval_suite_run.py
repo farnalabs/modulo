@@ -27,7 +27,7 @@ import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
-from modulo.core.eval_engine.suite_run import (
+from farna.core.eval_engine.suite_run import (
     SuiteRunError,
     assert_eval_notification_isolated,
     build_baseline_tuple,
@@ -40,14 +40,14 @@ from modulo.core.eval_engine.suite_run import (
     suite_alert_metrics,
     suite_cumulative_exceeded,
 )
-from modulo.db.models import (
+from farna.db.models import (
     Base,
     EvalResult,
     SuiteRun,
     compute_definition_checksum,
     compute_scenario_signature,
 )
-from modulo.db.models.eval_suite_run import (
+from farna.db.models.eval_suite_run import (
     IllegalStateTransitionError,
     OptimisticLockError,
     SuiteRunState,
@@ -55,7 +55,7 @@ from modulo.db.models.eval_suite_run import (
     is_terminal,
     transition_state,
 )
-from modulo.db.rls import _inject_tenant_filter
+from farna.db.rls import _inject_tenant_filter
 
 _TENANT_KEY = "org_id"
 _MIGRATION_PATH = (
@@ -132,7 +132,7 @@ def test_suite_runs_columns() -> None:
 
 
 def test_suite_runs_is_org_scoped() -> None:
-    from modulo.db.models.base import OrgScoped
+    from farna.db.models.base import OrgScoped
 
     assert issubclass(SuiteRun, OrgScoped)
 
@@ -456,7 +456,7 @@ def test_pass_rate_by_eval_type_never_cross_combines() -> None:
 
 
 def test_pass_rate_excludes_errored() -> None:
-    from modulo.core.eval_engine.suite_run import suite_pass_rate
+    from farna.core.eval_engine.suite_run import suite_pass_rate
 
     results = [
         EvalResult(run_id=None, eval_id=uuid.uuid4(), passed=True),

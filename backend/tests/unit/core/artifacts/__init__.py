@@ -1,1 +1,1 @@
-"""Unit tests for modulo.core.artifacts."""
+"""Unit tests for farna.core.artifacts."""

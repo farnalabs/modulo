@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager import sweep_alarm
-from modulo.core.hitl_manager.sweep_alarm import count_recent_approves, maybe_alarm_approve_sweep
+from farna.core.hitl_manager import sweep_alarm
+from farna.core.hitl_manager.sweep_alarm import count_recent_approves, maybe_alarm_approve_sweep
 
 
 @pytest.mark.asyncio
@@ -48,9 +48,9 @@ def test_schedule_webhook_without_running_loop(caplog):
 @pytest.mark.asyncio
 async def test_webhook_body_is_failure_isolated():
     with (
-        patch("modulo.core.notifier.Notifier", side_effect=RuntimeError("notifier down")),
-        patch("modulo.db.session.get_shared_engine", return_value=MagicMock()),
-        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="secret")),
+        patch("farna.core.notifier.Notifier", side_effect=RuntimeError("notifier down")),
+        patch("farna.db.session.get_shared_engine", return_value=MagicMock()),
+        patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="secret")),
     ):
         await sweep_alarm._run_sweep_webhook(uuid.uuid4(), {"approve_count": 6})
     assert not sweep_alarm._PENDING_SWEEP_TASKS

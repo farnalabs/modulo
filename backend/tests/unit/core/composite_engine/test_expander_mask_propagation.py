@@ -25,19 +25,19 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modulo.api.middleware.sensitive_mask import resolve_and_reject_mask_sentinels
-from modulo.core.composite_engine.expander import (
+from farna.api.middleware.sensitive_mask import resolve_and_reject_mask_sentinels
+from farna.core.composite_engine.expander import (
     MaskedCredentialExpansionError,
     expand_composite_node,
     expand_composites_in_graph,
 )
-from modulo.core.graph_validator.mask_sentinel import (
+from farna.core.graph_validator.mask_sentinel import (
     GRAPH_NODE_SECRET_FIELDS,
     MASK_SENTINEL_ISSUE_CODE,
 )
-from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
-from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
+from farna.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
 _FAKE_CREDENTIAL = "FAKE_CREDENTIAL_FOR_TEST"
 
@@ -74,7 +74,7 @@ def _bind_lock_connection(session: AsyncMock) -> Any:
     engine = MagicMock(spec=AsyncEngine)
     engine.connect = AsyncMock(return_value=lock_conn)
     session.bind = engine
-    return patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
+    return patch("farna.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=engine)
 
 
 def _template_mock(template_id: uuid.UUID, sub_graph: dict[str, Any]) -> MagicMock:

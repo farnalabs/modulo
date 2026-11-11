@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from starlette.routing import Mount
 from starlette.testclient import TestClient
 
-from modulo.api.main import _init_once_mount_spa
+from farna.api.main import _init_once_mount_spa
 
 ASSET_NAME = "app-a1b2c3d4.js"
 

@@ -46,9 +46,9 @@ def get_run(run_id, client, request):
     if run_id.startswith("{"):
         run_id = request.node._run_id
     with (
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.set_rls_org"),
         patch(
-            "modulo.api.routes.runs._do_get_run_with_gate",
+            "farna.api.routes.runs._do_get_run_with_gate",
             return_value=(
                 make_mock_run(
                     id=run_id,
@@ -58,10 +58,10 @@ def get_run(run_id, client, request):
                 False,
             ),
         ),
-        patch("modulo.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal("0.00"), 0)),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", return_value=None),
+        patch("farna.api.routes.runs._do_get_child_run_rollup", return_value=(Decimal("0.00"), 0)),
+        patch("farna.api.routes.runs._do_get_otel_endpoint", return_value=None),
         patch(
-            "modulo.api.routes.runs._do_get_run_observability",
+            "farna.api.routes.runs._do_get_run_observability",
             return_value=(None, None, None),
         ),
     ):
@@ -96,7 +96,7 @@ def _failed_run_blobs(request):
     every node AFTER it has no entry at all (so the endpoint 404s). The shape is
     fixed by the Given, never by the value an individual step asserts.
     """
-    from modulo.db.crud.run_node_outputs import RunBlobs
+    from farna.db.crud.run_node_outputs import RunBlobs
 
     failed = request.node._failed_node
     outputs = {str(n): {"node": n, "status": "completed", "result": f"output-{n}"} for n in range(1, failed)}
@@ -114,7 +114,7 @@ def _get_node_output(request, node):
     """Drive the REAL ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` route.
 
     Only the route module's DB seams are patched — ``set_rls_org``,
-    ``get_run`` and ``read_run_blobs`` (imported into ``modulo.api.routes.runs``
+    ``get_run`` and ``read_run_blobs`` (imported into ``farna.api.routes.runs``
     at runs.py:2521-2527) — so the route body, its response model, the
     derived-telemetry fallback and its 404 all run for real.
     """
@@ -122,9 +122,9 @@ def _get_node_output(request, node):
     run_id = request.node._run_id
     run = make_mock_run(id=run_id, status="failed", error_detail="Node 2: Connection timeout")
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
-        patch("modulo.api.routes.runs.read_run_blobs", new=AsyncMock(return_value=_failed_run_blobs(request))),
+        patch("farna.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("farna.api.routes.runs.read_run_blobs", new=AsyncMock(return_value=_failed_run_blobs(request))),
     ):
         return client.get(f"/api/v1/runs/{run_id}/nodes/{node}/output")
 
@@ -184,9 +184,9 @@ def check_response_terminal_status(request):
     A Run has a terminal ``status`` (and, on failure, an ``error_detail``) —
     this asserts the real payload the ``GET /runs/{id}`` route produced, read
     against ``TERMINAL_STATUSES`` from the Run model
-    (modulo/db/models/run.py), rather than a value the step itself set.
+    (farna/db/models/run.py), rather than a value the step itself set.
     """
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.db.models.run import TERMINAL_STATUSES
 
     data = request.node._resp.json()
     assert data.get("status") in TERMINAL_STATUSES, f"Expected a terminal run status, got {data.get('status')!r}"
@@ -234,8 +234,8 @@ def _write_failed_run_audit(request) -> dict:
     when production still classifies it terminal. Returns the event kwargs the
     production writer handed to ``append_audit_event``.
     """
-    from modulo.core.audit_logger import background
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.core.audit_logger import background
+    from farna.db.models.run import TERMINAL_STATUSES
 
     run = make_mock_run(id=request.node._run_id, status="failed", error_detail="Node 2: Connection timeout")
     run.organisation_id = ORG_ID
@@ -306,9 +306,9 @@ def check_audit_log(request):
     event = _write_failed_run_audit(request)
     client = _active_client(request)
     with (
-        patch("modulo.api.routes.audit.set_rls_org"),
+        patch("farna.api.routes.audit.set_rls_org"),
         patch(
-            "modulo.api.routes.audit.list_audit_events",
+            "farna.api.routes.audit.list_audit_events",
             return_value={
                 "items": [_audit_event_item(event)],
                 "total": 1,
@@ -405,33 +405,33 @@ def _post_recover(request, client):
     node = request.node._recover_node
     input_data = getattr(request.node, "_recover_input_data", _RECOVER_BODY_EMPTY)
 
-    from modulo.core.pipeline_engine.recovery import (
+    from farna.core.pipeline_engine.recovery import (
         ConcurrentRecoveryError,
         NodeAlreadyCompletedError,
         NodeNotFoundInGraphError,
         RecoveryNotAllowedError,
     )
 
-    recover_patch = patch("modulo.api.routes.runs.recover_node", new=AsyncMock(return_value=_recovered_run(request)))
+    recover_patch = patch("farna.api.routes.runs.recover_node", new=AsyncMock(return_value=_recovered_run(request)))
     error = getattr(request.node, "_recover_error", None)
     if error == "node_not_found":
         recover_patch = patch(
-            "modulo.api.routes.runs.recover_node",
+            "farna.api.routes.runs.recover_node",
             new=AsyncMock(side_effect=NodeNotFoundInGraphError(run_id, node)),
         )
     elif error == "already_completed":
         recover_patch = patch(
-            "modulo.api.routes.runs.recover_node",
+            "farna.api.routes.runs.recover_node",
             new=AsyncMock(side_effect=NodeAlreadyCompletedError(run_id, node)),
         )
     elif error == "not_recoverable":
         recover_patch = patch(
-            "modulo.api.routes.runs.recover_node",
+            "farna.api.routes.runs.recover_node",
             new=AsyncMock(side_effect=RecoveryNotAllowedError(run_id, "running")),
         )
     elif error == "concurrent":
         recover_patch = patch(
-            "modulo.api.routes.runs.recover_node",
+            "farna.api.routes.runs.recover_node",
             new=AsyncMock(side_effect=ConcurrentRecoveryError(run_id)),
         )
 
@@ -440,10 +440,10 @@ def _post_recover(request, client):
 
     body = {} if input_data is _RECOVER_BODY_EMPTY or input_data is None else {"input_data": input_data}
     with (
-        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.runs.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.runs.set_rls_user_context", new=AsyncMock()),
         recover_patch,
-        patch("modulo.api.routes.runs.dispatch_run", dispatch_mock),
+        patch("farna.api.routes.runs.dispatch_run", dispatch_mock),
     ):
         resp = client.post(f"/api/v1/runs/{run_id}/nodes/{node}/recover", json=body)
     request.node._resp = resp

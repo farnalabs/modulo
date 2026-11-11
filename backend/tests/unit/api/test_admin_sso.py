@@ -11,13 +11,13 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session
-from modulo.core.feature_flags import PlanContext
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.core.audit_coverage import audit_session
+from farna.core.feature_flags import PlanContext
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -170,7 +170,7 @@ class TestListProviders:
 
     def test_lists_providers(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider()
-        with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
+        with patch("farna.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[mock_provider])):
             resp = client.get(self.URL)
             assert resp.status_code == 200
             data = resp.json()
@@ -180,7 +180,7 @@ class TestListProviders:
             assert data[0]["enabled"] is True
 
     def test_empty_list(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[])):
+        with patch("farna.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[])):
             resp = client.get(self.URL)
             assert resp.status_code == 200
             assert not resp.json()
@@ -194,9 +194,9 @@ class TestListProviders:
         assert resp.status_code == 403
 
     def test_serializes_real_orm_provider_shapes(self) -> None:
-        from modulo.api.routes.admin_sso import SsoProviderResponse
-        from modulo.auth.secret_storage import encrypt_stored_secret
-        from modulo.db.models.sso_provider import SsoProvider
+        from farna.api.routes.admin_sso import SsoProviderResponse
+        from farna.auth.secret_storage import encrypt_stored_secret
+        from farna.db.models.sso_provider import SsoProvider
 
         provider = SsoProvider(
             id=_PROVIDER_ID,
@@ -223,14 +223,14 @@ class TestListProviders:
         assert serialized["client_secret"] == "••••••"
 
     def test_response_coerces_allowed_domains_json_string(self) -> None:
-        from modulo.api.routes.admin_sso import SsoProviderResponse
+        from farna.api.routes.admin_sso import SsoProviderResponse
 
         provider = _make_mock_provider(allowed_domains=json.dumps(["example.com"]))
         response = SsoProviderResponse.model_validate(provider)
         assert response.allowed_domains == ["example.com"]
 
     def test_response_coerces_malformed_allowed_domains_string_to_empty(self) -> None:
-        from modulo.api.routes.admin_sso import SsoProviderResponse
+        from farna.api.routes.admin_sso import SsoProviderResponse
 
         provider = _make_mock_provider(allowed_domains="not-json")
         response = SsoProviderResponse.model_validate(provider)
@@ -245,7 +245,7 @@ class TestCreateProvider:
         # (mode 3) and is rejected with 422 while the flag is off, so this
         # happy-path test uses an allowlisted provider.
         mock_provider = _make_mock_provider(allowed_domains=["example.com"])
-        with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.post(
                 self.URL,
                 json={
@@ -266,7 +266,7 @@ class TestCreateProvider:
             assert data["provider_type"] == "oidc"
 
     def test_422_on_invalid_allowed_domains(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock()) as created:
+        with patch("farna.api.routes.admin_sso.create_provider", new=AsyncMock()) as created:
             resp = client.post(
                 self.URL,
                 json={
@@ -289,7 +289,7 @@ class TestCreateProvider:
             metadata_url="https://idp.example.com/metadata",
             auto_provision=False,
         )
-        with patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.post(
                 self.URL,
                 json={
@@ -330,9 +330,9 @@ class TestCreateProvider:
         # at save time (422) while the operator flag is OFF.
         mock_provider = _make_mock_provider(auto_provision=True, allowed_domains=[])
         with (
-            patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)),
+            patch("farna.api.routes.admin_sso.create_provider", new=AsyncMock(return_value=mock_provider)),
             patch(
-                "modulo.api.routes.admin_sso.resolve_sso_unrestricted_provisioning",
+                "farna.api.routes.admin_sso.resolve_sso_unrestricted_provisioning",
                 new=AsyncMock(return_value=False),
             ),
         ):
@@ -357,13 +357,13 @@ class TestUpdateProvider:
         # FAR-855: the update path validates the MERGED provider state; the
         # returned mock must not look like an unrestricted (mode 3) provider.
         mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.put(self.URL, json={"name": "Updated Name"})
             assert resp.status_code == 200
             assert resp.json()["name"] == "Updated Name"
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=None)):
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=None)):
             resp = client.put(self.URL, json={"name": "Updated Name"})
             assert resp.status_code == 404
 
@@ -373,7 +373,7 @@ class TestUpdateProvider:
 
     def test_update_with_google_preset_derives_url_and_scopes(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
             resp = client.put(self.URL, json={"preset": "google"})
 
         assert resp.status_code == 200
@@ -383,7 +383,7 @@ class TestUpdateProvider:
 
     def test_update_with_custom_preset_leaves_derived_fields_unset(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
             resp = client.put(self.URL, json={"preset": "custom"})
 
         assert resp.status_code == 200
@@ -391,7 +391,7 @@ class TestUpdateProvider:
         assert "scopes" not in upd.await_args.kwargs
 
     def test_update_with_unknown_preset_returns_422(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock()):
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock()):
             resp = client.put(self.URL, json={"preset": "not-a-preset"})
 
         assert resp.status_code == 422
@@ -399,8 +399,8 @@ class TestUpdateProvider:
     def test_update_with_preset_resolving_nothing_leaves_fields_unset(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
         with (
-            patch("modulo.api.routes.admin_sso.resolve_preset", return_value=(None, None)),
-            patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd,
+            patch("farna.api.routes.admin_sso.resolve_preset", return_value=(None, None)),
+            patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd,
         ):
             resp = client.put(self.URL, json={"preset": "google"})
 
@@ -413,12 +413,12 @@ class TestDeleteProvider:
     URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
 
     def test_delete_provider(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=True)):
+        with patch("farna.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=True)):
             resp = client.delete(self.URL)
             assert resp.status_code == 204
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=False)):
+        with patch("farna.api.routes.admin_sso.delete_provider", new=AsyncMock(return_value=False)):
             resp = client.delete(self.URL)
             assert resp.status_code == 404
 
@@ -428,13 +428,13 @@ class TestToggleProvider:
 
     def test_toggle_enabled(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(enabled=False)
-        with patch("modulo.api.routes.admin_sso.toggle_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.toggle_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.put(self.URL)
             assert resp.status_code == 200
             assert resp.json()["enabled"] is False
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.toggle_provider", new=AsyncMock(return_value=None)):
+        with patch("farna.api.routes.admin_sso.toggle_provider", new=AsyncMock(return_value=None)):
             resp = client.put(self.URL)
             assert resp.status_code == 404
 
@@ -453,9 +453,9 @@ class TestTestConnection:
             "scopes_supported": ["openid", "profile", "email"],
         }
         with (
-            patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
+            patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
             patch(
-                "modulo.api.routes.admin_sso._test_oidc_connection",
+                "farna.api.routes.admin_sso._test_oidc_connection",
                 new=AsyncMock(
                     return_value=MagicMock(
                         success=True,
@@ -484,9 +484,9 @@ class TestTestConnection:
             ),
         )
         with (
-            patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
+            patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)),
             patch(
-                "modulo.api.routes.admin_sso._test_saml_connection",
+                "farna.api.routes.admin_sso._test_saml_connection",
                 new=AsyncMock(
                     return_value=MagicMock(
                         success=True,
@@ -506,14 +506,14 @@ class TestTestConnection:
             assert data["success"] is True
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=None)):
+        with patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=None)):
             resp = client.post(self.URL)
             assert resp.status_code == 404
 
 
 class TestOidcConnection:
     async def test_missing_discovery_url(self) -> None:
-        from modulo.api.routes.admin_sso import _test_oidc_connection
+        from farna.api.routes.admin_sso import _test_oidc_connection
 
         provider = _make_mock_provider(discovery_url=None)
         result = await _test_oidc_connection(provider)
@@ -521,18 +521,18 @@ class TestOidcConnection:
         assert "Discovery URL" in result.message
 
     async def test_discovery_fetch_failure(self) -> None:
-        from modulo.api.routes.admin_sso import _test_oidc_connection
+        from farna.api.routes.admin_sso import _test_oidc_connection
 
         provider = _make_mock_provider()
         with (
             patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=httpx.ConnectError("Connection refused"))),
-            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
+            patch("farna.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
         ):
             result = await _test_oidc_connection(provider)
             assert result.success is False
 
     async def test_successful_discovery(self) -> None:
-        from modulo.api.routes.admin_sso import _test_oidc_connection
+        from farna.api.routes.admin_sso import _test_oidc_connection
 
         provider = _make_mock_provider()
         mock_resp = AsyncMock()
@@ -546,7 +546,7 @@ class TestOidcConnection:
         )
         with (
             patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)),
-            patch("modulo.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
+            patch("farna.api.routes.admin_sso.validate_outbound_url_async", new=AsyncMock()),
         ):
             result = await _test_oidc_connection(provider)
             assert result.success is True
@@ -572,7 +572,7 @@ class TestSamlConnection:
     )
 
     async def test_missing_metadata(self) -> None:
-        from modulo.api.routes.admin_sso import _test_saml_connection
+        from farna.api.routes.admin_sso import _test_saml_connection
 
         provider = _make_mock_provider(provider_type="saml", metadata_url=None, metadata_xml=None)
         result = await _test_saml_connection(provider)
@@ -580,7 +580,7 @@ class TestSamlConnection:
         assert "Metadata" in result.message
 
     async def test_successful_parse(self) -> None:
-        from modulo.api.routes.admin_sso import _test_saml_connection
+        from farna.api.routes.admin_sso import _test_saml_connection
 
         provider = _make_mock_provider(provider_type="saml", metadata_xml=self.SAML_METADATA)
         result = await _test_saml_connection(provider)
@@ -590,7 +590,7 @@ class TestSamlConnection:
         assert result.provider_info["sso_url"] == "https://idp.example.com/sso"
 
     async def test_missing_idp_descriptor(self) -> None:
-        from modulo.api.routes.admin_sso import _test_saml_connection
+        from farna.api.routes.admin_sso import _test_saml_connection
 
         bad_xml = (
             '<?xml version="1.0"?>'
@@ -602,7 +602,7 @@ class TestSamlConnection:
         assert "IDPSSODescriptor" in result.message
 
     async def test_invalid_xml(self) -> None:
-        from modulo.api.routes.admin_sso import _test_saml_connection
+        from farna.api.routes.admin_sso import _test_saml_connection
 
         provider = _make_mock_provider(provider_type="saml", metadata_xml="not xml at all")
         result = await _test_saml_connection(provider)
@@ -624,7 +624,7 @@ class TestEnvVarSeeding:
         return factory_mock
 
     async def test_seeds_from_env_var(self) -> None:
-        from modulo.api.main import _seed_sso_providers
+        from farna.api.main import _seed_sso_providers
 
         settings = _make_settings()
         mock_session = _make_mock_session()
@@ -633,9 +633,9 @@ class TestEnvVarSeeding:
         mock_session.execute.return_value.scalar_one_or_none.side_effect = [None, MagicMock()]
 
         with (
-            patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
             patch(
-                "modulo.api.dependencies.get_or_create_session_factory",
+                "farna.api.dependencies.get_or_create_session_factory",
                 return_value=self._make_factory_mock(mock_session),
             ),
         ):
@@ -650,16 +650,16 @@ class TestEnvVarSeeding:
             assert Fernet(_FERNET_KEY.encode()).decrypt(added.client_secret).decode() == "google-client-secret"
 
     async def test_skips_if_providers_exist(self) -> None:
-        from modulo.api.main import _seed_sso_providers
+        from farna.api.main import _seed_sso_providers
 
         settings = _make_settings()
         mock_session = _make_mock_session()
         mock_session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=object()))
 
         with (
-            patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+            patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
             patch(
-                "modulo.api.dependencies.get_or_create_session_factory",
+                "farna.api.dependencies.get_or_create_session_factory",
                 return_value=self._make_factory_mock(mock_session),
             ),
         ):
@@ -667,14 +667,14 @@ class TestEnvVarSeeding:
             mock_session.add.assert_not_called()
 
     async def test_skips_if_empty_env_var(self) -> None:
-        from modulo.api.main import _seed_sso_providers
+        from farna.api.main import _seed_sso_providers
 
         settings = _make_settings()
         settings.modulo_oidc_providers = "[]"
 
         with (
-            patch("modulo.api.dependencies.get_or_create_engine") as mock_engine,
-            patch("modulo.api.dependencies.get_or_create_session_factory") as mock_factory,
+            patch("farna.api.dependencies.get_or_create_engine") as mock_engine,
+            patch("farna.api.dependencies.get_or_create_session_factory") as mock_factory,
         ):
             await _seed_sso_providers(settings)
 
@@ -697,7 +697,7 @@ class TestSetGroupMappings:
                 {"idp_group": "viewers", "team_id": "00000000-0000-0000-0000-000000000030", "team_role": "viewer"},
             ]
         )
-        with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=mock_provider)):
             resp = client.put(
                 self.URL,
                 json={
@@ -722,7 +722,7 @@ class TestSetGroupMappings:
             assert data["mappings"][0]["team_role"] == "operator"
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=None)):
+        with patch("farna.api.routes.admin_sso.set_group_mappings", new=AsyncMock(return_value=None)):
             resp = client.put(self.URL, json={"mappings": []})
             assert resp.status_code == 404
 
@@ -748,7 +748,7 @@ class TestGetGroupMappings:
                 },
             ]
         )
-        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.get(self.URL)
             assert resp.status_code == 200
             data = resp.json()
@@ -757,13 +757,13 @@ class TestGetGroupMappings:
 
     def test_empty_mappings(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(group_mappings=[])
-        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
+        with patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=mock_provider)):
             resp = client.get(self.URL)
             assert resp.status_code == 200
             assert resp.json() == {"mappings": []}
 
     def test_404_on_missing(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=None)):
+        with patch("farna.api.routes.admin_sso.get_provider", new=AsyncMock(return_value=None)):
             resp = client.get(self.URL)
             assert resp.status_code == 404
 
@@ -778,7 +778,7 @@ class TestGetGroupMappings:
 
 class TestApplyGroupMappings:
     async def test_adds_new_memberships(self) -> None:
-        from modulo.auth.sso import apply_group_mappings
+        from farna.auth.sso import apply_group_mappings
 
         session = _make_mock_session()
         session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
@@ -795,7 +795,7 @@ class TestApplyGroupMappings:
         assert len(add_calls) == 1
 
     async def test_skips_non_matching_groups(self) -> None:
-        from modulo.auth.sso import apply_group_mappings
+        from farna.auth.sso import apply_group_mappings
 
         session = _make_mock_session()
 
@@ -811,7 +811,7 @@ class TestApplyGroupMappings:
         assert not add_calls
 
     async def test_skips_empty_mappings(self) -> None:
-        from modulo.auth.sso import apply_group_mappings
+        from farna.auth.sso import apply_group_mappings
 
         session = _make_mock_session()
 
@@ -824,7 +824,7 @@ class TestApplyGroupMappings:
         assert not add_calls
 
     async def test_updates_existing_membership_role(self) -> None:
-        from modulo.auth.sso import apply_group_mappings
+        from farna.auth.sso import apply_group_mappings
 
         session = _make_mock_session()
         existing = MagicMock()
@@ -847,7 +847,7 @@ class TestAllowedDomainsResponseCoercion:
     """FAR-855: SsoProviderResponse coerces legacy/NULL string transports to []."""
 
     def _validate(self, allowed_domains: object) -> list:
-        from modulo.api.routes.admin_sso import SsoProviderResponse
+        from farna.api.routes.admin_sso import SsoProviderResponse
 
         provider = _make_mock_provider(allowed_domains=allowed_domains)
         provider.id = _PROVIDER_ID
@@ -875,7 +875,7 @@ class TestUpdateAllowedDomainsValidation:
 
     def test_422_on_invalid_allowed_domains(self, client: TestClient) -> None:
         mock_provider = _make_mock_provider(name="Updated Name", auto_provision=False)
-        with patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
+        with patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock(return_value=mock_provider)) as upd:
             resp = client.put(self.URL, json={"allowed_domains": ["@bad"]})
         assert resp.status_code == 422
         assert "allowed_domains" in resp.json()["detail"]
@@ -923,10 +923,10 @@ class TestSsoClientSecretVaultReference:
         vault = _StubSecretVault({"kv/idp": "resolved-idp-secret"})
         with (
             patch(
-                "modulo.api.routes.admin_sso.create_provider",
+                "farna.api.routes.admin_sso.create_provider",
                 new=AsyncMock(return_value=mock_provider),
             ) as created,
-            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+            patch("farna.api.routes.admin_sso.create_secrets_backend", return_value=vault),
         ):
             resp = client.post(
                 self.CREATE_URL,
@@ -949,10 +949,10 @@ class TestSsoClientSecretVaultReference:
         vault = _StubSecretVault({})
         with (
             patch(
-                "modulo.api.routes.admin_sso.create_provider",
+                "farna.api.routes.admin_sso.create_provider",
                 new=AsyncMock(return_value=mock_provider),
             ) as created,
-            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+            patch("farna.api.routes.admin_sso.create_secrets_backend", return_value=vault),
         ):
             resp = client.post(
                 self.CREATE_URL,
@@ -972,8 +972,8 @@ class TestSsoClientSecretVaultReference:
     def test_create_missing_vault_key_fails_closed(self, client: TestClient) -> None:
         vault = _StubSecretVault({})
         with (
-            patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock()) as created,
-            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+            patch("farna.api.routes.admin_sso.create_provider", new=AsyncMock()) as created,
+            patch("farna.api.routes.admin_sso.create_secrets_backend", return_value=vault),
         ):
             resp = client.post(
                 self.CREATE_URL,
@@ -997,10 +997,10 @@ class TestSsoClientSecretVaultReference:
         vault = _StubSecretVault({"kv/idp": "rotated-idp-secret"})
         with (
             patch(
-                "modulo.api.routes.admin_sso.update_provider",
+                "farna.api.routes.admin_sso.update_provider",
                 new=AsyncMock(return_value=mock_provider),
             ) as updated,
-            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+            patch("farna.api.routes.admin_sso.create_secrets_backend", return_value=vault),
         ):
             resp = client.put(self.UPDATE_URL, json={"client_secret": "secretref://kv/idp"})
         assert resp.status_code == 200
@@ -1010,8 +1010,8 @@ class TestSsoClientSecretVaultReference:
     def test_update_missing_vault_key_fails_closed(self, client: TestClient) -> None:
         vault = _StubSecretVault({})
         with (
-            patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock()) as updated,
-            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+            patch("farna.api.routes.admin_sso.update_provider", new=AsyncMock()) as updated,
+            patch("farna.api.routes.admin_sso.create_secrets_backend", return_value=vault),
         ):
             resp = client.put(self.UPDATE_URL, json={"client_secret": "secretref://kv/missing"})
         assert resp.status_code == 422

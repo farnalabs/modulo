@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud.run import get_run_api_key_ttl_seconds
+from farna.db.crud.run import get_run_api_key_ttl_seconds
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.uuid4()
@@ -51,7 +51,7 @@ async def test_get_run_api_key_ttl_uses_settings_floor() -> None:
     1800. If the function hardcodes 900 the result is 900 and this fails.
     """
     settings = SimpleNamespace(run_api_key_default_ttl_seconds=1800)
-    with patch("modulo.settings.get_settings", return_value=settings):
+    with patch("farna.settings.get_settings", return_value=settings):
         ttl = await get_run_api_key_ttl_seconds(_session_factory(), _ORG_ID, node_timeout_seconds=30)
     assert ttl == 1800
 
@@ -60,7 +60,7 @@ async def test_get_run_api_key_ttl_uses_settings_floor() -> None:
 async def test_get_run_api_key_ttl_floor_still_allows_node_timeout_to_win() -> None:
     """The setting is a FLOOR — a larger node-timeout term still raises the TTL."""
     settings = SimpleNamespace(run_api_key_default_ttl_seconds=900)
-    with patch("modulo.settings.get_settings", return_value=settings):
+    with patch("farna.settings.get_settings", return_value=settings):
         ttl = await get_run_api_key_ttl_seconds(_session_factory(), _ORG_ID, node_timeout_seconds=2000)
     assert ttl == 2300  # min(max(900, 2000+300), 3600)
 
@@ -68,6 +68,6 @@ async def test_get_run_api_key_ttl_floor_still_allows_node_timeout_to_win() -> N
 @pytest.mark.asyncio
 async def test_get_run_api_key_ttl_falls_back_when_settings_read_fails() -> None:
     """A settings read failure falls back to the default 900 floor (fail-open)."""
-    with patch("modulo.settings.get_settings", side_effect=RuntimeError("settings boom")):
+    with patch("farna.settings.get_settings", side_effect=RuntimeError("settings boom")):
         ttl = await get_run_api_key_ttl_seconds(_session_factory(), _ORG_ID, node_timeout_seconds=30)
     assert ttl == 900

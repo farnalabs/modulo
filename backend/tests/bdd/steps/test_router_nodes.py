@@ -15,7 +15,7 @@ The scenarios drive the real shipped seams end to end:
 - ``PipelineExecutor._stream_operational_outcome`` — the executor mapping that
   turns a runtime ``RouterNoMatchError`` into the terminal ``router_no_match``
   run status (distinct from ``failed``), backed by the ``TERMINAL_STATUSES``
-  contract in ``modulo.db.models.run``.
+  contract in ``farna.db.models.run``.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.pipeline_engine.errors import RouterNoMatchError
-from modulo.core.pipeline_engine.graph_cache import RouterConfigError, build_graph_from_json
-from modulo.core.pipeline_engine.node_runner import make_router_node_fn
+from farna.core.pipeline_engine.errors import RouterNoMatchError
+from farna.core.pipeline_engine.graph_cache import RouterConfigError, build_graph_from_json
+from farna.core.pipeline_engine.node_runner import make_router_node_fn
 
 scenarios("../features/pipelines/router_nodes.feature")
 
@@ -126,9 +126,9 @@ def _compile_graph(ctx: dict[str, Any]) -> None:
     graph_json = {"nodes": nodes, "edges": edges}
 
     with (
-        patch("modulo.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
-        patch("modulo.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_manual_node_fn", MagicMock()),
+        patch("farna.core.pipeline_engine.graph_cache.make_hitl_review_fn", MagicMock()),
     ):
         try:
             ctx["_compiled"] = build_graph_from_json(graph_json)
@@ -239,7 +239,7 @@ def _running_pipeline_with_no_match(ctx: dict[str, Any]) -> None:
 
 @when("the pipeline engine encounters the RouterNoMatchError")
 def _engine_encounters_no_match(ctx: dict[str, Any]) -> None:
-    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from farna.core.pipeline_engine.executor import PipelineExecutor
 
     broker = MagicMock()
     executor = PipelineExecutor(MagicMock())
@@ -275,6 +275,6 @@ def _assert_not_failed(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse('"{status}" is a terminal run status'))
 def _assert_terminal_run_status(ctx: dict[str, Any], status: str) -> None:
-    from modulo.db.models.run import TERMINAL_STATUSES
+    from farna.db.models.run import TERMINAL_STATUSES
 
     assert status in TERMINAL_STATUSES, f"{status!r} is not in TERMINAL_STATUSES: {sorted(TERMINAL_STATUSES)}"

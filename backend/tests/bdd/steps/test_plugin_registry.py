@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.plugin_registry import PluginHealth
+from farna.core.plugin_registry import PluginHealth
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/plugins/plugin_registry.feature")
@@ -184,7 +184,7 @@ def _get_plugins(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
+    patcher = patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -203,7 +203,7 @@ def _get_plugin_detail(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
+    patcher = patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -222,7 +222,7 @@ def _get_plugin_health(
     plugin_data: list[dict[str, Any]] = getattr(request.node, "_plugin_data", [])
     mock_registry = _make_mock_registry(plugin_data)
 
-    patcher = patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
+    patcher = patch("farna.api.routes.plugins.get_plugin_registry", return_value=mock_registry)
     patcher.start()
     patches.append(patcher)
 
@@ -232,22 +232,22 @@ def _get_plugin_health(
 
 @when("the plugin registry discovers plugins")
 def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.core.plugin_registry import PluginRegistry
+    from farna.core.plugin_registry import PluginRegistry
 
     registry = PluginRegistry()
 
     broken = getattr(request.node, "_broken_ep", False)
     if broken:
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_ep = MagicMock()
             mock_ep.name = "slack"
             mock_ep.dist = None  # No distribution → manifest rejected
             mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group in ("modulo.connectors", "modulo.model_backends") else []
+                [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
             )
             discovered = registry.discover_plugins()
     else:
-        with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+        with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
             mock_ep = MagicMock()
             mock_ep.name = "slack"
             mock_dist = MagicMock()
@@ -260,7 +260,7 @@ def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> Non
             mock_ep.dist = mock_dist
             mock_ep.load.return_value = lambda cfg, creds: None
             mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group in ("modulo.connectors", "modulo.model_backends") else []
+                [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
             )
             discovered = registry.discover_plugins()
 
@@ -276,15 +276,15 @@ def _registry_processes_entry_point(request: pytest.FixtureRequest) -> None:
     (``dist is None``) is surfaced as an unhealthy plugin rather than being
     silently dropped from the registry.
     """
-    from modulo.core.plugin_registry import PluginRegistry
+    from farna.core.plugin_registry import PluginRegistry
 
     registry = PluginRegistry()
-    with patch("modulo.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
+    with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
         mock_ep = MagicMock()
         mock_ep.name = "slack"
         mock_ep.dist = None  # No distribution → manifest rejected
         mock_eps.side_effect = lambda group=None: (
-            [mock_ep] if group in ("modulo.connectors", "modulo.model_backends") else []
+            [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
         )
         registry.discover_plugins()
 

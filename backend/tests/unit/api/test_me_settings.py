@@ -14,12 +14,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.account import Account
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.db.crud.account import Account
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -107,7 +107,7 @@ class TestGetUserSettings:
     def test_returns_preferences(self, client: TestClient) -> None:
         account = MagicMock()
         account.preferences = {"theme": "dark", "locale": "en-GB"}
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=account):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 200
         assert resp.json() == {"theme": "dark", "locale": "en-GB"}
@@ -115,19 +115,19 @@ class TestGetUserSettings:
     def test_absent_preferences_returns_defaults(self, client: TestClient) -> None:
         account = MagicMock()
         account.preferences = {}
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=account):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 200
         assert resp.json() == {"theme": None, "locale": None}
 
     def test_missing_account_returns_404(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=None):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=None):
             resp = client.get(_ENDPOINT)
         assert resp.status_code == 404
 
     def test_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.me.get_account_by_id",
+            "farna.api.routes.me.get_account_by_id",
             side_effect=ProgrammingError("stmt", "params", Exception("orig")),
         ):
             resp = client.get(_ENDPOINT)
@@ -153,19 +153,19 @@ class TestUpdateUserSettingsNoBody:
     def test_no_body_returns_current_settings(self, client: TestClient) -> None:
         account = MagicMock()
         account.preferences = {"theme": "light"}
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=account):
             resp = client.put(_ENDPOINT)
         assert resp.status_code == 200
         assert resp.json() == {"theme": "light", "locale": None}
 
     def test_no_body_missing_account_returns_404(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=None):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=None):
             resp = client.put(_ENDPOINT)
         assert resp.status_code == 404
 
     def test_no_body_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.me.get_account_by_id",
+            "farna.api.routes.me.get_account_by_id",
             side_effect=ProgrammingError("stmt", "params", Exception("orig")),
         ):
             resp = client.put(_ENDPOINT)
@@ -173,17 +173,17 @@ class TestUpdateUserSettingsNoBody:
 
     def test_with_body_programming_error_returns_501(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.me.update_account_preferences",
+            "farna.api.routes.me.update_account_preferences",
             side_effect=ProgrammingError("stmt", "params", Exception("orig")),
         ):
             resp = client.put(_ENDPOINT, json={"theme": "dark"})
         assert resp.status_code == 501
 
     def test_with_body_account_not_found_returns_404(self, client: TestClient) -> None:
-        from modulo.db.crud.account import AccountNotFoundError
+        from farna.db.crud.account import AccountNotFoundError
 
         with patch(
-            "modulo.api.routes.me.update_account_preferences",
+            "farna.api.routes.me.update_account_preferences",
             side_effect=AccountNotFoundError(),
         ):
             resp = client.put(_ENDPOINT, json={"theme": "dark"})

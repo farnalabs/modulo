@@ -235,8 +235,8 @@ async def _resume_with_decision(
         decision=action,
         decision_payload=payload,
     )
-    from modulo.core.cron_helpers import _committed_decision_resume_data
-    from modulo.db.rls import set_rls_org
+    from farna.core.cron_helpers import _committed_decision_resume_data
+    from farna.db.rls import set_rls_org
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -306,7 +306,7 @@ async def test_c1_evaluation_mode_column_default_and_check(db_engine: AsyncEngin
 
 
 def _human_dto(node_id: str, *, mode: str = "human") -> object:
-    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+    from farna.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
     return EvalDefDTO(
         id=uuid.uuid4(),
@@ -324,7 +324,7 @@ def _human_dto(node_id: str, *, mode: str = "human") -> object:
 
 
 def _two_node_graph(edge_extra: dict[str, object] | None = None) -> tuple[dict, str, str]:
-    from modulo.core.pipeline_engine.graph_cache import _make_review_id
+    from farna.core.pipeline_engine.graph_cache import _make_review_id
 
     node_a, node_b = str(uuid.uuid4()), str(uuid.uuid4())
     graph = {
@@ -362,7 +362,7 @@ def _two_node_graph(edge_extra: dict[str, object] | None = None) -> tuple[dict, 
 
 
 def _build(graph: dict, by_node: dict) -> object:
-    from modulo.core.pipeline_engine.graph_cache import build_graph_from_json
+    from farna.core.pipeline_engine.graph_cache import build_graph_from_json
 
     return build_graph_from_json(graph, eval_definitions_by_node=by_node)
 
@@ -386,7 +386,7 @@ def test_c8_human_gate_without_a_pause_edge_raises() -> None:
 def test_c8_human_gate_with_two_pause_edges_raises() -> None:
     """Two HITL edges from one human-governed node would raise two interrupts
     for one gate — refused."""
-    from modulo.core.pipeline_engine.graph_cache import _make_review_id
+    from farna.core.pipeline_engine.graph_cache import _make_review_id
 
     graph, node_a, _node_b = _two_node_graph()
     node_c = str(uuid.uuid4())
@@ -482,8 +482,8 @@ async def test_c14_e2e_approve_grounds_evidence_and_writes_no_decision_row(
     assert counts["evidence"] == 1
 
     # C11: the reconciler reports zero anomalies for the org.
-    from modulo.core.eval_engine.decision_reconcile import reconcile_decision_records
-    from modulo.db.rls import set_rls_org
+    from farna.core.eval_engine.decision_reconcile import reconcile_decision_records
+    from farna.db.rls import set_rls_org
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
@@ -534,7 +534,7 @@ async def test_c12_grounding_failure_is_fail_open(
     """An ``append_evidence`` failure during resume must NOT fail the run or
     the already-committed decision: the run still completes and a structured
     warning is logged."""
-    import modulo.core.eval_engine.evidence_layer as evidence_layer
+    import farna.core.eval_engine.evidence_layer as evidence_layer
 
     ctx = await _seed_human_gate_run(db_engine, "C12FailOpen")
     run_id = ctx["run_id"]
@@ -548,7 +548,7 @@ async def test_c12_grounding_failure_is_fail_open(
 
     evidence_layer.append_evidence = _boom  # type: ignore[assignment]
     try:
-        with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"):
+        with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
             await _resume_with_decision(
                 db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
             )
@@ -578,8 +578,8 @@ async def test_c18_cancellation_while_pending_is_clean(
     """Cancelling an ``awaiting_human`` run whose human-mode gate is pending
     reaches ``cancelled`` with no undecided claim left on an awaiting run
     (the pending list's status filter excludes it)."""
-    from modulo.db.crud.run import request_cancellation
-    from modulo.db.rls import set_rls_org
+    from farna.db.crud.run import request_cancellation
+    from farna.db.rls import set_rls_org
 
     ctx = await _seed_human_gate_run(db_engine, "C18Cancel")
     run_id = ctx["run_id"]

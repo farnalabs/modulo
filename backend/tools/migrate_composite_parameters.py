@@ -65,7 +65,7 @@ async def _migrate_one_template(
     schema_name: str,
     ports_raw: list[dict[str, Any]],
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    from modulo.db.models.parameter_schema import ParameterSchema
+    from farna.db.models.parameter_schema import ParameterSchema
 
     async with session_factory() as session, session.begin():
         schema = ParameterSchema(
@@ -78,7 +78,7 @@ async def _migrate_one_template(
         session.add(schema)
         await session.flush()
 
-        from modulo.db.models.parameter_set import ParameterSet
+        from farna.db.models.parameter_set import ParameterSet
 
         param_set = ParameterSet(
             parameter_schema_id=schema.id,
@@ -141,7 +141,7 @@ async def _migrate_row(
 
 
 async def _migrate(args: argparse.Namespace) -> int:
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     settings = get_settings()
     engine = create_async_engine(settings.database_url, echo=False)

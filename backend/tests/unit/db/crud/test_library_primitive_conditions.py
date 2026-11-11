@@ -19,8 +19,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
-from modulo.db.crud.library_primitive import _build_list_conditions
-from modulo.db.models.library_primitive import LibraryPrimitive
+from farna.db.crud.library_primitive import _build_list_conditions
+from farna.db.models.library_primitive import LibraryPrimitive
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
 

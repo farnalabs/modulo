@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_engine.runaway_protection — the runaway run guards.
+"""Unit tests for farna.core.pipeline_engine.runaway_protection — the runaway run guards.
 
 QA lens pass (correctness, bugs, edge cases) on the circuit breaker that guards
 every pipeline run: ``PipelineExecutor`` constructs a ``RunawayGuard`` per run
@@ -26,8 +26,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-import modulo.core.pipeline_engine.runaway_protection as rp
-from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
+import farna.core.pipeline_engine.runaway_protection as rp
+from farna.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 
 _T0 = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
 

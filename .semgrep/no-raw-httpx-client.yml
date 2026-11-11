@@ -20,7 +20,7 @@ rules:
       re-opens the DNS-rebinding window: a hostname is validated at one moment
       then re-resolved by a fresh httpx pool at connect time. Build every
       outbound client through the shared egress factory in
-      modulo.core.ssrf (pinned_async_client_sync / pinned_async_client) so the
+      farna.core.ssrf (pinned_async_client_sync / pinned_async_client) so the
       validated address is pinned onto the connection. The only legitimate
       constructions are the factory module itself (core/ssrf.py) and the REST
       connector's injected/pinned transport seam (it always receives a pinned or
@@ -29,14 +29,14 @@ rules:
     severity: ERROR
     paths:
       include:
-        - "**/backend/src/modulo/**"
+        - "**/backend/src/farna/**"
       exclude:
         # The pinned-egress factory — the single allowlisted construction site.
-        - "**/backend/src/modulo/core/ssrf.py"
+        - "**/backend/src/farna/core/ssrf.py"
         # REST always receives a pinned transport (production) or an injected
         # MockTransport (test seam) via `kwargs["transport"]`; the raw
         # `httpx.AsyncClient(**kwargs)` here never builds an unpinned pool.
-        - "**/backend/src/modulo/connectors/rest/**"
+        - "**/backend/src/farna/connectors/rest/**"
         # FAR-526C honest-scope residual (see the scope note in core/ssrf.py):
         # these support modules build their own clients toward operator-config /
         # multi-host endpoints. They are excluded so this gate stays green
@@ -45,9 +45,9 @@ rules:
         # tree is still caught - including core/library_sync/**,
         # core/product_analytics/** and core/notifier/**, which now build
         # through the pinned factory and are deliberately NOT excluded.
-        - "**/backend/src/modulo/core/error_tracking/**"
-        - "**/backend/src/modulo/core/watchdog/**"
-        - "**/backend/src/modulo/core/reports/**"
+        - "**/backend/src/farna/core/error_tracking/**"
+        - "**/backend/src/farna/core/watchdog/**"
+        - "**/backend/src/farna/core/reports/**"
   - id: no-unscoped-decrypt
     patterns:
       # PURE, session-less decryption. `decode_stored_secret_scoped(...)` is a
@@ -68,9 +68,9 @@ rules:
     severity: ERROR
     paths:
       include:
-        - "**/backend/src/modulo/**"
+        - "**/backend/src/farna/**"
       exclude:
         # The module that OWNS both helpers — its private `decode_stored_secret`
         # delegation inside `decode_stored_secret_scoped` (and the definition)
         # is legitimate, not an unconverted call site.
-        - "**/backend/src/modulo/auth/secret_storage.py"
+        - "**/backend/src/farna/auth/secret_storage.py"

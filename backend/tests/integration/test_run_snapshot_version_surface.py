@@ -36,10 +36,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.jwt import create_access_token
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.jwt import create_access_token
+from farna.settings import Settings, get_settings
 
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -215,7 +215,7 @@ async def runs_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[As
 @pytest.fixture(autouse=True)
 def _stub_run_dispatch() -> Generator[None, None, None]:
     """Stub the background dispatch so a 202 does not require Redis/SAQ."""
-    with patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock):
+    with patch("farna.api.routes.runs.dispatch_run", new_callable=AsyncMock):
         yield
 
 

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.shortcut import ShortcutConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.shortcut import ShortcutConnector
 
 TOKEN = "shortcut_token"
 _BASE = "https://api.app.shortcut.com/api/v3"

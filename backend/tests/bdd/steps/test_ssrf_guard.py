@@ -1,6 +1,6 @@
 """BDD step definitions: SSRF-safe outbound URL validation (feat-core-ssrf).
 
-Drives the REAL ``modulo.core.ssrf`` guard seams — sync and async URL
+Drives the REAL ``farna.core.ssrf`` guard seams — sync and async URL
 validation, the tenant-scoped egress allowlist layering, DNS fail-closed
 semantics, the pinned-target resolution and the unpinned-host refusal of the
 pinned transport — without any real DNS or network traffic: hostname
@@ -19,7 +19,7 @@ import httpx
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core import ssrf
+from farna.core import ssrf
 
 scenarios("../features/security/ssrf_guard.feature")
 

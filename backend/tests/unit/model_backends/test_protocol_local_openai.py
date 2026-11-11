@@ -27,13 +27,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import HumanMessage
 
-from modulo.model_backends.jan import DEFAULT_JAN_BASE_URL, JanBackend
-from modulo.model_backends.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LLamaCppBackend
-from modulo.model_backends.lm_studio import DEFAULT_LM_STUDIO_BASE_URL, LmStudioBackend
-from modulo.model_backends.localai import DEFAULT_LOCALAI_BASE_URL, LocalAIBackend
-from modulo.model_backends.ollama import DEFAULT_OLLAMA_BASE_URL, OllamaBackend
-from modulo.model_backends.tgi import DEFAULT_TGI_BASE_URL, TgiBackend
-from modulo.model_backends.vllm import DEFAULT_VLLM_BASE_URL, VllmBackend
+from farna.model_backends.jan import DEFAULT_JAN_BASE_URL, JanBackend
+from farna.model_backends.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LLamaCppBackend
+from farna.model_backends.lm_studio import DEFAULT_LM_STUDIO_BASE_URL, LmStudioBackend
+from farna.model_backends.localai import DEFAULT_LOCALAI_BASE_URL, LocalAIBackend
+from farna.model_backends.ollama import DEFAULT_OLLAMA_BASE_URL, OllamaBackend
+from farna.model_backends.tgi import DEFAULT_TGI_BASE_URL, TgiBackend
+from farna.model_backends.vllm import DEFAULT_VLLM_BASE_URL, VllmBackend
 
 # httpx connection-pool sockets are GC'd after backend.aclose() but the
 # finaliser order is not deterministic — suppress the harmless warning.

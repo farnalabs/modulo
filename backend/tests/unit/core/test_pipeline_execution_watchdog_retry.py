@@ -36,10 +36,10 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.core.pipeline_engine import watchdog_retry as wr
-from modulo.core.pipeline_engine.executor import RunRetryPolicyError
-from modulo.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
-from modulo.core.pipeline_execution import (
+from farna.core.pipeline_engine import watchdog_retry as wr
+from farna.core.pipeline_engine.executor import RunRetryPolicyError
+from farna.core.pipeline_engine.watchdog_retry import WatchdogRetryOutcome
+from farna.core.pipeline_execution import (
     _fail_overdue_node,
     _record_derived_deadline_cost,
     _salvage_cancelled_run_cost,
@@ -127,11 +127,11 @@ def _db_seams(
 
     factory = MagicMock(side_effect=lambda: _session_ctx())
     return (
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
-        patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
-        patch("modulo.db.rls.set_rls_org", AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", AsyncMock()),
-        patch("modulo.core.pipeline_engine.watchdog_retry.async_sessionmaker", return_value=factory),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=run)),
+        patch("farna.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("farna.db.rls.set_rls_org", AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", AsyncMock()),
+        patch("farna.core.pipeline_engine.watchdog_retry.async_sessionmaker", return_value=factory),
     )
 
 
@@ -163,7 +163,7 @@ async def _consult_hook(
         for seam in seams:
             stack.enter_context(seam)
         sleep_mock = stack.enter_context(
-            patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+            patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
         )
         dispatched = await wr.watchdog_retry_after_policy(
             aeng=MagicMock(),
@@ -202,8 +202,8 @@ async def test_deadline_kill_redispatches_under_timeout_policy():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -232,8 +232,8 @@ async def test_deadline_kill_terminal_fails_when_budget_exhausted():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -258,8 +258,8 @@ async def test_deadline_kill_terminal_fails_without_timeout_coverage():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -290,9 +290,9 @@ async def test_deadline_kill_books_derived_cost_after_successful_terminal_write(
     stall = asyncio.Event()
     done = asyncio.Event()
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_derived_deadline_cost", derived))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -326,10 +326,10 @@ async def test_deadline_kill_books_no_derived_cost_when_redispatching():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_derived_deadline_cost", derived))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -349,9 +349,9 @@ async def test_deadline_kill_books_no_derived_cost_when_terminal_write_rejected(
     stall = asyncio.Event()
     done = asyncio.Event()
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_derived_deadline_cost", derived))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -369,7 +369,7 @@ async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
     """
     with (
         patch(
-            "modulo.core.pipeline_execution.async_sessionmaker",
+            "farna.core.pipeline_execution.async_sessionmaker",
             side_effect=asyncio.CancelledError(),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -408,10 +408,10 @@ async def test_record_worker_lost_derived_cost_bounds_lock_and_delegates_uuids()
         captured.update(kwargs)
 
     with (
-        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
-        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()) as mock_rls,
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.cost_controller.finalize.finalize_worker_lost_run", new=_finalize),
+        patch("farna.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("farna.core.pipeline_execution.set_rls_org", new=AsyncMock()) as mock_rls,
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.cost_controller.finalize.finalize_worker_lost_run", new=_finalize),
     ):
         await record_worker_lost_derived_cost(
             MagicMock(),
@@ -432,7 +432,7 @@ async def test_record_worker_lost_derived_cost_bounds_lock_and_delegates_uuids()
 async def test_record_worker_lost_derived_cost_rereises_cancelled_error() -> None:
     """Worker shutdown is not ours to swallow."""
     with (
-        patch("modulo.core.pipeline_execution.async_sessionmaker", side_effect=asyncio.CancelledError()),
+        patch("farna.core.pipeline_execution.async_sessionmaker", side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await record_worker_lost_derived_cost(
@@ -447,7 +447,7 @@ async def test_record_worker_lost_derived_cost_rereises_cancelled_error() -> Non
 async def test_record_worker_lost_derived_cost_swallows_ordinary_failure(caplog: pytest.LogCaptureFixture) -> None:
     """An ordinary failure is logged and swallowed — the terminal write stands."""
     with (
-        patch("modulo.core.pipeline_execution.async_sessionmaker", side_effect=RuntimeError("db down")),
+        patch("farna.core.pipeline_execution.async_sessionmaker", side_effect=RuntimeError("db down")),
         caplog.at_level(logging.WARNING),
     ):
         await record_worker_lost_derived_cost(
@@ -503,10 +503,10 @@ async def test_record_derived_deadline_cost_bounds_the_row_lock_before_finalize(
         order.append("finalize")
 
     with (
-        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
-        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
+        patch("farna.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("farna.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.cost_controller.finalize.finalize_failed_run", new=_finalize),
     ):
         await _record_derived_deadline_cost(
             MagicMock(),
@@ -532,10 +532,10 @@ async def test_salvage_cancelled_run_cost_bounds_the_row_lock_before_salvage() -
         order.append("salvage")
 
     with (
-        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
-        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
-        patch("modulo.core.cost_controller.finalize.salvage_cancelled_run_cost", new=_salvage),
+        patch("farna.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("farna.core.pipeline_execution.set_rls_org", new=AsyncMock()),
+        patch("farna.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("farna.core.cost_controller.finalize.salvage_cancelled_run_cost", new=_salvage),
     ):
         await _salvage_cancelled_run_cost(MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()))
 
@@ -583,9 +583,9 @@ async def test_deadline_kill_records_firing_before_redispatch():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -623,9 +623,9 @@ async def test_deadline_kill_records_firing_before_terminal_fail():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -658,8 +658,8 @@ async def test_standdown_deadline_kill_records_no_firing():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
         # run_done_event set — the watchdog stands down before consulting the hook.
         done.set()
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
@@ -689,8 +689,8 @@ async def test_deadline_kill_never_redispatches_finished_run():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         # run_done_event set — the watchdog stands down before consulting the hook.
         done.set()
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
@@ -710,8 +710,8 @@ async def test_deadline_kill_hook_failure_fails_closed_to_terminal():
     done = asyncio.Event()
     hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
     with (
-        patch("modulo.db.crud.run.get_run", AsyncMock(side_effect=RuntimeError("db down"))),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch("farna.db.crud.run.get_run", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
     ):
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
@@ -737,8 +737,8 @@ async def test_deadline_kill_injected_completion_probe_failure_fails_closed_to_t
     probe = AsyncMock(side_effect=ValueError("corrupted completion payload"))
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
     ):
         await _fail_overdue_node(
             MagicMock(),
@@ -782,12 +782,12 @@ async def test_deadline_kill_real_completion_probe_failure_fails_closed_to_termi
     real_engine = MagicMock(spec=AsyncEngine)
 
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
         patch(
-            "modulo.core.pipeline_execution._probe_completed_nodes",
+            "farna.core.pipeline_execution._probe_completed_nodes",
             AsyncMock(side_effect=SQLAlchemyError("database unreachable")),
         ),
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
     ):
         await _fail_overdue_node(
             real_engine,
@@ -827,7 +827,7 @@ async def test_deadline_kill_completion_probe_preserves_terminal_write_error() -
     probe = AsyncMock(side_effect=ValueError("probe failed"))
 
     with (
-        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        patch("farna.core.pipeline_execution.fail_run_terminal", fail),
         pytest.raises(RuntimeError, match="terminal write fatal DB failure"),
     ):
         await _fail_overdue_node(
@@ -894,11 +894,11 @@ async def test_deadline_kill_reset_timeout_defers_without_terminal_fail():
         for seam in seams:
             stack.enter_context(seam)
         sleep_mock = stack.enter_context(
-            patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+            patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
         )
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
-        stack.enter_context(patch("modulo.core.pipeline_execution._persist_node_deadline_triage", triage))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("farna.core.pipeline_execution._persist_node_deadline_triage", triage))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -943,17 +943,17 @@ async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
             for seam in seams:
                 stack.enter_context(seam)
             sleep_mock = stack.enter_context(
-                patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+                patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
             )
             # The zombie call site opts into the FAR-2053 delivery veto, which
             # reads the run's marker rows; an empty record is "not delivered".
             stack.enter_context(
                 patch(
-                    "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                    "farna.core.pipeline_engine.watchdog_retry._read_run_markers",
                     AsyncMock(return_value={}),
                 )
             )
-            stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+            stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
             await zombie_watchdog(
                 MagicMock(),
                 "run-1",
@@ -1020,7 +1020,7 @@ async def test_hook_stands_down_when_exec_task_already_done():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
         dispatched = await wr.watchdog_retry_after_policy(
             aeng=MagicMock(),
             run_id=uuid.uuid4(),
@@ -1054,8 +1054,8 @@ async def test_zombie_stall_redispatches_under_stall_policy():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1087,8 +1087,8 @@ async def test_zombie_stall_terminal_fails_when_budget_exhausted():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1117,8 +1117,8 @@ async def test_zombie_stall_terminal_fails_without_stall_coverage():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1149,8 +1149,8 @@ async def test_zombie_stall_never_retries_correction_run():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1222,8 +1222,8 @@ async def test_zombie_stall_redispatches_under_failure_policy_via_zero_node_carv
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1261,8 +1261,8 @@ async def test_deadline_kill_gets_no_failure_carve_out():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -1292,8 +1292,8 @@ def _markers_seam(markers: dict[str, Any] | None = None, *, read_error: Exceptio
     time, so patching the owning module's attribute intercepts it.
     """
     if read_error is not None:
-        return patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(side_effect=read_error))
-    return patch("modulo.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value=markers))
+        return patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(side_effect=read_error))
+    return patch("farna.db.crud.run_node_outputs.read_run_markers", AsyncMock(return_value=markers))
 
 
 async def _drive_zombie_stall(
@@ -1319,8 +1319,8 @@ async def _drive_zombie_stall(
         for seam in seams:
             stack.enter_context(seam)
         marker_reader = stack.enter_context(markers_seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await zombie_watchdog(
             MagicMock(),
             "run-1",
@@ -1361,8 +1361,8 @@ async def _drive_deadline_kill(
         for seam in seams:
             stack.enter_context(seam)
         marker_reader = stack.enter_context(markers_seam)
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         await _fail_overdue_node(
             MagicMock(),
             "run-1",
@@ -1441,7 +1441,7 @@ async def test_delivery_veto_is_opt_in_per_call_site():
         for seam in seams:
             stack.enter_context(seam)
         marker_reader = stack.enter_context(_markers_seam(_DELIVERED_MARKERS))
-        stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
         dispatched, box, _sleep = await _consult_hook(
             executor,
             retry_policy={"on": ["stall"], "max_retries": 2},
@@ -1512,7 +1512,7 @@ async def test_delivery_probe_failure_vetoes_the_deadline_redispatch(caplog: pyt
     delivery record must not license a re-dispatch. The probe failure is
     absorbed (it never raises into the watchdog path), is logged, and the run
     terminal-fails."""
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.watchdog_retry"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.watchdog_retry"):
         fail, box, executor, _marker_reader = await _drive_deadline_kill(
             {"on": ["timeout"], "max_retries": 2}, read_error=RuntimeError("markers unreadable")
         )
@@ -1538,11 +1538,11 @@ async def test_deadline_delivery_probe_reraises_cancellation():
                 stack.enter_context(seam)
             stack.enter_context(
                 patch(
-                    "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                    "farna.core.pipeline_engine.watchdog_retry._read_run_markers",
                     AsyncMock(side_effect=asyncio.CancelledError()),
                 )
             )
-            stack.enter_context(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+            stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
             with pytest.raises(asyncio.CancelledError):
                 await _fail_overdue_node(
                     MagicMock(),
@@ -1565,7 +1565,7 @@ async def test_delivery_probe_reraises_cancellation():
     probe propagates instead of being absorbed into a veto decision."""
     with (
         patch(
-            "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+            "farna.core.pipeline_engine.watchdog_retry._read_run_markers",
             AsyncMock(side_effect=asyncio.CancelledError()),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -1580,11 +1580,11 @@ async def test_delivery_probe_reraises_cancellation():
 
 def _watchdog_wrapper_seams(retry_policy: dict[str, Any] | None):
     seams = list(_db_seams(retry_policy))
-    seams.append(patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
+    seams.append(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
     # FAR-2078: the per-attempt history close is diagnostics, not part of the
     # retry/outcome decision these tests pin; the wrapper is driven with a
     # MagicMock engine, so the DB write is stubbed at its named seam.
-    seams.append(patch("modulo.core.pipeline_execution._record_executor_outcome_attempt", AsyncMock(return_value=None)))
+    seams.append(patch("farna.core.pipeline_execution._record_executor_outcome_attempt", AsyncMock(return_value=None)))
     return seams
 
 
@@ -1605,11 +1605,11 @@ async def test_watchdog_redispatch_reraises_run_retry_policy_error():
     with contextlib.ExitStack() as stack:
         for seam in _watchdog_wrapper_seams({"on": ["stall"], "max_retries": 1}):
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
             )
         )
@@ -1646,10 +1646,10 @@ async def test_watchdog_wires_completion_hook_with_caller_claim_token() -> None:
         return SimpleNamespace(status="complete")
 
     with (
-        patch("modulo.core.pipeline_execution._wire_node_deadline_hooks", side_effect=_wire) as wire,
-        patch("modulo.core.pipeline_execution.zombie_watchdog", new_callable=AsyncMock),
-        patch("modulo.core.pipeline_execution.node_deadline_watchdog", new_callable=AsyncMock),
-        patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
+        patch("farna.core.pipeline_execution._wire_node_deadline_hooks", side_effect=_wire) as wire,
+        patch("farna.core.pipeline_execution.zombie_watchdog", new_callable=AsyncMock),
+        patch("farna.core.pipeline_execution.node_deadline_watchdog", new_callable=AsyncMock),
+        patch("farna.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
     ):
         result = await run_executor_with_watchdog(
             MagicMock(),
@@ -1680,12 +1680,12 @@ async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():
     with contextlib.ExitStack() as stack:
         for seam in _watchdog_wrapper_seams({}):
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
             )
         )
@@ -1728,17 +1728,17 @@ async def test_watchdog_reset_timeout_returns_deferred_without_terminal_fail():
             stack.enter_context(seam)
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                "farna.core.pipeline_engine.watchdog_retry._read_run_markers",
                 AsyncMock(return_value={}),
             )
         )
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.mark_complete", complete))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.mark_complete", complete))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
             )
         )
@@ -1759,7 +1759,7 @@ async def test_watchdog_reset_timeout_returns_deferred_without_terminal_fail():
 async def test_resume_job_disables_watchdog_retry():
     """Resume jobs keep today's unconditional terminal fail: their claim
     cannot re-claim a pending run, so the hook is never built. Runtime SAQ
-    job functions are FULLY-QUALIFIED ("modulo.core.saq_worker.resume_run",
+    job functions are FULLY-QUALIFIED ("farna.core.saq_worker.resume_run",
     dispatch.py) — this pins the endswith match against the real shape (the
     old bare ``!= "resume_run"`` comparison never matched it and built the
     hook for resume jobs)."""
@@ -1773,15 +1773,13 @@ async def test_resume_job_disables_watchdog_retry():
     with contextlib.ExitStack() as stack:
         for seam in _watchdog_wrapper_seams({"on": ["stall"], "max_retries": 1}):
             stack.enter_context(seam)
-        create_hook = stack.enter_context(
-            patch("modulo.core.pipeline_engine.watchdog_retry.create_watchdog_retry_hook")
-        )
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
-        stack.enter_context(patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
+        create_hook = stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.create_watchdog_retry_hook"))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
             )
         )
@@ -1790,7 +1788,7 @@ async def test_resume_job_disables_watchdog_retry():
             run_id=str(uuid.uuid4()),
             org_id=str(uuid.uuid4()),
             executor=executor,
-            job=MagicMock(function="modulo.core.saq_worker.resume_run"),
+            job=MagicMock(function="farna.core.saq_worker.resume_run"),
             execute_fn=_hang,
         )
     assert result == {"status": "failed"}
@@ -1808,8 +1806,8 @@ def test_watchdog_retry_enabled_for_job():
     enabled the hook when the job was absent, which would have let a resume
     watchdog kill re-dispatch into an unreclaimable pending run."""
     assert _watchdog_retry_enabled_for_job(MagicMock(function="execute_run")) is True
-    assert _watchdog_retry_enabled_for_job(MagicMock(function="modulo.core.saq_worker.execute_run")) is True
-    assert _watchdog_retry_enabled_for_job(MagicMock(function="modulo.core.saq_worker.resume_run")) is False
+    assert _watchdog_retry_enabled_for_job(MagicMock(function="farna.core.saq_worker.execute_run")) is True
+    assert _watchdog_retry_enabled_for_job(MagicMock(function="farna.core.saq_worker.resume_run")) is False
     assert _watchdog_retry_enabled_for_job(MagicMock(function="resume_run")) is False
     assert _watchdog_retry_enabled_for_job(None) is False
     assert _watchdog_retry_enabled_for_job(MagicMock()) is False
@@ -1901,12 +1899,12 @@ async def test_context_load_sets_rls_org_and_execution_context():
     pipeline = MagicMock()
     pipeline.retry_policy = {"on": ["timeout"], "max_retries": 1}
     with (
-        patch("modulo.db.crud.run.get_run", AsyncMock(return_value=run)),
-        patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
-        patch("modulo.db.rls.set_rls_org", set_rls_org_mock),
-        patch("modulo.db.rls.set_rls_execution_context", set_rls_ctx_mock),
+        patch("farna.db.crud.run.get_run", AsyncMock(return_value=run)),
+        patch("farna.db.crud.pipeline.get_pipeline", AsyncMock(return_value=pipeline)),
+        patch("farna.db.rls.set_rls_org", set_rls_org_mock),
+        patch("farna.db.rls.set_rls_execution_context", set_rls_ctx_mock),
         patch(
-            "modulo.core.pipeline_engine.watchdog_retry.async_sessionmaker",
+            "farna.core.pipeline_engine.watchdog_retry.async_sessionmaker",
             return_value=_watchdog_retry_session_factory(),
         ),
     ):
@@ -2112,7 +2110,7 @@ def test_capacity_retry_budget_setting_default_and_override(monkeypatch: pytest.
     monkeypatch.setenv("SECRET_KEY", "a" * 32)
     monkeypatch.setenv("FERNET_KEY", "a" * 32)
     monkeypatch.delenv("SAQ_CAPACITY_RETRY_BUDGET", raising=False)
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     assert Settings().saq_capacity_retry_budget == 3
     monkeypatch.setenv("SAQ_CAPACITY_RETRY_BUDGET", "7")
@@ -2231,9 +2229,9 @@ async def test_deadline_kill_waits_for_cancel_cleanup_before_terminalising():
     done = asyncio.Event()
     stall = asyncio.Event()
     with (
-        patch("modulo.core.pipeline_execution.fail_run_terminal", _fail),
-        patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new=AsyncMock()),
-        patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new=AsyncMock()),
+        patch("farna.core.pipeline_execution.fail_run_terminal", _fail),
+        patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new=AsyncMock()),
+        patch("farna.core.pipeline_execution._record_derived_deadline_cost", new=AsyncMock()),
     ):
         await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall)
     if not exec_task.done():
@@ -2268,15 +2266,15 @@ async def _wrapper_outcome(
     with contextlib.ExitStack() as stack:
         for seam in _watchdog_wrapper_seams({}):
             stack.enter_context(seam)
-        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
-        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
         stack.enter_context(
-            patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status))
+            patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status))
         )
-        stack.enter_context(patch("modulo.core.pipeline_execution._salvage_cancelled_run_cost", salvage))
+        stack.enter_context(patch("farna.core.pipeline_execution._salvage_cancelled_run_cost", salvage))
         stack.enter_context(
             patch(
-                "modulo.core.pipeline_execution.get_settings",
+                "farna.core.pipeline_execution.get_settings",
                 lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
             )
         )
@@ -2353,7 +2351,7 @@ async def test_salvage_cancelled_run_cost_rereises_cancelled_error() -> None:
     """
     with (
         patch(
-            "modulo.core.pipeline_execution.async_sessionmaker",
+            "farna.core.pipeline_execution.async_sessionmaker",
             side_effect=asyncio.CancelledError(),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -2365,9 +2363,9 @@ async def test_salvage_cancelled_run_cost_fails_open(caplog: pytest.LogCaptureFi
     """An ordinary write failure must never turn a terminal cancelled run into
     a raised error — the run stays cancelled and the failure is logged."""
     with (
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
         patch(
-            "modulo.core.pipeline_execution.async_sessionmaker",
+            "farna.core.pipeline_execution.async_sessionmaker",
             side_effect=RuntimeError("db down"),
         ),
     ):
@@ -2391,11 +2389,11 @@ def test_executor_cancel_settle_covers_the_retention_worst_case():
     be terminalised BEFORE its marker (and therefore its cost/delivery
     evidence) landed. 25-30s is the accepted headroom band.
     """
-    from modulo.core.pipeline_engine.node_runner import (
+    from farna.core.pipeline_engine.node_runner import (
         _CANCEL_DELIVERY_GRACE_SECONDS,
         _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
     )
-    from modulo.core.pipeline_execution import _EXECUTOR_CANCEL_SETTLE_SECONDS
+    from farna.core.pipeline_execution import _EXECUTOR_CANCEL_SETTLE_SECONDS
 
     retention_worst_case = 4 * _IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT + _CANCEL_DELIVERY_GRACE_SECONDS
     assert retention_worst_case == 20.5

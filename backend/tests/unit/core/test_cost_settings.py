@@ -1,9 +1,9 @@
 """Unit tests locking the shared org cost-control settings contract.
 
-``modulo.core.cost_settings`` holds the ``cost_controls`` settings key and
+``farna.core.cost_settings`` holds the ``cost_controls`` settings key and
 defaults shared by the admin cost-controls router
-(``modulo.api.routes.costs``) and the org-level display-settings router
-(``modulo.api.routes.org_settings``). The module docstring exists precisely
+(``farna.api.routes.costs``) and the org-level display-settings router
+(``farna.api.routes.org_settings``). The module docstring exists precisely
 because both routers read and write the org's ``settings_json`` under the same
 key with the same defaults — a drift between them would silently change the
 currency rendered across cost surfaces. Previously the module was exercised
@@ -31,19 +31,19 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core import cost_settings as cs
+from farna.core import cost_settings as cs
 
 BACKEND = Path(__file__).resolve().parent.parent.parent.parent
-ROUTERS = BACKEND / "src" / "modulo" / "api" / "routes"
+ROUTERS = BACKEND / "src" / "farna" / "api" / "routes"
 
 
 def _router_imports(router: str) -> set[str]:
-    """Names a router module imports from ``modulo.core.cost_settings``."""
+    """Names a router module imports from ``farna.core.cost_settings``."""
     source = (ROUTERS / f"{router}.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imported: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "modulo.core.cost_settings":
+        if isinstance(node, ast.ImportFrom) and node.module == "farna.core.cost_settings":
             imported.update(alias.name for alias in node.names)
     return imported
 
@@ -176,6 +176,6 @@ class TestCrossRouterWiring:
             for node in ast.walk(tree):
                 assert not (
                     isinstance(node, ast.ImportFrom)
-                    and node.module == "modulo.core.cost_settings"
+                    and node.module == "farna.core.cost_settings"
                     and node.names[0].name == "*"
                 )

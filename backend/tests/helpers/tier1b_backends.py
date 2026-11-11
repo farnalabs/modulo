@@ -31,7 +31,7 @@ import pytest
 from tests.helpers.testcontainers_harness import SSRF_LOOPBACK_OPTIN
 
 if TYPE_CHECKING:
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
 QWEN_05B_GGUF = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
 
@@ -53,7 +53,7 @@ def ssrf_loopback_consent() -> Iterator[None]:
 
 def make_backend(provider: str, model_id: str, base_url: str) -> OpenAICompatibleBackend:
     """Build a real ``OpenAICompatibleBackend`` pointed at a live container."""
-    from modulo.model_backends.module import OpenAICompatibleBackend
+    from farna.model_backends.module import OpenAICompatibleBackend
 
     return OpenAICompatibleBackend(
         api_key="not-needed",

@@ -1,6 +1,6 @@
 """Regression tests: /api/v1/admin/monitor-config must run CRUD inside session.begin().
 
-The DI session factory uses ``autobegin=False`` (backend/src/modulo/db/session.py),
+The DI session factory uses ``autobegin=False`` (backend/src/farna/db/session.py),
 so every ``session.execute()`` outside an explicit transaction raises
 ``InvalidRequestError``. These tests exercise the REAL CRUD functions against an
 autobegin-aware fake session that fails loudly when ``execute()`` runs outside
@@ -11,8 +11,8 @@ tests/unit/hitl_manager/test_claim_expiry_job.py.
 import uuid
 from unittest.mock import MagicMock
 
-from modulo.api.routes.admin_monitor_config import MonitorConfigUpdate, get_monitor_config, set_monitor_config
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.routes.admin_monitor_config import MonitorConfigUpdate, get_monitor_config, set_monitor_config
+from farna.auth.jwt import TenantPrincipal
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")

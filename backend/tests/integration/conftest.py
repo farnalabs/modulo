@@ -173,7 +173,7 @@ def session_monkeypatch() -> Generator[pytest.MonkeyPatch, None, None]:
 @pytest.fixture(autouse=True)
 def _reset_settings_cache() -> Generator[None, None, None]:
     """Keep settings derived from one integration test out of the next."""
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     get_settings.cache_clear()
     yield
@@ -334,7 +334,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
     # script_location is CWD-relative in alembic.ini; pin it to the absolute
     # backend path so integration tests also run from the repo root (the
     # pre-commit run-changed-tests hook invokes pytest from the repo root).
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     # Skip fileConfig (like main.py does) so env.py doesn't call
     # logging.config.fileConfig, whose default disable_existing_loggers=True
     # disables every module logger not listed in alembic.ini for the rest of
@@ -381,7 +381,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
     # get_settings() resolves the system engine exactly as in production.
     sys_url = _with_credentials(db_url, "modulo_system", "syspass")
 
-    from modulo.db.bootstrap_role import bootstrap_roles
+    from farna.db.bootstrap_role import bootstrap_roles
 
     async def _migrate_shared_db() -> None:
         """Apply the full schema setup once, serialised across xdist workers.
@@ -455,7 +455,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
             # tuning statement with a syntax error could reach main unnoticed
             # by PR CI. Every statement is idempotent and MIGRATIONS orders
             # the CREATEs before the tuning ALTERs, so replaying them is safe.
-            from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+            from farna.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
             for _ddl in ModuloPostgresSaver.MIGRATIONS:
                 await conn.execute(text(_ddl))
@@ -566,7 +566,7 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
     checkout — the same pattern ``app_engine`` uses — restoring RLS for the SAQ
     scheduler/reconcile code paths.
     """
-    from modulo.core import cron_helpers
+    from farna.core import cron_helpers
 
     original_get_engine = cron_helpers._get_engine
     role = non_superuser_role
@@ -958,7 +958,7 @@ async def rls_session(migrated_db_url: str, test_org: uuid.UUID) -> AsyncGenerat
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
             await session.execute(text("SELECT 1"))
-            from modulo.db.rls import set_rls_org
+            from farna.db.rls import set_rls_org
 
             await set_rls_org(session, test_org)
             yield session
@@ -1132,10 +1132,10 @@ class _AllFeatures:
 @pytest_asyncio.fixture
 async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClient:
     """ASGI ``AsyncClient`` wired with the app's dependency overrides."""
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.core.feature_flags import PlanContext
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.core.feature_flags import PlanContext
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -1189,13 +1189,13 @@ async def dispose_process_global_engines() -> None:
     closes. Resetting each cache makes the next caller recreate an engine bound
     to the then-current loop and database URL.
     """
-    from modulo.api import dependencies as api_dependencies
-    from modulo.cli import break_glass
-    from modulo.core import cron_helpers, saq_worker
-    from modulo.core.error_tracking import saq_hooks
-    from modulo.core.reports import scheduler
-    from modulo.db import session as db_session
-    from modulo.db.crud import pipeline_snapshot
+    from farna.api import dependencies as api_dependencies
+    from farna.cli import break_glass
+    from farna.core import cron_helpers, saq_worker
+    from farna.core.error_tracking import saq_hooks
+    from farna.core.reports import scheduler
+    from farna.db import session as db_session
+    from farna.db.crud import pipeline_snapshot
 
     single_engine_caches: tuple[tuple[object, str], ...] = (
         (db_session, "_shared_engine"),

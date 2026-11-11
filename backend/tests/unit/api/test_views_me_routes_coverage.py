@@ -16,11 +16,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -82,7 +82,7 @@ class TestHitlEmailPreferencesCoverage:
     def test_get_returns_default_off(self, client: TestClient) -> None:
         account = MagicMock()
         account.preferences = {"theme": "dark"}
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=account):
             resp = client.get("/api/v1/me/hitl-email-preferences")
         assert resp.status_code == 200
         data = resp.json()
@@ -93,21 +93,21 @@ class TestHitlEmailPreferencesCoverage:
         pid = str(uuid.uuid4())
         account = MagicMock()
         account.preferences = {"hitl_email": {"default": True, "pipeline_overrides": {pid: False}}}
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=account):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=account):
             resp = client.get("/api/v1/me/hitl-email-preferences")
         assert resp.status_code == 200
         assert resp.json()["default"] is True
         assert resp.json()["pipeline_overrides"] == {pid: False}
 
     def test_get_account_not_found(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.get_account_by_id", return_value=None):
+        with patch("farna.api.routes.me.get_account_by_id", return_value=None):
             resp = client.get("/api/v1/me/hitl-email-preferences")
         assert resp.status_code == 404
 
     def test_put_persists_and_echoes(self, client: TestClient) -> None:
         pid = str(uuid.uuid4())
         merged = {"hitl_email": {"default": True, "pipeline_overrides": {pid: True}}}
-        with patch("modulo.api.routes.me.set_hitl_email_preference", return_value=merged):
+        with patch("farna.api.routes.me.set_hitl_email_preference", return_value=merged):
             resp = client.put(
                 "/api/v1/me/hitl-email-preferences",
                 json={"default": True, "pipeline_overrides": {pid: True}},
@@ -117,10 +117,10 @@ class TestHitlEmailPreferencesCoverage:
         assert resp.json()["pipeline_overrides"] == {pid: True}
 
     def test_put_account_not_found(self, client: TestClient) -> None:
-        from modulo.db.crud.account import AccountNotFoundError
+        from farna.db.crud.account import AccountNotFoundError
 
         with patch(
-            "modulo.api.routes.me.set_hitl_email_preference",
+            "farna.api.routes.me.set_hitl_email_preference",
             side_effect=AccountNotFoundError(),
         ):
             resp = client.put("/api/v1/me/hitl-email-preferences", json={"default": True})
@@ -129,7 +129,7 @@ class TestHitlEmailPreferencesCoverage:
     def test_put_omitting_overrides_preserves_stored(self, client: TestClient) -> None:
         pid = str(uuid.uuid4())
         merged = {"hitl_email": {"default": True, "pipeline_overrides": {pid: False}}}
-        with patch("modulo.api.routes.me.set_hitl_email_preference", return_value=merged) as mock_set:
+        with patch("farna.api.routes.me.set_hitl_email_preference", return_value=merged) as mock_set:
             resp = client.put("/api/v1/me/hitl-email-preferences", json={"default": True})
         assert resp.status_code == 200
         # pipeline_overrides was NOT in body → helper passed None
@@ -144,20 +144,20 @@ class TestAssistantSkillsCoverage:
     """Cover the /me/assistant/skills CRUD endpoints in me.py."""
 
     def test_list_skills(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.get_user_skills", return_value=[]):
+        with patch("farna.api.routes.me.get_user_skills", return_value=[]):
             resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 200
         assert not resp.json()
 
     def test_list_skills_programming_error(self, client: TestClient) -> None:
         with patch(
-            "modulo.api.routes.me.get_user_skills", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
+            "farna.api.routes.me.get_user_skills", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
         ):
             resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 501
 
     def test_create_skill(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock):
+        with patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock):
             resp = client.post(
                 "/api/v1/me/assistant/skills",
                 json={"name": "My Skill", "body": "do stuff"},
@@ -170,7 +170,7 @@ class TestAssistantSkillsCoverage:
 
     def test_create_skill_programming_error(self, client: TestClient) -> None:
         client.mock_session.flush = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))  # type: ignore[attr-defined]
-        with patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock):
+        with patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock):
             resp = client.post(
                 "/api/v1/me/assistant/skills",
                 json={"name": "X", "body": "b"},
@@ -188,8 +188,8 @@ class TestAssistantSkillsCoverage:
         skill.created_at = None
         skill.updated_at = None
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
             resp = client.put(f"/api/v1/me/assistant/skills/{_SKILL_ID}", json={"name": "Updated"})
         assert resp.status_code == 200
@@ -197,9 +197,9 @@ class TestAssistantSkillsCoverage:
 
     def test_update_skill_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.api.routes.me.get_user_skill_or_404",
+                "farna.api.routes.me.get_user_skill_or_404",
                 side_effect=HTTPException(status_code=404, detail="Skill not found"),
             ),
         ):
@@ -210,8 +210,8 @@ class TestAssistantSkillsCoverage:
         skill = MagicMock()
         client.mock_session.flush = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))  # type: ignore[attr-defined]
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
             resp = client.put(f"/api/v1/me/assistant/skills/{_SKILL_ID}", json={"name": "X"})
         assert resp.status_code == 501
@@ -219,17 +219,17 @@ class TestAssistantSkillsCoverage:
     def test_delete_skill(self, client: TestClient) -> None:
         skill = MagicMock()
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
             resp = client.delete(f"/api/v1/me/assistant/skills/{_SKILL_ID}")
         assert resp.status_code == 204
 
     def test_delete_skill_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
             patch(
-                "modulo.api.routes.me.get_user_skill_or_404",
+                "farna.api.routes.me.get_user_skill_or_404",
                 side_effect=HTTPException(status_code=404, detail="Skill not found"),
             ),
         ):
@@ -240,8 +240,8 @@ class TestAssistantSkillsCoverage:
         skill = MagicMock()
         client.mock_session.delete = MagicMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))  # type: ignore[attr-defined]
         with (
-            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.me.get_user_skill_or_404", return_value=skill),
+            patch("farna.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.me.get_user_skill_or_404", return_value=skill),
         ):
             resp = client.delete(f"/api/v1/me/assistant/skills/{_SKILL_ID}")
         assert resp.status_code == 501
@@ -264,7 +264,7 @@ class TestContextSourcesCoverage:
 
     def test_get_context_sources(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.get("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 200
         service.get_effective_config.assert_awaited_once()
@@ -273,13 +273,13 @@ class TestContextSourcesCoverage:
     def test_get_context_sources_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.get_effective_config = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.get("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 501
 
     def test_set_context_source(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.put(
                 f"/api/v1/me/assistant/context-sources/{_SOURCE_KEY}",
                 json={"source_mode": "tool"},
@@ -290,7 +290,7 @@ class TestContextSourcesCoverage:
     def test_set_context_source_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.set_user_override = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.put(
                 f"/api/v1/me/assistant/context-sources/{_SOURCE_KEY}",
                 json={"source_mode": "tool"},
@@ -306,7 +306,7 @@ class TestContextSourcesCoverage:
 
     def test_reset_context_sources(self, client: TestClient) -> None:
         service = self._mock_service()
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.delete("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 200
         service.reset_user_overrides.assert_awaited_once()
@@ -314,6 +314,6 @@ class TestContextSourcesCoverage:
     def test_reset_context_sources_programming_error(self, client: TestClient) -> None:
         service = MagicMock()
         service.reset_user_overrides = AsyncMock(side_effect=ProgrammingError("stmt", "params", Exception("orig")))
-        with patch("modulo.api.routes.me.AssistantContextSourceService", return_value=service):
+        with patch("farna.api.routes.me.AssistantContextSourceService", return_value=service):
             resp = client.delete("/api/v1/me/assistant/context-sources")
         assert resp.status_code == 501

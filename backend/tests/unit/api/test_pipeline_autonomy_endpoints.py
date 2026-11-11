@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.api.routes.pipelines import PipelineResponse
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.api.routes.pipelines import PipelineResponse
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -29,7 +29,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE_ID = uuid.UUID("20000000-0000-0000-0000-000000000001")
 _OWNER_TEAM_ID = uuid.UUID("30000000-0000-0000-0000-000000000001")
 _NOW = datetime(2026, 10, 10, tzinfo=UTC)
-_ROUTES = "modulo.api.routes.pipelines."
+_ROUTES = "farna.api.routes.pipelines."
 
 
 def _make_settings() -> Settings:
@@ -269,7 +269,7 @@ def _session_cm(session: AsyncMock) -> AsyncMock:
 
 class TestMcpTools:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_org_id,
@@ -286,7 +286,7 @@ class TestMcpTools:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import (
+        from farna.api.mcp_server import (
             _ctx_auth_token,
             _ctx_auth_type,
             _ctx_org_id,
@@ -299,18 +299,18 @@ class TestMcpTools:
             var.set(None)
 
     async def test_demote_lowers_and_audits(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         pipeline = _pipeline(earned="fully_autonomous")
         set_level = AsyncMock(return_value=pipeline)
         audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             result = await demote_pipeline_autonomy(
                 pipeline_id=str(_PIPELINE_ID), level="manual_approval", reason="escape"
@@ -325,18 +325,18 @@ class TestMcpTools:
         assert kwargs["payload_json"]["reason"] == "escape"
 
     async def test_promote_above_ceiling_rejected(self) -> None:
-        from modulo.api.mcp_server import promote_pipeline_autonomy
+        from farna.api.mcp_server import promote_pipeline_autonomy
 
         pipeline = _pipeline(earned="manual_approval", ceiling="notify_on_complete")
         set_level = AsyncMock(return_value=pipeline)
         audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             result = await promote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="fully_autonomous")
 
@@ -345,19 +345,19 @@ class TestMcpTools:
         audit.assert_not_awaited()
 
     async def test_operator_without_owner_team_denied(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, demote_pipeline_autonomy
+        from farna.api.mcp_server import _ctx_role, demote_pipeline_autonomy
 
         _ctx_role.set("operator")
         pipeline = _pipeline(earned="fully_autonomous", owner_team_id=None)
         set_level = AsyncMock(return_value=pipeline)
         audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
@@ -366,7 +366,7 @@ class TestMcpTools:
         audit.assert_not_awaited()
 
     async def test_owner_team_key_allowed(self) -> None:
-        from modulo.api.mcp_server import _ctx_role, _ctx_team_id, demote_pipeline_autonomy
+        from farna.api.mcp_server import _ctx_role, _ctx_team_id, demote_pipeline_autonomy
 
         _ctx_role.set("operator")
         _ctx_team_id.set(_OWNER_TEAM_ID)
@@ -374,12 +374,12 @@ class TestMcpTools:
         set_level = AsyncMock(return_value=pipeline)
         audit = AsyncMock()
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=_OWNER_TEAM_ID)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=audit),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=_OWNER_TEAM_ID)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
@@ -390,103 +390,103 @@ class TestMcpTools:
     # error dict rather than raising out of the tool. ---
 
     async def test_auth_failure_returns_auth_expired(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=False)):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["error"] == "auth_expired"
 
     async def test_malformed_pipeline_id_returns_invalid_id(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
             result = await demote_pipeline_autonomy(pipeline_id="not-a-uuid", level="manual_approval")
 
         assert result["error"] == "invalid_id"
         assert result["field"] == "pipeline_id"
 
     async def test_invalid_level_returns_validation_failed(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
-        with patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
+        with patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="bogus")
 
         assert result["error"] == "validation_failed"
         assert result["field"] == "level"
 
     async def test_team_boundary_violation_denied(self) -> None:
-        from modulo.api.mcp_server import _ctx_team_id, demote_pipeline_autonomy
+        from farna.api.mcp_server import _ctx_team_id, demote_pipeline_autonomy
 
         _ctx_team_id.set(uuid.uuid4())
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=uuid.uuid4())),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["error"] == "team_boundary_violation"
 
     async def test_missing_pipeline_returns_not_found(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=None)),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["error"] == "pipeline_not_found"
 
     async def test_null_stored_levels_use_default(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         pipeline = _pipeline(earned=None, default="fully_autonomous", ceiling=None)
         set_level = AsyncMock(return_value=pipeline)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["previous_level"] == "fully_autonomous"
 
     async def test_unparseable_stored_levels_fall_back(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         pipeline = _pipeline(earned="bogus", default="fully_autonomous", ceiling="also_bogus")
         set_level = AsyncMock(return_value=pipeline)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["earned_autonomy_level"] == "manual_approval"
 
     async def test_promote_not_above_current_rejected(self) -> None:
-        from modulo.api.mcp_server import promote_pipeline_autonomy
+        from farna.api.mcp_server import promote_pipeline_autonomy
 
         pipeline = _pipeline(earned="notify_on_complete", ceiling="fully_autonomous")
         set_level = AsyncMock(return_value=pipeline)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             result = await promote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
@@ -494,17 +494,17 @@ class TestMcpTools:
         set_level.assert_not_awaited()
 
     async def test_demote_not_below_current_rejected(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         pipeline = _pipeline(earned="manual_approval")
         set_level = AsyncMock(return_value=pipeline)
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="notify_on_complete")
 
@@ -512,31 +512,31 @@ class TestMcpTools:
         set_level.assert_not_awaited()
 
     async def test_update_returning_none_is_not_found(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         pipeline = _pipeline(earned="fully_autonomous")
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
-            patch("modulo.db.crud.pipeline.set_earned_autonomy_level", new=AsyncMock(return_value=None)),
-            patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock()),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
+            patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=AsyncMock(return_value=None)),
+            patch("farna.core.audit_logger.append_audit_event", new=AsyncMock()),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 
         assert result["error"] == "pipeline_not_found"
 
     async def test_scope_error_maps_to_insufficient_scope(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+        from farna.api.mcp_server import demote_pipeline_autonomy
+        from farna.core.mcp.scope_validator import MCPAuthorizationError
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline.get_pipeline",
+                "farna.db.crud.pipeline.get_pipeline",
                 new=AsyncMock(side_effect=MCPAuthorizationError("nope")),
             ),
         ):
@@ -547,14 +547,14 @@ class TestMcpTools:
     async def test_programming_error_maps_to_migration_required(self) -> None:
         from sqlalchemy.exc import ProgrammingError
 
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
-                "modulo.db.crud.pipeline.get_pipeline",
+                "farna.db.crud.pipeline.get_pipeline",
                 new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("missing column"))),
             ),
         ):
@@ -563,13 +563,13 @@ class TestMcpTools:
         assert result["error"] == "migration_required"
 
     async def test_unexpected_error_maps_to_server_error(self) -> None:
-        from modulo.api.mcp_server import demote_pipeline_autonomy
+        from farna.api.mcp_server import demote_pipeline_autonomy
 
         with (
-            patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
-            patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._session", return_value=_session_cm(AsyncMock())),
+            patch("farna.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch("farna.db.crud.pipeline.get_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval")
 

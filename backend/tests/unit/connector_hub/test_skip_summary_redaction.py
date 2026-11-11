@@ -19,9 +19,9 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.connectors.security import _MASK, CredentialRedactor
-from modulo.core.connector_hub import _SKIP_WARN_SEEN, ConnectorHub
-from modulo.core.secrets_backend import create_secrets_backend
+from farna.connectors.security import _MASK, CredentialRedactor
+from farna.core.connector_hub import _SKIP_WARN_SEEN, ConnectorHub
+from farna.core.secrets_backend import create_secrets_backend
 
 _KEY = Fernet.generate_key().decode()
 

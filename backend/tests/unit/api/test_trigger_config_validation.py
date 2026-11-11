@@ -23,15 +23,15 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes.triggers import (
+from farna.api.routes.triggers import (
     _RECOGNISED_TRIGGER_CONFIG_KEYS,
     _merge_trigger_config,
     _validate_trigger_config_keys,
 )
-from modulo.core.trigger_engine import _RECOGNISED_TRIGGER_CONFIG_KEYS as _ENGINE_KEYS
-from modulo.core.trigger_streak import _streak_auto_deactivate_enabled, _streak_config
+from farna.core.trigger_engine import _RECOGNISED_TRIGGER_CONFIG_KEYS as _ENGINE_KEYS
+from farna.core.trigger_streak import _streak_auto_deactivate_enabled, _streak_config
 
-_ENGINE_SOURCE_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo"
+_ENGINE_SOURCE_DIR = Path(__file__).resolve().parents[3] / "src" / "farna"
 
 #: Source files whose ``cfg``/``config`` locals hold a trigger's ``config_json``.
 #: ``polling.py`` and ``pre_guardrail.py`` also call ``.get()`` but on a

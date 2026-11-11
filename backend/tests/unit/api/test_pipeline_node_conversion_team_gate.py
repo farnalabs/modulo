@@ -40,11 +40,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy.sql import Select
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -53,7 +53,7 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PIPELINE_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _NODE_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 _TEAM_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
-_PREFIX = "modulo.api.routes.pipelines."
+_PREFIX = "farna.api.routes.pipelines."
 
 _NON_MEMBER_DETAIL = "Not a member of the team that owns this resource"
 
@@ -300,7 +300,7 @@ def test_in_txn_team_gate_denial_overrides_a_passing_request_time_gate() -> None
     """TOCTOU close: dependency says member, the locked row says otherwise.
 
     The request-time dependency resolves membership through
-    ``modulo.api.dependencies``' own import (the session answers a membership
+    ``farna.api.dependencies``' own import (the session answers a membership
     row), while the in-txn re-check resolves it through the one imported into
     ``routes.pipelines`` - patched here to deny, exactly as an ownership flip
     inside the request -> mutation window would behave. The endpoint must

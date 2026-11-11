@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.auth.api_key import generate_api_key, validate_api_key
-from modulo.auth.permissions import _clamp_role
+from farna.auth.api_key import generate_api_key, validate_api_key
+from farna.auth.permissions import _clamp_role
 
 # ── _clamp_role pure tests ────────────────────────────────────────────────
 
@@ -68,8 +68,8 @@ class TestMintCap:
         """
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_mint_cap, _require_runner
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.api.routes.api_keys import _enforce_mint_cap, _require_runner
+        from farna.auth.jwt import TenantPrincipal
 
         principal = TenantPrincipal(
             username="u",
@@ -119,8 +119,8 @@ class TestMintCap:
     async def test_removed_member_live_none_denied(self) -> None:
         from fastapi import HTTPException
 
-        from modulo.api.routes.api_keys import _enforce_mint_cap
-        from modulo.auth.jwt import TenantPrincipal
+        from farna.api.routes.api_keys import _enforce_mint_cap
+        from farna.auth.jwt import TenantPrincipal
 
         principal = TenantPrincipal(
             username="u",
@@ -142,7 +142,7 @@ class TestMintCap:
 class TestMiddlewareLiveClamp:
     def _make_key(self, token: str, *, role: str = "operator") -> MagicMock:
         """Fake OrgApiKey whose hashed_secret matches the middleware raw pre-check."""
-        from modulo.auth.api_key import _hash_key
+        from farna.auth.api_key import _hash_key
 
         key = MagicMock()
         key.id = uuid.uuid4()
@@ -156,7 +156,7 @@ class TestMiddlewareLiveClamp:
 
     @pytest.fixture(autouse=True)
     def _reset_counter(self) -> None:
-        import modulo.api.mcp_server as _ms
+        import farna.api.mcp_server as _ms
 
         saved = _ms._api_key_role_cap_count
         _ms._api_key_role_cap_count = 0
@@ -168,15 +168,15 @@ class TestMiddlewareLiveClamp:
 
         Returns the clamped role, or None when the key dies (401).
         """
-        import modulo.api.mcp_server as _ms
+        import farna.api.mcp_server as _ms
 
         async def _fake_validate(s, token, org_id=None):
             return key
 
         with (
-            patch("modulo.api.mcp_server.validate_api_key", new=AsyncMock(side_effect=_fake_validate)),
+            patch("farna.api.mcp_server.validate_api_key", new=AsyncMock(side_effect=_fake_validate)),
             patch(
-                "modulo.api.mcp_server.resolve_role_from_membership",
+                "farna.api.mcp_server.resolve_role_from_membership",
                 new=AsyncMock(return_value=live_role),
             ),
         ):
@@ -202,8 +202,8 @@ class TestMiddlewareLiveClamp:
 
     async def test_demoted_operator_key_degrades_on_next_call(self) -> None:
         """key.role=operator, live=runner → effective 'runner'; operator tool denied."""
-        from modulo.api.mcp_server import _ctx_role, _ctx_role_val
-        from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+        from farna.api.mcp_server import _ctx_role, _ctx_role_val
+        from farna.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
 
         token, _, _ = generate_api_key()
         key = self._make_key(token, role="operator")
@@ -217,7 +217,7 @@ class TestMiddlewareLiveClamp:
             with pytest.raises(MCPAuthorizationError):
                 check_tool_scope(_ctx_role_val(), "create_pipeline")
 
-            import modulo.api.mcp_server as _ms
+            import farna.api.mcp_server as _ms
 
             assert _ms.get_api_key_role_cap_count() == 1
         finally:
@@ -225,7 +225,7 @@ class TestMiddlewareLiveClamp:
 
     async def test_removed_owner_key_dies_401(self) -> None:
         """live_role=None (owner removed/deactivated) → the key dies."""
-        import modulo.api.mcp_server as _ms
+        import farna.api.mcp_server as _ms
 
         token, _, _ = generate_api_key()
         key = self._make_key(token, role="operator")
@@ -238,7 +238,7 @@ class TestMiddlewareLiveClamp:
 
     async def test_no_degradation_when_live_matches_minted(self) -> None:
         """operator minted / operator live → no clamp, no counter increment."""
-        import modulo.api.mcp_server as _ms
+        import farna.api.mcp_server as _ms
 
         token, _, _ = generate_api_key()
         key = self._make_key(token, role="operator")

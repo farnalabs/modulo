@@ -27,11 +27,11 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES
+from farna.db.models.run import ACTIVE_RUN_STATUSES, PIPELINE_CAPACITY_STATUSES, TERMINAL_STATUSES
 
 _MIGRATION_NAME = "0180_hitl_parked_status"
 _MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 _CHECK_CONSTRAINT_NAME = "ck_runs_status"
 _EXPECTED_STATUSES = frozenset(
@@ -68,7 +68,7 @@ def _load_migration() -> ModuleType:
 def _model_check_sqltext() -> str:
     from sqlalchemy import CheckConstraint
 
-    from modulo.db.models.run import Run
+    from farna.db.models.run import Run
 
     checks = [c for c in Run.__table_args__ if isinstance(c, CheckConstraint)]
     check = next(c for c in checks if c.name == _CHECK_CONSTRAINT_NAME)

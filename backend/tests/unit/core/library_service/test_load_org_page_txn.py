@@ -3,10 +3,10 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.library_service import _load_org_page
-from modulo.db.crud.base import PageResult
+from farna.core.library_service import _load_org_page
+from farna.db.crud.base import PageResult
 
-_MODULE = "modulo.core.library_service"
+_MODULE = "farna.core.library_service"
 
 
 def _session(*, in_transaction: bool) -> MagicMock:

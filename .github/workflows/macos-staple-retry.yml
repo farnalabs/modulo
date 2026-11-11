@@ -525,7 +525,7 @@ jobs:
           from pathlib import Path
 
           sys.path.insert(0, "backend/src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
 
           root = Path("release-assets")
           version = os.environ["VERSION"]
@@ -626,7 +626,7 @@ jobs:
           from pathlib import Path
 
           sys.path.insert(0, "backend/src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
 
           root = Path("release-assets")
           version = os.environ["VERSION"]
@@ -738,7 +738,7 @@ jobs:
           from pathlib import Path
 
           sys.path.insert(0, "backend/src")
-          from modulo.launcher import manifest as m
+          from farna.launcher import manifest as m
 
           tag = os.environ["RELEASE_TAG"]
           repo = os.environ["REPO"]

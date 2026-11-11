@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.pipeline_apply (FAR-681 slice 2).
+"""Unit tests for farna.cli.apply.pipeline_apply (FAR-681 slice 2).
 
 HTTP mocked via respx. Round-trip payloads are validated against the REAL
 API pydantic models (contract round-trip), not hand-built response fixtures.
@@ -15,12 +15,12 @@ import httpx
 import pytest
 import respx
 
-from modulo.api.routes.pipelines import PipelineCreate, PipelineUpdate
-from modulo.cli.apply.executor import (
+from farna.api.routes.pipelines import PipelineCreate, PipelineUpdate
+from farna.cli.apply.executor import (
     PAGE_SIZE,
     ApplyExecutor,
 )
-from modulo.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.loader import parse_apply_documents
 from tests.unit.cli.test_apply_executor import _backend_item, _mock_current, _schema_item
 
 CONFIG_TEXT = """
@@ -882,8 +882,8 @@ class TestStdoutRetentionConfigPayloads:
         builder sends the value, re-planning the same entity against the
         stored value reports 'unchanged'. Round-trip through the real
         managed_view + plan_entity + the real apply payload builder."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {
@@ -981,8 +981,8 @@ class TestHitlReviewWindowPayloads:
         The stored row is rebuilt from the REAL PipelineUpdate model's
         ``model_dump(exclude_unset=True)`` output, not the raw request body, so
         the assertion fails if the REST model ever silently drops the field."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {
@@ -1020,8 +1020,8 @@ class TestHitlReviewWindowPayloads:
     def test_omitted_field_patches_null_and_still_converges(self) -> None:
         """Unconditional semantics: an OMITTED key means null, and a live row
         carrying a UI-set override therefore plans as drift and is cleared."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
@@ -1112,8 +1112,8 @@ class TestQueueTimeoutPayloads:
         The stored row is rebuilt from the REAL PipelineUpdate model's
         ``model_dump(exclude_unset=True)`` output, not the raw request body, so
         the assertion fails if the REST model ever silently drops the field."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {
@@ -1152,8 +1152,8 @@ class TestQueueTimeoutPayloads:
         """Unconditional semantics: an OMITTED key means null (never expire),
         and a live row carrying a UI-set timeout therefore plans as drift and is
         cleared."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
@@ -1250,8 +1250,8 @@ class TestRuntimeLimitPayloads:
         """Prove-the-fix: plan 'updated' against a row with different limits;
         after the payload builder sends them, re-planning against the stored
         values reports 'unchanged' (no perpetual drift)."""
-        from modulo.cli.apply.models import PipelineEntity
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.models import PipelineEntity
+        from farna.cli.apply.plan import plan_entity
 
         entity = PipelineEntity.model_validate(
             {
@@ -1339,7 +1339,7 @@ class TestRuntimeLimitPayloads:
         mid-apply 422 otherwise."""
         from pydantic import ValidationError
 
-        from modulo.cli.apply.models import PipelineEntity
+        from farna.cli.apply.models import PipelineEntity
 
         for field in ("node_timeout_seconds", "max_duration_seconds"):
             with pytest.raises(ValidationError):
@@ -1352,7 +1352,7 @@ class TestRuntimeLimitPayloads:
     def test_yaml_boolean_limit_fails_to_load(self) -> None:
         """The real config path: YAML 1.1 parses ``on`` as True, which must
         fail the load instead of becoming a one-second kill switch."""
-        from modulo.cli.apply.loader import ApplyLoadError
+        from farna.cli.apply.loader import ApplyLoadError
 
         with pytest.raises(ApplyLoadError, match="not a boolean"):
             parse_apply_documents(
@@ -1573,7 +1573,7 @@ class TestFailureIsolation:
         import click
         from click.testing import CliRunner
 
-        from modulo.cli.apply import register_apply
+        from farna.cli.apply import register_apply
 
         monkeypatch.setenv("MODULO_URL", "https://api.test")
         monkeypatch.setenv("MODULO_API_KEY", "key")

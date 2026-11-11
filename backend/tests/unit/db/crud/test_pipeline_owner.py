@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from modulo.db.crud.pipeline_owner import (
+from farna.db.crud.pipeline_owner import (
     ACCOUNTABILITY_OWNER_FIELDS,
     validate_accountability_owner,
 )

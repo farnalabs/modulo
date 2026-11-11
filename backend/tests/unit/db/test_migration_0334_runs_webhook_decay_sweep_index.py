@@ -32,11 +32,11 @@ from unittest.mock import patch
 from sqlalchemy import Index
 from sqlalchemy.dialects import postgresql
 
-from modulo.core import pipeline_decay_alerts as decay
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from farna.core import pipeline_decay_alerts as decay
+from farna.db.models.run import TERMINAL_STATUSES, Run
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0334_runs_webhook_decay_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0333_trigger_event_findings"

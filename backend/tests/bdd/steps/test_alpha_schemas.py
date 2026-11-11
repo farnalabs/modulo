@@ -72,10 +72,10 @@ _NESTED_DEFINITION = {
 def create_schema(name: str, client, request):
     with (
         patch(
-            "modulo.api.routes.schemas.create_schema",
+            "farna.api.routes.schemas.create_schema",
             return_value=_make_mock_schema(name=name),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas",
@@ -100,14 +100,14 @@ def create_nested_schema(name: str, client, request):
     carries the nested definition."""
     schema_id = _schema_id_for(name)
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
-            "modulo.api.routes.schemas.create_schema_version",
+            "farna.api.routes.schemas.create_schema_version",
             return_value=_make_mock_schema_version(
                 version="1", version_number=1, schema_id=schema_id, definition_json=_NESTED_DEFINITION
             ),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             f"/api/v1/schemas/{schema_id}/versions",
@@ -126,10 +126,10 @@ def create_schema_simple(name: str, client, request):
 
     with (
         patch(
-            "modulo.api.routes.schemas.create_schema",
+            "farna.api.routes.schemas.create_schema",
             side_effect=IntegrityError("INSERT INTO schemas", {}, Exception("duplicate key")),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post("/api/v1/schemas", json={"name": name})
     request.node._resp = resp
@@ -143,10 +143,10 @@ def create_invalid_schema(name: str, client, request):
     invalid_definition = {"type": 123, "properties": []}
     with (
         patch(
-            "modulo.api.routes.schemas.create_schema",
+            "farna.api.routes.schemas.create_schema",
             return_value=_make_mock_schema(name=name),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/schemas",
@@ -197,8 +197,8 @@ def get_schema(name: str, client, request):
     other_org = getattr(request.node, "_other_org", None)
     return_val = None if other_org else _make_mock_schema(name=name)
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=return_val),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=return_val),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_schema_id_for(name)}")
     request.node._resp = resp
@@ -211,14 +211,14 @@ def update_schema(client, request):
     name = getattr(request.node, "_schema_name", "test-schema")
     next_number = getattr(request.node, "_schema_version", 1) + 1
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
-            "modulo.api.routes.schemas.create_schema_version",
+            "farna.api.routes.schemas.create_schema_version",
             return_value=_make_mock_schema_version(
                 version=str(next_number), version_number=next_number, schema_id=_schema_id_for(name)
             ),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             f"/api/v1/schemas/{_schema_id_for(name)}/versions",
@@ -235,14 +235,14 @@ def update_schema(client, request):
 def update_schema_to_version(version: int, client, request):
     name = getattr(request.node, "_schema_name", "test-schema")
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
-            "modulo.api.routes.schemas.create_schema_version",
+            "farna.api.routes.schemas.create_schema_version",
             return_value=_make_mock_schema_version(
                 version=str(version), version_number=version, schema_id=_schema_id_for(name)
             ),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.post(
             f"/api/v1/schemas/{_schema_id_for(name)}/versions",
@@ -277,9 +277,9 @@ def get_schema_versions(name: str, client, request):
     versions = [_make_mock_schema_version(version=str(i + 1), version_number=i + 1) for i in range(count)]
     page_result = MagicMock(items=versions, total=count, page=1, page_size=20)
     with (
-        patch("modulo.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
-        patch("modulo.api.routes.schemas.list_schema_versions", return_value=page_result),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
+        patch("farna.api.routes.schemas.list_schema_versions", return_value=page_result),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_schema_id_for(name)}/versions")
     request.node._resp = resp
@@ -302,7 +302,7 @@ def schema_two_versions(org: str, name: str, request):
 def get_schema_version(name: str, version: int, client, request):
     with (
         patch(
-            "modulo.api.routes.schemas.get_schema_version",
+            "farna.api.routes.schemas.get_schema_version",
             return_value=_make_mock_schema_version(
                 version=str(version),
                 version_number=version,
@@ -310,7 +310,7 @@ def get_schema_version(name: str, version: int, client, request):
                 definition_json={"type": "object", "properties": {"title": {"type": "string"}}},
             ),
         ),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.get(f"/api/v1/schemas/{_schema_id_for(name)}/versions/{version}")
     request.node._resp = resp
@@ -329,7 +329,7 @@ def no_pipeline_uses_schema(name: str, request):
 
 @when(parsers.parse("I DELETE /api/schemas/{name}"))
 def delete_schema(name: str, client, request):
-    from modulo.db.crud.schema import SchemaDeletionProtectedError
+    from farna.db.crud.schema import SchemaDeletionProtectedError
 
     if getattr(request.node, "_schema_unused", False):
         side_effect = None
@@ -340,8 +340,8 @@ def delete_schema(name: str, client, request):
 
         side_effect = _raise
     with (
-        patch("modulo.api.routes.schemas.delete_schema", side_effect=side_effect),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.delete_schema", side_effect=side_effect),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{_schema_id_for(name)}")
     request.node._resp = resp
@@ -360,8 +360,8 @@ def pipeline_uses_schema(name: str, request):
 @when(parsers.parse("I DELETE /api/schemas/{name} with force=true"))
 def force_delete_schema(name: str, client, request):
     with (
-        patch("modulo.api.routes.schemas.delete_schema", return_value=True),
-        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("farna.api.routes.schemas.delete_schema", return_value=True),
+        patch("farna.api.routes.schemas.set_rls_org"),
     ):
         resp = client.delete(f"/api/v1/schemas/{_schema_id_for(name)}?force=true")
     request.node._resp = resp

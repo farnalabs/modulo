@@ -20,8 +20,8 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import NodeCancelledError
 from langgraph.types import Interrupt
 
-from modulo.core.pipeline_engine.decorator import set_connector_hub
-from modulo.core.pipeline_engine.executor import (
+from farna.core.pipeline_engine.decorator import set_connector_hub
+from farna.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
     RunRetryPolicyError,
@@ -78,19 +78,19 @@ from modulo.core.pipeline_engine.executor import (
     _traceback_detail,
     compute_retry_aware_topology_hash,
 )
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     ConnectorNodeFailedError,
     SupersededNodeError,
     _build_sandbox_node_envelope,
     _SandboxNodeOutput,
     make_connector_fn,
 )
-from modulo.core.pipeline_engine.retry_policy import (
+from farna.core.pipeline_engine.retry_policy import (
     _failure_event_matches,
     _get_otel_meter,
     _retry_delay_bucket,
 )
-from modulo.core.pipeline_engine.runaway_protection import RunawayRunError
+from farna.core.pipeline_engine.runaway_protection import RunawayRunError
 
 # ---------------------------------------------------------------------------
 # _sanitize_detail
@@ -120,7 +120,7 @@ async def test_safe_pipeline_name_returns_name_on_success():
     mock_pipeline = MagicMock()
     mock_pipeline.name = "Test Pipeline"
     with patch(
-        "modulo.core.pipeline_engine.executor.get_pipeline",
+        "farna.core.pipeline_engine.executor.get_pipeline",
         new_callable=AsyncMock,
         return_value=mock_pipeline,
     ):
@@ -133,7 +133,7 @@ async def test_safe_pipeline_name_returns_none_on_exception():
     """A failed lookup returns None (fail-open)."""
     mock_session = AsyncMock()
     with patch(
-        "modulo.core.pipeline_engine.executor.get_pipeline",
+        "farna.core.pipeline_engine.executor.get_pipeline",
         new_callable=AsyncMock,
         side_effect=RuntimeError("db error"),
     ):
@@ -146,7 +146,7 @@ async def test_safe_pipeline_name_returns_none_when_pipeline_is_none():
     """Missing pipeline returns None."""
     mock_session = AsyncMock()
     with patch(
-        "modulo.core.pipeline_engine.executor.get_pipeline",
+        "farna.core.pipeline_engine.executor.get_pipeline",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -186,23 +186,23 @@ def test_traceback_detail_respects_limit():
 def test_failure_build_sha_returns_value_when_available():
     """When attribution module is available, _failure_build_sha calls _get_build_sha."""
     with (
-        patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
-        patch("modulo.core.pipeline_engine.executor._get_build_sha", return_value="abc123"),
+        patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
+        patch("farna.core.pipeline_engine.executor._get_build_sha", return_value="abc123"),
     ):
         assert _failure_build_sha() == "abc123"
 
 
 def test_failure_build_sha_returns_unknown_when_unavailable():
     """When attribution module is not available, returns 'unknown'."""
-    with patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
+    with patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
         assert _failure_build_sha() == "unknown"
 
 
 def test_failure_build_sha_returns_unknown_on_exception():
     """When _get_build_sha raises, returns 'unknown'."""
     with (
-        patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
-        patch("modulo.core.pipeline_engine.executor._get_build_sha", side_effect=RuntimeError),
+        patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
+        patch("farna.core.pipeline_engine.executor._get_build_sha", side_effect=RuntimeError),
     ):
         assert _failure_build_sha() == "unknown"
 
@@ -210,23 +210,23 @@ def test_failure_build_sha_returns_unknown_on_exception():
 def test_failure_column_returns_value_when_available():
     """When attribution module is available, returns the column."""
     with (
-        patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
-        patch("modulo.core.pipeline_engine.executor._extract_column_info", return_value=("table", "col_a")),
+        patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
+        patch("farna.core.pipeline_engine.executor._extract_column_info", return_value=("table", "col_a")),
     ):
         assert _failure_column(ValueError("err")) == "col_a"
 
 
 def test_failure_column_returns_none_when_unavailable():
     """When attribution module is not available, returns None."""
-    with patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
+    with patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
         assert _failure_column(ValueError("err")) is None
 
 
 def test_failure_column_returns_none_on_exception():
     """When _extract_column_info raises, returns None."""
     with (
-        patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
-        patch("modulo.core.pipeline_engine.executor._extract_column_info", side_effect=RuntimeError),
+        patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
+        patch("farna.core.pipeline_engine.executor._extract_column_info", side_effect=RuntimeError),
     ):
         assert _failure_column(ValueError("err")) is None
 
@@ -234,15 +234,15 @@ def test_failure_column_returns_none_on_exception():
 def test_enrich_failure_detail_delegates_when_available():
     """When attribution module is available, enriches the detail."""
     with (
-        patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
-        patch("modulo.core.pipeline_engine.executor.enrich_error_detail", return_value="enriched"),
+        patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", True),
+        patch("farna.core.pipeline_engine.executor.enrich_error_detail", return_value="enriched"),
     ):
         assert _enrich_failure_detail("raw", ValueError("err")) == "enriched"
 
 
 def test_enrich_failure_detail_returns_raw_when_unavailable():
     """When attribution module is not available, returns raw detail unchanged."""
-    with patch("modulo.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
+    with patch("farna.core.pipeline_engine.executor._ATTRIBUTION_AVAILABLE", False):
         assert _enrich_failure_detail("raw", ValueError("err")) == "raw"
 
 
@@ -314,7 +314,7 @@ def test_record_retry_redispatch_with_meter():
     mock_meter = MagicMock()
     mock_counter = MagicMock()
     mock_meter.create_counter.return_value = mock_counter
-    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
+    with patch("farna.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
         _record_retry_redispatch(reason="failed", schedule_state="valid", delay_seconds=10.0)
     mock_meter.create_counter.assert_called_once()
     mock_counter.add.assert_called_once()
@@ -326,7 +326,7 @@ def test_record_retry_redispatch_with_meter():
 
 def test_record_retry_redispatch_no_meter():
     """When no meter is available, it returns without error."""
-    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=None) as mock_meter:
+    with patch("farna.core.pipeline_engine.retry_policy._get_otel_meter", return_value=None) as mock_meter:
         _record_retry_redispatch(reason="failed", schedule_state="absent", delay_seconds=0.5)
     assert mock_meter.call_count == 1
 
@@ -335,7 +335,7 @@ def test_record_retry_redispatch_exception_is_swallowed():
     """When the meter raises, the exception is swallowed."""
     mock_meter = MagicMock()
     mock_meter.create_counter.side_effect = RuntimeError("metrics down")
-    with patch("modulo.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
+    with patch("farna.core.pipeline_engine.retry_policy._get_otel_meter", return_value=mock_meter):
         _record_retry_redispatch(reason="failed", schedule_state="valid", delay_seconds=1.0)
     assert mock_meter.create_counter.call_count == 1
 
@@ -592,7 +592,7 @@ def test_sandbox_agent_for_snapshot_caches_result():
     """Second call hits the cache, not the function."""
     snap_id = uuid.uuid4()
     graph = {"nodes": [{"node_type": "sandbox_agent", "id": "n1"}]}
-    with patch("modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent", return_value=True) as mock_fn:
+    with patch("farna.core.pipeline_engine.executor._graph_contains_sandbox_agent", return_value=True) as mock_fn:
         r1 = _sandbox_agent_for_snapshot(snap_id, graph)
         r2 = _sandbox_agent_for_snapshot(snap_id, graph)
     assert r1 is True
@@ -602,14 +602,14 @@ def test_sandbox_agent_for_snapshot_caches_result():
 
 def test_sandbox_agent_for_snapshot_evicts_when_full():
     """When cache is full, it clears before adding."""
-    import modulo.core.pipeline_engine.executor as exec_mod
+    import farna.core.pipeline_engine.executor as exec_mod
 
     # Fill the cache
     for i in range(exec_mod._SANDBOX_AGENT_CACHE_MAX):
         exec_mod._SANDBOX_AGENT_CACHE[str(uuid.uuid4())] = False
     snap_id = uuid.uuid4()
     graph = {"nodes": [{"node_type": "sandbox_agent", "id": "n1"}]}
-    with patch("modulo.core.pipeline_engine.executor._graph_contains_sandbox_agent", return_value=True):
+    with patch("farna.core.pipeline_engine.executor._graph_contains_sandbox_agent", return_value=True):
         result = _sandbox_agent_for_snapshot(snap_id, graph)
     assert result is True
     assert len(exec_mod._SANDBOX_AGENT_CACHE) == 1
@@ -880,7 +880,7 @@ async def test_connector_failure_envelope_survives_node_stream_and_finalization(
         patch.object(executor, "_dispatch_run_failed", new=AsyncMock()),
         patch.object(executor, "_alert_provider_failure", new=AsyncMock()),
         patch.object(executor, "_run_finalize_cost_transaction", new=AsyncMock()) as finalize_cost,
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
         final_run = await executor._finalize_run_after_stream(
             run_id=run_id,
@@ -983,7 +983,7 @@ async def test_connector_write_failure_envelope_survives_node_stream_and_finaliz
         patch.object(executor, "_dispatch_run_failed", new=AsyncMock()),
         patch.object(executor, "_alert_provider_failure", new=AsyncMock()),
         patch.object(executor, "_run_finalize_cost_transaction", new=AsyncMock()) as finalize_cost,
-        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+        patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
         final_run = await executor._finalize_run_after_stream(
             run_id=run_id,
@@ -1258,7 +1258,7 @@ def test_resolve_post_node_eval_target_splittable_found():
     """When resolve_node_contract_output finds a result, it's returned."""
     envelope = {"output": {"result": "ok"}}
     with patch(
-        "modulo.core.pipeline_engine.executor.resolve_node_contract_output",
+        "farna.core.pipeline_engine.executor.resolve_node_contract_output",
         return_value=(True, {"result": "ok"}),
     ):
         result = _resolve_post_node_eval_target("n1", envelope, {"n1": "sandbox_agent"})
@@ -1269,7 +1269,7 @@ def test_resolve_post_node_eval_target_splittable_not_found():
     """Splittable type with no contract output returns the envelope."""
     envelope = {"output": {"status": "done"}}
     with patch(
-        "modulo.core.pipeline_engine.executor.resolve_node_contract_output",
+        "farna.core.pipeline_engine.executor.resolve_node_contract_output",
         return_value=(False, {}),
     ):
         result = _resolve_post_node_eval_target("n1", envelope, {"n1": "sandbox_agent"})
@@ -1281,7 +1281,7 @@ def test_resolve_post_node_eval_target_non_splittable_dict_inner():
     the function returns the envelope (fail-closed for splittable types)."""
     envelope = {"output": {"key": "val"}}
     with patch(
-        "modulo.core.pipeline_engine.executor.resolve_node_contract_output",
+        "farna.core.pipeline_engine.executor.resolve_node_contract_output",
         return_value=(False, {}),
     ):
         # "agent" IS in SPLITTABLE_NODE_TYPES, so the function returns the envelope
@@ -1294,7 +1294,7 @@ def test_resolve_post_node_eval_target_non_splittable_non_dict_inner():
     the function returns the envelope regardless of inner output type."""
     envelope = {"output": "str"}
     with patch(
-        "modulo.core.pipeline_engine.executor.resolve_node_contract_output",
+        "farna.core.pipeline_engine.executor.resolve_node_contract_output",
         return_value=(False, {}),
     ):
         result = _resolve_post_node_eval_target("n1", envelope, {"n1": "agent"})
@@ -1306,7 +1306,7 @@ def test_resolve_post_node_eval_target_no_node_type():
 
     envelope = {"output": "just-a-string"}
     with patch(
-        "modulo.core.pipeline_engine.executor.resolve_node_contract_output",
+        "farna.core.pipeline_engine.executor.resolve_node_contract_output",
         return_value=(False, {}),
     ):
         result = _resolve_post_node_eval_target("n1", envelope, None)
@@ -1338,7 +1338,7 @@ def test_stream_terminal_reason_session_lost():
 def test_stream_terminal_reason_agent_failure():
     """agent_failure with no stall → agent.failed when elevation enabled."""
     state = _StreamState(agent_failure_reason="agent error")
-    with patch("modulo.settings.get_settings") as mock_settings:
+    with patch("farna.settings.get_settings") as mock_settings:
         mock_settings.return_value.modulo_agent_failure_elevation_enabled = True
         result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
     assert result is not None
@@ -2109,7 +2109,7 @@ def test_compute_run_work_intact_false_for_no_output_json():
 
 
 def test_compute_run_work_intact_false_for_sandbox_agent_failed():
-    from modulo.core.pipeline_engine.error_codes import _CODE_SANDBOX_AGENT_FAILED
+    from farna.core.pipeline_engine.error_codes import _CODE_SANDBOX_AGENT_FAILED
 
     executor = _make_executor()
     assert executor._compute_run_work_intact("failed", _CODE_SANDBOX_AGENT_FAILED, {}, set()) is False
@@ -2122,21 +2122,21 @@ def test_compute_run_work_intact_false_for_sandbox_agent_failed():
 
 def test_log_accumulation_state_zero_segments():
     """Zero segments → info log."""
-    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+    with patch("farna.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 0, None)
         assert mock_log.info.call_count == 1
 
 
 def test_log_accumulation_state_segments_with_empty_usage():
     """Segments > 0 but empty usage → warning (broken accumulation)."""
-    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+    with patch("farna.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 1, {})
         assert mock_log.warning.call_count == 1
 
 
 def test_log_accumulation_state_segments_with_usage():
     """Segments > 0 with non-empty usage → no log."""
-    with patch("modulo.core.pipeline_engine.executor._log") as mock_log:
+    with patch("farna.core.pipeline_engine.executor._log") as mock_log:
         PipelineExecutor._log_accumulation_state(uuid.uuid4(), 1, {"n1": {"total_tokens": 10}})
         assert mock_log.info.call_count == 0
         assert mock_log.warning.call_count == 0
@@ -2331,7 +2331,7 @@ async def test_reclassify_after_work_intact_best_effort():
     run_mock = MagicMock()
     session.get.return_value = run_mock
     with patch(
-        "modulo.core.pipeline_engine.classify.classify_and_persist_run",
+        "farna.core.pipeline_engine.classify.classify_and_persist_run",
         new_callable=AsyncMock,
         side_effect=RuntimeError("classify boom"),
     ):
@@ -2425,7 +2425,7 @@ async def test_stream_graph_superseded_node_error():
 
 async def test_stream_graph_output_rejected_error():
     """OutputRejectedError maps to 'failed' + 'output_rejected'."""
-    from modulo.core.pipeline_engine.output_filter import OutputRejectedError
+    from farna.core.pipeline_engine.output_filter import OutputRejectedError
 
     compiled = MagicMock()
 
@@ -2450,7 +2450,7 @@ async def test_stream_graph_output_rejected_error():
 
 async def test_stream_graph_router_no_match_error():
     """RouterNoMatchError maps to 'router_no_match'."""
-    from modulo.core.pipeline_engine.errors import RouterNoMatchError
+    from farna.core.pipeline_engine.errors import RouterNoMatchError
 
     compiled = MagicMock()
 
@@ -2496,7 +2496,7 @@ async def test_stream_graph_node_cancelled_reraises():
 
 async def test_stream_graph_run_cancelled_terminalizes():
     """RunCancelledError is caught and terminalized as 'cancelled'."""
-    from modulo.core.pipeline_engine.decorator import RunCancelledError
+    from farna.core.pipeline_engine.decorator import RunCancelledError
 
     compiled = MagicMock()
 

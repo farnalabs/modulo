@@ -3,9 +3,9 @@ id: feat-schemas
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/schemas.py
-  - backend/src/modulo/api/routes/parameter_schemas.py
-  - backend/src/modulo/core/schema_registry
+  - backend/src/farna/api/routes/schemas.py
+  - backend/src/farna/api/routes/parameter_schemas.py
+  - backend/src/farna/core/schema_registry
 unit-tests:
   - backend/tests/unit/api/test_schemas_endpoint.py
   - backend/tests/unit/api/test_schema_infer_endpoint.py

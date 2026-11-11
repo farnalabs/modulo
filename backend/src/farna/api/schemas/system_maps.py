@@ -1,0 +1,537 @@
+"""System Maps request/response schemas (FAR-2236).
+
+Centralised Pydantic models for the System Maps REST API surface.
+All validation uses vocabularies from the ORM models (db/models/system_map.py).
+"""
+
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from typing import Any, Literal
+
+from fastapi import HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from farna.core.system_map_validation import validate_system_map_graph_references
+
+# ─── Centralised vocabularies (mirror ORM CHECK constraints) ───
+
+VALID_NODE_TYPES: tuple[str, ...] = (
+    "pipeline",
+    "agent",
+    "connector",
+    "improvement_loop",
+    "data_store",
+    "external_system",
+)
+
+VALID_REL_TYPES: tuple[str, ...] = ("flow", "data", "trigger", "loop_back")
+
+VALID_REVISION_STATUSES: tuple[str, ...] = ("draft", "published", "archived")
+
+VALID_BINDING_KINDS: tuple[str, ...] = ("trigger", "action_pipeline")
+
+VALID_VISIBILITY: tuple[str, ...] = ("org", "team")
+
+_ANCHORED_NODE_TYPE_PATTERN = f"^({'|'.join(VALID_NODE_TYPES)})$"
+_ANCHORED_REL_TYPE_PATTERN = f"^({'|'.join(VALID_REL_TYPES)})$"
+_ANCHORED_BINDING_KIND_PATTERN = f"^({'|'.join(VALID_BINDING_KINDS)})$"
+
+
+# ─── Request bodies ───
+
+
+class SystemMapCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    owner_team_id: uuid.UUID | None = None
+    visibility: Literal["org", "team"] = "org"
+    default_map: bool = False
+
+
+class SystemMapUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    owner_team_id: uuid.UUID | None = None
+    visibility: Literal["org", "team"] | None = None
+    default_map: bool | None = None
+
+
+class SystemMapRevisionCreate(BaseModel):
+    """Create a draft revision (nodes, relationships, loop configs)."""
+
+    nodes: list["SystemMapNodeCreate"] = Field(default_factory=list)
+    relationships: list["SystemMapRelationshipCreate"] = Field(default_factory=list)
+    loop_configs: list["SystemMapLoopConfigCreate"] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def validate_graph_references(self) -> "SystemMapRevisionCreate":
+        validate_system_map_graph_references(self.nodes, self.relationships, self.loop_configs)
+        return self
+
+
+class SystemMapNodeCreate(BaseModel):
+    node_key: str = Field(min_length=1, max_length=100)
+    node_type: str = Field(pattern=_ANCHORED_NODE_TYPE_PATTERN)
+    display_name: str = Field(min_length=1, max_length=255)
+    config_json: dict[str, Any] = Field(default_factory=dict)
+    pipeline_id: uuid.UUID | None = None
+    connector_instance_id: uuid.UUID | None = None
+    owner_team_id: uuid.UUID | None = None
+    eval_id: uuid.UUID | None = None
+    position_x: Decimal = Field(default=Decimal(0))
+    position_y: Decimal = Field(default=Decimal(0))
+
+
+class SystemMapRelationshipCreate(BaseModel):
+    source_node_key: str = Field(min_length=1, max_length=100)
+    target_node_key: str = Field(min_length=1, max_length=100)
+    relationship_type: str = Field(pattern=_ANCHORED_REL_TYPE_PATTERN)
+    config_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemMapLoopConfigCreate(BaseModel):
+    node_key: str = Field(min_length=1, max_length=100)
+    target_signal: str = Field(min_length=1, max_length=100)
+    observation_window_seconds: int = Field(ge=1)
+    action_pipeline_id: uuid.UUID
+    budget_limit_usd: Decimal = Field(ge=0)
+    cooldown_seconds: int = Field(ge=0)
+    outcome_metric: str = Field(min_length=1, max_length=100)
+
+
+class AttributionBindingCreate(BaseModel):
+    pipeline_id: uuid.UUID
+    trigger_id: uuid.UUID | None = None
+    node_key: str = Field(min_length=1, max_length=100)
+    binding_kind: str = Field(pattern=_ANCHORED_BINDING_KIND_PATTERN)
+
+    @model_validator(mode="after")
+    def validate_trigger_semantics(self) -> "AttributionBindingCreate":
+        if self.binding_kind == "trigger" and self.trigger_id is None:
+            raise ValueError("trigger bindings require trigger_id")
+        if self.binding_kind == "action_pipeline" and self.trigger_id is not None:
+            raise ValueError("action_pipeline bindings cannot include trigger_id")
+        return self
+
+
+# ─── Response models ───
+
+
+class SystemMapResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    name: str
+    description: str | None
+    owner_team_id: uuid.UUID | None
+    visibility: str
+    default_map: bool
+    published_revision_id: uuid.UUID | None
+    account_id: uuid.UUID
+    updated_by: uuid.UUID | None
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapListResponse(BaseModel):
+    items: list[SystemMapResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class SystemMapRevisionResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    system_map_id: uuid.UUID
+    revision_number: int
+    status: str
+    content_json: dict[str, Any]
+    published_at: datetime | None
+    # Version-aware fields (FAR-2288)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapRevisionHistoryEntry(BaseModel):
+    """Single entry in the revision history with its effective time range."""
+
+    revision: SystemMapRevisionResponse
+    is_current: bool = False
+
+
+class SystemMapRevisionHistoryResponse(BaseModel):
+    """List of all revisions for a system map with their effective time ranges."""
+
+    system_map_id: uuid.UUID
+    revisions: list[SystemMapRevisionHistoryEntry]
+
+
+class SystemMapRevisionByTimeResponse(BaseModel):
+    """The revision active at a specific timestamp."""
+
+    revision: SystemMapRevisionResponse
+    requested_at: datetime
+    matched: bool = True
+
+
+class SystemMapCurrentRevisionResponse(BaseModel):
+    """Currently active (published) revision - alias for the published revision."""
+
+    revision: SystemMapRevisionResponse
+
+
+class SystemMapNodeResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    revision_id: uuid.UUID
+    node_key: str
+    node_type: str
+    display_name: str
+    config_json: dict[str, Any]
+    pipeline_id: uuid.UUID | None
+    connector_instance_id: uuid.UUID | None
+    owner_team_id: uuid.UUID | None
+    eval_id: uuid.UUID | None
+    position_x: Decimal
+    position_y: Decimal
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapRelationshipResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    revision_id: uuid.UUID
+    source_node_key: str
+    target_node_key: str
+    relationship_type: str
+    config_json: dict[str, Any]
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapLoopConfigResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    revision_id: uuid.UUID
+    node_key: str
+    target_signal: str
+    observation_window_seconds: int
+    action_pipeline_id: uuid.UUID
+    budget_limit_usd: Decimal
+    cooldown_seconds: int
+    outcome_metric: str
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class SystemMapRevisionDetailResponse(BaseModel):
+    """Full revision with nested nodes, relationships, and loop configs."""
+
+    revision: SystemMapRevisionResponse
+    nodes: list[SystemMapNodeResponse]
+    relationships: list[SystemMapRelationshipResponse]
+    loop_configs: list[SystemMapLoopConfigResponse]
+
+
+class SystemMapOverviewNodeHealth(BaseModel):
+    """Per-node health metrics for the overview aggregate."""
+
+    node_key: str
+    node_type: str
+    display_name: str
+    health: Literal["healthy", "degraded", "unhealthy", "unknown"]
+    queue_depth: int | None = None
+    throughput_per_min: float | None = None
+    capacity_pressure: float | None = None  # 0.0-1.0
+    failure_rate: float | None = None  # 0.0-1.0
+    telemetry_coverage: float | None = None  # 0.0-1.0
+    last_run_id: uuid.UUID | None = None
+    last_run_status: str | None = None
+    last_run_completed_at: datetime | None = None
+
+
+class SystemMapOverviewLoopConfig(BaseModel):
+    """Per-loop-config status for the overview aggregate."""
+
+    node_key: str
+    target_signal: str
+    observation_window_seconds: int
+    action_pipeline_id: uuid.UUID
+    budget_limit_usd: Decimal
+    cooldown_seconds: int
+    outcome_metric: str
+    last_admission_at: datetime | None = None
+    last_admission_status: str | None = None
+    # True/False when reservation evidence exists; null only when no
+    # reservation was ever recorded for this loop.
+    cooldown_active: bool | None = None
+    cooldown_until: datetime | None = None
+    # Sum of reservations that genuinely hold budget (active/consumed) in the
+    # window; null when a contributing run's cost was never observed.
+    budget_used_usd: Decimal | None = None
+    # Null unless the deployment records a real budget period; the metrics
+    # window is NOT reported as one.
+    budget_period_start: datetime | None = None
+
+
+class SystemMapOverviewBottleneck(BaseModel):
+    """Detected bottleneck in the system map."""
+
+    node_key: str
+    node_type: str
+    display_name: str
+    kind: Literal["starved", "overloaded", "failing", "unobserved"]
+    detail: str
+    severity: Literal["low", "medium", "high", "critical"]
+
+
+class SystemMapOverviewResponse(BaseModel):
+    """Aggregate read model for a published system map.
+
+    Metrics cover the half-open UTC interval ``[window_start, window_end)``.
+    ``window_end`` is the generation instant and facts without an observed
+    timestamp remain null rather than being inferred. Failure rates use the
+    canonical analytics definition: only non-benign ``failed``/``stalled`` runs
+    count as failures, so a deliberate cancel or reject is not a fault.
+    """
+
+    system_map_id: uuid.UUID
+    revision_id: uuid.UUID
+    revision_number: int
+    generated_at: datetime
+    window_days: int
+    window_start: datetime
+    window_end: datetime
+    nodes: list[SystemMapOverviewNodeHealth]
+    loop_configs: list[SystemMapOverviewLoopConfig]
+    bottlenecks: list[SystemMapOverviewBottleneck]
+
+
+class AttributionBindingResponse(BaseModel):
+    id: uuid.UUID
+    organisation_id: uuid.UUID
+    pipeline_id: uuid.UUID
+    trigger_id: uuid.UUID | None
+    system_map_id: uuid.UUID
+    node_key: str
+    binding_kind: str
+    deleted_at: datetime | None
+    deleted_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class PublishValidationError(BaseModel):
+    """Error detail for publish validation failures."""
+
+    code: str
+    message: str
+    node_key: str | None = None
+    relationship_id: uuid.UUID | None = None
+
+
+class PublishValidationErrorHTTP(HTTPException):
+    """422 raised when a system map revision publish fails validation.
+
+    The exception carries the validation errors and the revision so the exception handler
+    can render them as a 200 PublishResponse. Raising (instead of returning)
+    ensures the audited() dependency records outcome="error".
+    """
+
+    def __init__(self, validation_errors: list[PublishValidationError], revision: Any) -> None:
+        self.validation_errors = validation_errors
+        self.revision = revision
+        # Note: status_code=422 is used here so the exception type is recognisable,
+        # but the registered exception handler converts it to a 200 PublishResponse
+        # (wire-contract preservation: clients expect 200 with errors in the body).
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"message": "Publish validation failed", "errors": [e.model_dump() for e in validation_errors]},
+        )
+
+
+class PublishResponse(BaseModel):
+    revision: SystemMapRevisionResponse
+    validation_errors: list[PublishValidationError] = Field(default_factory=list)
+
+
+# ─── Revision Lifecycle (FAR-2288) ───
+
+
+class SystemMapRevisionDiffRequest(BaseModel):
+    """Request to diff a revision against another revision or the current draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    against_revision_id: uuid.UUID | None = Field(
+        default=None,
+        description="Revision to diff against. If omitted, diffs against the current draft revision (if any).",
+    )
+
+
+class SystemMapRevisionDiffResponse(BaseModel):
+    """Diff result between two revisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision_id: uuid.UUID
+    base_revision_number: int
+    target_revision_id: uuid.UUID
+    target_revision_number: int
+    nodes_added: list[str] = Field(default_factory=list)
+    nodes_removed: list[str] = Field(default_factory=list)
+    nodes_modified: list[str] = Field(default_factory=list)
+    relationships_added: list[str] = Field(default_factory=list)
+    relationships_removed: list[str] = Field(default_factory=list)
+    relationships_modified: list[str] = Field(default_factory=list)
+    loop_configs_added: list[str] = Field(default_factory=list)
+    loop_configs_removed: list[str] = Field(default_factory=list)
+    loop_configs_modified: list[str] = Field(default_factory=list)
+    content_json_changed: bool = False
+
+
+class SystemMapRevisionRestoreAsNewRequest(BaseModel):
+    """Request to restore a published/archived revision as a new draft revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    notes: str = Field(default="Restored from revision {revision_number}", max_length=4000)
+
+
+class SystemMapRevisionRestoreAsNewResponse(BaseModel):
+    """Response for restore-as-new operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_revision: SystemMapRevisionResponse
+    source_revision_id: uuid.UUID
+    source_revision_number: int
+
+
+# Forward references for recursive types
+SystemMapRevisionCreate.model_rebuild()
+
+
+__all__ = [
+    "VALID_BINDING_KINDS",
+    # Vocabularies
+    "VALID_NODE_TYPES",
+    "VALID_REL_TYPES",
+    "VALID_REVISION_STATUSES",
+    "VALID_VISIBILITY",
+    "AttributionBindingCreate",
+    "AttributionBindingResponse",
+    "PublishResponse",
+    "PublishValidationError",
+    "PublishValidationErrorHTTP",
+    # Requests
+    "SystemMapCreate",
+    "SystemMapCurrentRevisionResponse",
+    "SystemMapDiscoveryReport",
+    "SystemMapDiscoveryRequest",
+    "SystemMapDiscoverySkipped",
+    "SystemMapDiscoverySource",
+    "SystemMapListResponse",
+    "SystemMapLoopConfigCreate",
+    "SystemMapLoopConfigResponse",
+    "SystemMapNodeCreate",
+    "SystemMapNodeResponse",
+    "SystemMapOverviewBottleneck",
+    "SystemMapOverviewLoopConfig",
+    "SystemMapOverviewNodeHealth",
+    "SystemMapOverviewResponse",
+    "SystemMapRelationshipCreate",
+    "SystemMapRelationshipResponse",
+    # Responses
+    "SystemMapResponse",
+    "SystemMapRevisionByTimeResponse",
+    "SystemMapRevisionCreate",
+    "SystemMapRevisionDetailResponse",
+    # Revision Lifecycle (FAR-2288)
+    "SystemMapRevisionDiffRequest",
+    "SystemMapRevisionDiffResponse",
+    "SystemMapRevisionHistoryEntry",
+    "SystemMapRevisionHistoryResponse",
+    "SystemMapRevisionResponse",
+    "SystemMapRevisionRestoreAsNewRequest",
+    "SystemMapRevisionRestoreAsNewResponse",
+    "SystemMapUpdate",
+]
+
+# ─── Discovery contracts ───
+
+
+class SystemMapDiscoveryRequest(BaseModel):
+    name: str = Field(default="Discovered System Map", min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    model_backend_id: uuid.UUID | None = None
+    eval_definition_id: uuid.UUID | None = None
+
+
+class SystemMapDiscoverySource(BaseModel):
+    kind: str
+    identifier: str
+    name: str
+
+
+class SystemMapDiscoverySkipped(BaseModel):
+    source: str
+    reason: str
+
+
+class SystemMapDiscoveryProvenance(BaseModel):
+    mode: Literal["deterministic", "ai_assisted", "deterministic_fallback"] = "deterministic"
+    prompt_version: str | None = None
+    rubric_version: str | None = None
+    evaluator_version: str | None = None
+    selected_backend_id: uuid.UUID | None = None
+    input_hash: str | None = None
+    output_hash: str | None = None
+
+
+class SystemMapDiscoveryReport(BaseModel):
+    sources_inspected: list[SystemMapDiscoverySource]
+    node_count: int
+    edge_count: int
+    inferred_nodes: list[dict[str, Any]]
+    inferred_edges: list[dict[str, Any]]
+    skipped: list[SystemMapDiscoverySkipped]
+    warnings: list[str]
+    draft_map_id: uuid.UUID
+    draft_revision_id: uuid.UUID
+    draft_revision_number: int
+    published: bool = False
+    ai_assisted: bool | None = Field(default=None, description="Whether AI enhancement was accepted")
+    eval_gate_passed: bool | None = Field(default=None, description="Whether the optional eval gate passed")
+    eval_gate_verdict: Literal["not_requested", "pass", "fail", "error"] | None = Field(
+        default=None,
+        description="The optional eval gate outcome",
+    )
+    provenance: SystemMapDiscoveryProvenance = Field(default_factory=SystemMapDiscoveryProvenance)

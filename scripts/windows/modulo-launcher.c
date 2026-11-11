@@ -198,7 +198,7 @@ static wchar_t *append_quoted_arg(wchar_t *cursor, const wchar_t *arg) {
 }
 
 static wchar_t *build_command_line(const wchar_t *python_exe, int argc, wchar_t *argv[]) {
-    static const wchar_t module_invocation[] = L" -m modulo.cli.main";
+    static const wchar_t module_invocation[] = L" -m farna.cli.main";
     size_t total = 0;
     size_t argument_length;
     int index;

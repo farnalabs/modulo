@@ -122,7 +122,7 @@ mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
 cp "${ROOT_DIR}/backend/alembic.ini" "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
 [[ -f "${BUNDLE_ROOT}/backend/alembic.ini" ]]
-[[ -d "${BUNDLE_ROOT}/backend/src/modulo/db/migrations" ]]
+[[ -d "${BUNDLE_ROOT}/backend/src/farna/db/migrations" ]]
 # Keep Alembic's config beside the bundled backend source. The app starts from
 # launchd's data directory, so the relative script_location in alembic.ini must
 # be resolved from this installed bundle rather than the build checkout.
@@ -139,7 +139,7 @@ uv sync --frozen --no-dev --no-install-project --project "${BUNDLE_ROOT}/backend
 RUNTIME_SITE_PACKAGES="${BUNDLE_ROOT}/runtime/lib/python3.12/site-packages"
 mkdir -p "${RUNTIME_SITE_PACKAGES}"
 printf '%s\n' '../../../../backend/src' > "${RUNTIME_SITE_PACKAGES}/modulo-bundle.pth"
-env -u PYTHONPATH -u PYTHONHOME "${BUNDLE_ROOT}/runtime/bin/python3" -c 'import modulo.launcher.supervisor'
+env -u PYTHONPATH -u PYTHONHOME "${BUNDLE_ROOT}/runtime/bin/python3" -c 'import farna.launcher.supervisor'
 
 # Assert the installed bundle's actual launcher module emits PostgreSQL's
 # server argv contract as separate elements. A shell command string would be
@@ -149,7 +149,7 @@ PYTHONPATH="${BUNDLE_ROOT}/backend/src:${BUNDLE_ROOT}/backend/.venv/lib/python3.
 from pathlib import Path
 import sys
 
-from modulo.launcher.initdb import postgres_server_argv
+from farna.launcher.initdb import postgres_server_argv
 
 bundle = Path(sys.argv[1])
 pgdata = bundle / "runtime-contract-pgdata"
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
     if (!child) return 70;
     child[0] = python;
     child[1] = "-c";
-    child[2] = "from modulo.cli.main import cli; cli()";
+    child[2] = "from farna.cli.main import cli; cli()";
     for (int i = 1; i < argc; ++i) child[i + 2] = argv[i];
     child[argc + 2] = NULL;
     execv(python, child);

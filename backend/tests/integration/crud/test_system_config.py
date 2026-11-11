@@ -14,8 +14,8 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from modulo.db.crud.system_config import set_config, update_config
-from modulo.db.models.system_config import SystemConfig
+from farna.db.crud.system_config import set_config, update_config
+from farna.db.models.system_config import SystemConfig
 
 pytestmark = pytest.mark.integration
 

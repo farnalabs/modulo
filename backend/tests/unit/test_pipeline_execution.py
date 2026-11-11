@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_execution.
+"""Unit tests for farna.core.pipeline_execution.
 
 Tests are mock/fake based — no Postgres required. Real Postgres concurrency
 behaviour (two concurrent claims -> exactly one) lives in
@@ -20,9 +20,9 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError, OperationalError
 
-import modulo.core.pipeline_execution as pe
-import modulo.core.run_terminal_advance as rta
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
+import farna.core.pipeline_execution as pe
+import farna.core.run_terminal_advance as rta
+from farna.db.models.run import ACTIVE_RUN_STATUSES, Run
 
 
 @pytest.fixture(autouse=True)
@@ -320,7 +320,7 @@ class TestMarkComplete:
         conn = _AsyncConnRow(None)
         engine = MagicMock()
         engine.connect.return_value = conn
-        with caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"):
+        with caplog.at_level("WARNING", logger="farna.core.pipeline_execution"):
             await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
 
         assert any("mark_complete skipped" in m for m in caplog.messages)
@@ -1331,8 +1331,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_record),
+            patch("farna.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("farna.core.run_terminal_advance.record_terminal_failed_fact", new=_record),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -1391,8 +1391,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new=_boom),
+            patch("farna.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("farna.core.run_terminal_advance.record_terminal_failed_fact", new=_boom),
             patch.object(pe._log, "warning"),
         ):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
@@ -1445,8 +1445,8 @@ class TestStaleRunRecoverySweep:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with (
-            patch("modulo.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch("modulo.core.run_terminal_advance.record_terminal_failed_fact", new_callable=AsyncMock),
+            patch("farna.core.run_terminal_advance.advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch("farna.core.run_terminal_advance.record_terminal_failed_fact", new_callable=AsyncMock),
         ):
             await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
 
@@ -1525,7 +1525,7 @@ class TestSaqSettingsDefaults:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         return Settings()
 
@@ -1562,7 +1562,7 @@ class TestSaqSettingsDefaults:
     def test_test_pause_refused_outside_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError
 
-        from modulo.settings import Settings
+        from farna.settings import Settings
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
@@ -1593,7 +1593,7 @@ class TestCountActiveRuns:
         return statuses
 
     async def test_include_pending_false_excludes_pending(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_pipeline
+        from farna.db.crud.run import count_active_runs_for_pipeline
 
         executed: list[tuple[object, object]] = []
 
@@ -1615,7 +1615,7 @@ class TestCountActiveRuns:
         assert statuses == {"running", "claimed"}
 
     async def test_include_pending_true_includes_pending(self) -> None:
-        from modulo.db.crud.run import count_active_runs_for_pipeline
+        from farna.db.crud.run import count_active_runs_for_pipeline
 
         executed: list[object] = []
 
@@ -1645,7 +1645,7 @@ class TestCountActiveRuns:
                 stmt_sql.append(_compiled(stmt, render_postcompile=True))
                 return _Result()
 
-        from modulo.db.crud.run import count_active_runs_for_pipeline
+        from farna.db.crud.run import count_active_runs_for_pipeline
 
         rid = uuid.uuid4()
         session = _FakeAsyncSession()
@@ -1660,7 +1660,7 @@ class TestCountActiveRuns:
 
 class TestCountActiveSandboxRuns:
     async def _count(self, graphs: list[dict[str, Any] | None]) -> int:
-        from modulo.db.crud.run import count_active_sandbox_runs_for_org
+        from farna.db.crud.run import count_active_sandbox_runs_for_org
 
         class _ScalarResult:
             def scalars(self) -> _ScalarResult:
@@ -1710,7 +1710,7 @@ def _saq_settings(**overrides: object) -> MagicMock:
 
 class TestSaqWorkerSettings:
     def test_runs_settings_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
@@ -1722,7 +1722,7 @@ class TestSaqWorkerSettings:
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
 
     def test_system_settings_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
@@ -1781,7 +1781,7 @@ class TestSaqWorkerSettings:
         assert settings["after_process"] is not None
 
     def test_staging_queue_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         # Staging sets SAQ_RUNS_QUEUE=staging-runs; workers derive their queues.
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings(saq_runs_queue="staging-runs"))
@@ -1789,7 +1789,7 @@ class TestSaqWorkerSettings:
         assert sw.staging_system_settings()["queue"].name == "staging-system"
 
     def test_system_settings_fail_closed_without_auth(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings(saq_auth_password=None))
         with pytest.raises(RuntimeError, match="SAQ_AUTH_PASSWORD"):
@@ -1800,7 +1800,7 @@ class TestSaqWorkerSettings:
             sw.system_settings()
 
     def test_redis_client_knobs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import modulo.core.saq_worker as sw
+        import farna.core.saq_worker as sw
 
         captured: dict[str, object] = {}
 
@@ -2453,7 +2453,7 @@ class TestRecordFactForTerminalFailedRunHelper:
         monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
         monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
-            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
+            patch("farna.core.analytics.record_fact_for_terminal_failed_run", record_facts),
             patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
@@ -2469,7 +2469,7 @@ class TestRecordFactForTerminalFailedRunHelper:
         monkeypatch.setattr(rta, "async_sessionmaker", lambda *a, **k: factory)
         monkeypatch.setattr(rta, "set_rls_org", AsyncMock())
         with (
-            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
+            patch("farna.core.analytics.record_fact_for_terminal_failed_run", record_facts),
             patch.object(rta, "get_run", new_callable=AsyncMock, return_value=None),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
@@ -2491,9 +2491,9 @@ class TestRecordFactForTerminalFailedRunHelper:
             raise RuntimeError("facts boom")
 
         with (
-            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", new=_boom),
+            patch("farna.core.analytics.record_fact_for_terminal_failed_run", new=_boom),
             patch.object(rta, "get_run", new_callable=AsyncMock, return_value=fake_run),
-            caplog.at_level("WARNING", logger="modulo.core.run_terminal_advance"),
+            caplog.at_level("WARNING", logger="farna.core.run_terminal_advance"),
         ):
             await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
 

@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.sql import operators
 
-from modulo.core.reports.quality_report import (
+from farna.core.reports.quality_report import (
     _fmt_delta,
     _format_eval_breakdown,
     _format_summary_block,
@@ -31,11 +31,11 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
-from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
-from modulo.db.models.base import Base
-from modulo.db.models.daily_run_count import OrgDailyRunCount
-from modulo.db.models.eval import Eval
-from modulo.db.models.eval_result import EvalResult
+from farna.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
+from farna.db.models.base import Base
+from farna.db.models.daily_run_count import OrgDailyRunCount
+from farna.db.models.eval import Eval
+from farna.db.models.eval_result import EvalResult
 from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
@@ -458,13 +458,13 @@ class TestSlackBlockKitSchema:
 
 class TestWebhookSigning:
     def test_serialize_json_body_is_byte_stable(self) -> None:
-        from modulo.core.reports.scheduler import _serialize_json_body
+        from farna.core.reports.scheduler import _serialize_json_body
 
         body = {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]}
         assert _serialize_json_body(body) == b'{"blocks":[{"text":{"text":"hi","type":"mrkdwn"},"type":"section"}]}'
 
     def test_sign_payload_matches_known_vector(self) -> None:
-        from modulo.core.reports.scheduler import _sign_payload
+        from farna.core.reports.scheduler import _sign_payload
 
         secret = "secret-key"
         body = b'{"a":1}'
@@ -472,7 +472,7 @@ class TestWebhookSigning:
         assert _sign_payload(secret, body) == f"sha256={expected}"
 
     def test_sign_payload_accepts_non_string_secret(self) -> None:
-        from modulo.core.reports.scheduler import _sign_payload
+        from farna.core.reports.scheduler import _sign_payload
 
         body = b'{"a":1}'
         expected = hmac.new(str(b"secret-key").encode("utf-8"), body, hashlib.sha256).hexdigest()
@@ -578,7 +578,7 @@ class TestDeliverQualityReport:
     # --- HMAC-SHA256 webhook signing (PRD 8.11) ---
 
     async def test_signed_delivery_sends_signature_header_and_bytes(self) -> None:
-        from modulo.core.reports.scheduler import _serialize_json_body, _sign_payload
+        from farna.core.reports.scheduler import _serialize_json_body, _sign_payload
 
         url = SLACK_URL
         secret = "super-secret"

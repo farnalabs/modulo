@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.policy_pack — compliance policy packs.
+"""Unit tests for farna.core.guardrails.policy_pack — compliance policy packs.
 
 Covers the pack schema (valid/invalid controls, mapped flag sync, YAML
 load/dump round-trip), instantiation (mapped controls → valid
@@ -11,15 +11,15 @@ with a gap raises, a complete pack passes), and warn-mode-first rollout
 import pydantic
 import pytest
 
-from modulo.core.guardrails import GuardrailAction, GuardrailConfigError
-from modulo.core.guardrails.config import (
+from farna.core.guardrails import GuardrailAction, GuardrailConfigError
+from farna.core.guardrails.config import (
     GuardrailConfigItem,
     GuardrailConfigSet,
     GuardrailDetection,
     hash_config_set,
     validate_config_set,
 )
-from modulo.core.guardrails.policy_pack import (
+from farna.core.guardrails.policy_pack import (
     PolicyControl,
     PolicyPack,
     assert_pack_ci_ready,

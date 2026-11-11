@@ -1,7 +1,7 @@
 """Architecture test: the unit suite's audit-session-double autouse gate actually gates.
 
 ``tests/unit/conftest.py``'s ``_isolated_audit_session`` installs a double over
-``modulo.core.audit_coverage._shared_session_factory`` through a STRING
+``farna.core.audit_coverage._shared_session_factory`` through a STRING
 ``monkeypatch.setattr`` target — resolving it imports the audit/app stack
 (fastapi + sqlalchemy + db.models, ~1.8-3.8 s measured 2026-10-13) on EVERY
 unit test, including pure-logic packages that never touch an ``audited(...)``
@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-import modulo.core.audit_coverage as _audit_coverage
+import farna.core.audit_coverage as _audit_coverage
 import tests.unit.conftest as _unit_conftest
 
 _FAKE_MODNAME = "gate_audit_probe_mod"
@@ -94,7 +94,7 @@ def test_gate_skips_without_hint_and_does_not_import_audit_stack(
     next(gen)  # skip path yields once without installing
     try:
         assert _audit_coverage._shared_session_factory is _REAL_FACTORY
-        assert "modulo.core.audit_coverage" not in sys.modules
+        assert "farna.core.audit_coverage" not in sys.modules
     finally:
         gen.close()
 
@@ -138,7 +138,7 @@ def test_gate_patches_when_surface_already_loaded(
 ) -> None:
     """``sys.modules`` marker alone is sufficient — source need not mention it."""
     request = _fake_request(tmp_path, monkeypatch, "value = 1\n")
-    assert "modulo.core.audit_coverage" in sys.modules
+    assert "farna.core.audit_coverage" in sys.modules
 
     gen = _unit_conftest._isolated_audit_session.__wrapped__(request, monkeypatch)
     next(gen)
@@ -157,7 +157,7 @@ def test_gate_patches_on_source_mention_of_lazy_import(
     This is the lazy in-body-import shape: the fixture decides BEFORE the
     test body imports the surface, so the source scan is the only signal.
     """
-    source = "def go():\n    from modulo.api.main import app\n    return app\n"
+    source = "def go():\n    from farna.api.main import app\n    return app\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_audit_markers(monkeypatch)
 
@@ -180,7 +180,7 @@ def test_gate_teardown_restores_real_factory(
     test body and gone once the generator closes.
     """
     request = _fake_request(tmp_path, monkeypatch, "value = 1\n")
-    assert "modulo.core.audit_coverage" in sys.modules
+    assert "farna.core.audit_coverage" in sys.modules
 
     gen = _unit_conftest._isolated_audit_session.__wrapped__(request, monkeypatch)
     next(gen)
@@ -194,7 +194,7 @@ def test_gate_predicate_is_conservative_on_mention(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A comment/docstring mention still counts — false positives are safe."""
-    source = "# touches modulo.api in comments only\nvalue = 1\n"
+    source = "# touches farna.api in comments only\nvalue = 1\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_audit_markers(monkeypatch)
 

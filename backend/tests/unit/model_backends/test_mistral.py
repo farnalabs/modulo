@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.model_backends.base import HealthResult
-from modulo.model_backends.mistral import MISTRAL_BASE_URL, MistralBackend
+from farna.model_backends.base import HealthResult
+from farna.model_backends.mistral import MISTRAL_BASE_URL, MistralBackend
 
 
 @pytest.fixture
 def backend():
-    with patch("modulo.model_backends.mistral.ChatMistralAI"):
+    with patch("farna.model_backends.mistral.ChatMistralAI"):
         return MistralBackend(api_key="sk-test", model_id="mistral-large-latest")
 
 
@@ -27,10 +27,10 @@ async def test_aclose_is_idempotent_without_a_pinned_client(backend):
 
 
 async def test_health_check_uses_mistral_base_url():
-    with patch("modulo.model_backends.mistral.ChatMistralAI"):
+    with patch("farna.model_backends.mistral.ChatMistralAI"):
         backend = MistralBackend(api_key="sk-test", model_id="mistral-large-latest")
     with patch(
-        "modulo.model_backends.mistral.openai_compatible_health_check",
+        "farna.model_backends.mistral.openai_compatible_health_check",
         new=AsyncMock(return_value=HealthResult(ok=True)),
     ) as mock_health:
         result = await backend.health_check()

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.typed_judge import (
     SYSTEM_ONE_MODEL_LABEL,
     TYPED_QUESTIONS_MECHANISM,
     JudgeConfidenceKind,

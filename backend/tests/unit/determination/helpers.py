@@ -6,10 +6,10 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from modulo.connectors.base import ConnectorQuery, ConnectorType
-from modulo.determination.draft import PipelineDraft, generate_draft
-from modulo.determination.inference import Finding, infer
-from modulo.determination.scanner import ScanSample
+from farna.connectors.base import ConnectorQuery, ConnectorType
+from farna.determination.draft import PipelineDraft, generate_draft
+from farna.determination.inference import Finding, infer
+from farna.determination.scanner import ScanSample
 
 
 def iso_days_ago(delta_days: float) -> str:

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.microsoft_teams import MicrosoftTeamsConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
+from farna.connectors.microsoft_teams import MicrosoftTeamsConnector
 
 TOKEN = "ms_test_token"
 _BASE = "https://graph.microsoft.com/v1.0"

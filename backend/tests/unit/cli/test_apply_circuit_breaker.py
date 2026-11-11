@@ -15,10 +15,10 @@ import pytest
 import respx
 from pydantic import ValidationError
 
-from modulo.api.routes.pipelines import PipelineCreate, PipelineUpdate
-from modulo.cli.apply.executor import ApplyExecutor
-from modulo.cli.apply.loader import parse_apply_documents
-from modulo.cli.apply.models import PipelineEntity, quantize_circuit_breaker_threshold
+from farna.api.routes.pipelines import PipelineCreate, PipelineUpdate
+from farna.cli.apply.executor import ApplyExecutor
+from farna.cli.apply.loader import parse_apply_documents
+from farna.cli.apply.models import PipelineEntity, quantize_circuit_breaker_threshold
 from tests.unit.cli.test_apply_pipeline import _mock_current_with_pipelines, _pipeline_item
 
 _EXISTING_ID = "00000000-0000-0000-0000-0000000000aa"

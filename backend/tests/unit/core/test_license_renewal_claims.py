@@ -21,9 +21,9 @@ from typing import Any
 
 import pytest
 
-import modulo.core.license as license_module
-import modulo.core.license_signing as license_signing_module
-from modulo.core.license import (
+import farna.core.license as license_module
+import farna.core.license_signing as license_signing_module
+from farna.core.license import (
     DEFAULT_RENEWAL_MODE,
     RENEWAL_MODE_AUTO,
     RENEWAL_MODE_MANUAL,
@@ -32,13 +32,13 @@ from modulo.core.license import (
     set_public_key,
     verify_license_key,
 )
-from modulo.core.license_signing import (
+from farna.core.license_signing import (
     LicenseSigningError,
     build_team_payload,
     encode_license_key,
     generate_team_license,
 )
-from modulo.core.registry.crypto import generate_keypair, sign_primitive
+from farna.core.registry.crypto import generate_keypair, sign_primitive
 
 
 def _sign_payload(payload: dict[str, Any], private_key_hex: str) -> str:

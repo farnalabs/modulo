@@ -31,7 +31,7 @@ from wcmatch import glob
 
 REPO_ROOT = Path(__file__).parents[4]
 RULE_FILE = REPO_ROOT / ".semgrep" / "migration-fstring-sql.yml"
-VERSIONS_DIR = REPO_ROOT / "backend" / "src" / "modulo" / "db" / "migrations" / "versions"
+VERSIONS_DIR = REPO_ROOT / "backend" / "src" / "farna" / "db" / "migrations" / "versions"
 
 # The frozen exclude cutoff baked into the rule's path filters: migrations
 # through 0247 shipped before the rule existed and are its only exemptions.
@@ -97,19 +97,19 @@ class TestMigrationFStringRulePaths:
 
     def test_a_new_migration_is_not_exempt_but_in_scope(self) -> None:
         """The window ends at the frozen cutoff: the next revision is scanned."""
-        rel = "backend/src/modulo/db/migrations/versions/0999_probe_next.py"
+        rel = "backend/src/farna/db/migrations/versions/0999_probe_next.py"
         assert not _is_excluded(rel)
         assert _is_included(rel)
 
     def test_exclude_globs_match_wcmatch_bracket_semantics(self) -> None:
         """The bracket globs must span the full exempt window: 0000-0239 and 0240-0247."""
         for rev in (1, 13, 99, 131, 199, 200, 239):
-            rel = f"backend/src/modulo/db/migrations/versions/{rev:04d}_x.py"
+            rel = f"backend/src/farna/db/migrations/versions/{rev:04d}_x.py"
             assert _is_excluded(rel), f"revision {rev:04d} should be exempt"
         for rev in (240, 247):
-            rel = f"backend/src/modulo/db/migrations/versions/{rev:04d}_x.py"
+            rel = f"backend/src/farna/db/migrations/versions/{rev:04d}_x.py"
             assert _is_excluded(rel), f"revision {rev:04d} should be exempt"
-        rel = "backend/src/modulo/db/migrations/versions/0248_x.py"
+        rel = "backend/src/farna/db/migrations/versions/0248_x.py"
         assert not _is_excluded(rel), "revision 0248 must NOT be exempt"
 
 

@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.db.crud.connector_instance import (
+from farna.db.crud.connector_instance import (
     clear_degraded_markers,
     create_connector_instance,
     delete_connector_instance,
@@ -19,7 +19,7 @@ from modulo.db.crud.connector_instance import (
     mark_instances_degraded,
     update_connector_instance,
 )
-from modulo.db.rls import set_rls_org
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 

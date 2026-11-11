@@ -98,15 +98,15 @@ def post_login(email: str, password: str, request, client):
     family = MagicMock()
     family.family_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.auth.get_account_by_email", new_callable=AsyncMock, return_value=account),
-        patch("modulo.api.routes.auth.authenticate_db_user", return_value=auth_ok),
-        patch("modulo.api.routes.auth.update_last_login", new_callable=AsyncMock),
+        patch("farna.api.routes.auth.get_account_by_email", new_callable=AsyncMock, return_value=account),
+        patch("farna.api.routes.auth.authenticate_db_user", return_value=auth_ok),
+        patch("farna.api.routes.auth.update_last_login", new_callable=AsyncMock),
         patch(
-            "modulo.api.routes.auth.list_memberships_for_account",
+            "farna.api.routes.auth.list_memberships_for_account",
             new_callable=AsyncMock,
             return_value=[membership],
         ),
-        patch("modulo.api.routes.auth.create_family", new_callable=AsyncMock, return_value=family),
+        patch("farna.api.routes.auth.create_family", new_callable=AsyncMock, return_value=family),
     ):
         resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     request.node._user_email = email
@@ -140,9 +140,9 @@ def use_refresh_token(request, client):
     active_account.active = True
     active_account.email = "user@example.com"
     with (
-        patch("modulo.api.routes.auth.get_account_by_id", new_callable=AsyncMock, return_value=active_account),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
-        patch("modulo.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False, False)),
+        patch("farna.api.routes.auth.get_account_by_id", new_callable=AsyncMock, return_value=active_account),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new_callable=AsyncMock, return_value="admin"),
+        patch("farna.api.routes.auth.advance_sequence", new_callable=AsyncMock, return_value=(1, False, False)),
     ):
         client.cookies.set("modulo_refresh", request.node._refresh_token)
         resp = client.post("/api/v1/auth/refresh")
@@ -196,9 +196,9 @@ def authenticated_request(request, unauth_client, expired_token):
 def create_pipeline(name: str, request):
     c = _get_client(request)
     with (
-        patch("modulo.api.routes.pipelines.create_pipeline", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.create_pipeline", new_callable=AsyncMock) as m,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         m.return_value = _pipeline_mock(name=name)
         resp = c.post("/api/v1/pipelines", json={"name": name})
@@ -222,9 +222,9 @@ def get_pipelines(request):
     page.next_cursor = None
     page.has_more = False
     with (
-        patch("modulo.api.routes.pipelines.list_pipelines", new_callable=AsyncMock, return_value=page),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.list_pipelines", new_callable=AsyncMock, return_value=page),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = c.get("/api/v1/pipelines")
     request.node._resp = resp
@@ -241,10 +241,10 @@ def delete_pipeline(name, request):
     c = _get_client(request)
     pipeline_id = getattr(request.node, "_pipeline_id", uuid.uuid4())
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
-        patch("modulo.api.routes.pipelines.soft_delete_pipeline", new_callable=AsyncMock) as d,
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
+        patch("farna.api.routes.pipelines.soft_delete_pipeline", new_callable=AsyncMock) as d,
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         g.return_value = _pipeline_mock(name=name)
         d.return_value = True
@@ -257,11 +257,11 @@ def patch_pipeline(name, request):
     c = _get_client(request)
     pipeline_id = getattr(request.node, "_pipeline_id", uuid.uuid4())
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
-        patch("modulo.api.routes.pipelines.update_pipeline", new_callable=AsyncMock) as u,
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
+        patch("farna.api.routes.pipelines.update_pipeline", new_callable=AsyncMock) as u,
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         g.return_value = _pipeline_mock(name=name)
         u.return_value = _pipeline_mock(name=name)
@@ -279,11 +279,11 @@ def create_user(email: str, role: str, request):
     membership = MagicMock()
     membership.role = role
     with (
-        patch("modulo.api.routes.admin.get_account_by_email", new_callable=AsyncMock, return_value=None),
-        patch("modulo.db.crud.account.create_account", new_callable=AsyncMock, return_value=account),
-        patch("modulo.api.routes.admin.create_membership", new_callable=AsyncMock, return_value=membership),
-        patch("modulo.api.routes.admin.validate_password_strength"),
-        patch("modulo.api.routes.admin.hash_password", return_value="hashed"),
+        patch("farna.api.routes.admin.get_account_by_email", new_callable=AsyncMock, return_value=None),
+        patch("farna.db.crud.account.create_account", new_callable=AsyncMock, return_value=account),
+        patch("farna.api.routes.admin.create_membership", new_callable=AsyncMock, return_value=membership),
+        patch("farna.api.routes.admin.validate_password_strength"),
+        patch("farna.api.routes.admin.hash_password", return_value="hashed"),
     ):
         resp = c.post(
             "/api/v1/admin/users",
@@ -343,16 +343,16 @@ def runner_triggers_run(name, request):
         async def _override_session():
             yield session
 
-        from modulo.api.dependencies import get_db_session
+        from farna.api.dependencies import get_db_session
 
         c.app.dependency_overrides[get_db_session] = _override_session
 
         with (
-            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
-            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
-            patch("modulo.api.routes.runs.dispatch_run"),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+            patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.api.routes.runs.dispatch_run"),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             snap.return_value = make_mock_snapshot()
             resp = c.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
@@ -361,11 +361,11 @@ def runner_triggers_run(name, request):
         pipeline = _pipeline_mock(name=str(name))
         run = make_mock_run(status="pending")
         with (
-            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-            patch("modulo.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
-            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
-            patch("modulo.api.routes.runs.dispatch_run"),
-            patch("modulo.api.routes.runs.set_rls_org"),
+            patch("farna.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("farna.api.routes.runs.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+            patch("farna.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+            patch("farna.api.routes.runs.dispatch_run"),
+            patch("farna.api.routes.runs.set_rls_org"),
         ):
             snap.return_value = make_mock_snapshot()
             resp = c.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id)})
@@ -379,11 +379,11 @@ def runner_patches_pipeline(request):
     c = _get_client(request)
     pipeline_id = getattr(request.node, "_pipeline_id", uuid.uuid4())
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
-        patch("modulo.api.routes.pipelines.update_pipeline", new_callable=AsyncMock) as u,
-        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new_callable=AsyncMock),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", new_callable=AsyncMock) as g,
+        patch("farna.api.routes.pipelines.update_pipeline", new_callable=AsyncMock) as u,
+        patch("farna.api.routes.pipelines._assert_team_transition_allowed", new_callable=AsyncMock),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         g.return_value = _pipeline_mock(name=getattr(request.node, "_pipeline_name", "ci-pipeline"))
         u.return_value = _pipeline_mock(name=getattr(request.node, "_pipeline_name", "ci-pipeline"))
@@ -413,18 +413,18 @@ def runner_gets_run(run_id, request):
     run = make_mock_run(id=resolved, status="complete")
     with (
         patch(
-            "modulo.api.routes.runs._do_get_run_with_gate",
+            "farna.api.routes.runs._do_get_run_with_gate",
             new_callable=AsyncMock,
             return_value=(run, False),
         ),
         patch(
-            "modulo.api.routes.runs._do_get_child_run_rollup",
+            "farna.api.routes.runs._do_get_child_run_rollup",
             new_callable=AsyncMock,
             return_value=(Decimal("0.00"), 0),
         ),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch("farna.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
         patch(
-            "modulo.api.routes.runs._do_get_run_observability",
+            "farna.api.routes.runs._do_get_run_observability",
             new_callable=AsyncMock,
             return_value=(None, None, None),
         ),

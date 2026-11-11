@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.db.crud.run import (
+from farna.db.crud.run import (
     _active_run_statuses,
     _empty_run_stats,
     _input_hash,
@@ -143,7 +143,7 @@ def _org_with(settings: object) -> SimpleNamespace:
 async def _read_limit(settings: object, *, org: object | None = None) -> int | None:
     session = AsyncMock()
     with patch(
-        "modulo.db.crud.run.get_organisation",
+        "farna.db.crud.run.get_organisation",
         AsyncMock(return_value=_org_with(settings) if org is None else org),
     ):
         return await _read_org_int_limit(session, uuid.uuid4(), _KEY, _MIN, _MAX, _LOG_PREFIX)
@@ -163,7 +163,7 @@ async def test_read_int_limit_missing_key_returns_none(caplog: pytest.LogCapture
 
 async def test_read_int_limit_missing_org_returns_none(caplog: pytest.LogCaptureFixture) -> None:
     session = AsyncMock()
-    with patch("modulo.db.crud.run.get_organisation", AsyncMock(return_value=None)):
+    with patch("farna.db.crud.run.get_organisation", AsyncMock(return_value=None)):
         limit = await _read_org_int_limit(session, uuid.uuid4(), _KEY, _MIN, _MAX, _LOG_PREFIX)
     assert limit is None
     assert f"{_LOG_PREFIX}.org_not_found" in caplog.text

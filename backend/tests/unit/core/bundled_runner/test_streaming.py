@@ -15,13 +15,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.bundled_runner.runner_dispatch import (
+from farna.core.bundled_runner.runner_dispatch import (
     _consume_stream,
     _finalize_stream_consume,
     _pump_exec_to_queue,
 )
-from modulo.core.runtime_provider import ExecProcess, ExecStreamChunk
-from modulo.core.runtime_provider.docker import DockerRuntimeProvider, _split_exec_frame
+from farna.core.runtime_provider import ExecProcess, ExecStreamChunk
+from farna.core.runtime_provider.docker import DockerRuntimeProvider, _split_exec_frame
 
 # ---------------------------------------------------------------------------
 # ABC default + frame splitting
@@ -33,7 +33,7 @@ async def test_abc_default_exec_stream_raises_typed_streaming_unsupported() -> N
     ``StreamingUnsupportedError`` (a ``RuntimeProviderError`` member), not a
     raw ``NotImplementedError``. Reconciled in place from the pre-ADR
     assertion — coverage of the default's raise is unchanged."""
-    from modulo.core.runtime_provider import RuntimeProvider, RuntimeProviderError, StreamingUnsupportedError
+    from farna.core.runtime_provider import RuntimeProvider, RuntimeProviderError, StreamingUnsupportedError
 
     class _Bare(RuntimeProvider):
         async def create_workspace(self, spec):  # type: ignore[no-untyped-def]
@@ -89,7 +89,7 @@ def _stream_provider(monkeypatch: pytest.MonkeyPatch | None = None) -> tuple[Doc
     """
     if monkeypatch is not None:
         monkeypatch.setattr(
-            "modulo.core.runtime_provider.docker._validate_docker_endpoint_tls",
+            "farna.core.runtime_provider.docker._validate_docker_endpoint_tls",
             lambda _ep: None,
         )
     provider = DockerRuntimeProvider(docker_host="tcp://engine:2375")
@@ -356,7 +356,7 @@ async def test_finalize_stream_consume_reraises_cancelled_join(monkeypatch: pyte
 async def test_finalize_stream_consume_swallows_join_failure(caplog: pytest.LogCaptureFixture) -> None:
     """A pump that cannot be joined (not a task/future) is logged at info
     level and the consume returns — teardown never raises on a best-effort join."""
-    caplog.set_level(logging.INFO, logger="modulo.core.bundled_runner.runner_dispatch")
+    caplog.set_level(logging.INFO, logger="farna.core.bundled_runner.runner_dispatch")
 
     class _UnjoinablePump:
         def cancel(self) -> None:

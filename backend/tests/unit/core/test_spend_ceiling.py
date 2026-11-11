@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.spend_ceiling (FAR-391 hard spend ceilings).
+"""Unit tests for farna.core.spend_ceiling (FAR-391 hard spend ceilings).
 
 Pure logic only — no DB, no FastAPI. Verifies the per-run and per-org ceiling
 evaluation, the combined evaluator, the cents conversion, and the kill-switch
@@ -7,7 +7,7 @@ evaluation, the combined evaluator, the cents conversion, and the kill-switch
 
 from decimal import Decimal
 
-from modulo.core.spend_ceiling import (
+from farna.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
     RUN_CEILING_EXCEEDED,
     cents_from_usd,

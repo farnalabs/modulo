@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.exc import MultipleResultsFound
 
-from modulo.db.crud.hitl_review_config import (
+from farna.db.crud.hitl_review_config import (
     MSG_HUMAN_ONLY_DENY,
     MSG_HUMAN_ONLY_UNRESOLVED,
     edge_source_or_target,
@@ -772,7 +772,7 @@ class TestResolveGateDescriptions:
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            "farna.db.crud.hitl_review_config.snapshot_review_config_map",
             side_effect=snapshot_review_config_map,
         ) as map_mock:
             result = await resolve_review_descriptions(session, gates=[gate_a, gate_b], org_id=_ORG_ID)
@@ -908,7 +908,7 @@ class TestResolveGateHumanOnlyMap:
         import unittest.mock
 
         with unittest.mock.patch(
-            "modulo.db.crud.hitl_review_config.snapshot_review_config_map",
+            "farna.db.crud.hitl_review_config.snapshot_review_config_map",
             side_effect=snapshot_review_config_map,
         ) as map_mock:
             result = await resolve_review_human_only_map(session, gates=[gate_a, gate_b], org_id=_ORG_ID)

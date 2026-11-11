@@ -53,10 +53,10 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes import pipelines as pipelines_route
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.run_context.autonomy import validate_autonomy_ceiling
-from modulo.db.models.pipeline import Pipeline
+from farna.api.routes import pipelines as pipelines_route
+from farna.auth.jwt import TenantPrincipal
+from farna.core.run_context.autonomy import validate_autonomy_ceiling
+from farna.db.models.pipeline import Pipeline
 
 pytestmark = pytest.mark.integration
 
@@ -70,7 +70,7 @@ _SCOPE_SQL = "SELECT visibility, owner_team_id FROM pipelines WHERE id = :id"
 
 
 def _auth_headers(org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> dict[str, str]:
-    from modulo.auth.jwt import create_access_token
+    from farna.auth.jwt import create_access_token
 
     token = create_access_token(
         subject=f"user-{account_id.hex[:8]}",
@@ -351,8 +351,8 @@ async def _seed_team(
     (``create_team`` needs the org RLS GUC set on the session; the raw
     ``teams`` INSERT would have to hand-supply every NOT NULL column).
     """
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

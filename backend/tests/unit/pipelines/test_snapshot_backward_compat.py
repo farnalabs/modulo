@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
+from farna.core.pipeline_engine.graph_cache import _CACHE, build_graph_from_json
 
 
 def _clear_cache() -> None:
@@ -207,7 +207,7 @@ async def test_old_snapshot_role_field_still_works():
 
 def test_diff_handles_node_type_field():
     """Snapshot diff should handle node_type changes between versions."""
-    from modulo.db.crud.pipeline_snapshot_versioning import _compute_node_changes
+    from farna.db.crud.pipeline_snapshot_versioning import _compute_node_changes
 
     # Old snapshot node without node_type
     old_node = {"id": "a", "agent_id": "ag1", "label": "A"}
@@ -226,7 +226,7 @@ async def test_list_snapshots_returns_total_count():
     """list_snapshots should return correct total count."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from modulo.db.crud.pipeline_snapshot_versioning import list_snapshots
+    from farna.db.crud.pipeline_snapshot_versioning import list_snapshots
 
     session = AsyncMock()
     pipeline_id = "00000000-0000-0000-0000-000000000001"

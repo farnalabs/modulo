@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
+from farna.core.documentation_indexer import DocEntry, DocumentationIndex
 
 
 class TestDocumentationIndexBuild:

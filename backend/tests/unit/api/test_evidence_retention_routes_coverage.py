@@ -25,17 +25,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes.admin_evidence_retention as retention_routes
-from modulo.api.db_error_handling import raise_lock_timeout_conflict_if
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.evidence_retention import (
+import farna.api.routes.admin_evidence_retention as retention_routes
+from farna.api.db_error_handling import raise_lock_timeout_conflict_if
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user
+from farna.auth.jwt import TenantPrincipal
+from farna.core.evidence_retention import (
     EvidenceRetentionPolicy,
     PurgeResult,
 )
-from modulo.settings import Settings, get_settings
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")

@@ -20,7 +20,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import create_access_token
+from farna.auth.jwt import create_access_token
 
 pytestmark = pytest.mark.integration
 
@@ -77,9 +77,9 @@ async def api_client(
     app_engine: AsyncEngine,
 ) -> AsyncClient:
     """FastAPI app wired to the real DB with RLS enforced (non-superuser role)."""
-    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-    from modulo.api.main import app
-    from modulo.settings import Settings, get_settings
+    from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from farna.api.main import app
+    from farna.settings import Settings, get_settings
 
     settings = Settings(
         database_url=db_url,
@@ -127,7 +127,7 @@ def _headers(org_id: uuid.UUID, user_id: uuid.UUID, role: str = "admin") -> dict
 
 
 async def _seed_membership(db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():

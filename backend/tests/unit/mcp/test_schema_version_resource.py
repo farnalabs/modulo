@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.mcp_server import resource_schema_detail
+from farna.api.mcp_server import resource_schema_detail
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -27,11 +27,11 @@ def _patch_plan(plan: object) -> tuple:
     """Patch org lookup + plan resolution so the resource's feature gate is on/off."""
     return (
         patch(
-            "modulo.db.crud.organisation.get_organisation",
+            "farna.db.crud.organisation.get_organisation",
             new=AsyncMock(return_value=MagicMock(settings_json={})),
         ),
-        patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
-        patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+        patch("farna.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
+        patch("farna.api.mcp_server.get_settings", return_value=MagicMock()),
     )
 
 
@@ -77,7 +77,7 @@ def _mock_scalar_one_or_none(value) -> MagicMock:
 
 class TestResourceSchemaDetailAuth:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -85,14 +85,14 @@ class TestResourceSchemaDetailAuth:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         result = await resource_schema_detail(schema_id=str(uuid.uuid4()), version="latest")
         assert "revoked" in result.lower() or "expired" in result.lower()
@@ -105,7 +105,7 @@ class TestResourceSchemaDetailAuth:
 
 class TestResourceSchemaDetailSuccess:
     def setup_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
         _ctx_role.set("runner")
@@ -113,7 +113,7 @@ class TestResourceSchemaDetailSuccess:
         _ctx_auth_type.set("api_key")
 
     def teardown_method(self) -> None:
-        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+        from farna.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(None)
         _ctx_role.set(None)
@@ -127,8 +127,8 @@ class TestResourceSchemaDetailSuccess:
         with org_patch, plan_patch, settings_patch:
             yield
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_returns_schema_version_detail_json_schema(
         self,
         mock_session: AsyncMock,
@@ -166,8 +166,8 @@ class TestResourceSchemaDetailSuccess:
         assert "title: string (required)" in result
         assert "count: integer (optional)" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_returns_latest_version(
         self,
         mock_session: AsyncMock,
@@ -198,8 +198,8 @@ class TestResourceSchemaDetailSuccess:
         assert "2.0.0" in result
         assert "name: string (optional)" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_handles_flat_fields_format(
         self,
         mock_session: AsyncMock,
@@ -229,8 +229,8 @@ class TestResourceSchemaDetailSuccess:
         assert "title: string (required)" in result
         assert "count: integer (optional)" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_empty_definition_json(
         self,
         mock_session: AsyncMock,
@@ -252,8 +252,8 @@ class TestResourceSchemaDetailSuccess:
         assert "Fields (0):" in result
         assert "object" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_schema_not_found(
         self,
         mock_session: AsyncMock,
@@ -268,8 +268,8 @@ class TestResourceSchemaDetailSuccess:
 
         assert "not found" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_version_not_found(
         self,
         mock_session: AsyncMock,
@@ -288,8 +288,8 @@ class TestResourceSchemaDetailSuccess:
 
         assert "not found" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_invalid_schema_id_returns_error(
         self,
         mock_session: AsyncMock,
@@ -302,8 +302,8 @@ class TestResourceSchemaDetailSuccess:
         assert "error" in result.lower()
         assert "Invalid UUID" in result
 
-    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    @patch("modulo.api.mcp_server._session")
+    @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("farna.api.mcp_server._session")
     async def test_feature_gate_off_returns_feature_required(
         self,
         mock_session: AsyncMock,

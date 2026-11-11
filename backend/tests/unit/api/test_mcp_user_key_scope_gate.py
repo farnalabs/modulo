@@ -27,17 +27,17 @@ import pytest
 from fastapi import HTTPException
 from jwt import InvalidTokenError as JWTError
 
-import modulo.api.mcp_server as ms
-import modulo.api.routes.api_keys as api_keys_routes
-from modulo.api.mcp_server import (
+import farna.api.mcp_server as ms
+import farna.api.routes.api_keys as api_keys_routes
+from farna.api.mcp_server import (
     _authenticate_api_key,
     _authenticate_oauth_jwt,
     _finalize_oauth_principal,
     _set_user_keys_flag,
     validate_current_auth,
 )
-from modulo.auth.permissions import reset_authz_enforce, set_authz_enforce
-from modulo.core.mcp.scope_validator import MCPAuthorizationError
+from farna.auth.permissions import reset_authz_enforce, set_authz_enforce
+from farna.core.mcp.scope_validator import MCPAuthorizationError
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -130,8 +130,8 @@ def _ctx() -> Any:
 
 
 _API_KEY_AUTH_PATCHES = (
-    "modulo.db.rls._ensure_active_transaction",
-    "modulo.api.mcp_server._node_allowed_tools_for_key",
+    "farna.db.rls._ensure_active_transaction",
+    "farna.api.mcp_server._node_allowed_tools_for_key",
 )
 
 
@@ -140,8 +140,8 @@ def _api_key_patches(key: MagicMock, live_role: str | None) -> list[Any]:
     session = _mock_session()
     session.execute.return_value = _make_execute_result(scalar_one_or_none=_ORG_ID)
     return [
-        patch("modulo.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
-        patch("modulo.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None)),
+        patch("farna.db.rls._ensure_active_transaction", new=AsyncMock(return_value="postgresql")),
+        patch("farna.api.mcp_server._node_allowed_tools_for_key", new=AsyncMock(return_value=None)),
         patch.object(ms, "_get_session_factory", return_value=_mock_factory(session)),
         patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
         patch.object(ms, "validate_api_key", new=AsyncMock(return_value=key)),
@@ -336,7 +336,7 @@ class TestJwtAndOauthPaths:
         request = _mock_request()
         with (
             patch.object(ms, "decode_oauth_access_token", side_effect=JWTError("not oauth")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
             patch.object(ms, "_session", return_value=_make_session_context(_mock_session())),
             patch.object(ms, "resolve_role_from_membership", new=AsyncMock(return_value="runner")),
         ):
@@ -389,7 +389,7 @@ class TestValidateCurrentAuthJwtBranch:
         principal.account_id = _USER_ID
         with (
             patch.object(ms, "get_settings", return_value=MagicMock(secret_key="k")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(return_value=principal)),
             patch.object(ms, "_validate_principal_live", new=AsyncMock(return_value=True)) as live,
         ):
             assert await validate_current_auth() is True
@@ -402,7 +402,7 @@ class TestValidateCurrentAuthJwtBranch:
         ms._ctx_org_id.set(_ORG_ID)
         with (
             patch.object(ms, "get_settings", return_value=MagicMock(secret_key="k")),
-            patch("modulo.auth.jwt.decode_principal", new=MagicMock(side_effect=JWTError("revoked"))),
+            patch("farna.auth.jwt.decode_principal", new=MagicMock(side_effect=JWTError("revoked"))),
         ):
             assert await validate_current_auth() is False
 

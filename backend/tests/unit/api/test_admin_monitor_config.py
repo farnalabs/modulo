@@ -8,9 +8,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session, get_plan_context
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from farna.api.dependencies import get_db_session, get_plan_context
+from farna.auth.dependencies import get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -39,7 +39,7 @@ def _make_mock_session() -> AsyncMock:
 
 
 def _make_client(session: AsyncMock, principal: AuthenticatedPrincipal) -> AsyncClient:
-    from modulo.api.main import app
+    from farna.api.main import app
 
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -59,7 +59,7 @@ def _make_entry(value: dict[str, Any] | None) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _cleanup_overrides():
     yield
-    from modulo.api.main import app
+    from farna.api.main import app
 
     app.dependency_overrides.clear()
 
@@ -69,7 +69,7 @@ class TestGetMonitorConfig:
     async def test_admin_gets_default_config_when_unset(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -92,7 +92,7 @@ class TestGetMonitorConfig:
             "grafana_faro": None,
         }
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             return_value=_make_entry(stored),
         ):
@@ -114,8 +114,8 @@ class TestGetMonitorConfig:
     @pytest.mark.anyio
     async def test_missing_credentials_gets_403(self):
         session = _make_mock_session()
-        from modulo.api.dependencies import get_db_session
-        from modulo.api.main import app
+        from farna.api.dependencies import get_db_session
+        from farna.api.main import app
 
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = True
@@ -130,7 +130,7 @@ class TestGetMonitorConfig:
     async def test_programming_error_returns_501(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", "params", Exception("boom")),
         ):
@@ -143,7 +143,7 @@ class TestGetMonitorConfig:
     async def test_sqlalchemy_error_returns_503(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("connection lost"),
         ):
@@ -155,7 +155,7 @@ class TestGetMonitorConfig:
     async def test_unexpected_error_returns_500(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.get_config",
+            "farna.api.routes.admin_monitor_config.get_config",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):
@@ -179,7 +179,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.update_config",
+            "farna.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -248,7 +248,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.update_config",
+            "farna.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -268,7 +268,7 @@ class TestSetMonitorConfig:
             return _make_entry(value)
 
         with patch(
-            "modulo.api.routes.admin_monitor_config.update_config",
+            "farna.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=fake_set_config,
         ):
@@ -314,7 +314,7 @@ class TestSetMonitorConfig:
     async def test_programming_error_returns_501(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.update_config",
+            "farna.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=ProgrammingError("stmt", "params", Exception("boom")),
         ):
@@ -329,7 +329,7 @@ class TestSetMonitorConfig:
     async def test_sqlalchemy_error_returns_503(self):
         session = _make_mock_session()
         with patch(
-            "modulo.api.routes.admin_monitor_config.update_config",
+            "farna.api.routes.admin_monitor_config.update_config",
             new_callable=AsyncMock,
             side_effect=SQLAlchemyError("connection lost"),
         ):

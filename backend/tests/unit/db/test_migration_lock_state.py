@@ -2,14 +2,14 @@
 
 Alembic loads ``env.py`` as a fresh module (``env_py``) via
 ``alembic.util.pyfiles.load_python_file``; it never reuses the cached
-``modulo.db.migrations.env`` object. A lock-ownership flag stored as a global
-inside ``env.py`` therefore did not propagate from ``modulo.api.main`` to the
+``farna.db.migrations.env`` object. A lock-ownership flag stored as a global
+inside ``env.py`` therefore did not propagate from ``farna.api.main`` to the
 copy ``command.upgrade`` executed, so the app's lifespan migration run
 re-acquired the advisory lock it already held and self-deadlocked -- the nightly
 Schemathesis fuzz job failed with "Timed out waiting for the migration advisory
 lock" for 11 consecutive days.
 
-The flag now lives in ``modulo.db.migrations._lock_state`` so both copies import
+The flag now lives in ``farna.db.migrations._lock_state`` so both copies import
 the same object; these tests pin that propagation, loading env.py exactly the
 way alembic does.
 """
@@ -20,8 +20,8 @@ from typing import Any, Self
 
 import pytest
 
-from modulo.db.migrations import _lock_state
-from modulo.db.migrations import env as cached_env
+from farna.db.migrations import _lock_state
+from farna.db.migrations import env as cached_env
 
 
 @pytest.fixture(autouse=True)

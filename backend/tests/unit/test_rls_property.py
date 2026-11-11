@@ -28,14 +28,14 @@ from sqlalchemy import Column, Integer, Uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import declarative_base
 
-from modulo.auth.team_rbac import (
+from farna.auth.team_rbac import (
     ORG_ROLE_HIERARCHY,
     TEAM_ROLE_HIERARCHY,
     get_effective_team_role,
     org_role_level,
     team_role_level,
 )
-from modulo.db.rls import _inject_tenant_filter, set_rls_org
+from farna.db.rls import _inject_tenant_filter, set_rls_org
 
 _Base = declarative_base()
 

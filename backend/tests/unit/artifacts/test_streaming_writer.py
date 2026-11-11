@@ -10,8 +10,8 @@ import hashlib
 
 import pytest
 
-from modulo.core.artifacts.store import LocalArtifactStore
-from modulo.core.artifacts.streaming import StreamingArtifactWriter
+from farna.core.artifacts.store import LocalArtifactStore
+from farna.core.artifacts.streaming import StreamingArtifactWriter
 
 
 def test_write_does_not_count_bytes_when_append_fails(tmp_path):

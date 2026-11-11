@@ -17,12 +17,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.api.dependencies import get_plan_context
-from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import CommunityTier, FeatureFlagRegistry
-from modulo.db.models.base import Base
-from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
-from modulo.settings import Settings
+from farna.api.dependencies import get_plan_context
+from farna.auth.jwt import AuthenticatedPrincipal
+from farna.core.feature_flags import CommunityTier, FeatureFlagRegistry
+from farna.db.models.base import Base
+from farna.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
+from farna.settings import Settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -117,8 +117,8 @@ class TestFeatureFlagRegistryFromDbTransactionSafe:
         registry = FeatureFlagRegistry(current_tier="team")
 
         with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+            patch("farna.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
         ):
             await registry.load_from_db(session)
 
@@ -169,8 +169,8 @@ class TestGetPlanContextFallback:
     async def test_type_error_returns_community_tier(self) -> None:
         session = self._make_session()
         with (
-            patch("modulo.db.crud.organisation.get_organisation", return_value=None),
-            patch("modulo.core.feature_flags.resolve_plan_context", side_effect=TypeError("no support")),
+            patch("farna.db.crud.organisation.get_organisation", return_value=None),
+            patch("farna.core.feature_flags.resolve_plan_context", side_effect=TypeError("no support")),
         ):
             ctx = await get_plan_context(
                 current_user=self._make_user(),
@@ -183,8 +183,8 @@ class TestGetPlanContextFallback:
     async def test_attribute_error_returns_community_tier(self) -> None:
         session = self._make_session()
         with (
-            patch("modulo.db.crud.organisation.get_organisation", return_value=None),
-            patch("modulo.core.feature_flags.resolve_plan_context", side_effect=AttributeError("no attr")),
+            patch("farna.db.crud.organisation.get_organisation", return_value=None),
+            patch("farna.core.feature_flags.resolve_plan_context", side_effect=AttributeError("no attr")),
         ):
             ctx = await get_plan_context(
                 current_user=self._make_user(),
@@ -197,8 +197,8 @@ class TestGetPlanContextFallback:
     async def test_unrelated_exception_is_not_swallowed(self) -> None:
         session = self._make_session()
         with (
-            patch("modulo.db.crud.organisation.get_organisation", return_value=None),
-            patch("modulo.core.feature_flags.resolve_plan_context", side_effect=ValueError("boom")),
+            patch("farna.db.crud.organisation.get_organisation", return_value=None),
+            patch("farna.core.feature_flags.resolve_plan_context", side_effect=ValueError("boom")),
             pytest.raises(ValueError, match="boom"),
         ):
             await get_plan_context(
@@ -245,8 +245,8 @@ async def test_list_tiers_and_list_feature_flags_awaited_via_fake_session() -> N
     """The CRUD reads are awaited through the fake session's execute() contract."""
     session = _FakeSession()
     with (
-        patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
-        patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_tiers", return_value=[]),
+        patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=[]),
     ):
         registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
     assert registry.current_tier == "community"

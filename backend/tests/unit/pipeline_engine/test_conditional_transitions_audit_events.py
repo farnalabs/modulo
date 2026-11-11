@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.eval_engine import EvalBlockedError
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from farna.core.eval_engine import EvalBlockedError
+from farna.core.pipeline_engine.executor import PipelineExecutor
 
 # ---------------------------------------------------------------------------
 # Helpers (matching test_executor.py patterns)
@@ -142,7 +142,7 @@ def _bypass_capacity(self: Any, **kwargs: Any) -> MagicMock:
 
 
 @pytest.mark.asyncio
-@patch("modulo.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
+@patch("farna.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
 async def test_eval_blocked_records_audit_event(mock_append: AsyncMock):
     """EvalBlockedError from _stream_graph triggers an audit event."""
     run = _make_run()
@@ -154,14 +154,14 @@ async def test_eval_blocked_records_audit_event(mock_append: AsyncMock):
     registry = _make_registry()
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
     ):
         executor = PipelineExecutor(MagicMock())
@@ -174,7 +174,7 @@ async def test_eval_blocked_records_audit_event(mock_append: AsyncMock):
 
 
 @pytest.mark.asyncio
-@patch("modulo.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
+@patch("farna.core.pipeline_engine.executor.append_audit_event", new_callable=AsyncMock)
 async def test_resume_eval_blocked_records_audit_event(mock_append: AsyncMock):
     """EvalBlockedError from _stream_graph during resume triggers an audit event."""
     run = _make_run()
@@ -193,16 +193,16 @@ async def test_resume_eval_blocked_records_audit_event(mock_append: AsyncMock):
     settings_mock.fernet_key = "test-fernet-key-not-for-production="
 
     with (
-        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
-        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
-        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
-        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
-        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
-        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("farna.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("farna.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("farna.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("farna.core.pipeline_engine.executor.set_rls_org"),
+        patch("farna.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("farna.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("farna.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("farna.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("farna.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("farna.settings.get_settings", return_value=settings_mock),
     ):
         executor = PipelineExecutor(MagicMock())
         executor._checkpointer_conn_string = "sqlite:///test.db"

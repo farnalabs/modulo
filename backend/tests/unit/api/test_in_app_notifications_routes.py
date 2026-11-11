@@ -19,12 +19,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud.notifications import LinkedRunState
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud.notifications import LinkedRunState
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -96,8 +96,8 @@ class _TestHarness:
         self.session = _make_session()
         self.event_bus = MagicMock()
         self.event_bus.publish = AsyncMock()
-        self.patches = [patch(f"modulo.api.routes.in_app_notifications.{name}", new=AsyncMock()) for name in _PATCHES]
-        self.patches.append(patch("modulo.api.routes.in_app_notifications.get_event_bus", return_value=self.event_bus))
+        self.patches = [patch(f"farna.api.routes.in_app_notifications.{name}", new=AsyncMock()) for name in _PATCHES]
+        self.patches.append(patch("farna.api.routes.in_app_notifications.get_event_bus", return_value=self.event_bus))
 
     def __enter__(self) -> Self:
         for p in self.patches:
@@ -112,7 +112,7 @@ class _TestHarness:
             p.stop()
 
     def stub(self, name: str, value: object) -> None:
-        import modulo.api.routes.in_app_notifications as route
+        import farna.api.routes.in_app_notifications as route
 
         setattr(route, name, value)
 

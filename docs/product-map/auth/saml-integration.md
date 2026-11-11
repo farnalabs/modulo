@@ -3,8 +3,8 @@ id: feat-core-saml-integration
 prd: 9.4
 adr: []
 code:
-  - backend/src/modulo/auth/saml_handler.py
-  - backend/src/modulo/auth/sso.py
+  - backend/src/farna/auth/saml_handler.py
+  - backend/src/farna/auth/sso.py
 unit-tests:
   - backend/tests/unit/auth/test_saml_parse_datetime.py
   - backend/tests/unit/auth/test_saml_audience_containment.py

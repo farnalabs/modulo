@@ -1,11 +1,11 @@
 """Unit tests for the HITL-gate weakening guard primitive
-(modulo.db.crud.hitl_review_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
+(farna.db.crud.hitl_review_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
 
 from __future__ import annotations
 
 import pytest
 
-from modulo.db.crud.hitl_review_guard import (
+from farna.db.crud.hitl_review_guard import (
     REASON_CORRELATION_KEY_MISMATCH,
     REASON_INSUFFICIENT_ROLE,
     REASON_LEGACY_SNAPSHOT_AMBIGUOUS,
@@ -830,7 +830,7 @@ def test_edge_only_payload_has_no_affected_nodes_key() -> None:
 
 
 def test_denial_detail_names_affected_node() -> None:
-    from modulo.db.crud.hitl_review_guard import denial_detail
+    from farna.db.crud.hitl_review_guard import denial_detail
 
     diff = DiffResult(
         weakened_edges=[],

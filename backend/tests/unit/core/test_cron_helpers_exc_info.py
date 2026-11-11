@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.cron_helpers`` (PR #97).
+``farna.core.cron_helpers`` (PR #97).
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core import cron_helpers as ch
+from farna.core import cron_helpers as ch
 
 
 def _redis_mock(method: str) -> MagicMock:

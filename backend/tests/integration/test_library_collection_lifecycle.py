@@ -18,36 +18,36 @@ import pytest_asyncio
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.library import (
+from farna.api.routes.library import (
     _install_response,
     _load_install_facts,
     _load_installed_entities,
     get_collection_install_endpoint,
 )
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.library_service._seed_data import MODULO_ORG_ID
-from modulo.core.library_service.grant import grant_collection_agents
-from modulo.core.library_service.install import CollectionInstallError, install_collection
-from modulo.core.library_service.runnability import _org_has_model_backend, compute_runnable
-from modulo.core.library_service.uninstall import uninstall_collection
-from modulo.core.library_service.upgrade import (
+from farna.auth.jwt import TenantPrincipal
+from farna.core.library_service._seed_data import MODULO_ORG_ID
+from farna.core.library_service.grant import grant_collection_agents
+from farna.core.library_service.install import CollectionInstallError, install_collection
+from farna.core.library_service.runnability import _org_has_model_backend, compute_runnable
+from farna.core.library_service.uninstall import uninstall_collection
+from farna.core.library_service.upgrade import (
     NoUpdateAvailableError,
     UpgradeInstallNotFoundError,
     detect_collection_update,
     upgrade_collection,
 )
-from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
-from modulo.db.models.library_primitive import LibraryPrimitive
-from modulo.db.models.organisation import Organisation
-from modulo.db.rls import set_rls_org
-from modulo.db.soft_delete import include_soft_deleted, register_soft_delete_filter
+from farna.db.models.collection_install import CollectionInstall, CollectionInstallEntity
+from farna.db.models.library_primitive import LibraryPrimitive
+from farna.db.models.organisation import Organisation
+from farna.db.rls import set_rls_org
+from farna.db.soft_delete import include_soft_deleted, register_soft_delete_filter
 
 pytestmark = pytest.mark.integration
 
 # Uninstall SOFT-deletes the ``CollectionInstall`` row (0308), so every claim
 # this module makes about a retired install — hidden from plain reads, able to
 # coexist with a reinstall — depends on the global ``deleted_at IS NULL``
-# listener being registered. In the app that happens at ``modulo.db.session``
+# listener being registered. In the app that happens at ``farna.db.session``
 # import; this module never imports it, so register it explicitly here (the
 # same house pattern as test_soft_delete_filter.py / test_viewmodel_soft_deleted_team.py).
 register_soft_delete_filter()
@@ -872,7 +872,7 @@ async def test_install_shipped_github_pr_reviewer_collection(
     agent's output schema round-trips to the installed schema entity, and
     the connector checklist carries the github connector requirement.
     """
-    from modulo.core.library_service._seed_data import _MODULO_PRIMITIVES
+    from farna.core.library_service._seed_data import _MODULO_PRIMITIVES
 
     collection = next(p for p in _MODULO_PRIMITIVES if p.slug == "github-pr-reviewer")
 
@@ -970,7 +970,7 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
     5. A second install in the same org is refused ("already installed") and
        does not duplicate the sentinel row.
     """
-    from modulo.core.library_service._seed_data import _MODULO_PRIMITIVES
+    from farna.core.library_service._seed_data import _MODULO_PRIMITIVES
 
     collection = next(p for p in _MODULO_PRIMITIVES if p.slug == "github-pr-reviewer")
 

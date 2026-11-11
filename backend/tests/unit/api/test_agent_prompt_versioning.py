@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -38,7 +38,7 @@ def _stub_get_agent() -> Generator[None, None, None]:
     """The IDOR ownership check in the prompt-version routes reads the agent via
     ``get_agent`` before the write CRUD. Supply a same-org agent so the ownership
     check passes for the legitimate (same-org) principal these tests use."""
-    with patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()):
+    with patch("farna.api.routes.agents.get_agent", return_value=_make_agent()):
         yield
 
 
@@ -139,8 +139,8 @@ class TestListPromptVersions:
     def test_list_versions_returns_sorted(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts")
         assert resp.status_code == 200
@@ -152,8 +152,8 @@ class TestListPromptVersions:
     def test_list_versions_empty(self, client: TestClient) -> None:
         agent = _make_agent(history=[])
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts")
         assert resp.status_code == 200
@@ -161,8 +161,8 @@ class TestListPromptVersions:
 
     def test_list_versions_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts")
         assert resp.status_code == 404
@@ -172,9 +172,9 @@ class TestGetPromptVersion:
     def test_get_version_found(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.get_prompt_version", return_value=agent.prompt_version_history[0]),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_prompt_version", return_value=agent.prompt_version_history[0]),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts/v1")
         assert resp.status_code == 200
@@ -185,9 +185,9 @@ class TestGetPromptVersion:
     def test_get_version_not_found(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.get_prompt_version", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_prompt_version", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts/v99")
         assert resp.status_code == 404
@@ -203,9 +203,9 @@ class TestGetPromptVersion:
             "eval_result_ids": [],
         }
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.get_prompt_version", return_value=current_entry),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.get_prompt_version", return_value=current_entry),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.get(f"{BASE}/prompts/current")
         assert resp.status_code == 200
@@ -268,8 +268,8 @@ class TestRollback:
         ]
 
         with (
-            patch("modulo.api.routes.agents.rollback_prompt_version", return_value=agent_after),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.rollback_prompt_version", return_value=agent_after),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.put(f"{BASE}/prompts/rollback/v1", json={})
         assert resp.status_code == 200
@@ -279,8 +279,8 @@ class TestRollback:
 
     def test_rollback_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.rollback_prompt_version", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.rollback_prompt_version", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.put(f"{BASE}/prompts/rollback/v99", json={})
         assert resp.status_code == 404
@@ -291,16 +291,16 @@ class TestRollback:
         (not the generic-handler 500) — same mapping as the Agent save paths.
         This test FAILS without the route clause (GitContentRefError would be
         swallowed by `except Exception` into a 500)."""
-        from modulo.core.pipeline_engine.git_content import GitContentRefError
+        from farna.core.pipeline_engine.git_content import GitContentRefError
 
         with (
             patch(
-                "modulo.api.routes.agents.rollback_prompt_version",
+                "farna.api.routes.agents.rollback_prompt_version",
                 side_effect=GitContentRefError(
                     "prompt_template 'git+https://github.com/example/repo.git@main#p.md' is not pinned to a commit SHA"
                 ),
             ),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.put(f"{BASE}/prompts/rollback/v1", json={})
         assert resp.status_code == 422
@@ -311,8 +311,8 @@ class TestDiffVersions:
     def test_diff_returns_structured_lines(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 f"{BASE}/prompts/diff",
@@ -329,8 +329,8 @@ class TestDiffVersions:
     def test_diff_version_not_found(self, client: TestClient) -> None:
         agent = _make_agent()
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=agent),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=agent),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 f"{BASE}/prompts/diff",
@@ -340,8 +340,8 @@ class TestDiffVersions:
 
     def test_diff_agent_not_found(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=None),
-            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("farna.api.routes.agents.get_agent", return_value=None),
+            patch("farna.api.routes.agents.set_rls_org"),
         ):
             resp = client.post(
                 f"{BASE}/prompts/diff",

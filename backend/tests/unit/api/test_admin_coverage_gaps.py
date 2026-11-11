@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin`` (FAR-573).
 
 Complements test_admin.py by exercising endpoints and error branches the
 existing suite leaves uncovered: org profile, regenerate-api-key, user
@@ -22,15 +22,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
-import modulo.api.routes._org_settings as _org_settings
-import modulo.api.routes.admin as admin
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.crud.team import TeamUpdateOutcome
-from modulo.db.models.organisation import Organisation
-from modulo.settings import Settings, get_settings
+import farna.api.routes._org_settings as _org_settings
+import farna.api.routes.admin as admin
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.crud.team import TeamUpdateOutcome
+from farna.db.models.organisation import Organisation
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -406,7 +406,7 @@ def test_update_org_error_mapping(
 def test_regenerate_api_key_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(
-        "modulo.auth.api_key.create_api_key", AsyncMock(return_value=(MagicMock(), "mk_abcdef1234567890"))
+        "farna.auth.api_key.create_api_key", AsyncMock(return_value=(MagicMock(), "mk_abcdef1234567890"))
     )
     resp = client.post("/api/v1/admin/org/regenerate-api-key")
     assert resp.status_code == 200
@@ -423,7 +423,7 @@ def test_regenerate_api_key_error_mapping(
     expected: int,
 ) -> None:
     client, _ = api
-    monkeypatch.setattr("modulo.auth.api_key.create_api_key", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("farna.auth.api_key.create_api_key", AsyncMock(side_effect=exc))
     resp = client.post("/api/v1/admin/org/regenerate-api-key")
     assert resp.status_code == expected
 
@@ -635,7 +635,7 @@ def test_deactivate_success(api: tuple[TestClient, AsyncMock], monkeypatch: pyte
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=membership))
     monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock())
     monkeypatch.setattr(admin, "list_team_memberships_for_account", AsyncMock(return_value=[]))
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock())
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock())
     # The SECURITY DEFINER tombstones the membership; session.refresh is what
     # surfaces the new deactivated_at on the ORM object (per-org is_active).
     session.refresh = AsyncMock(side_effect=lambda obj, *a, **k: setattr(obj, "deactivated_at", _NOW))
@@ -678,7 +678,7 @@ def test_reactivate_success(api: tuple[TestClient, AsyncMock], monkeypatch: pyte
     membership = _membership(role="runner")
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=account))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=membership))
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock())
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock())
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/reactivate")
     assert resp.status_code == 200
     assert resp.json()["is_active"] is True
@@ -694,7 +694,7 @@ def test_reactivate_error_mapping(
     client, _ = api
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=exc))
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/reactivate")
     assert resp.status_code == expected
 
@@ -739,7 +739,7 @@ def test_reset_password_success(api: tuple[TestClient, AsyncMock], monkeypatch: 
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
     monkeypatch.setattr(admin, "list_families_for_account", AsyncMock(return_value=[]))
     # Patch the name ``admin`` actually calls (it is imported into the route
-    # module), not the defining module: patching only ``modulo.core.audit_logger``
+    # module), not the defining module: patching only ``farna.core.audit_logger``
     # left the real audit append running, where ``async with
     # session.begin_nested()`` on the AsyncMock session raised (swallowed by the
     # route's fail-open audit guard) and orphaned the begin_nested coroutine.
@@ -890,7 +890,7 @@ def test_delete_team_audit_integrity_error_409(
     client, _ = api
     monkeypatch.setattr(admin, "delete_team", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "modulo.core.audit_logger.append_audit_event", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x")))
+        "farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x")))
     )
     resp = client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
     assert resp.status_code == 409
@@ -902,7 +902,7 @@ def test_delete_team_audit_programming_error_still_204(
     client, _ = api
     monkeypatch.setattr(admin, "delete_team", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "modulo.core.audit_logger.append_audit_event", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
+        "farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
     )
     resp = client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
     assert resp.status_code == 204
@@ -913,7 +913,7 @@ def test_delete_team_audit_programming_error_still_204(
 
 def test_admin_dashboard_summary_alias(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
-    monkeypatch.setattr("modulo.api.routes.dashboard.dashboard_summary", AsyncMock(return_value={"runs": 4}))
+    monkeypatch.setattr("farna.api.routes.dashboard.dashboard_summary", AsyncMock(return_value={"runs": 4}))
     resp = client.get("/api/v1/admin/dashboard/summary")
     assert resp.status_code == 200
     assert resp.json() == {"runs": 4}
@@ -1006,7 +1006,7 @@ def test_request_org_deletion_refuses_before_any_db_access(
     """The route is DB-free: a CRUD failure can never surface as its old 4xx/5xx."""
     client, _ = api
     request_deletion = AsyncMock(side_effect=exc)
-    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", request_deletion)
+    monkeypatch.setattr("farna.db.crud.org_deletion.request_org_deletion", request_deletion)
     resp = client.post("/api/v1/admin/org/deletion-request")
     assert resp.status_code == 403
     assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
@@ -1022,7 +1022,7 @@ def test_confirm_org_deletion_refuses_before_any_db_access(
 ) -> None:
     client, _ = api
     confirm_deletion = AsyncMock(side_effect=exc)
-    monkeypatch.setattr("modulo.db.crud.org_deletion.confirm_org_deletion", confirm_deletion)
+    monkeypatch.setattr("farna.db.crud.org_deletion.confirm_org_deletion", confirm_deletion)
     resp = client.post("/api/v1/admin/org/deletion-confirm", json={"token": "tok"})
     assert resp.status_code == 403
     assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
@@ -1032,7 +1032,7 @@ def test_confirm_org_deletion_refuses_before_any_db_access(
 def test_cancel_org_deletion_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(
-        "modulo.db.crud.org_deletion.cancel_org_deletion", AsyncMock(return_value={"status": "cancelled"})
+        "farna.db.crud.org_deletion.cancel_org_deletion", AsyncMock(return_value={"status": "cancelled"})
     )
     resp = client.patch("/api/v1/admin/org/deletion-cancel")
     assert resp.status_code == 200
@@ -1047,7 +1047,7 @@ def test_cancel_org_deletion_error_mapping(
     expected: int,
 ) -> None:
     client, _ = api
-    monkeypatch.setattr("modulo.db.crud.org_deletion.cancel_org_deletion", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("farna.db.crud.org_deletion.cancel_org_deletion", AsyncMock(side_effect=exc))
     resp = client.patch("/api/v1/admin/org/deletion-cancel")
     assert resp.status_code == expected
 
@@ -1060,7 +1060,7 @@ def test_export_org_data_success(api: tuple[TestClient, AsyncMock], monkeypatch:
         ],
         "exported_at": "2025-06-01T00:00:00+00:00",
     }
-    monkeypatch.setattr("modulo.db.crud.org_deletion.export_org_data", AsyncMock(return_value=bundle))
+    monkeypatch.setattr("farna.db.crud.org_deletion.export_org_data", AsyncMock(return_value=bundle))
     resp = client.get("/api/v1/admin/org/export")
     assert resp.status_code == 200
     data = resp.json()
@@ -1076,7 +1076,7 @@ def test_export_org_data_error_mapping(
     expected: int,
 ) -> None:
     client, _ = api
-    monkeypatch.setattr("modulo.db.crud.org_deletion.export_org_data", AsyncMock(side_effect=exc))
+    monkeypatch.setattr("farna.db.crud.org_deletion.export_org_data", AsyncMock(side_effect=exc))
     resp = client.get("/api/v1/admin/org/export")
     assert resp.status_code == expected
 
@@ -1084,7 +1084,7 @@ def test_export_org_data_error_mapping(
 def test_delete_org_immediate_is_forbidden(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     request_deletion = AsyncMock()
-    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", request_deletion)
+    monkeypatch.setattr("farna.db.crud.org_deletion.request_org_deletion", request_deletion)
 
     resp = client.delete("/api/v1/admin/org")
 
@@ -1363,7 +1363,7 @@ def test_retention_purge_runs_unexpected_error_500(
 def test_manual_purge_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "purge_runs", AsyncMock(return_value={"purged": 3}))
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock())
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock())
     resp = client.post("/api/v1/admin/purge", json={"older_than": "2025-01-01"})
     assert resp.status_code == 200
     assert resp.json() == {"purged": 3}

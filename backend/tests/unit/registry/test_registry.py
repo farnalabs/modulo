@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from modulo.core.registry import (
+from farna.core.registry import (
     _BUILTIN_REGISTRY,
     _canonical_json,
     _sha256_digest,

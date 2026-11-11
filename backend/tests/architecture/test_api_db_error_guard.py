@@ -14,8 +14,8 @@ of every arm that answers 503:
         raise_session_contract_error(exc, "<module>.<function>")
         ... existing logging / 503 raise ...
 
-This test AST-scans ``backend/src/modulo/api/**`` and — since FAR-1481 —
-``backend/src/modulo/auth/**`` and FAILS when an arm that reports a 503 does
+This test AST-scans ``backend/src/farna/api/**`` and — since FAR-1481 —
+``backend/src/farna/auth/**`` and FAILS when an arm that reports a 503 does
 not lead with that guard, so the misclassification cannot reappear. Arms
 legitimately exempt are listed in ``_EXEMPT`` with a reason.
 
@@ -43,15 +43,15 @@ Scope notes:
   the run WebSocket surface. Both delegate to the SAME shared classifier in
   ``db_error_handling``; only the rendering differs (500 vs payload), which is
   why accepting either satisfies both predicates.
-* Helper resolution is CROSS-MODULE across the scanned ``modulo.api`` +
-  ``modulo.auth`` trees (iteration-2 fix): a helper reached via
-  ``from modulo.api.<...> import <name>``
-  (incl. ``as`` aliases, relative imports, ``import modulo.api.<...>`` usage and
+* Helper resolution is CROSS-MODULE across the scanned ``farna.api`` +
+  ``farna.auth`` trees (iteration-2 fix): a helper reached via
+  ``from farna.api.<...> import <name>``
+  (incl. ``as`` aliases, relative imports, ``import farna.api.<...>`` usage and
   ``import *``) is resolved to its definition in the source module and the
   503-predicate is computed as a fixed point over the whole import graph —
   so an arm whose 503 comes from an imported helper is flagged exactly like a
-  module-local one. Helpers defined OUTSIDE the scanned trees (``modulo.core``,
-  ``modulo.db``, third-party) are unresolvable and are NOT treated as 503 —
+  module-local one. Helpers defined OUTSIDE the scanned trees (``farna.core``,
+  ``farna.db``, third-party) are unresolvable and are NOT treated as 503 —
   documented boundary, not a silent gap; no current arm delegates its 503 to
   a non-scanned helper. FAR-1481 added the auth root because
   ``auth/dependencies.py``'s two arms sat outside the api root and were
@@ -82,10 +82,10 @@ from pathlib import Path
 
 from tests.unit._source_scan import iter_source_text
 
-_API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
-_API_PREFIX = "modulo.api"
-_AUTH_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "auth"
-_AUTH_PREFIX = "modulo.auth"
+_API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "farna" / "api"
+_API_PREFIX = "farna.api"
+_AUTH_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "farna" / "auth"
+_AUTH_PREFIX = "farna.auth"
 
 #: (root path, module prefix, root name) for every scanned tree. The root
 #: name namespaces ``_EXEMPT`` keys and violation paths so the two roots
@@ -98,7 +98,7 @@ _ROOTS_BY_NAME: dict[str, Path] = {name: path for path, _prefix, name in _ROOTS}
 
 #: Files whose SQLAlchemyError arms are allowed to report a 503 WITHOUT the
 #: guard, mapped to the reason the exemption is legitimate (FAR-1464).
-#: Keys are ``"<root name>/<path under src/modulo>"`` (FAR-1481).
+#: Keys are ``"<root name>/<path under src/farna>"`` (FAR-1481).
 _EXEMPT = {
     "api/db_error_handling.py": (
         "The shared classifier itself: _translate_wrapped_exception's SQLAlchemyError "
@@ -298,7 +298,7 @@ class _ApiIndex:
                     elif isinstance(node, ast.Import):
                         for alias in node.names:
                             if alias.name.startswith((_API_PREFIX, _AUTH_PREFIX)):
-                                # import modulo.api.routes.admin [as adm]
+                                # import farna.api.routes.admin [as adm]
                                 self.aliases[module][alias.asname or alias.name.split(".")[0]] = alias.name
 
 
@@ -306,7 +306,7 @@ def _resolve_def_key(index: _ApiIndex, module: str, func: ast.expr) -> tuple[str
     """Map a call's func expression to the (module, name) of its definition.
 
     Resolves: local top-level defs; ``from ... import`` bindings (chained
-    re-exports, capped); ``import modulo.api.<...>`` aliases; dotted paths that
+    re-exports, capped); ``import farna.api.<...>`` aliases; dotted paths that
     are themselves a known module; and ``import *`` targets. Returns None for
     anything outside the scanned tree — unresolvable helpers are NOT treated
     as 503 (documented boundary in the module docstring).
@@ -521,7 +521,7 @@ def boom() -> None:
 _CROSS_ROUTE_FROM_IMPORT = """\
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.cross_helper_503 import boom
+from farna.api.cross_helper_503 import boom
 
 
 async def handler_from_import() -> None:
@@ -532,7 +532,7 @@ async def handler_from_import() -> None:
 """
 
 _CROSS_ROUTE_DOTTED_IMPORT = """\
-import modulo.api.cross_helper_503 as helper_alias
+import farna.api.cross_helper_503 as helper_alias
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -546,7 +546,7 @@ async def handler_dotted_import() -> None:
 _CROSS_ROUTE_GUARDED = """\
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.cross_helper_503 import boom
+from farna.api.cross_helper_503 import boom
 
 
 async def handler_from_import() -> None:
@@ -575,7 +575,7 @@ async def handler_local() -> None:
 
 
 def _write_synthetic_tree(root: Path, route_sources: dict[str, str]) -> None:
-    """Build a miniature modulo.api tree: helper file + route file(s)."""
+    """Build a miniature farna.api tree: helper file + route file(s)."""
     (root / "routes").mkdir(parents=True, exist_ok=True)
     (root / "cross_helper_503.py").write_text(_CROSS_HELPER_SOURCE, encoding="utf-8")
     for rel, source in route_sources.items():
@@ -585,8 +585,8 @@ def _write_synthetic_tree(root: Path, route_sources: dict[str, str]) -> None:
 def test_cross_module_delegating_503_helper_is_flagged_when_unguarded(tmp_path: Path) -> None:
     """The iteration-2 hole: an arm delegating its 503 to an IMPORTED helper.
 
-    Both import shapes the scanner must follow — ``from modulo.api.X import f``
-    and ``import modulo.api.X as alias`` — must flag the unguarded arm in the
+    Both import shapes the scanner must follow — ``from farna.api.X import f``
+    and ``import farna.api.X as alias`` — must flag the unguarded arm in the
     importing file, even though the 503 raise lives in a different file.
     """
     _write_synthetic_tree(
@@ -700,7 +700,7 @@ def test_mcp_payload_guard_shape_is_accepted(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # FAR-1481: the auth root is scanned with the SAME predicate as the api root.
-# A synthetic modulo.auth tree proves the second root is wired in — an
+# A synthetic farna.auth tree proves the second root is wired in — an
 # unguarded 503 arm under auth/ is flagged, the guarded shape is clean.
 # ---------------------------------------------------------------------------
 

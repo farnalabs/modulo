@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.audit_logger.append_only import register_append_only_guard
-from modulo.db.models.audit_event import AuditEvent
+from farna.core.audit_logger.append_only import register_append_only_guard
+from farna.db.models.audit_event import AuditEvent
 
 pytestmark = pytest.mark.integration
 BACKEND_ROOT = Path(__file__).parents[2]
@@ -45,7 +45,7 @@ def _collect_mutating_methods(source_path: Path) -> list[str]:
 class TestAuditApiHasNoMutatingEndpoints:
     """Static analysis: the audit router must not expose PUT/PATCH/DELETE."""
 
-    audit_route_path = BACKEND_ROOT / "src" / "modulo" / "api" / "routes" / "audit.py"
+    audit_route_path = BACKEND_ROOT / "src" / "farna" / "api" / "routes" / "audit.py"
 
     def test_audit_router_has_no_put(self) -> None:
         assert "put" not in _collect_mutating_methods(self.audit_route_path), (
@@ -163,7 +163,7 @@ class TestAuditOrmImmutability:
 # Architecture-level: every mutating route file emits audit events
 # ---------------------------------------------------------------------------
 
-ROUTE_FILES = sorted(BACKEND_ROOT.glob("src/modulo/api/routes/*.py"))
+ROUTE_FILES = sorted(BACKEND_ROOT.glob("src/farna/api/routes/*.py"))
 _MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
 
 
@@ -225,7 +225,7 @@ class TestMcpToolsAuditCoverage:
     append_audit_event calls in mcp_server.py itself.
     """
 
-    mcp_server_path = BACKEND_ROOT / "src" / "modulo" / "api" / "mcp_server.py"
+    mcp_server_path = BACKEND_ROOT / "src" / "farna" / "api" / "mcp_server.py"
 
     def test_mcp_mutating_tools_exist(self) -> None:
         """Verify each MCP tool that changes state exists in the server."""
@@ -252,7 +252,7 @@ class TestAuditChainIntegrity:
 
     async def test_chain_verify_passes_after_failed_mutation(self, db_session: AsyncSession) -> None:
         """After a failed DELETE attempt, chain verification must still pass."""
-        from modulo.core.audit_logger import append_audit_event, verify_chain
+        from farna.core.audit_logger import append_audit_event, verify_chain
 
         org_id = uuid.uuid4()
         await db_session.execute(

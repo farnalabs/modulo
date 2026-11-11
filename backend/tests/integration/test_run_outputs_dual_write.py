@@ -32,17 +32,17 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.run_outputs_dualwrite import guard_dual_write
-from modulo.db.crud.run import update_run_status
-from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
-from modulo.db.rls import set_rls_org
+from farna.core.run_outputs_dualwrite import guard_dual_write
+from farna.db.crud.run import update_run_status
+from farna.db.crud.run_node_outputs import DualWriteError, read_run_blobs
+from farna.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
 
 def patch_replace(replacement: Any) -> Any:
     """Patch the chokepoint's REPLACE helper at the crud.run module boundary."""
-    return patch("modulo.db.crud.run.replace_run_node_outputs", replacement)
+    return patch("farna.db.crud.run.replace_run_node_outputs", replacement)
 
 
 @dataclass(frozen=True)
@@ -465,7 +465,7 @@ async def test_transient_retry_succeeds_without_failure_event(
     dual_write_tenant: _Tenant,
 ) -> None:
     run_id = await _insert_run(db_engine, dual_write_tenant)
-    from modulo.db.crud import run as run_crud
+    from farna.db.crud import run as run_crud
 
     real_replace = run_crud.replace_run_node_outputs
     calls: list[int] = []

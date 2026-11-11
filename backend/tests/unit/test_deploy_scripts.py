@@ -181,7 +181,7 @@ def test_bootstrap_db_shim_reexports_promoted_module() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    import modulo.db.bootstrap as promoted
+    import farna.db.bootstrap as promoted
 
     assert module.main is promoted.main
     assert module.__all__ == ["asyncio", "derive_system_database_url", "fix_database_url", "main"]
@@ -229,7 +229,7 @@ def test_extract_machine_id_main_reads_stdin_and_writes_id(monkeypatch: pytest.M
 
 
 def test_bootstrap_db_script_entrypoint_calls_promoted_main(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modulo.db.bootstrap as promoted
+    import farna.db.bootstrap as promoted
 
     called: list[bool] = []
     monkeypatch.setattr(promoted, "main", lambda: called.append(True))

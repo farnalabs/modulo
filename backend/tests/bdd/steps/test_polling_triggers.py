@@ -16,9 +16,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import ConnectorResult
-from modulo.core.cron_helpers import fire_polling_trigger
-from modulo.db.models.trigger import Trigger
+from farna.connectors.base import ConnectorResult
+from farna.core.cron_helpers import fire_polling_trigger
+from farna.db.models.trigger import Trigger
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/polling.feature")
@@ -238,18 +238,18 @@ def _fire_polling_trigger(ctx: dict[str, Any]) -> dict[str, Any]:
         )
 
     with (
-        patch("modulo.core.cron_helpers.get_settings") as mock_settings,
-        patch("modulo.core.cron_helpers._open_factory", return_value=factory),
-        patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.cron_helpers.org_is_paused", new_callable=AsyncMock, return_value=False),
-        patch("modulo.core.secrets_backend.create_secrets_backend") as mock_backend,
-        patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+        patch("farna.core.cron_helpers.get_settings") as mock_settings,
+        patch("farna.core.cron_helpers._open_factory", return_value=factory),
+        patch("farna.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
+        patch("farna.core.cron_helpers.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("farna.core.secrets_backend.create_secrets_backend") as mock_backend,
+        patch("farna.core.trigger_engine.polling._build_polling_connector", return_value=connector),
         patch(
-            "modulo.db.crud.run.create_run",
+            "farna.db.crud.run.create_run",
             new_callable=AsyncMock,
             return_value=run_mock,
         ) as mock_cr,
-        patch("modulo.core.cron_helpers._log_poll_event", new_callable=AsyncMock) as mock_event,
+        patch("farna.core.cron_helpers._log_poll_event", new_callable=AsyncMock) as mock_event,
     ):
         mock_settings.return_value = MagicMock(
             database_url="postgresql+asyncpg://localhost/test",

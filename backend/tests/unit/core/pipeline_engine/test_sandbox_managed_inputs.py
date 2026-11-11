@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.pipeline_engine.sandbox_mode import (
+from farna.core.pipeline_engine.sandbox_mode import (
     SANDBOX_CAPABILITY_WORKSPACE_INPUTS,
     _validate_sandbox_managed_inputs_config,
 )
@@ -357,7 +357,7 @@ class TestErrorCodeConstants:
     """Verify the new error codes are registered in the error-code registry."""
 
     def test_all_five_codes_registered(self) -> None:
-        from modulo.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
+        from farna.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
 
         expected = {
             "sandbox.input_credential_failed",
@@ -370,7 +370,7 @@ class TestErrorCodeConstants:
         assert not missing, f"Missing error codes: {missing}"
 
     def test_codes_are_retryable_appropriately(self) -> None:
-        from modulo.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
+        from farna.core.pipeline_engine.error_codes import ERROR_CODE_REGISTRY
 
         # Credential and checkout failures are retryable (transient).
         for code in (

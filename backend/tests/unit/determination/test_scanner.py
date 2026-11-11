@@ -13,10 +13,10 @@ import pytest
 import respx
 from cryptography.fernet import Fernet
 
-from modulo.connectors.base import ConnectorType
-from modulo.core.connector_hub import ConnectorHub
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.determination.scanner import _repo_name, run_scan
+from farna.connectors.base import ConnectorType
+from farna.core.connector_hub import ConnectorHub
+from farna.core.secrets_backend import create_secrets_backend
+from farna.determination.scanner import _repo_name, run_scan
 
 from .helpers import FakeConnector
 
@@ -464,7 +464,7 @@ async def test_connector_query_timeout_produces_error_sample() -> None:
 
     hub = _bare_hub({cid: FakeConnector(query_records=[], delay_seconds=60)})
 
-    with patch("modulo.determination.scanner._QUERY_TIMEOUT", 0.05):
+    with patch("farna.determination.scanner._QUERY_TIMEOUT", 0.05):
         samples = await run_scan(hub)
 
     assert len(samples) == 1

@@ -82,11 +82,11 @@ def get_pipelines(client, request):
     own_name = org_pipelines.get("acme") or request.node._pipeline_name
     with (
         patch(
-            "modulo.api.routes.pipelines.list_pipelines",
+            "farna.api.routes.pipelines.list_pipelines",
             return_value=_page_result([_make_mock_pipeline_full(name=own_name)]),
         ),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get("/api/v1/pipelines")
     request.node._resp = resp
@@ -97,9 +97,9 @@ def get_pipeline_by_name(name: str, client, request):
     # Cross-org access: the pipeline is not visible to the caller's org, so the
     # route resolves it to 404.
     with (
-        patch("modulo.api.routes.pipelines.get_pipeline", return_value=None),
-        patch("modulo.api.routes.pipelines.set_rls_org"),
-        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("farna.api.routes.pipelines.get_pipeline", return_value=None),
+        patch("farna.api.routes.pipelines.set_rls_org"),
+        patch("farna.api.routes.pipelines.set_rls_user_context"),
     ):
         resp = client.get(f"/api/v1/pipelines/{_pipeline_id_for(name)}")
     request.node._resp = resp
@@ -134,8 +134,8 @@ def trigger_cross_org_run(pipeline_name: str, client, request):
     # Cross-org run creation: the pipeline is not visible, so the current
     # trigger endpoint (POST /api/v1/runs) resolves it to 404.
     with (
-        patch("modulo.api.routes.runs.get_pipeline", return_value=None),
-        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("farna.api.routes.runs.get_pipeline", return_value=None),
+        patch("farna.api.routes.runs.set_rls_org"),
     ):
         resp = client.post(
             "/api/v1/runs",
@@ -146,7 +146,7 @@ def trigger_cross_org_run(pipeline_name: str, client, request):
 
 @when(parsers.parse("a raw query runs with SET app.organisation_id = '{org}'"))
 def raw_query_with_set(org: str, mock_session, request):
-    from modulo.db.rls import set_rls_org
+    from farna.db.rls import set_rls_org
 
     # ``set_rls_org`` is an ASYNC function; calling it without awaiting both
     # skips its body and leaks the coroutine object as an
@@ -161,7 +161,7 @@ def raw_query_with_set(org: str, mock_session, request):
 
 @when("a raw query runs without setting app.current_org_id")
 def raw_query_without_set(request):
-    from modulo.db.rls import set_rls_org
+    from farna.db.rls import set_rls_org
 
     mock_session = MagicMock()
     try:

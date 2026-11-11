@@ -58,7 +58,7 @@ _SEED_SPECS: list[tuple[str, str, str, bool, bool, str | None]] = [
 def _alembic_config(db_url: str) -> Config:
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
-    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"))
     config.config_file_name = None
     return config
 
@@ -72,7 +72,7 @@ def _with_credentials(database_url: str, user: str, password: str) -> str:
 
 def _sync_url(asyncpg_url: str) -> str:
     # Reuse env.py's canonical async->sync driver mapping (psycopg2 not in tree).
-    from modulo.db.migrations import env as migration_env
+    from farna.db.migrations import env as migration_env
 
     return migration_env._to_sync_url(asyncpg_url)
 
@@ -194,7 +194,7 @@ def sweep_db(monkeypatch):
         m.setenv("DATABASE_URL", raw)
         m.setenv("DATABASE_ADMIN_URL", raw)
         m.setenv("MODULO_BREAK_GLASS_DATABASE_URL", bg_url)
-        from modulo.db.bootstrap_role import bootstrap_roles
+        from farna.db.bootstrap_role import bootstrap_roles
 
         asyncio.run(bootstrap_roles(raw, app_url))
         command.upgrade(config, _PREHEAD)

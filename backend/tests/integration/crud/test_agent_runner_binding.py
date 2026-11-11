@@ -15,16 +15,16 @@ from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.runner_bindings import resolve_agent_bindings
-from modulo.db.crud.agent import create_agent
-from modulo.db.crud.agent_runner_binding import (
+from farna.core.runner_bindings import resolve_agent_bindings
+from farna.db.crud.agent import create_agent
+from farna.db.crud.agent_runner_binding import (
     delete_binding,
     list_bindings_for_agent,
     replace_agent_bindings,
 )
-from modulo.db.crud.model_backend import create_model_backend, delete_model_backend
-from modulo.db.models.agent_runner_binding import AgentRunnerBinding
-from modulo.db.rls import set_rls_execution_context, set_rls_org
+from farna.db.crud.model_backend import create_model_backend, delete_model_backend
+from farna.db.models.agent_runner_binding import AgentRunnerBinding
+from farna.db.rls import set_rls_execution_context, set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -246,7 +246,7 @@ async def test_delete_binding_scoped_to_agent(rls_session, test_org, test_user) 
 
 async def test_org_teardown_with_bindings_present(db_engine: AsyncEngine, test_user: uuid.UUID) -> None:
     """RESTRICT + teardown: delete_organisation cannot abort on the bindings."""
-    from modulo.db.crud.organisation import delete_organisation
+    from farna.db.crud.organisation import delete_organisation
 
     org_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -323,7 +323,7 @@ async def _seed_resolution_scene(
 
     from cryptography.fernet import Fernet
 
-    from modulo.settings import get_settings
+    from farna.settings import get_settings
 
     encrypted_secret = Fernet(get_settings().fernet_key.encode()).encrypt(
         json.dumps({"api_key": secret_value}).encode("utf-8")
@@ -429,7 +429,7 @@ async def test_local_profile_refuses_bindings_without_opt_in(
     db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """Local + bindings + no opt-in -> typed provision-time refusal (D7 posture)."""
-    from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
+    from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=False
@@ -453,7 +453,7 @@ async def test_string_opt_in_is_not_an_opt_in(
     string-configured flag must FAIL the refusal, never silently host a
     standing host-env credential.
     """
-    from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
+    from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
@@ -486,7 +486,7 @@ async def test_unresolvable_profile_fails_closed(
     an absent profile row for a provided id cannot prove its tier is
     container-isolated.
     """
-    from modulo.core.runner_bindings import LocalProviderBindingsRefusedError
+    from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
     agent_id, _backend_id, _real_profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
@@ -506,7 +506,7 @@ async def test_missing_backend_fails_resolution_typed(
 ) -> None:
     """FAR-592 qa F3: a binding to a backend that is NOT org-visible fails
     typed in the validating PRE-PASS (never a raw dict-index KeyError)."""
-    from modulo.core.runner_bindings import AgentBindingResolutionError
+    from farna.core.runner_bindings import AgentBindingResolutionError
 
     agent_id, backend_id, _profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
@@ -563,7 +563,7 @@ async def test_concurrent_replace_serialises_no_union(
     committed model_backend into ``test_org`` breaks the exact-count assertions
     in ``test_model_backend.py::TestListModelBackendsTierFiltering``.
     """
-    from modulo.db.crud.agent_runner_binding import list_bindings_for_agent
+    from farna.db.crud.agent_runner_binding import list_bindings_for_agent
 
     factory = _app_session_factory(app_engine)
 
@@ -649,7 +649,7 @@ async def test_unknown_source_field_fails_resolution_typed(
     db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
 ) -> None:
     """A source field the stored secret does not carry -> typed resolution error."""
-    from modulo.core.runner_bindings import AgentBindingResolutionError
+    from farna.core.runner_bindings import AgentBindingResolutionError
 
     agent_id, _backend_id, profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
@@ -679,13 +679,13 @@ async def test_binding_export_import_round_trip(
     """Exported agent carries NAME-BASED bindings; the import rebinds by name."""
     from cryptography.fernet import Fernet
 
-    from modulo.core.workflow_import_export import (
+    from farna.core.workflow_import_export import (
         export_pipeline_bundle,
         extract_bundle_json_from_zip,
         materialize_import,
     )
-    from modulo.db.crud.pipeline import create_pipeline
-    from modulo.settings import get_settings
+    from farna.db.crud.pipeline import create_pipeline
+    from farna.settings import get_settings
 
     agent_id, backend_id, _profile_id = await _seed_resolution_scene(
         db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True

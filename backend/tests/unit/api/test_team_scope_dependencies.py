@@ -1,8 +1,8 @@
 """Unit tests for the single-sourced team-gate matrix (FAR-1513).
 
-``modulo.api.team_scope.evaluate_team_gate`` is ONE body shared by:
+``farna.api.team_scope.evaluate_team_gate`` is ONE body shared by:
   - the REST dependency ``require_team_membership_or_admin[_any_credential]``
-    (``modulo.api.dependencies``), and
+    (``farna.api.dependencies``), and
   - the MCP per-row pipeline/trigger guards (``mcp_server._pipeline_team_gate``),
     which evaluate it against team-blind-resolved rows.
 
@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import status
 
-from modulo.api.team_scope import TeamGateDenial, evaluate_team_gate
+from farna.api.team_scope import TeamGateDenial, evaluate_team_gate
 
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _TEAM_B = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
@@ -41,7 +41,7 @@ async def _deny(
 ) -> TeamGateDenial | None:
     """Evaluate the gate with the membership query patched to ``member``."""
     session = AsyncMock()
-    with patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=member)):
+    with patch("farna.api.team_scope.team_membership_exists", AsyncMock(return_value=member)):
         return await evaluate_team_gate(
             session,
             row_present=row_present,
@@ -148,7 +148,7 @@ async def test_denial_kinds() -> None:
 async def test_membership_read_only_for_gated_rows() -> None:
     """The gate must not hit the membership table for rows it never gates."""
     session = MagicMock()
-    with patch("modulo.api.team_scope.team_membership_exists", new_callable=AsyncMock) as mock_member:
+    with patch("farna.api.team_scope.team_membership_exists", new_callable=AsyncMock) as mock_member:
         result = await evaluate_team_gate(
             session,
             row_present=True,

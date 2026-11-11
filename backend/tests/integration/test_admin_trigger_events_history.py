@@ -24,8 +24,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.api.routes.admin_triggers import TriggerEventListResponse, list_trigger_events
-from modulo.auth.jwt import TenantPrincipal
+from farna.api.routes.admin_triggers import TriggerEventListResponse, list_trigger_events
+from farna.auth.jwt import TenantPrincipal
 
 pytestmark = pytest.mark.integration
 

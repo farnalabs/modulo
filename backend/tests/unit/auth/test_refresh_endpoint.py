@@ -21,12 +21,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.api.constants import MSG_CSRF_FAILED
-from modulo.api.dependencies import _get_engine, get_db_session
-from modulo.api.routes.auth import REFRESH_COOKIE
-from modulo.api.routes.auth import router as auth_router
-from modulo.auth.jwt import create_refresh_token, decode_refresh_token_claims
-from modulo.settings import Settings, get_settings
+from farna.api.constants import MSG_CSRF_FAILED
+from farna.api.dependencies import _get_engine, get_db_session
+from farna.api.routes.auth import REFRESH_COOKIE
+from farna.api.routes.auth import router as auth_router
+from farna.auth.jwt import create_refresh_token, decode_refresh_token_claims
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -52,7 +52,7 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:
@@ -179,7 +179,7 @@ def _make_account(active: bool) -> MagicMock:
 
 
 def _patch_account(account: MagicMock | None):
-    return patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=account))
+    return patch("farna.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=account))
 
 
 def test_refresh_success_for_active_account(client: TestClient, mock_session: AsyncMock) -> None:
@@ -188,8 +188,8 @@ def test_refresh_success_for_active_account(client: TestClient, mock_session: As
     resolve_role = AsyncMock(return_value="admin")
     with (
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -248,8 +248,8 @@ def test_refresh_cookie_attributes(client: TestClient, mock_session: AsyncMock) 
     advance = AsyncMock(return_value=(2, False, False))
     with (
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -272,7 +272,7 @@ def test_refresh_deactivated_account_denied_and_blacklisted(client: TestClient, 
     token = _make_refresh_token(str(_ORG_ID))
     with (
         _patch_account(_make_account(False)),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, token)
         first = _post_refresh(client)
@@ -295,7 +295,7 @@ def test_refresh_unknown_account_denied_and_blacklisted(client: TestClient, mock
     advance = AsyncMock(return_value=(2, False, False))
     with (
         _patch_account(None),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -313,8 +313,8 @@ def test_refresh_deactivated_system_admin_without_membership_denied(
     resolve_role = AsyncMock()
     with (
         _patch_account(_make_account(False)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(None))
         resp = _post_refresh(client)
@@ -330,8 +330,8 @@ def test_refresh_active_system_admin_without_membership_succeeds(client: TestCli
     advance = AsyncMock(return_value=(2, False, False))
     with (
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock()),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock()),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(None))
         resp = _post_refresh(client)
@@ -346,8 +346,8 @@ def test_refresh_reuse_within_window_mints_tokens(client: TestClient, mock_sessi
     resolve_role = AsyncMock(return_value="admin")
     with (
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -368,8 +368,8 @@ def test_refresh_rotation_mints_configured_lifetime(client: TestClient, app: Fas
     resolve_role = AsyncMock(return_value="admin")
     with (
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=resolve_role),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=resolve_role),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -393,8 +393,8 @@ def test_refresh_reuse_replay_log_truncates_token_family(client: TestClient, cap
     with (
         caplog.at_level(logging.INFO),
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         resp = _post_refresh(client)
@@ -410,8 +410,8 @@ def test_refresh_theft_log_truncates_token_family(client: TestClient, caplog: py
     with (
         caplog.at_level(logging.INFO),
         _patch_account(_make_account(True)),
-        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
-        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+        patch("farna.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("farna.api.routes.auth.advance_sequence", new=advance),
     ):
         _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
         _post_refresh(client)

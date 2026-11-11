@@ -18,14 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
-from modulo.db.crud.base import PageResult
-from modulo.db.crud.runner_probe import PROBE_RETENTION_SECONDS, PROBE_STALENESS_THRESHOLD_SECONDS
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.db.bundled_runner_template import BUNDLED_RUNNER_IMAGE_REF, TEMPLATE_CONFIG_JSON
+from farna.db.crud.base import PageResult
+from farna.db.crud.runner_probe import PROBE_RETENTION_SECONDS, PROBE_STALENESS_THRESHOLD_SECONDS
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -34,7 +34,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
-_ROUTES = "modulo.api.routes.runners"
+_ROUTES = "farna.api.routes.runners"
 
 
 def _make_settings() -> Settings:

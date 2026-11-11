@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -99,11 +99,11 @@ class TestVerifyWithTrustTier:
         mock_pub.name = "Modulo Team"
 
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
-            patch("modulo.api.routes.registry.db_get_publisher_by_key", return_value=mock_pub),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.db_get_publisher_by_key", return_value=mock_pub),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
         assert resp.status_code == 200
@@ -114,9 +114,9 @@ class TestVerifyWithTrustTier:
 
     def test_verify_without_pubkey_returns_no_trust_tier(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.verify_primitive_signature", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="verified"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.verify_primitive_signature", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
         ):
             resp = client.get(VERIFY_URL)
         assert resp.status_code == 200
@@ -125,17 +125,17 @@ class TestVerifyWithTrustTier:
         assert data["publisher_name"] is None
 
     def test_verify_unknown_primitive_returns_404(self, client: TestClient) -> None:
-        with patch("modulo.api.routes.registry.get_registry_primitive", return_value=None):
+        with patch("farna.api.routes.registry.get_registry_primitive", return_value=None):
             resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
         assert resp.status_code == 404
 
     def test_verify_with_pubkey_no_db_match(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
-            patch("modulo.api.routes.registry.crypto_verify_signature", return_value=True),
-            patch("modulo.api.routes.registry.get_publisher_status", return_value="community"),
-            patch("modulo.api.routes.registry.db_get_publisher_by_key", return_value=None),
-            patch("modulo.api.routes.registry.set_rls_org"),
+            patch("farna.api.routes.registry.get_registry_primitive", return_value=_make_entry()),
+            patch("farna.api.routes.registry.crypto_verify_signature", return_value=True),
+            patch("farna.api.routes.registry.get_publisher_status", return_value="community"),
+            patch("farna.api.routes.registry.db_get_publisher_by_key", return_value=None),
+            patch("farna.api.routes.registry.set_rls_org"),
         ):
             resp = client.get(f"{VERIFY_URL}?public_key_hex={'ab' * 32}")
         assert resp.status_code == 200

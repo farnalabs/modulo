@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _claim_token_attempt_suffix,
     make_sandbox_agent_fn,
@@ -194,8 +194,8 @@ async def _run_fence(node_fn, create_mock) -> dict:
     """Run a fence-enabled node under the standard patch context."""
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
     ):
         return await node_fn(_run_state(claim_lease="tok-owner"))
 
@@ -219,8 +219,8 @@ async def test_pre_seeded_marker_for_different_claim_denies_and_never_creates():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(SupersededNodeError) as excinfo,
     ):
         await node_fn(_run_state(claim_lease="tok-owner"))
@@ -239,8 +239,8 @@ async def test_same_claim_transient_denial_is_also_denied():
 
     with (
         patch("e2b.AsyncSandbox.create", new=create_mock),
-        patch("modulo.db.rls.set_rls_org", new=AsyncMock()),
-        patch("modulo.db.rls.set_rls_execution_context", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_org", new=AsyncMock()),
+        patch("farna.db.rls.set_rls_execution_context", new=AsyncMock()),
         pytest.raises(SupersededNodeError) as excinfo,
     ):
         await node_fn(_run_state(claim_lease="tok-owner"))
@@ -368,7 +368,7 @@ async def test_best_effort_marker_db_failure_fails_open_with_attempt_key(caplog)
     ``sandbox_agent.best_effort_marker_failed`` (with the rollback-detector
     implication note) and returns the claim-token-derived attempt key so the
     dispatch proceeds markerless fail-open. A cancellation still propagates."""
-    from modulo.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
+    from farna.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
 
     class _BoomSession:
         async def __aenter__(self):
@@ -403,7 +403,7 @@ async def test_best_effort_marker_cancellation_reraises():
     swallowed — it propagates."""
     import asyncio
 
-    from modulo.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
+    from farna.core.pipeline_engine.node_runner import _sandbox_acquire_dispatch_marker_best_effort
 
     class _CancelledSession:
         def in_transaction(self):

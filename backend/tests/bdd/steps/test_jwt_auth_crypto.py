@@ -1,6 +1,6 @@
 """BDD step definitions: JWT token lifecycle and purpose isolation (feat-auth-jwt-auth).
 
-Drives the REAL ``modulo.auth.jwt`` mint/decode seams — access / WebSocket /
+Drives the REAL ``farna.auth.jwt`` mint/decode seams — access / WebSocket /
 refresh / claim-token minting, ``decode_principal`` signature/expiry/purpose
 validation, ``refresh_access_token`` rotation propagation and ``decode_claim_token``
 HITL-gate scoping — with no DB and no network (pure crypto), so the product-map
@@ -21,7 +21,7 @@ import jwt as pyjwt
 from jwt import InvalidTokenError as JWTError
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.auth import jwt as jwt_mod
+from farna.auth import jwt as jwt_mod
 
 scenarios("../features/auth/jwt_auth_crypto.feature")
 

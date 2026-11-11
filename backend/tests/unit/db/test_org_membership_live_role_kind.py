@@ -10,7 +10,7 @@ predicates, so the two queries cannot silently drift apart.
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-from modulo.db.crud.org_membership import resolve_live_role_and_kind
+from farna.db.crud.org_membership import resolve_live_role_and_kind
 
 
 def _session_returning(row: tuple[str, str] | None) -> AsyncMock:

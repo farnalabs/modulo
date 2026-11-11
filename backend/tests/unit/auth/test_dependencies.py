@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.exc import InvalidRequestError, OperationalError, SQLAlchemyError
 
-from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
-from modulo.auth.dependencies import (
+from farna.api.db_error_handling import MSG_SESSION_CONTRACT
+from farna.auth.dependencies import (
     AccountNotFound,
     OrganisationMembershipNotFound,
     OrganisationNotFound,
@@ -18,8 +18,8 @@ from modulo.auth.dependencies import (
     get_current_tenant_user_or_api_key,
     require_system_admin,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings
 
 
 @pytest.mark.asyncio
@@ -35,7 +35,7 @@ async def test_tenant_dependency_returns_validated_principal() -> None:
 
     from unittest.mock import patch
 
-    with patch("modulo.auth.dependencies._verify_identity", return_value="admin"):
+    with patch("farna.auth.dependencies._verify_identity", return_value="admin"):
         result = await get_current_tenant_user(principal)
 
     assert isinstance(result, TenantPrincipal)
@@ -107,10 +107,10 @@ def _patch_identity_verify(*, rows: list[object], live_role: str | None) -> tupl
 
     role_mock = AsyncMock(return_value=live_role)
     return (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-        patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
-        patch("modulo.settings.get_settings", return_value=MagicMock()),
-        patch("modulo.auth.dependencies.resolve_role_from_membership", role_mock),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
+        patch("farna.settings.get_settings", return_value=MagicMock()),
+        patch("farna.auth.dependencies.resolve_role_from_membership", role_mock),
         role_mock,
         session,
     )
@@ -332,8 +332,8 @@ async def test_api_key_resolution_invalid_request_error_maps_to_500_not_503() ->
     )
 
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-        patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
         pytest.raises(HTTPException) as exc_info,
     ):
         await get_current_tenant_user_or_api_key(_credentials(), _api_key_settings())
@@ -348,8 +348,8 @@ async def test_api_key_resolution_operational_error_still_maps_to_503() -> None:
     factory = _api_key_failing_factory(OperationalError("select 1", {}, Exception("connection lost")))
 
     with (
-        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
-        patch("modulo.api.dependencies.get_or_create_session_factory", return_value=factory),
+        patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch("farna.api.dependencies.get_or_create_session_factory", return_value=factory),
         pytest.raises(HTTPException) as exc_info,
     ):
         await get_current_tenant_user_or_api_key(_credentials(), _api_key_settings())

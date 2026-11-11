@@ -18,13 +18,13 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import CLIENT_KIND_PROGRAMMATIC, AuthenticatedPrincipal, TenantPrincipal
-from modulo.core import audit_coverage
-from modulo.core.audit_coverage import audit_session, audited, audited_system, bind_audit_actor_source, bind_audit_org
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import CLIENT_KIND_PROGRAMMATIC, AuthenticatedPrincipal, TenantPrincipal
+from farna.core import audit_coverage
+from farna.core.audit_coverage import audit_session, audited, audited_system, bind_audit_actor_source, bind_audit_org
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
@@ -149,9 +149,9 @@ def _route_write_patches(order: list[str]) -> tuple[object, object, object]:
         return _make_schema()
 
     return (
-        patch("modulo.api.routes.parameter_schemas.create_schema", new=AsyncMock(side_effect=_handler)),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new=AsyncMock()),
+        patch("farna.api.routes.parameter_schemas.create_schema", new=AsyncMock(side_effect=_handler)),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new=AsyncMock()),
     )
 
 
@@ -161,7 +161,7 @@ def test_successful_mutation_emits_exactly_one_audit_event(client: TestClient, a
     captured = AsyncMock(side_effect=lambda *_a, **_k: order.append("audit"))
     create, rls_org, rls_user = _route_write_patches(order)
     with (
-        patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured),
+        patch("farna.core.audit_coverage.append_audit_event_isolated", new=captured),
         create,
         rls_org,
         rls_user,
@@ -194,10 +194,10 @@ def test_reads_emit_no_audit_event(client: TestClient) -> None:
     captured = AsyncMock()
     schema = _make_schema()
     with (
-        patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured),
-        patch("modulo.api.routes.parameter_schemas.get_schema", new=AsyncMock(return_value=schema)),
-        patch("modulo.api.routes.parameter_schemas.set_rls_org", new=AsyncMock()),
-        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new=AsyncMock()),
+        patch("farna.core.audit_coverage.append_audit_event_isolated", new=captured),
+        patch("farna.api.routes.parameter_schemas.get_schema", new=AsyncMock(return_value=schema)),
+        patch("farna.api.routes.parameter_schemas.set_rls_org", new=AsyncMock()),
+        patch("farna.api.routes.parameter_schemas.set_rls_user_context", new=AsyncMock()),
     ):
         resp = client.get(_CREATE_PATH + f"/{schema.id}")
 
@@ -211,7 +211,7 @@ def test_fail_open_logs_and_does_not_raise(client: TestClient, caplog: pytest.Lo
     create, rls_org, rls_user = _route_write_patches(order)
     failing = AsyncMock(side_effect=RuntimeError("audit store is down"))
     with (
-        patch("modulo.core.audit_coverage.append_audit_event_isolated", new=failing),
+        patch("farna.core.audit_coverage.append_audit_event_isolated", new=failing),
         create,
         rls_org,
         rls_user,
@@ -230,7 +230,7 @@ def test_fail_open_logs_a_real_append_failure_from_the_shared_helper(
     order: list[str] = []
     create, rls_org, rls_user = _route_write_patches(order)
     with (
-        patch("modulo.core.audit_logger.append_audit_event", new=AsyncMock(side_effect=SQLAlchemyError("boom"))),
+        patch("farna.core.audit_logger.append_audit_event", new=AsyncMock(side_effect=SQLAlchemyError("boom"))),
         create,
         rls_org,
         rls_user,
@@ -297,7 +297,7 @@ def test_fail_closed_reraises_a_write_failure() -> None:
     client = _mini_client()
     failing = AsyncMock(side_effect=RuntimeError("audit store is down"))
     with (
-        patch("modulo.core.audit_coverage.append_audit_event", new=failing),
+        patch("farna.core.audit_coverage.append_audit_event", new=failing),
         pytest.raises(RuntimeError, match="audit store is down"),
     ):
         client.post("/strict")
@@ -307,7 +307,7 @@ def test_fail_closed_succeeds_when_the_append_succeeds() -> None:
     """fail_closed is not a permanent failure mode — a good write still returns 200."""
     client = _mini_client()
     ok = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event", new=ok):
+    with patch("farna.core.audit_coverage.append_audit_event", new=ok):
         resp = client.post("/strict")
     assert resp.status_code == 200, resp.text
     assert ok.call_count == 1
@@ -317,7 +317,7 @@ def test_fail_open_route_never_raises() -> None:
     """The default policy on a standalone route: append failure, still 200."""
     client = _mini_client()
     failing = AsyncMock(side_effect=RuntimeError("audit store is down"))
-    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=failing):
+    with patch("farna.core.audit_coverage.append_audit_event_isolated", new=failing):
         resp = client.post("/loose")
     assert resp.status_code == 200, resp.text
 
@@ -326,7 +326,7 @@ def test_handler_http_error_is_recorded_without_masking_the_error() -> None:
     """A handler error is audited (outcome=error) but never replaced by an audit error."""
     client = _mini_client()
     recording = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=recording):
+    with patch("farna.core.audit_coverage.append_audit_event_isolated", new=recording):
         resp = client.post("/conflict")
 
     assert resp.status_code == 409, resp.text
@@ -339,7 +339,7 @@ def test_unhandled_handler_error_is_not_swallowed_by_the_audit_path() -> None:
     """An unexpected handler crash still surfaces after the audit attempt."""
     client = _mini_client()
     with (
-        patch("modulo.core.audit_coverage.append_audit_event_isolated", new=AsyncMock()),
+        patch("farna.core.audit_coverage.append_audit_event_isolated", new=AsyncMock()),
         pytest.raises(RuntimeError, match="handler exploded"),
     ):
         client.post("/crash")
@@ -370,7 +370,7 @@ async def test_dependency_propagates_append_cancellation() -> None:
     assert await gen.asend(None) is None
     with (
         patch(
-            "modulo.core.audit_coverage.append_audit_event_isolated",
+            "farna.core.audit_coverage.append_audit_event_isolated",
             new=AsyncMock(side_effect=asyncio.CancelledError),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -442,8 +442,8 @@ def test_audited_system_records_a_system_event_without_an_actor() -> None:
     append = AsyncMock()
     rls_org = AsyncMock()
     with (
-        patch("modulo.core.audit_coverage.append_audit_event", new=append),
-        patch("modulo.core.audit_coverage.set_rls_org", new=rls_org),
+        patch("farna.core.audit_coverage.append_audit_event", new=append),
+        patch("farna.core.audit_coverage.set_rls_org", new=rls_org),
     ):
         resp = client.post("/system")
 
@@ -471,7 +471,7 @@ def test_audited_system_records_the_promoted_actor_source() -> None:
     """A route that promotes provenance records the promotion, not the default."""
     client, _ = _mini_system_client(promote_actor_source=True)
     append = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event", new=append):
+    with patch("farna.core.audit_coverage.append_audit_event", new=append):
         resp = client.post("/system")
 
     assert resp.status_code == 200, resp.text
@@ -485,7 +485,7 @@ def test_audited_system_skips_and_logs_when_no_org_was_published(
     """No published org -> nowhere honest to record: logged, never invented."""
     client, _ = _mini_system_client(publish_org=False)
     append = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event", new=append):
+    with patch("farna.core.audit_coverage.append_audit_event", new=append):
         resp = client.post("/system")
 
     assert resp.status_code == 200, resp.text
@@ -499,7 +499,7 @@ def test_audited_system_fail_closed_reraises_an_append_failure() -> None:
     client, _ = _mini_system_client(fail_closed=True)
     failing = AsyncMock(side_effect=RuntimeError("audit store is down"))
     with (
-        patch("modulo.core.audit_coverage.append_audit_event", new=failing),
+        patch("farna.core.audit_coverage.append_audit_event", new=failing),
         pytest.raises(RuntimeError, match="audit store is down"),
     ):
         client.post("/system")
@@ -510,7 +510,7 @@ def test_audited_system_records_a_handler_error_without_masking_it() -> None:
     client, _ = _mini_system_client(handler_raises=True)
     append = AsyncMock()
     with (
-        patch("modulo.core.audit_coverage.append_audit_event", new=append),
+        patch("farna.core.audit_coverage.append_audit_event", new=append),
         pytest.raises(RuntimeError, match="handler exploded"),
     ):
         client.post("/system")
@@ -596,7 +596,7 @@ async def test_emit_system_propagates_a_cancelled_append() -> None:
     session = _make_mock_session()
     with (
         patch(
-            "modulo.core.audit_coverage._append_system_or_raise",
+            "farna.core.audit_coverage._append_system_or_raise",
             new=AsyncMock(side_effect=asyncio.CancelledError),
         ),
         pytest.raises(asyncio.CancelledError),
@@ -615,7 +615,7 @@ async def test_emit_system_fail_open_logs_and_swallows(caplog: pytest.LogCapture
     """Default policy: an append failure is logged under its stable key, not raised."""
     session = _make_mock_session()
     with patch(
-        "modulo.core.audit_coverage._append_system_or_raise",
+        "farna.core.audit_coverage._append_system_or_raise",
         new=AsyncMock(side_effect=RuntimeError("audit store is down")),
     ):
         await audit_coverage._emit_system(
@@ -732,7 +732,7 @@ def test_audited_route_stamps_human_for_a_browser_jwt_credential() -> None:
     """M-1 end-to-end: the real dependency stamps a browser credential human."""
     client = _mini_client(_make_principal())
     captured = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+    with patch("farna.core.audit_coverage.append_audit_event_isolated", new=captured):
         resp = client.post("/loose")
     assert resp.status_code == 200, resp.text
     assert captured.call_count == 1
@@ -743,7 +743,7 @@ def test_audited_route_omits_principal_kind_for_an_api_key_credential() -> None:
     """M-1 end-to-end prove-the-fix: an ``mk_`` credential is never stamped human."""
     client = _mini_client(_make_api_key_principal())
     captured = AsyncMock()
-    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+    with patch("farna.core.audit_coverage.append_audit_event_isolated", new=captured):
         resp = client.post("/loose")
     assert resp.status_code == 200, resp.text
     assert captured.call_count == 1

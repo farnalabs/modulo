@@ -3,11 +3,11 @@ id: feat-product-analytics
 prd: N/A
 adr: []
 code:
-  - backend/src/modulo/api/routes/product_analytics.py
-  - backend/src/modulo/api/routes/product_analytics_identity.py
-  - backend/src/modulo/api/routes/product_analytics_transparency.py
-  - backend/src/modulo/api/routes/metrics_ingest.py
-  - backend/src/modulo/core/product_analytics
+  - backend/src/farna/api/routes/product_analytics.py
+  - backend/src/farna/api/routes/product_analytics_identity.py
+  - backend/src/farna/api/routes/product_analytics_transparency.py
+  - backend/src/farna/api/routes/metrics_ingest.py
+  - backend/src/farna/core/product_analytics
   - frontend/src/composables/useProductAnalytics.ts
   - frontend/src/composables/productAnalyticsEvents.ts
   - frontend/src/stores/productAnalyticsStore.ts

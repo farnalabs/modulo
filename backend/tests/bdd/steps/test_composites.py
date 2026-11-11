@@ -109,7 +109,7 @@ def _store_response(request: pytest.FixtureRequest, resp) -> None:
         request.node._resp_body = resp.text
 
 
-def _patch_set_rls(patches: list[Any], module_path: str = "modulo.api.routes.composite_templates.set_rls_org") -> None:
+def _patch_set_rls(patches: list[Any], module_path: str = "farna.api.routes.composite_templates.set_rls_org") -> None:
     patcher = patch(module_path, new_callable=AsyncMock)
     patcher.start()
     patches.append(patcher)
@@ -154,7 +154,7 @@ def org_has_composite_template_with_id(
 
 @given(parsers.parse('org "{org}" has composite templates "{names}"'))
 def org_has_composite_templates(org: str, names: str, request: pytest.FixtureRequest) -> None:
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
     name_list = [n.strip() for n in names.split(",")]
     mock_templates = [_make_template(name=n) for n in name_list]
@@ -422,11 +422,11 @@ def community_primitive_exists(request: pytest.FixtureRequest) -> None:
 )
 def crud_post_composite(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url("/api/composite-templates")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     mock_template = _make_template(name=name)
     patcher = patch(
-        "modulo.api.routes.composite_templates.create_composite_template",
+        "farna.api.routes.composite_templates.create_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -462,7 +462,7 @@ def crud_post_composite(client, name: str, agent_name: str, request: pytest.Fixt
 @when("I POST /api/composite-templates with an empty name")
 def crud_post_composite_empty_name(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url("/api/composite-templates")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     resp = client.post(actual_url, json={"name": "", "sub_pipeline_graph_json": {"nodes": [], "edges": []}})
     _store_response(request, resp)
@@ -471,7 +471,7 @@ def crud_post_composite_empty_name(client, request: pytest.FixtureRequest, patch
 @when('I POST /api/composite-templates with invalid port type "blob"')
 def crud_post_composite_invalid_port(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url("/api/composite-templates")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     body = {
         "name": "test",
@@ -496,10 +496,10 @@ def crud_post_composite_invalid_port(client, request: pytest.FixtureRequest, pat
 
 @when(parsers.parse("I GET /api/composite-templates"))
 def crud_list_composites(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
     actual_url = _map_url("/api/composite-templates")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     mock_templates = getattr(request.node, "_mock_templates", [])
     page_result = getattr(request.node, "_page_result", None)
@@ -507,7 +507,7 @@ def crud_list_composites(client, request: pytest.FixtureRequest, patches: list[A
         page_result = PageResult(items=mock_templates, total=len(mock_templates), page=1, page_size=20)
 
     patcher = patch(
-        "modulo.api.routes.composite_templates.list_composite_templates",
+        "farna.api.routes.composite_templates.list_composite_templates",
         new_callable=AsyncMock,
         return_value=page_result,
     )
@@ -521,11 +521,11 @@ def crud_list_composites(client, request: pytest.FixtureRequest, patches: list[A
 @when(parsers.parse("I GET /api/composite-templates/{template_id}"))
 def crud_get_composite(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id)))
     patcher = patch(
-        "modulo.api.routes.composite_templates.get_composite_template",
+        "farna.api.routes.composite_templates.get_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -541,11 +541,11 @@ def crud_patch_composite(
     client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
 ) -> None:
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id), name=new_name))
     patcher = patch(
-        "modulo.api.routes.composite_templates.update_composite_template",
+        "farna.api.routes.composite_templates.update_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -559,10 +559,10 @@ def crud_patch_composite(
 @when(parsers.parse("I DELETE /api/composite-templates/{template_id}"))
 def crud_delete_composite(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     patcher = patch(
-        "modulo.api.routes.composite_templates.soft_delete_composite_template",
+        "farna.api.routes.composite_templates.soft_delete_composite_template",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -578,11 +578,11 @@ def other_org_get_composite(org: str, template_id: str, request: pytest.FixtureR
     # Use alt_org_client for cross-org isolation test
 
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
     # get_composite_template returns None for other org
     patcher = patch(
-        "modulo.api.routes.composite_templates.get_composite_template",
+        "farna.api.routes.composite_templates.get_composite_template",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -595,7 +595,7 @@ def other_org_get_composite(org: str, template_id: str, request: pytest.FixtureR
 
 @when("the pipeline run expands the composite node")
 def when_expand_composite_node(request: pytest.FixtureRequest) -> None:
-    from modulo.core.composite_engine.expander import expand_composite_node
+    from farna.core.composite_engine.expander import expand_composite_node
 
     node_def = getattr(request.node, "_composite_node", {})
     template_data = getattr(request.node, "_composite_template_data", {"nodes": [], "edges": []})
@@ -612,7 +612,7 @@ def when_expand_composite_node(request: pytest.FixtureRequest) -> None:
 
 @when("the graph validator checks the pipeline")
 def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from farna.api.routes.pipelines import PipelineGraphNode
 
     composite_node = getattr(request.node, "_composite_node", {})
 
@@ -736,19 +736,19 @@ def when_save_composite_as_library(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     mock_primitive = _make_mock_primitive(primitive_type=primitive_type, name="review-composite")
     patcher = patch(
-        "modulo.api.routes.library.create_library_primitive",
+        "farna.api.routes.library.create_library_primitive",
         new_callable=AsyncMock,
         return_value=mock_primitive,
     )
     patcher.start()
     patches.append(patcher)
     patcher_slug = patch(
-        "modulo.api.routes.library.get_primitive_by_slug",
+        "farna.api.routes.library.get_primitive_by_slug",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -767,17 +767,17 @@ def when_save_composite_as_library(
 
 @when(parsers.parse("the user requests GET /api/v1/libraries?primitive_type={primitive_type}"))
 def when_browse_composites(client, primitive_type: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     mock_primitives = getattr(request.node, "_mock_primitives", [])
     page_result = PageResult(
         items=mock_primitives, total=len(mock_primitives), page=1, page_size=20, next_cursor=None, has_more=False
     )
     patcher = patch(
-        "modulo.api.routes.library.list_primitives",
+        "farna.api.routes.library.list_primitives",
         new_callable=AsyncMock,
         return_value=page_result,
     )
@@ -795,8 +795,8 @@ def when_adapt_composite(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     mock_forked = _make_mock_primitive(
         source="local",
@@ -804,7 +804,7 @@ def when_adapt_composite(
         forked_from=uuid.UUID(primitive_id),
     )
     patcher = patch(
-        "modulo.api.routes.library.copy_to_adapt",
+        "farna.api.routes.library.copy_to_adapt",
         new_callable=AsyncMock,
         return_value=mock_forked,
     )
@@ -824,8 +824,8 @@ def when_create_primitive_empty(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     body = {
         "primitive_type": primitive_type,
@@ -843,8 +843,8 @@ def when_update_composite_empty_content_json(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.library.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     mock_primitive = _make_mock_primitive(
         primitive_type="composite",
@@ -852,14 +852,14 @@ def when_update_composite_empty_content_json(
         content_json={"nodes": [], "edges": []},
     )
     patcher_get = patch(
-        "modulo.api.routes.library.get_library_primitive",
+        "farna.api.routes.library.get_library_primitive",
         new_callable=AsyncMock,
         return_value=mock_primitive,
     )
     patcher_get.start()
     patches.append(patcher_get)
     patcher_update = patch(
-        "modulo.api.routes.library.update_library_primitive",
+        "farna.api.routes.library.update_library_primitive",
         new_callable=AsyncMock,
         return_value=mock_primitive,
     )
@@ -882,14 +882,14 @@ def when_save_pipeline_as_composite(
     request: pytest.FixtureRequest,
     patches: list[Any],
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_org")
-    _patch_set_rls(patches, "modulo.api.routes.pipelines.set_rls_user_context")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.pipelines.set_rls_user_context")
 
     mock_pipeline = getattr(request.node, "_mock_pipeline", MagicMock(id=uuid.uuid4()))
     agent = getattr(request.node, "_mock_agent", MagicMock(id=uuid.uuid4()))
 
     patcher = patch(
-        "modulo.api.routes.pipelines.get_pipeline",
+        "farna.api.routes.pipelines.get_pipeline",
         new_callable=AsyncMock,
         return_value=mock_pipeline,
     )
@@ -898,7 +898,7 @@ def when_save_pipeline_as_composite(
 
     # Mock the agent query for parameter detection
     patcher_agent = patch(
-        "modulo.api.routes.pipelines.select",
+        "farna.api.routes.pipelines.select",
     )
     mock_select = patcher_agent.start()
     patches.append(patcher_agent)
@@ -933,7 +933,7 @@ def when_save_pipeline_as_composite(
         ],
     )
     patcher_create = patch(
-        "modulo.api.routes.pipelines.create_composite_template",
+        "farna.api.routes.pipelines.create_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -1167,15 +1167,15 @@ def then_parameter_ports_contain(port_name: str, request: pytest.FixtureRequest)
 
 @when(parsers.parse("I GET /api/v1/composite-templates"))
 def crud_list_composites_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    from modulo.db.crud.base import PageResult
+    from farna.db.crud.base import PageResult
 
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_templates = getattr(request.node, "_mock_templates", [])
     page_result = getattr(request.node, "_page_result", None)
     if page_result is None:
         page_result = PageResult(items=mock_templates, total=len(mock_templates), page=1, page_size=20)
     patcher = patch(
-        "modulo.api.routes.composite_templates.list_composite_templates",
+        "farna.api.routes.composite_templates.list_composite_templates",
         new_callable=AsyncMock,
         return_value=page_result,
     )
@@ -1187,10 +1187,10 @@ def crud_list_composites_v1(client, request: pytest.FixtureRequest, patches: lis
 
 @when(parsers.parse("I GET /api/v1/composite-templates/{template_id}"))
 def crud_get_composite_v1(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id)))
     patcher = patch(
-        "modulo.api.routes.composite_templates.get_composite_template",
+        "farna.api.routes.composite_templates.get_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -1204,10 +1204,10 @@ def crud_get_composite_v1(client, template_id: str, request: pytest.FixtureReque
 def crud_patch_composite_v1(
     client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id), name=new_name))
     patcher = patch(
-        "modulo.api.routes.composite_templates.update_composite_template",
+        "farna.api.routes.composite_templates.update_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -1219,9 +1219,9 @@ def crud_patch_composite_v1(
 
 @when(parsers.parse("I DELETE /api/v1/composite-templates/{template_id}"))
 def crud_delete_composite_v1(client, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.composite_templates.soft_delete_composite_template",
+        "farna.api.routes.composite_templates.soft_delete_composite_template",
         new_callable=AsyncMock,
         return_value=True,
     )
@@ -1233,9 +1233,9 @@ def crud_delete_composite_v1(client, template_id: str, request: pytest.FixtureRe
 
 @when(parsers.parse('the user from org "{org}" requests GET /api/v1/composite-templates/{template_id}'))
 def other_org_get_composite_v1(org: str, template_id: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     patcher = patch(
-        "modulo.api.routes.composite_templates.get_composite_template",
+        "farna.api.routes.composite_templates.get_composite_template",
         new_callable=AsyncMock,
         return_value=None,
     )
@@ -1253,10 +1253,10 @@ def other_org_get_composite_v1(org: str, template_id: str, request: pytest.Fixtu
 def crud_post_composite_v1(
     client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]
 ) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_template = _make_template(name=name, version="0.1.0")
     patcher = patch(
-        "modulo.api.routes.composite_templates.create_composite_template",
+        "farna.api.routes.composite_templates.create_composite_template",
         new_callable=AsyncMock,
         return_value=mock_template,
     )
@@ -1290,7 +1290,7 @@ def crud_post_composite_v1(
 
 @when("I POST /api/v1/composite-templates with an empty name")
 def crud_post_composite_empty_name_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     resp = client.post(
         "/api/v1/composite-templates", json={"name": "", "sub_pipeline_graph_json": {"nodes": [], "edges": []}}
     )
@@ -1299,7 +1299,7 @@ def crud_post_composite_empty_name_v1(client, request: pytest.FixtureRequest, pa
 
 @when('I POST /api/v1/composite-templates with invalid port type "blob"')
 def crud_post_composite_invalid_port_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
-    _patch_set_rls(patches, "modulo.api.routes.composite_templates.set_rls_org")
+    _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     body = {
         "name": "test",
         "sub_pipeline_graph_json": {"nodes": [], "edges": []},

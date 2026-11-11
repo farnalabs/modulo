@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_engine.git_content (FAR-220).
+"""Unit tests for farna.core.pipeline_engine.git_content (FAR-220).
 
 Covers the git-sourced content ref form (``git+<repo>[@<ref>]#<path>``):
 parsing + fail-closed rejection, resolution against ``git ls-remote`` output,
@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine import git_content
-from modulo.core.pipeline_engine.git_content import (
+from farna.core.pipeline_engine import git_content
+from farna.core.pipeline_engine.git_content import (
     GitContentFetchError,
     GitContentRefError,
     _git,
@@ -45,7 +45,7 @@ def _allow_all_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
 
     REAL DNS resolution must never run in unit tests (offline-stable), so all
     hostname-bearing flows patch the gate; the gate itself carries dedicated
-    literal-IP tests that exercise the real ``modulo.core.ssrf`` path
+    literal-IP tests that exercise the real ``farna.core.ssrf`` path
     (deterministic, no DNS).
     """
 
@@ -258,7 +258,7 @@ def test_default_resolver_pinned_never_touches_network(monkeypatch: pytest.Monke
         raise AssertionError("network must not be used for a pinned ref")
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.git_content.run_git_ls_remote",
+        "farna.core.pipeline_engine.git_content.run_git_ls_remote",
         _boom,
     )
     assert default_git_content_resolver(parse_git_content_ref(_PINNED)) == _SHA_A
@@ -269,7 +269,7 @@ def test_default_resolver_movable_uses_ls_remote(monkeypatch: pytest.MonkeyPatch
         return f"{_SHA_A}\trefs/heads/main\n"
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.git_content.run_git_ls_remote",
+        "farna.core.pipeline_engine.git_content.run_git_ls_remote",
         _ls,
     )
     ref = parse_git_content_ref(f"git+{_REPO}@main#prompts/x.md")
@@ -281,7 +281,7 @@ def test_default_resolver_unresolvable_ref_is_typed_error(monkeypatch: pytest.Mo
         return f"{_SHA_A}\trefs/heads/other\n"
 
     monkeypatch.setattr(
-        "modulo.core.pipeline_engine.git_content.run_git_ls_remote",
+        "farna.core.pipeline_engine.git_content.run_git_ls_remote",
         _ls,
     )
     ref = parse_git_content_ref(f"git+{_REPO}@main#prompts/x.md")
@@ -407,7 +407,7 @@ async def test_resolve_field_pinned_fetches_content(monkeypatch: pytest.MonkeyPa
         seen["path"] = path
         return "PROMPT CONTENT FROM GIT"
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     result = await resolve_git_content_field(_PINNED, node_id="n1", field="agent_prompt")
     assert result == "PROMPT CONTENT FROM GIT"
     assert seen == {"repo_url": _REPO, "sha": _SHA_A, "path": "prompts/x.md"}
@@ -421,7 +421,7 @@ async def test_resolve_field_unpinned_is_typed_error(monkeypatch: pytest.MonkeyP
         fetched = True
         return "unused"
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     with pytest.raises(GitContentRefError, match="unpinned"):
         await resolve_git_content_field(f"git+{_REPO}@main#prompts/x.md", field="agent_prompt")
     assert not fetched
@@ -438,7 +438,7 @@ async def test_resolve_field_fetch_failure_propagates(monkeypatch: pytest.Monkey
     async def _fetch(*_args: object, **_kwargs: object) -> str:
         raise GitContentFetchError("clone failed")
 
-    monkeypatch.setattr("modulo.core.pipeline_engine.git_content.fetch_git_content", _fetch)
+    monkeypatch.setattr("farna.core.pipeline_engine.git_content.fetch_git_content", _fetch)
     with pytest.raises(GitContentFetchError, match="clone failed"):
         await resolve_git_content_field(_PINNED, field="agent_prompt")
 
@@ -898,7 +898,7 @@ def test_validate_agent_git_content_values_rejects_ref_among_several_commands() 
 
 
 # ---------------------------------------------------------------------------
-# SSRF host gate (modulo.core.ssrf parity) — real path, literal-IP only (no DNS)
+# SSRF host gate (farna.core.ssrf parity) — real path, literal-IP only (no DNS)
 # ---------------------------------------------------------------------------
 
 

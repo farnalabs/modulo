@@ -1,6 +1,6 @@
 """BDD step definitions: ``modulo apply`` declarative configuration CLI (feat-apply).
 
-Drives the REAL ``modulo.cli.apply`` seams network-free and DB-free:
+Drives the REAL ``farna.cli.apply`` seams network-free and DB-free:
 
 - **loading** goes through the real ``loader.parse_apply_documents`` and the
   real ``models.ApplyConfig`` validators (duplicate-name / api_version /
@@ -31,12 +31,12 @@ import pytest
 import respx
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.cli.apply import render_table
-from modulo.cli.apply.drift import build_drift_detail, has_drift
-from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor, resolve_secret_refs
-from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
-from modulo.cli.apply.models import ModelBackendEntity, SchemaEntity
-from modulo.cli.apply.plan import build_plan, has_blockers, plan_entity
+from farna.cli.apply import render_table
+from farna.cli.apply.drift import build_drift_detail, has_drift
+from farna.cli.apply.executor import PAGE_SIZE, ApplyExecutor, resolve_secret_refs
+from farna.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from farna.cli.apply.models import ModelBackendEntity, SchemaEntity
+from farna.cli.apply.plan import build_plan, has_blockers, plan_entity
 
 scenarios("../features/cli/apply.feature")
 

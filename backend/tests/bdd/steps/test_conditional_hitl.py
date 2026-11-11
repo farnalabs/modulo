@@ -12,7 +12,7 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.eval_engine import EvalBlockedError
+from farna.core.eval_engine import EvalBlockedError
 
 # ---------------------------------------------------------------------------
 # Active features
@@ -324,7 +324,7 @@ def run_routes_to_target(target: str, ctx):
 
 @then(parsers.parse('the run routes to "{target}"'))
 def run_routes_to(target: str, ctx):
-    from modulo.core.pipeline_engine.graph_cache import _make_gate_kickback_router
+    from farna.core.pipeline_engine.graph_cache import _make_gate_kickback_router
 
     gate_config = ctx.get("gate_config", {})
     reject_target = gate_config.get("reject_target", "?")
@@ -384,7 +384,7 @@ def _patch_mock_scores(
     eval_defs: list[Any] | None,
 ) -> None:
     """Patch EvalEngine.evaluate_result to use _mock_score per eval definition."""
-    from modulo.core.eval_engine import EvalEngine, EvalResult
+    from farna.core.eval_engine import EvalEngine, EvalResult
 
     score_map: dict[str, float] = {}
     for ed in ctx.get("eval_defs", []):
@@ -430,7 +430,7 @@ def _patch_eval_engine(
     persist-before-decide helper applies the block/warn decision after the
     result is returned, so the mock must not raise either.
     """
-    from modulo.core.eval_engine import EvalEngine, EvalResult
+    from farna.core.eval_engine import EvalEngine, EvalResult
 
     _passed = mock_result.get("passed", False)
     _score = mock_result.get("score")
@@ -462,7 +462,7 @@ def _run_gate_fn(
     eval_defs: list[Any] | None,
 ) -> None:
     """Execute the gate node function synchronously and capture results."""
-    from modulo.core.pipeline_engine.node_runner import make_hitl_review_fn
+    from farna.core.pipeline_engine.node_runner import make_hitl_review_fn
 
     node_fn = make_hitl_review_fn(gate_config, eval_definitions=eval_defs)
 
@@ -473,7 +473,7 @@ def _run_gate_fn(
         raise GraphInterrupt((Interrupt(value=value),))
 
     try:
-        with patch("modulo.core.pipeline_engine.node_runner.interrupt", _raise_interrupt):
+        with patch("farna.core.pipeline_engine.node_runner.interrupt", _raise_interrupt):
             result = asyncio.run(_run())
         ctx["_gate_result"] = result
         ctx["_interrupt_raised"] = False
@@ -490,7 +490,7 @@ def _build_eval_defs(ctx: dict[str, Any]) -> list[Any] | None:
     """Build EvalDefinition objects from context."""
     from uuid import uuid4
 
-    from modulo.core.eval_engine import EvalDefinition, EvalType
+    from farna.core.eval_engine import EvalDefinition, EvalType
 
     if ctx.get("eval_def") and ctx.get("eval_name"):
         ed = ctx["eval_def"]

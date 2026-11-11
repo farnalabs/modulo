@@ -26,9 +26,9 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
-from modulo.api.dependencies import get_db_session
-from modulo.api.main import app
-from modulo.settings import get_settings
+from farna.api.dependencies import get_db_session
+from farna.api.main import app
+from farna.settings import get_settings
 
 _VALID_32 = "a" * 32
 
@@ -48,11 +48,11 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _factory() -> AsyncGenerator[AsyncMock, None]:
         yield session
 
-    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+    monkeypatch.setattr("farna.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings(**overrides: object) -> object:
-    from modulo.settings import Settings
+    from farna.settings import Settings
 
     kwargs: dict = {
         "database_url": "postgresql+asyncpg://localhost/test",
@@ -701,35 +701,35 @@ class TestLoginOrgSlugBinding:
 
         with (
             patch(
-                "modulo.api.routes.auth._authenticate_credentials",
+                "farna.api.routes.auth._authenticate_credentials",
                 new=AsyncMock(return_value=account),
             ),
             patch(
-                "modulo.api.routes.auth._enforce_break_glass",
+                "farna.api.routes.auth._enforce_break_glass",
                 new=AsyncMock(return_value=False),
             ),
             patch(
-                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                "farna.api.routes.auth.get_login_active_org_by_slug",
                 new=AsyncMock(return_value=org),
             ),
             patch(
-                "modulo.api.routes.auth.get_membership_by_account_and_org",
+                "farna.api.routes.auth.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=membership),
             ),
             patch(
-                "modulo.api.routes.auth.list_memberships_for_account",
+                "farna.api.routes.auth.list_memberships_for_account",
                 new=AsyncMock(return_value=[membership]),
             ),
             patch(
-                "modulo.api.routes.auth.create_family",
+                "farna.api.routes.auth.create_family",
                 new=AsyncMock(return_value=MagicMock(family_id="fam-1")),
             ),
             patch(
-                "modulo.api.routes.auth.create_access_token",
+                "farna.api.routes.auth.create_access_token",
                 new=MagicMock(return_value="fake-access-token"),
             ),
             patch(
-                "modulo.api.routes.auth.create_refresh_token",
+                "farna.api.routes.auth.create_refresh_token",
                 new=MagicMock(return_value="fake-refresh-token"),
             ),
         ):
@@ -751,23 +751,23 @@ class TestLoginOrgSlugBinding:
 
         with (
             patch(
-                "modulo.api.routes.auth._authenticate_credentials",
+                "farna.api.routes.auth._authenticate_credentials",
                 new=AsyncMock(return_value=account),
             ),
             patch(
-                "modulo.api.routes.auth._enforce_break_glass",
+                "farna.api.routes.auth._enforce_break_glass",
                 new=AsyncMock(return_value=False),
             ),
             patch(
-                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                "farna.api.routes.auth.get_login_active_org_by_slug",
                 new=AsyncMock(return_value=org),
             ),
             patch(
-                "modulo.api.routes.auth.get_membership_by_account_and_org",
+                "farna.api.routes.auth.get_membership_by_account_and_org",
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "modulo.api.routes.auth.list_memberships_for_account",
+                "farna.api.routes.auth.list_memberships_for_account",
                 new=AsyncMock(return_value=[]),
             ),
         ):
@@ -789,19 +789,19 @@ class TestLoginOrgSlugBinding:
 
         with (
             patch(
-                "modulo.api.routes.auth._authenticate_credentials",
+                "farna.api.routes.auth._authenticate_credentials",
                 new=AsyncMock(return_value=account),
             ),
             patch(
-                "modulo.api.routes.auth._enforce_break_glass",
+                "farna.api.routes.auth._enforce_break_glass",
                 new=AsyncMock(return_value=False),
             ),
             patch(
-                "modulo.api.routes.auth.get_login_active_org_by_slug",
+                "farna.api.routes.auth.get_login_active_org_by_slug",
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "modulo.api.routes.auth.list_memberships_for_account",
+                "farna.api.routes.auth.list_memberships_for_account",
                 new=AsyncMock(return_value=[]),
             ),
         ):
@@ -827,27 +827,27 @@ class TestLoginOrgSlugBinding:
 
         with (
             patch(
-                "modulo.api.routes.auth._authenticate_credentials",
+                "farna.api.routes.auth._authenticate_credentials",
                 new=AsyncMock(return_value=account),
             ),
             patch(
-                "modulo.api.routes.auth._enforce_break_glass",
+                "farna.api.routes.auth._enforce_break_glass",
                 new=AsyncMock(return_value=False),
             ),
             patch(
-                "modulo.api.routes.auth.list_memberships_for_account",
+                "farna.api.routes.auth.list_memberships_for_account",
                 new=AsyncMock(return_value=[membership]),
             ),
             patch(
-                "modulo.api.routes.auth.create_family",
+                "farna.api.routes.auth.create_family",
                 new=AsyncMock(return_value=MagicMock(family_id="fam-1")),
             ),
             patch(
-                "modulo.api.routes.auth.create_access_token",
+                "farna.api.routes.auth.create_access_token",
                 new=MagicMock(return_value="fake-access-token"),
             ),
             patch(
-                "modulo.api.routes.auth.create_refresh_token",
+                "farna.api.routes.auth.create_refresh_token",
                 new=MagicMock(return_value="fake-refresh-token"),
             ),
         ):

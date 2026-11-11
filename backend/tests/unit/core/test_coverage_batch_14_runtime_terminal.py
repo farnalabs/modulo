@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core import run_terminal_advance as rta
-from modulo.core.runtime_provider import (
+from farna.core import run_terminal_advance as rta
+from farna.core.runtime_provider import (
     ExecResult,
     ProviderCapabilityUnsupportedError,
     RuntimeProvider,
     StreamingUnsupportedError,
 )
-from modulo.core.runtime_provider.base import RuntimeProvider as BaseRuntimeProvider
+from farna.core.runtime_provider.base import RuntimeProvider as BaseRuntimeProvider
 
 
 class _Provider(RuntimeProvider):
@@ -78,8 +78,8 @@ async def test_apply_agent_mint_gate_flag_off_drops_agent_refs(monkeypatch):
     run_id = uuid.uuid4()
     refs = [{"kind": "linear", "ref": "1", "source": "agent"}, {"kind": "linear", "ref": "2"}]
     suppressed = MagicMock()
-    monkeypatch.setattr("modulo.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=False))
-    monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.record_refs_agent_mint_suppressed_by_flag", suppressed)
+    monkeypatch.setattr("farna.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=False))
+    monkeypatch.setattr("farna.core.lifecycle_map.reconcile.record_refs_agent_mint_suppressed_by_flag", suppressed)
     result = await rta._apply_agent_mint_gate(MagicMock(), org_id, run_id, refs, [refs[0]])
     assert result == [refs[1]]
     suppressed.assert_called_once_with(1)
@@ -88,7 +88,7 @@ async def test_apply_agent_mint_gate_flag_off_drops_agent_refs(monkeypatch):
 @pytest.mark.asyncio
 async def test_apply_agent_mint_gate_no_agent_refs_returns_unchanged(monkeypatch):
     refs = [{"kind": "linear", "ref": "2"}]
-    monkeypatch.setattr("modulo.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr("farna.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=True))
     result = await rta._apply_agent_mint_gate(MagicMock(), uuid.uuid4(), uuid.uuid4(), refs, [])
     assert result == refs
 
@@ -98,29 +98,29 @@ async def test_apply_agent_mint_gate_probe_failure_and_budget_paths(monkeypatch)
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
     refs = [{"kind": "linear", "ref": "1", "source": "agent"}]
-    monkeypatch.setattr("modulo.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr("farna.core.lifecycle_map.advancement.agent_minting_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "modulo.core.lifecycle_map.advancement.confirm_reported_refs",
+        "farna.core.lifecycle_map.advancement.confirm_reported_refs",
         AsyncMock(side_effect=RuntimeError("probe down")),
     )
     session = MagicMock()
     session = MagicMock()
     consume = AsyncMock(return_value=False)
     exceeded = MagicMock()
-    monkeypatch.setattr("modulo.core.runtime_config.mint_budget.consume_agent_mint_budget", consume)
-    monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.record_refs_agent_mint_budget_exceeded", exceeded)
+    monkeypatch.setattr("farna.core.runtime_config.mint_budget.consume_agent_mint_budget", consume)
+    monkeypatch.setattr("farna.core.lifecycle_map.reconcile.record_refs_agent_mint_budget_exceeded", exceeded)
     assert not await rta._apply_agent_mint_gate(session, org_id, run_id, refs, refs)
     consume.assert_awaited_once_with(session, org_id, n=1)
     exceeded.assert_called_once_with(1)
 
     consume.reset_mock()
     minted = MagicMock()
-    monkeypatch.setattr("modulo.core.lifecycle_map.advancement.confirm_reported_refs", AsyncMock(return_value=([], [])))
+    monkeypatch.setattr("farna.core.lifecycle_map.advancement.confirm_reported_refs", AsyncMock(return_value=([], [])))
     monkeypatch.setattr(
-        "modulo.core.runtime_config.mint_budget.consume_agent_mint_budget",
+        "farna.core.runtime_config.mint_budget.consume_agent_mint_budget",
         AsyncMock(return_value=True),
     )
-    monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.record_refs_agent_minted", minted)
+    monkeypatch.setattr("farna.core.lifecycle_map.reconcile.record_refs_agent_minted", minted)
     assert await rta._apply_agent_mint_gate(MagicMock(), org_id, run_id, refs, refs) == refs
     minted.assert_called_once_with(1)
 
@@ -143,7 +143,7 @@ async def test_terminal_advance_swallow_failures_and_rethrow_cancellation(monkey
     monkeypatch.setattr(rta, "advance_journeys_from_stored_refs", AsyncMock())
     monkeypatch.setattr(rta, "record_terminal_failed_fact", AsyncMock(side_effect=RuntimeError("fact")))
     monkeypatch.setattr(
-        "modulo.core.audit_logger.background.record_run_state_change_audits",
+        "farna.core.audit_logger.background.record_run_state_change_audits",
         AsyncMock(side_effect=RuntimeError("audit")),
     )
     await rta.advance_terminalised_run(engine, uuid.uuid4(), uuid.uuid4(), source="test")

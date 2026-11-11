@@ -28,12 +28,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.team_visibility import (
+from farna.core.team_visibility import (
     ConnectorTeamMismatch,
     connector_team_mismatch_detail,
     find_connector_team_mismatches,
 )
-from modulo.db.models.connector_instance import ConnectorInstance
+from farna.db.models.connector_instance import ConnectorInstance
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
@@ -200,7 +200,7 @@ async def test_postgres_read_reports_an_unresolvable_binding_as_a_refusal() -> N
     ``connector_team_mismatch`` error, never a silent skip) cannot produce
     false positives for hidden rows.
     """
-    from modulo.core.team_visibility import ConnectorBindingMissingError
+    from farna.core.team_visibility import ConnectorBindingMissingError
 
     statements: list[Any] = []
     session = _pg_session(statements, [], guc_prev=("", ""))

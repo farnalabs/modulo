@@ -18,8 +18,8 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.base import CIRunStatus, ConnectorType
-from modulo.connectors.ci_runner.woodpecker import (
+from farna.connectors.base import CIRunStatus, ConnectorType
+from farna.connectors.ci_runner.woodpecker import (
     WoodpeckerCIRunner,
     _decode_entry,
     _epoch_iso,

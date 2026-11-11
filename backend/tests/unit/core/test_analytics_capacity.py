@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.core.analytics import capacity as capacity_module
-from modulo.core.analytics.capacity import (
+from farna.core.analytics import capacity as capacity_module
+from farna.core.analytics.capacity import (
     CAPACITY_MAX_RAW_ROWS,
     CAUSE_ORG_RUN,
     CAUSE_PIPELINE,
@@ -44,7 +44,7 @@ from modulo.core.analytics.capacity import (
     run_capacity_query,
     validate_capacity_params,
 )
-from modulo.core.analytics.service import (
+from farna.core.analytics.service import (
     AnalyticsDatabaseError,
     AnalyticsRateLimitedError,
     AnalyticsValidationError,
@@ -915,11 +915,11 @@ class TestSandboxState:
     async def test_absent_cap_reports_none_and_zero_active(self) -> None:
         with (
             patch(
-                "modulo.core.runner_capacity.read_runner_cap_contract",
+                "farna.core.runner_capacity.read_runner_cap_contract",
                 AsyncMock(return_value=(None, True)),
             ),
             patch(
-                "modulo.db.crud.run.get_sandbox_concurrency_limit",
+                "farna.db.crud.run.get_sandbox_concurrency_limit",
                 AsyncMock(return_value=SimpleNamespace(is_default=True)),
             ),
         ):
@@ -929,15 +929,15 @@ class TestSandboxState:
     async def test_present_cap_counts_active_dispatches(self) -> None:
         with (
             patch(
-                "modulo.core.runner_capacity.read_runner_cap_contract",
+                "farna.core.runner_capacity.read_runner_cap_contract",
                 AsyncMock(return_value=(4, False)),
             ),
             patch(
-                "modulo.db.crud.run.get_sandbox_concurrency_limit",
+                "farna.db.crud.run.get_sandbox_concurrency_limit",
                 AsyncMock(return_value=SimpleNamespace(is_default=False)),
             ),
             patch(
-                "modulo.core.runner_capacity.count_active_runner_dispatches_for_decision",
+                "farna.core.runner_capacity.count_active_runner_dispatches_for_decision",
                 AsyncMock(return_value=3),
             ),
         ):

@@ -21,9 +21,9 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import _UPDATE_STATUS_FENCED_SQL, create_run, update_run_status
-from modulo.db.models.base import Base, OrgScoped
-from modulo.db.models.run import Run
+from farna.db.crud.run import _UPDATE_STATUS_FENCED_SQL, create_run, update_run_status
+from farna.db.models.base import Base, OrgScoped
+from farna.db.models.run import Run
 
 
 @pytest.fixture

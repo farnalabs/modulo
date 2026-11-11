@@ -21,14 +21,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import saq_worker as sw
-from modulo.core.guardrails import kill_switch_drill as drill_module
-from modulo.core.guardrails.kill_switch_drill import (
+from farna.core import saq_worker as sw
+from farna.core.guardrails import kill_switch_drill as drill_module
+from farna.core.guardrails.kill_switch_drill import (
     run_kill_switch_drill,
     verify_kill_switch_invariants,
 )
-from modulo.db.models.base import Base
-from modulo.db.models.system_audit_event import SystemAuditEvent
+from farna.db.models.base import Base
+from farna.db.models.system_audit_event import SystemAuditEvent
 
 _TABLES: list[Any] = [SystemAuditEvent.__table__]
 
@@ -93,7 +93,7 @@ async def test_noop_downgrade_helper_records_fail(session: AsyncSession, monkeyp
     pre-downgrade set still holds ``block``/``redact``, so ``downgrade_applied``
     is False.
     """
-    monkeypatch.setattr("modulo.db.crud.run._downgrade_guardrails_to_observe", lambda defs: list(defs))
+    monkeypatch.setattr("farna.db.crud.run._downgrade_guardrails_to_observe", lambda defs: list(defs))
 
     result, rows = await _run_and_read_rows(session)
 
@@ -105,7 +105,7 @@ async def test_noop_downgrade_helper_records_fail(session: AsyncSession, monkeyp
 
 async def test_reader_fails_closed_to_off_on_read_failure() -> None:
     """AC4 — the real reader resolves a raising session to OFF (enforcement on)."""
-    from modulo.db.crud.run import _read_guardrails_kill_switch
+    from farna.db.crud.run import _read_guardrails_kill_switch
 
     faulty = cast(AsyncSession, drill_module._FailingReadSession())
 
@@ -126,7 +126,7 @@ async def test_read_check_uses_the_failing_stub_not_a_real_org(
         seen.append(session_arg)
         return False
 
-    monkeypatch.setattr("modulo.db.crud.run._read_guardrails_kill_switch", _spy)
+    monkeypatch.setattr("farna.db.crud.run._read_guardrails_kill_switch", _spy)
 
     result, _rows = await _run_and_read_rows(session)
 

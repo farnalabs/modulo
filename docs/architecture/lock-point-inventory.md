@@ -4,7 +4,7 @@
 > **inventory and assessment only** – it changes no production code. The follow-up fixes
 > are listed as proposed tickets at the end and are deliberately *not* created here.
 
-- **Scope:** every row-level lock taken in `backend/src/modulo` (PostgreSQL `SELECT … FOR
+- **Scope:** every row-level lock taken in `backend/src/farna` (PostgreSQL `SELECT … FOR
   UPDATE` and its SQLAlchemy forms), across both the API/route layer and the background
   engine.
 - **Repo-relative paths** throughout. Line numbers are against the worktree tip at time of
@@ -52,14 +52,14 @@ Counts below are **measured**, not estimated. The two enumeration commands are:
 ```bash
 # (1) SQLAlchemy call sites – the lint-safe way to skip doc/comment prose,
 #     because prose never writes a leading dot or an `=`:
-grep -rn '\.with_for_update(' backend/src/modulo --include='*.py' | wc -l   # 59
-grep -rn 'with_for_update='  backend/src/modulo --include='*.py' | wc -l   #  5  (4 session.get kwargs + 1 docstring mention)
+grep -rn '\.with_for_update(' backend/src/farna --include='*.py' | wc -l   # 59
+grep -rn 'with_for_update='  backend/src/farna --include='*.py' | wc -l   #  5  (4 session.get kwargs + 1 docstring mention)
 # total SQLAlchemy row-lock call sites: 63  (59 + 4 kwarg code sites)
 
 # (2) raw SQL `FOR UPDATE` occurrences. NOTE: the filter is LOOSE – it also
 #     matches docstring/prose mentions of `FOR UPDATE`, so do not read the raw
 #     hit count as the locking-site count (see the note below the command):
-grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
+grep -rn 'FOR UPDATE' backend/src/farna --include='*.py' \
   | grep -E '"[^"]*FOR UPDATE|sql_text\(' | grep -v '^\s*#'
 # 7 hits (re-measured at this branch tip): 2 LOCKING DML sites (core/runner_capacity.py:497,
 # core/pipeline_engine/node_runner.py:3090), 1 non-locking DDL clause (§4), and
@@ -68,7 +68,7 @@ grep -rn 'FOR UPDATE' backend/src/modulo --include='*.py' \
 # core/runner_capacity.py:490 docstring above the locking site)
 ```
 
-Cross-check: a full `grep -rn 'with_for_update' backend/src/modulo --include='*.py'`
+Cross-check: a full `grep -rn 'with_for_update' backend/src/farna --include='*.py'`
 returns **72** hits; the 9-hit difference is prose (docstrings/comments), which the
 `\.` / `=` patterns in command (1) exclude. The per-site inventory in §2 was generated
 by a one-off script that additionally resolves the enclosing `def`/`async def` for each
@@ -251,7 +251,7 @@ unrelated writer or is held across non-lock work.
 > **D9 is retired (FAR-1833).** The org spend-ceiling gate
 > (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`) no longer takes
 > an SQLAlchemy row lock: it serializes on the per-org cost-state advisory lock
-> (`modulo.core.runner_capacity.lock_org_cost_state`, a `pg_advisory_xact_lock`)
+> (`farna.core.runner_capacity.lock_org_cost_state`, a `pg_advisory_xact_lock`)
 > and reads/writes `organisation_cost_state` instead of the `organisations` row.
 > The D-numbering is retained so the other rows keep their §5/§6/§7 references;
 > there is no D9 in the post-cutover inventory.
@@ -497,7 +497,7 @@ shipped behavior. The corrections:
   runs report generation outside the `ScheduledReport` row lock. **FAR-1822 closes risk #1.**
   (MERGED as PR #1842, `c64a99c68`, 2026-10-15 – the `cron_helpers` lock (old D7) was removed
   outright; D8 retains only the phase-1 short lock.)
-- **`backend/src/modulo/db/crud/run.py` docstrings** – four docstrings (`request_cancellation`,
+- **`backend/src/farna/db/crud/run.py` docstrings** – four docstrings (`request_cancellation`,
   `update_run_status`, `unpark_parked_run`, `transition_run`) repeated a stale FAR-1601
   "neither caller issues the bound" claim. All four are bounded **at their callers** by
   FAR-1610; the docstrings now say so.
@@ -570,7 +570,7 @@ endpoints' org-row write was the D9 deadlock the audit's §7 risk #2 flagged.
 
 FAR-1833 moved the per-run ceiling, spend ceiling and cumulative total off the
 `organisations` row onto the dedicated `organisation_cost_state` row and replaced the
-row lock with a per-org **advisory** lock (`modulo.core.runner_capacity.lock_org_cost_state`
+row lock with a per-org **advisory** lock (`farna.core.runner_capacity.lock_org_cost_state`
 → `pg_advisory_xact_lock`). An advisory lock is transaction-scoped and is NOT a row lock, so
 it does not belong in this row-lock inventory; D9 is retired from §3/§5 and the row-lock
 counts drop by one. On the finalize path the gate takes NO *cost-column* read or write on the
@@ -653,7 +653,7 @@ every swept function issues an awaited `set_mutation_row_lock_timeout(...)` *bef
 first row-lock call (a comment/docstring mention cannot satisfy it), pins the
 caller-bounded C5/C6 shape, asserts each ENUMERATED route arm classifies 55P03, and
 asserts the no-caller sites stay unreachable (alias-aware). It also carries a
-**repo-wide file-set assertion**: the set of files under `backend/src/modulo` that take a
+**repo-wide file-set assertion**: the set of files under `backend/src/farna` that take a
 row-lock call must equal the known inventory allowlist, so a NEW file with an unbounded
 lock fails CI instead of being invisible. Adding a row-lock call means updating that
 allowlist and this inventory in the same change.

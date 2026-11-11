@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.api.routes.library import _resolve_bundle_connectors
-from modulo.core.connector_refs import connector_ref_type_id
-from modulo.core.workflow_import_export import _build_v2_requires
+from farna.api.routes.library import _resolve_bundle_connectors
+from farna.core.connector_refs import connector_ref_type_id
+from farna.core.workflow_import_export import _build_v2_requires
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ async def test_resolve_bundle_connectors_reads_connector_type_key() -> None:
     bundle = {"agents": [{"connector_type_refs": [{"connector_type": "github", "capabilities": []}]}]}
     resolved: list[dict[str, Any]] = []
     with patch(
-        "modulo.api.routes.library.resolve_connector_type",
+        "farna.api.routes.library.resolve_connector_type",
         new=AsyncMock(return_value={"instance_id": "inst-1"}),
     ) as mock_resolve:
         mapping = await _resolve_bundle_connectors(

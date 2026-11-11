@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from modulo.core.cost_controller.breakdown import metrics
+from farna.core.cost_controller.breakdown import metrics
 
 
 class _FakeCounter:

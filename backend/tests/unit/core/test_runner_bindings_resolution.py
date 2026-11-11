@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.model_backend_hub import BackendDecryptError
-from modulo.core.runner_bindings import (
+from farna.core.model_backend_hub import BackendDecryptError
+from farna.core.runner_bindings import (
     AgentBindingResolutionError,
     LocalProviderBindingsRefusedError,
     resolve_agent_bindings,
@@ -74,8 +74,8 @@ async def test_resolve_empty_when_no_bindings() -> None:
     agent_id = uuid.uuid4()
     session_factory, _ = _make_session([_make_result(rows=[])])
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
     ):
         resolved = await resolve_agent_bindings(session_factory=session_factory, org_id=org_id, agent_id=agent_id)
     assert resolved == {}
@@ -99,11 +99,11 @@ async def test_resolve_local_provider_refused_without_opt_in() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         hub = AsyncMock()
@@ -136,11 +136,11 @@ async def test_resolve_local_provider_opt_in_allows_bindings() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         hub = AsyncMock()
@@ -170,11 +170,11 @@ async def test_resolve_source_field_missing_raises() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         hub = AsyncMock()
@@ -199,11 +199,11 @@ async def test_resolve_happy_path_injects_credentials() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         hub = AsyncMock()
@@ -237,11 +237,11 @@ async def test_resolve_fail_closed_when_env_profile_unresolvable() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         model_hub.return_value.__aenter__.return_value = AsyncMock()
@@ -276,11 +276,11 @@ async def test_resolve_local_string_opt_in_not_honoured() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         model_hub.return_value.__aenter__.return_value = AsyncMock()
@@ -310,11 +310,11 @@ async def test_resolve_hub_decrypt_error_classified_as_resolution_failure() -> N
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         hub = AsyncMock()
@@ -342,11 +342,11 @@ async def test_resolve_missing_backend_raises_typed_resolution_error() -> None:
         ]
     )
     with (
-        patch("modulo.db.rls.set_rls_org"),
-        patch("modulo.db.rls.set_rls_execution_context"),
-        patch("modulo.settings.get_settings") as get_settings,
-        patch("modulo.core.secrets_backend.create_secrets_backend"),
-        patch("modulo.core.model_backend_hub.ModelBackendHub") as model_hub,
+        patch("farna.db.rls.set_rls_org"),
+        patch("farna.db.rls.set_rls_execution_context"),
+        patch("farna.settings.get_settings") as get_settings,
+        patch("farna.core.secrets_backend.create_secrets_backend"),
+        patch("farna.core.model_backend_hub.ModelBackendHub") as model_hub,
     ):
         get_settings.return_value = SimpleNamespace(fernet_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
         model_hub.return_value.__aenter__.return_value = AsyncMock()

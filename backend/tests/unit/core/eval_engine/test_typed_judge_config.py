@@ -15,8 +15,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core.eval_engine.eval_definition_write import EvalWriteOptions, create_or_update_eval
-from modulo.core.eval_engine.typed_judge import (
+from farna.core.eval_engine.eval_definition_write import EvalWriteOptions, create_or_update_eval
+from farna.core.eval_engine.typed_judge import (
     CODE_BACKEND_NOT_ACTIVE,
     CODE_BACKEND_NOT_FOUND,
     CODE_BACKEND_NOT_ORG_OWNED,
@@ -27,7 +27,7 @@ from modulo.core.eval_engine.typed_judge import (
     parse_typed_judge_config,
     validate_typed_judge_config,
 )
-from modulo.core.eval_engine.typed_judge.config import (
+from farna.core.eval_engine.typed_judge.config import (
     MAX_CHOICE_OPTIONS,
     MAX_SCORE_LEVELS,
     ChoiceQuestion,
@@ -35,9 +35,9 @@ from modulo.core.eval_engine.typed_judge.config import (
     ScoreQuestion,
     timeout_seconds,
 )
-from modulo.db.models import Base
-from modulo.db.models.eval import Eval
-from modulo.db.models.model_backend import ModelBackend
+from farna.db.models import Base
+from farna.db.models.eval import Eval
+from farna.db.models.model_backend import ModelBackend
 
 BACKEND_ID = str(uuid.uuid4())
 

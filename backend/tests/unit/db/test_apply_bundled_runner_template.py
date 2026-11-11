@@ -17,12 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.bundled_runner_template import (
+from farna.db.bundled_runner_template import (
     BUNDLED_RUNNER_IMAGE_REF,
     TEMPLATE_CONFIG_JSON,
     TEMPLATE_OWNED_FIELDS,
 )
-from modulo.db.crud.environment_profile import apply_bundled_runner_template
+from farna.db.crud.environment_profile import apply_bundled_runner_template
 
 _PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
@@ -56,7 +56,7 @@ def _make_profile(**overrides: Any) -> MagicMock:
 
 async def _apply(profile: Any) -> Any:
     session = _make_session()
-    with patch("modulo.db.crud.environment_profile.get_environment_profile", new=AsyncMock(return_value=profile)):
+    with patch("farna.db.crud.environment_profile.get_environment_profile", new=AsyncMock(return_value=profile)):
         return await apply_bundled_runner_template(session, _PROFILE_ID)
 
 
@@ -84,7 +84,7 @@ class TestApplyBundledRunnerTemplate:
         """
         advanced = "modulo-runner:opencode@sha256:" + "9" * 64
         monkeypatch.setattr(
-            "modulo.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
+            "farna.db.bundled_runner_template.BUNDLED_RUNNER_IMAGE_REF",
             advanced,
         )
         profile = _make_profile(image_ref="modulo-runner:opencode@sha256:" + "0" * 64)
@@ -141,6 +141,6 @@ class TestApplyBundledRunnerTemplate:
     @pytest.mark.asyncio
     async def test_missing_row_returns_none(self) -> None:
         session = _make_session()
-        with patch("modulo.db.crud.environment_profile.get_environment_profile", new=AsyncMock(return_value=None)):
+        with patch("farna.db.crud.environment_profile.get_environment_profile", new=AsyncMock(return_value=None)):
             applied = await apply_bundled_runner_template(session, _PROFILE_ID)
         assert applied is None

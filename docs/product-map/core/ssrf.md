@@ -4,7 +4,7 @@ prd: N/A
 adr:
   - ADR 025 (generic-rest-integration-connector)
 code:
-  - backend/src/modulo/core/ssrf.py
+  - backend/src/farna/core/ssrf.py
 unit-tests:
   - backend/tests/unit/core/test_ssrf.py
 bdd:
@@ -104,7 +104,7 @@ route, so it is tracked here rather than in the manifest registry.
 - 2026-09-18: **product-map review pass** - closed the
   tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
   into the executing BDD suite (``steps/test_ssrf_guard.py``), driving the real
-  ``modulo.core.ssrf`` seams - literal-IP fail-closed blocking (loopback /
+  ``farna.core.ssrf`` seams - literal-IP fail-closed blocking (loopback /
   private / link-local metadata / CGNAT / Aliyun metadata / current-network),
   pre-DNS syntax rejection (scheme, userinfo, hostname, port, non-canonical IP
   literals), injected-resolution sync/async validation including the any-blocked
@@ -118,7 +118,7 @@ route, so it is tracked here rather than in the manifest registry.
 - 2026-08-27: **product-map review pass** - entry added to
   close the feature-graph gap for a shipped infra-only surface whose tests
   and call sites were previously invisible to the product map. Behaviors
-  verified against ``backend/src/modulo/core/ssrf.py`` and the 73-test-function
+  verified against ``backend/src/farna/core/ssrf.py`` and the 73-test-function
   ``backend/tests/unit/core/test_ssrf.py`` suite; consumers confirmed in
   ``admin_sso.py``, ``notifications.py``, ``observability.py``,
   ``error_forwarder_config.py``, ``library_sync/client.py`` and the ADR 025

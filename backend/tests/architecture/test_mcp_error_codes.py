@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-_API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
+_API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "farna" / "api"
 _SOURCES = (_API_ROOT / "mcp_server.py", _API_ROOT / "routes" / "run_ws.py")
 
 

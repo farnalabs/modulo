@@ -17,16 +17,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from modulo.core.pipeline_execution import (
+from farna.core.pipeline_execution import (
     _fail_overdue_node,
     _probe_completed_nodes,
     _wire_node_deadline_hooks,
     _write_node_completion,
 )
-from modulo.db.crud.run_node_outputs import attempt_key_for_node, has_completed_nodes_in_attempt
-from modulo.db.models.base import Base
-from modulo.db.models.organisation import Organisation
-from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
+from farna.db.crud.run_node_outputs import attempt_key_for_node, has_completed_nodes_in_attempt
+from farna.db.models.base import Base
+from farna.db.models.organisation import Organisation
+from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
 
 _ORG = uuid.uuid4()
 
@@ -114,10 +114,10 @@ async def test_completion_writer_logs_and_swallows_database_failure(
 ) -> None:
     with (
         patch(
-            "modulo.core.pipeline_execution.async_sessionmaker",
+            "farna.core.pipeline_execution.async_sessionmaker",
             side_effect=RuntimeError("database unavailable"),
         ),
-        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"),
     ):
         await _write_node_completion(
             MagicMock(),
@@ -139,7 +139,7 @@ async def test_node_deadline_hook_records_completion_when_configured() -> None:
     writer = AsyncMock()
 
     engine = MagicMock()
-    with patch("modulo.core.pipeline_execution._write_node_completion", writer):
+    with patch("farna.core.pipeline_execution._write_node_completion", writer):
         _wire_node_deadline_hooks(
             executor,
             deadlines,
@@ -273,10 +273,10 @@ async def test_deadline_gate_terminal_fails_without_completion(
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -334,10 +334,10 @@ async def test_deadline_gate_fences_successor_reclamation_before_triage_and_cost
     terminal_write.side_effect = _successor_reclaims_then_rejects
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", terminal_write),
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", triage),
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived),
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", terminal_write),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", triage),
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", derived),
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -369,11 +369,11 @@ async def test_deadline_gate_skips_triage_and_cost_when_terminal_write_is_reject
     try:
         with (
             patch(
-                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
+                "farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
             ) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -403,10 +403,10 @@ async def test_deadline_gate_allows_retry_after_completion(
     try:
         with (
             patch(
-                "modulo.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
+                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
             ) as retry,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -478,7 +478,7 @@ async def test_write_node_completion_swallows_exception(
     """Test _write_node_completion swallows database exceptions."""
     from unittest.mock import MagicMock
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_execution"):
         # Pass a mock engine that will fail
         mock_engine = MagicMock()
         mock_engine.connect.side_effect = RuntimeError("database unavailable")
@@ -542,12 +542,10 @@ async def test_fail_overdue_node_no_completions_branch(
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True
-            ) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -589,8 +587,8 @@ async def test_fail_overdue_node_early_return_when_run_done(
     run_done.set()  # Signal that run is already done
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -620,8 +618,8 @@ async def test_fail_overdue_node_early_return_when_exec_task_done(
     await asyncio.sleep(0.01)  # Let it complete
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -652,13 +650,11 @@ async def test_fail_overdue_node_with_stall_requested(
     stall_requested = asyncio.Event()
     try:
         with (
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock),
             patch(
-                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True
-            ) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock),
-            patch(
-                "modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock
+                "farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock
             ) as firing,
         ):
             await _fail_overdue_node(
@@ -695,12 +691,12 @@ async def test_fail_overdue_node_with_completion_probe_callback(
 
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
             patch(
-                "modulo.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
+                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
             ) as retry,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -733,12 +729,12 @@ async def test_fail_overdue_node_non_async_engine_branch(
     # Pass a non-AsyncEngine sentinel (e.g., a string)
     try:
         with (
-            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
             patch(
-                "modulo.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
+                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
             ) as retry,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 "not-an-engine",  # type: ignore[arg-type]  # Non-AsyncEngine sentinel
@@ -775,12 +771,10 @@ async def test_fail_overdue_node_completion_probe_exception(
 
     try:
         with (
-            patch(
-                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True
-            ) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -814,11 +808,11 @@ async def test_fail_overdue_node_terminal_written_false_branch(
     try:
         with (
             patch(
-                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
+                "farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
             ) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -851,10 +845,10 @@ async def test_fail_overdue_node_retry_branch(
     try:
         with (
             patch(
-                "modulo.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=None
+                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=None
             ) as retry,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -887,10 +881,10 @@ async def test_fail_overdue_node_retry_true_branch(
     try:
         with (
             patch(
-                "modulo.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
+                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
             ) as retry,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
-            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+            patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
                 sqlite_engine,

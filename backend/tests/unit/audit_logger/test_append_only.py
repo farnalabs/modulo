@@ -18,14 +18,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy import event as sa_event
 from sqlalchemy.orm import Session
 
-from modulo.core.audit_logger import append_audit_event, append_only
-from modulo.core.audit_logger.append_only import (
+from farna.core.audit_logger import append_audit_event, append_only
+from farna.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
 )
-from modulo.db.models.audit_event import AuditEvent
-from modulo.db.models.base import Base
-from modulo.db.models.error_event import ErrorEvent
+from farna.db.models.audit_event import AuditEvent
+from farna.db.models.base import Base
+from farna.db.models.error_event import ErrorEvent
 
 _ListenerMap = dict[tuple[type, str], Callable[..., None]]
 
@@ -71,8 +71,8 @@ def _capture_listeners() -> _ListenerMap:
         captured[(target, identifier)] = listener
 
     with (
-        patch("modulo.core.audit_logger.append_only._guard_registered", False),
-        patch("modulo.core.audit_logger.append_only.event.listen", side_effect=_capture),
+        patch("farna.core.audit_logger.append_only._guard_registered", False),
+        patch("farna.core.audit_logger.append_only.event.listen", side_effect=_capture),
     ):
         register_append_only_guard()
     return captured
@@ -231,7 +231,7 @@ class TestAppendOnlyGuardWithMockSession:
     async def _append_test_event(mock_session, org_id):
         """Append one event with the chain head stubbed to None (fresh chain)."""
         with patch(
-            "modulo.core.audit_logger._get_chain_head_locked",
+            "farna.core.audit_logger._get_chain_head_locked",
             return_value=None,
         ):
             return await append_audit_event(

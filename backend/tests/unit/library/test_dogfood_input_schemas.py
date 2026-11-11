@@ -17,7 +17,7 @@ from typing import Any, cast
 import pytest
 from jsonschema import Draft202012Validator
 
-from modulo.core.seed_data.library_schemas import SCHEMAS
+from farna.core.seed_data.library_schemas import SCHEMAS
 
 _DOGFOOD_SCHEMAS_DIR_RAW = os.environ.get("MODULO_DOGFOOD_SCHEMAS_DIR")
 

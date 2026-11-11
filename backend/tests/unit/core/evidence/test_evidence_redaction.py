@@ -24,7 +24,7 @@ import types
 import uuid
 from typing import Any
 
-from modulo.core.evidence_redaction import (
+from farna.core.evidence_redaction import (
     REDACTED_SENTINEL,
     REDACTION_CLASS_FIELDS,
     apply_redaction,
@@ -209,7 +209,7 @@ def test_non_mapping_container_scalars_pass_through_unchanged() -> None:
 def test_unknown_stored_class_is_skipped_and_logged(caplog: Any) -> None:
     value = {"raw_output": "secret"}
 
-    with caplog.at_level(logging.WARNING, logger="modulo.core.evidence_redaction"):
+    with caplog.at_level(logging.WARNING, logger="farna.core.evidence_redaction"):
         result = apply_redaction(value, frozenset({"not_a_class"}))
 
     # The unknown class redacts nothing (a no-op), and the misconfiguration is

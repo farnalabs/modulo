@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import Settings, get_settings
+from farna.api.dependencies import _get_engine, get_db_session, get_plan_context
+from farna.api.main import app
+from farna.auth.dependencies import get_current_tenant_user, get_current_user
+from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from farna.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _VALID_32 = "a" * 32
@@ -101,9 +101,9 @@ class TestListNodeCategories:
     def test_returns_200(self, client: TestClient) -> None:
         page_result = MagicMock(items=[_make_category()], total=1, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.node_categories.list_node_categories", return_value=page_result),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.list_node_categories", return_value=page_result),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/node-categories")
         assert resp.status_code == 200
@@ -114,9 +114,9 @@ class TestListNodeCategories:
     def test_returns_empty_when_none(self, client: TestClient) -> None:
         page_result = MagicMock(items=[], total=0, page=1, page_size=20)
         with (
-            patch("modulo.api.routes.node_categories.list_node_categories", return_value=page_result),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.list_node_categories", return_value=page_result),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.get("/api/v1/node-categories")
         assert resp.status_code == 200
@@ -131,9 +131,9 @@ class TestCreateNodeCategory:
     def test_returns_201(self, client: TestClient) -> None:
         category = _make_category(name="LLM Call")
         with (
-            patch("modulo.api.routes.node_categories.create_node_category", return_value=category) as create,
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.create_node_category", return_value=category) as create,
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/node-categories", json={"name": "LLM Call"})
         assert resp.status_code == 201
@@ -149,9 +149,9 @@ class TestCreateNodeCategory:
             sort_order=1,
         )
         with (
-            patch("modulo.api.routes.node_categories.create_node_category", return_value=category),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.create_node_category", return_value=category),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.post(
                 "/api/v1/node-categories",
@@ -174,9 +174,9 @@ class TestCreateNodeCategory:
     def test_uses_default_color(self, client: TestClient) -> None:
         category = _make_category(name="Default Color")
         with (
-            patch("modulo.api.routes.node_categories.create_node_category", return_value=category),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.create_node_category", return_value=category),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/node-categories", json={"name": "Default Color"})
         assert resp.status_code == 201
@@ -205,9 +205,9 @@ class TestCreateNodeCategory:
     def test_name_at_max_length_accepted(self, client: TestClient) -> None:
         category = _make_category(name="x" * 100)
         with (
-            patch("modulo.api.routes.node_categories.create_node_category", return_value=category),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.create_node_category", return_value=category),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.post("/api/v1/node-categories", json={"name": "x" * 100})
         assert resp.status_code == 201
@@ -220,9 +220,9 @@ class TestCreateNodeCategory:
 class TestGetNodeCategory:
     def test_returns_200(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.get_node_category", return_value=_make_category()),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.get_node_category", return_value=_make_category()),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/node-categories/{_CATEGORY_ID}")
         assert resp.status_code == 200
@@ -230,9 +230,9 @@ class TestGetNodeCategory:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.get_node_category", return_value=None),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.get_node_category", return_value=None),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.get(f"/api/v1/node-categories/{uuid.uuid4()}")
         assert resp.status_code == 404
@@ -242,9 +242,9 @@ class TestUpdateNodeCategory:
     def test_returns_200(self, client: TestClient) -> None:
         category = _make_category(name="Updated Name")
         with (
-            patch("modulo.api.routes.node_categories.update_node_category", return_value=category),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.update_node_category", return_value=category),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"name": "Updated Name"})
         assert resp.status_code == 200
@@ -253,9 +253,9 @@ class TestUpdateNodeCategory:
     def test_partial_update(self, client: TestClient) -> None:
         category = _make_category(name="LLM Call", color="#ef4444")
         with (
-            patch("modulo.api.routes.node_categories.update_node_category", return_value=category),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.update_node_category", return_value=category),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/node-categories/{_CATEGORY_ID}", json={"color": "#ef4444"})
         assert resp.status_code == 200
@@ -263,9 +263,9 @@ class TestUpdateNodeCategory:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.update_node_category", return_value=None),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.update_node_category", return_value=None),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.patch(f"/api/v1/node-categories/{uuid.uuid4()}", json={"name": "x"})
         assert resp.status_code == 404
@@ -278,24 +278,24 @@ class TestUpdateNodeCategory:
 class TestDeleteNodeCategory:
     def test_returns_204(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.soft_delete_node_category", return_value=True),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.soft_delete_node_category", return_value=True),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
         assert resp.status_code == 204
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with (
-            patch("modulo.api.routes.node_categories.soft_delete_node_category", return_value=False),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.soft_delete_node_category", return_value=False),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/node-categories/{uuid.uuid4()}")
         assert resp.status_code == 404
 
     def test_in_use_returns_409(self, client: TestClient) -> None:
-        from modulo.db.crud.node_category import NodeCategoryInUseError
+        from farna.db.crud.node_category import NodeCategoryInUseError
 
         def _raise_in_use(*_args: object, **_kwargs: object) -> object:
             raise NodeCategoryInUseError(
@@ -304,16 +304,16 @@ class TestDeleteNodeCategory:
             )
 
         with (
-            patch("modulo.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
         assert resp.status_code == 409
         assert "referenced by 1 pipeline(s): Onboarding flow" in resp.json()["detail"]
 
     def test_in_use_409_lists_all_pipelines(self, client: TestClient) -> None:
-        from modulo.db.crud.node_category import NodeCategoryInUseError
+        from farna.db.crud.node_category import NodeCategoryInUseError
 
         def _raise_in_use(*_args: object, **_kwargs: object) -> object:
             raise NodeCategoryInUseError(
@@ -325,9 +325,9 @@ class TestDeleteNodeCategory:
             )
 
         with (
-            patch("modulo.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
-            patch("modulo.api.routes.node_categories.set_rls_org"),
-            patch("modulo.api.routes.node_categories.set_rls_user_context"),
+            patch("farna.api.routes.node_categories.soft_delete_node_category", side_effect=_raise_in_use),
+            patch("farna.api.routes.node_categories.set_rls_org"),
+            patch("farna.api.routes.node_categories.set_rls_user_context"),
         ):
             resp = client.delete(f"/api/v1/node-categories/{_CATEGORY_ID}")
         assert resp.status_code == 409
@@ -358,12 +358,12 @@ class TestCancelledErrorPropagation:
 
     @pytest.mark.anyio
     async def test_list_propagates_cancelled_error(self) -> None:
-        from modulo.api.routes.node_categories import list_node_categories_endpoint
+        from farna.api.routes.node_categories import list_node_categories_endpoint
 
         with (
             pytest.raises(asyncio.CancelledError),
-            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
         ):
             await list_node_categories_endpoint(
                 page=1,
@@ -374,17 +374,17 @@ class TestCancelledErrorPropagation:
 
     @pytest.mark.anyio
     async def test_create_propagates_cancelled_error(self) -> None:
-        from modulo.api.routes.node_categories import create_node_category_endpoint
+        from farna.api.routes.node_categories import create_node_category_endpoint
 
         with (
             pytest.raises(asyncio.CancelledError),
             patch(
-                "modulo.api.routes.node_categories.create_node_category",
+                "farna.api.routes.node_categories.create_node_category",
                 new_callable=AsyncMock,
                 side_effect=asyncio.CancelledError(),
             ),
-            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
         ):
             await create_node_category_endpoint(
                 req=MagicMock(name="X", description=None, color="#6366f1", icon=None, sort_order=0),
@@ -394,12 +394,12 @@ class TestCancelledErrorPropagation:
 
     @pytest.mark.anyio
     async def test_delete_propagates_cancelled_error(self) -> None:
-        from modulo.api.routes.node_categories import delete_node_category_endpoint
+        from farna.api.routes.node_categories import delete_node_category_endpoint
 
         with (
             pytest.raises(asyncio.CancelledError),
-            patch("modulo.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
-            patch("modulo.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_org", new_callable=AsyncMock),
+            patch("farna.api.routes.node_categories.set_rls_user_context", new_callable=AsyncMock),
         ):
             await delete_node_category_endpoint(
                 category_id=_CATEGORY_ID,
@@ -412,7 +412,7 @@ class TestCancelledErrorPropagation:
 # DB error branches — HTTP-triggered via TestClient
 # ---------------------------------------------------------------------------
 
-_PREFIX = "modulo.api.routes.node_categories."
+_PREFIX = "farna.api.routes.node_categories."
 
 
 class TestListErrorBranches:

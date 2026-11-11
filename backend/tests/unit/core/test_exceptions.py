@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.exceptions.
+"""Unit tests for farna.core.exceptions.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the core exception
 types. Every exception here is a cross-cutting contract: it is caught or
@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from modulo.core.exceptions import (
+from farna.core.exceptions import (
     OrgDeletedError,
     PipelineNotRunnableError,
     SnapshotLockNotAvailableError,

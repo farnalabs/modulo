@@ -2,7 +2,7 @@ from typing import ClassVar
 
 import pytest
 
-from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
+from farna.core.feature_flags import FeatureFlag, FeatureFlagRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +23,7 @@ class TestRetiredViewFlags:
         assert registry.get_flag(name) is None, f"{name} must no longer be registered in _KNOWN_FLAGS"
 
     def test_flag_is_not_default_off(self) -> None:
-        from modulo.core.feature_flags import DEFAULT_OFF_FLAGS
+        from farna.core.feature_flags import DEFAULT_OFF_FLAGS
 
         assert "saved_views" not in DEFAULT_OFF_FLAGS
 

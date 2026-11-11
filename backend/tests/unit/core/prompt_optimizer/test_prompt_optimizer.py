@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from modulo.core.prompt_optimizer import (
+from farna.core.prompt_optimizer import (
     SYSTEM_PROMPT,
     OptimizationFailedError,
     OptimizationResult,
@@ -389,4 +389,4 @@ async def _patch_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _noop_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr("modulo.core.prompt_optimizer.asyncio.sleep", _noop_sleep)
+    monkeypatch.setattr("farna.core.prompt_optimizer.asyncio.sleep", _noop_sleep)

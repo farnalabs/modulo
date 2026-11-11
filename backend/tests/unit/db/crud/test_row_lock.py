@@ -1,4 +1,4 @@
-"""Unit tests for ``modulo.db.crud.row_lock`` (FAR-1592 connection seam).
+"""Unit tests for ``farna.db.crud.row_lock`` (FAR-1592 connection seam).
 
 ``set_mutation_row_lock_timeout`` historically accepted only an
 ``AsyncSession``. FAR-1592's periodic sweeps in ``core.run_admission`` drive
@@ -19,8 +19,8 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from modulo.db.crud import row_lock
-from modulo.db.crud.row_lock import _dialect_name, set_mutation_row_lock_timeout
+from farna.db.crud import row_lock
+from farna.db.crud.row_lock import _dialect_name, set_mutation_row_lock_timeout
 
 
 @pytest.fixture

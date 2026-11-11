@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from modulo.settings import Settings
+from farna.settings import Settings
 
 _REQUIRED = {
     "DATABASE_URL": "sqlite+aiosqlite:///./settings-test.db",

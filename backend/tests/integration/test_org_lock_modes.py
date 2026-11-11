@@ -35,18 +35,18 @@ from typing import Any
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from modulo.core.runtime_config.org_flags import (
+from farna.core.runtime_config.org_flags import (
     FLAG_WORK_ITEM_AGENT_MINTING_ENABLED,
     set_org_flag,
 )
-from modulo.db.crud.observability import update_otel_config
-from modulo.db.crud.org_deletion import (
+from farna.db.crud.observability import update_otel_config
+from farna.db.crud.org_deletion import (
     cancel_org_deletion,
     confirm_org_deletion,
     export_org_data,
     request_org_deletion,
 )
-from modulo.db.crud.organisation import get_organisation
+from farna.db.crud.organisation import get_organisation
 
 pytestmark = pytest.mark.integration
 
@@ -213,7 +213,7 @@ async def test_other_org_deletion_paths_org_lock_stays_for_update() -> None:
     # Patch _collect_org_export_in_snapshot to avoid real DB connection
     from unittest.mock import AsyncMock, patch
 
-    target = "modulo.db.crud.org_deletion._collect_org_export_in_snapshot"
+    target = "farna.db.crud.org_deletion._collect_org_export_in_snapshot"
     with patch(target, AsyncMock(return_value={"organisation": []})), pytest.raises(ValueError, match=_ORG_NOT_FOUND):
         await request_org_deletion(request_session, _ORG_ID, _ACTOR_ID)
     # request_org_deletion has two org reads: 1) pre-lock validation (no FOR UPDATE)

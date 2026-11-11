@@ -33,19 +33,19 @@ from cryptography.fernet import Fernet
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from modulo.core.notifier import (
+from farna.core.notifier import (
     EVENT_HITL_AWAITING,
     EVENT_RUN_FAILED,
     DispatchResult,
     Notifier,
     _payload_run_id,
 )
-from modulo.db.models.account import Account
-from modulo.db.models.base import Base
-from modulo.db.models.notification import Notification, NotificationPreference
-from modulo.db.models.notification_delivery import NotificationDeliveryLog
-from modulo.db.models.notification_endpoint import NotificationEndpoint
-from modulo.db.models.run import Run
+from farna.db.models.account import Account
+from farna.db.models.base import Base
+from farna.db.models.notification import Notification, NotificationPreference
+from farna.db.models.notification_delivery import NotificationDeliveryLog
+from farna.db.models.notification_endpoint import NotificationEndpoint
+from farna.db.models.run import Run
 
 _KEY = Fernet.generate_key().decode()
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -158,7 +158,7 @@ class _Harness:
         }
         with (
             patch.object(self.notifier, "_dispatch_endpoint_pinned", self.endpoint_dispatch),
-            patch("modulo.core.notifier._fire_notification_sse_broadcast"),
+            patch("farna.core.notifier._fire_notification_sse_broadcast"),
         ):
             kwargs: dict[str, Any] = {}
             if run_id is not None:
@@ -192,7 +192,7 @@ async def test_terminal_run_suppression_reads_the_payload_run_id(harness: _Harne
     """The guard also fires when the emitter passes the run id only in the payload."""
     with (
         patch.object(harness.notifier, "_dispatch_endpoint_pinned", harness.endpoint_dispatch),
-        patch("modulo.core.notifier._fire_notification_sse_broadcast"),
+        patch("farna.core.notifier._fire_notification_sse_broadcast"),
     ):
         results = await harness.notifier.dispatch_event(
             _ORG,
@@ -284,7 +284,7 @@ async def test_run_state_db_error_fails_open(harness: _Harness) -> None:
     The ``except Exception`` arm is the safety net that keeps a DB blip from
     silently swallowing a live review request.
     """
-    with patch("modulo.core.notifier.set_rls_org", side_effect=RuntimeError("db blip")):
+    with patch("farna.core.notifier.set_rls_org", side_effect=RuntimeError("db blip")):
         assert await harness.notifier._run_is_terminal(_ORG, _TERMINAL_RUN) is False
 
 
@@ -295,7 +295,7 @@ async def test_run_state_cancellation_propagates(harness: _Harness) -> None:
     so the caller's cancellation is honoured.
     """
     with (
-        patch("modulo.core.notifier.set_rls_org", side_effect=asyncio.CancelledError),
+        patch("farna.core.notifier.set_rls_org", side_effect=asyncio.CancelledError),
         pytest.raises(asyncio.CancelledError),
     ):
         await harness.notifier._run_is_terminal(_ORG, _TERMINAL_RUN)

@@ -22,13 +22,13 @@ import httpx
 import pytest
 from langchain_core.messages import HumanMessage
 
-import modulo.model_backends.module as openai_module
-from modulo.core.eval_engine import EvalDefinition, EvalType
-from modulo.core.eval_engine.suite_run_judge import (
+import farna.model_backends.module as openai_module
+from farna.core.eval_engine import EvalDefinition, EvalType
+from farna.core.eval_engine.suite_run_judge import (
     build_org_model_backend_hub,
     build_suite_run_model_judge_callable,
 )
-from modulo.core.model_backend_hub import _build_backend
+from farna.core.model_backend_hub import _build_backend
 
 CUSTOM_BASE_URL = "https://gateway.internal.example/v1"
 _CHAT_COMPLETION = {
@@ -157,8 +157,8 @@ async def test_model_backed_typed_judge_uses_the_custom_base_url(
     settings = type("Settings", (), {"fernet_key": "unused-in-this-test"})()
 
     with (
-        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=secrets_backend),
-        patch("modulo.settings.get_settings", return_value=settings),
+        patch("farna.core.secrets_backend.create_secrets_backend", return_value=secrets_backend),
+        patch("farna.settings.get_settings", return_value=settings),
     ):
         hub = await build_org_model_backend_hub(_FakeSession([_FakeRow(backend_id)]), uuid.uuid4())
 

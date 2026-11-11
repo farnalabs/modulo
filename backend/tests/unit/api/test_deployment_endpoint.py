@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from modulo.api.main import app
-from modulo.api.routes import deployment
-from modulo.settings import Settings, get_settings
+from farna.api.main import app
+from farna.api.routes import deployment
+from farna.settings import Settings, get_settings
 
 
 def _make_settings() -> Settings:
@@ -213,8 +213,8 @@ class TestDeploymentInfoAutobeginDisabledSession:
     def test_reads_on_autobegin_disabled_session(self) -> None:
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-        from modulo.db.models.run import Run
-        from modulo.db.models.system_config import SystemConfig
+        from farna.db.models.run import Run
+        from farna.db.models.system_config import SystemConfig
 
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
 

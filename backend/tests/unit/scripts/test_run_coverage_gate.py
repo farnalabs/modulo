@@ -2770,8 +2770,8 @@ class TestBranchParserIntegration:
     def test_compute_branch_coverage_matches_python_source_root_relative_key(self, tmp_path):
         """coverage.py emits Cobertura filenames relative to its source root.
 
-        This repo runs ``--cov=src/modulo`` from ``backend/``, so a changed
-        ``backend/src/modulo/core/foo.py`` appears in the report as
+        This repo runs ``--cov=src/farna`` from ``backend/``, so a changed
+        ``backend/src/farna/core/foo.py`` appears in the report as
         ``core/foo.py``.  Before the path-alignment fix the lookup was a plain
         dict get on the repo-relative key, so every branch record was
         discarded and the file scored 0%.
@@ -2791,7 +2791,7 @@ class TestBranchParserIntegration:
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
             covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"backend/src/modulo/core/foo.py": 2}, xml, "origin/main", "Python"
+                {"backend/src/farna/core/foo.py": 2}, xml, "origin/main", "Python"
             )
         assert covered == 2
         assert total == 3
@@ -2802,7 +2802,7 @@ class TestBranchParserIntegration:
         xml = tmp_path / "coverage.xml"
         xml.write_text(
             "<coverage><packages><package><classes>"
-            '<class filename="src/modulo/foo.py"><lines>'
+            '<class filename="src/farna/foo.py"><lines>'
             '<line number="1" hits="1" branch="true" condition-coverage="100% (1/1)">'
             '<conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>'
             "</lines></class></classes></package></packages></coverage>"
@@ -2811,7 +2811,7 @@ class TestBranchParserIntegration:
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
             covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"backend/src/modulo/foo.py": 2}, xml, "origin/main", "Python"
+                {"backend/src/farna/foo.py": 2}, xml, "origin/main", "Python"
             )
         assert covered == 1
         assert total == 1
@@ -2896,9 +2896,9 @@ class TestBranchParserIntegration:
 
     def test_match_report_key_rejects_ambiguous_suffix(self):
         """A bare basename matching multiple changed files must not cross-attribute."""
-        changed = ["backend/src/modulo/a/foo.py", "backend/src/modulo/b/foo.py"]
+        changed = ["backend/src/farna/a/foo.py", "backend/src/farna/b/foo.py"]
         assert mod._match_report_key_to_changed("foo.py", changed, "Python") is None
-        assert mod._match_report_key_to_changed("a/foo.py", changed, "Python") == "backend/src/modulo/a/foo.py"
+        assert mod._match_report_key_to_changed("a/foo.py", changed, "Python") == "backend/src/farna/a/foo.py"
 
 
 # ---------------------------------------------------------------------------
@@ -3073,7 +3073,7 @@ class TestProjectWideFloor:
         )
 
         def fake_changed(compare_branch, language):
-            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+            return {"backend/src/farna/x.py": 1} if language == "Python" else {}
 
         with (
             patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
@@ -3107,7 +3107,7 @@ class TestProjectWideFloor:
         def fake_changed(compare_branch, language):
             # A Python tiny diff keeps the gate from short-circuiting on
             # all-skipped; JavaScript has no changed production files.
-            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+            return {"backend/src/farna/x.py": 1} if language == "Python" else {}
 
         with (
             patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
@@ -3152,7 +3152,7 @@ class TestProjectWideFloor:
         )
 
         def fake_changed(compare_branch, language):
-            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+            return {"backend/src/farna/x.py": 1} if language == "Python" else {}
 
         with (
             patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
@@ -3179,7 +3179,7 @@ class TestProjectWideFloor:
         )
 
         def fake_changed(compare_branch, language):
-            return {"backend/src/modulo/x.py": 1} if language == "Python" else {}
+            return {"backend/src/farna/x.py": 1} if language == "Python" else {}
 
         with (
             patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),

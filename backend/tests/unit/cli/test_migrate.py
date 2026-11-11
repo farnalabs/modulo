@@ -12,7 +12,7 @@ import pytest
 from click import ClickException
 from click.testing import CliRunner
 
-from modulo.cli.migrate import (
+from farna.cli.migrate import (
     _collect_org_data,
     _compute_export_hash,
     _group_records,
@@ -284,9 +284,9 @@ class TestAuth:
         assert result.exit_code != 0
         assert "Admin authentication required" in result.output
 
-    @patch("modulo.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.decode_principal")
     def test_cli_auth_with_token(self, mock_decode: MagicMock) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -311,8 +311,8 @@ class TestResolveAdminAuth:
 
     def test_non_admin_token_rejected(self) -> None:
         with (
-            patch("modulo.cli.migrate.decode_principal") as mock_decode,
-            patch("modulo.cli.migrate.get_settings") as mock_settings,
+            patch("farna.cli.migrate.decode_principal") as mock_decode,
+            patch("farna.cli.migrate.get_settings") as mock_settings,
         ):
             mock_decode.return_value = SimpleNamespace(org_role="member", user_id="u1")
             mock_settings.return_value = MagicMock(secret_key="key")
@@ -321,8 +321,8 @@ class TestResolveAdminAuth:
 
     def test_invalid_token_wrapped_as_click_exception(self) -> None:
         with (
-            patch("modulo.cli.migrate.decode_principal", side_effect=RuntimeError("bad token")),
-            patch("modulo.cli.migrate.get_settings") as mock_settings,
+            patch("farna.cli.migrate.decode_principal", side_effect=RuntimeError("bad token")),
+            patch("farna.cli.migrate.get_settings") as mock_settings,
         ):
             mock_settings.return_value = MagicMock(secret_key="key")
             with pytest.raises(ClickException, match="Invalid admin JWT"):
@@ -336,7 +336,7 @@ class TestVerifyAdminAccess:
         session.execute.assert_not_called()
 
     async def test_account_not_found_raises(self, org_id: uuid.UUID) -> None:
-        with patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account:
+        with patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account:
             mock_account.return_value = None
             with pytest.raises(ClickException, match="Admin account not found"):
                 await _verify_admin_access(MagicMock(), org_id, str(uuid.uuid4()))
@@ -344,8 +344,8 @@ class TestVerifyAdminAccess:
     async def test_non_member_raises(self, org_id: uuid.UUID) -> None:
         account = MagicMock(id=uuid.uuid4())
         with (
-            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
-            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+            patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("farna.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
         ):
             mock_account.return_value = account
             mock_membership.return_value = None
@@ -355,8 +355,8 @@ class TestVerifyAdminAccess:
     async def test_non_admin_role_raises(self, org_id: uuid.UUID) -> None:
         account = MagicMock(id=uuid.uuid4())
         with (
-            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
-            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+            patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("farna.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
         ):
             mock_account.return_value = account
             mock_membership.return_value = MagicMock(role="runner")
@@ -368,11 +368,11 @@ class TestVerifyAdminAccess:
 
 
 class TestExportOrg:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_export_basic(
         self,
         mock_get_membership: MagicMock,
@@ -384,7 +384,7 @@ class TestExportOrg:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -435,11 +435,11 @@ class TestExportOrg:
         assert "Exported" in result.output
         assert output_path.exists()
 
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_export_org_not_found(
         self,
         mock_get_membership: MagicMock,
@@ -451,7 +451,7 @@ class TestExportOrg:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -491,7 +491,7 @@ class TestExportOrg:
 
 class TestCollectOrgDataPagination:
     async def test_paginates_large_tables(self, org_id: uuid.UUID) -> None:
-        from modulo.cli.migrate import _PAGE_SIZE, _collect_org_data
+        from farna.cli.migrate import _PAGE_SIZE, _collect_org_data
 
         async def fake_execute(_stmt: object) -> object:
             calls.append(1)
@@ -516,7 +516,7 @@ class TestCollectOrgDataPagination:
         session = MagicMock()
         session.execute = fake_execute
 
-        with patch("modulo.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
+        with patch("farna.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
             mock_get_org.return_value = MockModel(id=org_id, name="Test Org")
             bundle = await _collect_org_data(session, org_id)
 
@@ -530,7 +530,7 @@ class TestCollectOrgDataPagination:
 
 class TestCollectOrgDataFlags:
     async def test_pipelines_only_and_users_only_mutually_exclusive(self, org_id: uuid.UUID) -> None:
-        with patch("modulo.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
+        with patch("farna.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
             mock_get_org.return_value = MockModel(id=org_id, name="Org")
             session = MagicMock()
             with pytest.raises(ClickException, match="mutually exclusive"):
@@ -543,11 +543,11 @@ class TestCollectOrgDataFlags:
 
 
 class TestImportOrg:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_import_basic(
         self,
         mock_get_membership: MagicMock,
@@ -559,7 +559,7 @@ class TestImportOrg:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -599,11 +599,11 @@ class TestImportOrg:
         assert "Loaded" in result.output
         assert "Import complete" in result.output
 
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_import_with_conflict_strategies(
         self,
         mock_get_membership: MagicMock,
@@ -615,7 +615,7 @@ class TestImportOrg:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -703,8 +703,8 @@ class TestImportOrgData:
         session.add = MagicMock()
         return session
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_creates_new_row(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         mock_find.return_value = None
         session = self._session()
@@ -716,8 +716,8 @@ class TestImportOrgData:
         assert added.organisation_id == org_id
         session.flush.assert_awaited()
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_skip_strategy_leaves_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
         mock_find.return_value = existing
@@ -727,8 +727,8 @@ class TestImportOrgData:
         session.add.assert_not_called()
         assert existing.email == "old@x.com"
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_overwrite_strategy_updates_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
         mock_find.return_value = existing
@@ -737,8 +737,8 @@ class TestImportOrgData:
         assert counts == {"created": 0, "skipped": 0, "overwritten": 1, "errors": 0}
         assert existing.email == "new@x.com"
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_merge_strategy_keeps_non_null_fields(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         record = {
             "__table__": "accounts",
@@ -759,8 +759,8 @@ class TestImportOrgData:
         # Null existing fields are backfilled.
         assert existing.display_name == "Renamed"
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_unknown_table_counts_error(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         session = self._session()
         counts = await _import_org_data(
@@ -769,15 +769,15 @@ class TestImportOrgData:
         assert counts["errors"] == 1
         session.add.assert_not_called()
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
-    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_missing_data_key_counts_error(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         session = self._session()
         counts = await _import_org_data(session, org_id, [{"__table__": "accounts", "id": "1"}], "skip")
         assert counts["errors"] == 1
         session.add.assert_not_called()
 
-    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("farna.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
     async def test_mutually_exclusive_flags_raise(self, org_id: uuid.UUID) -> None:
         session = self._session()
         with pytest.raises(ClickException, match="mutually exclusive"):
@@ -788,10 +788,10 @@ class TestImportOrgData:
 
 
 class TestVerifyExportCmd:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate._verify_export")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate._verify_export")
     def test_verify_success(self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -818,10 +818,10 @@ class TestVerifyExportCmd:
         )
         assert result.exit_code == 0
 
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate._verify_export")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate._verify_export")
     def test_verify_failure(self, mock_verify: MagicMock, mock_decode: MagicMock, tmp_path: Path) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -854,11 +854,11 @@ class TestVerifyExportCmd:
 
 
 class TestFlags:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_export_pipelines_only(
         self,
         mock_get_membership: MagicMock,
@@ -870,7 +870,7 @@ class TestFlags:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -918,11 +918,11 @@ class TestFlags:
         )
         assert result.exit_code == 0, f"CLI failed: {result.output}"
 
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_import_users_only(
         self,
         mock_get_membership: MagicMock,
@@ -934,7 +934,7 @@ class TestFlags:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -981,11 +981,11 @@ class TestFlags:
 
 
 class TestImportHashVerification:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_import_hash_mismatch_aborts(
         self,
         mock_get_membership: MagicMock,
@@ -997,7 +997,7 @@ class TestImportHashVerification:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -1035,11 +1035,11 @@ class TestImportHashVerification:
         assert result.exit_code != 0
         assert "hash verification failed" in result.output.lower() or "Import aborted" in result.output
 
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock)
-    @patch("modulo.cli.migrate.get_membership_by_account_and_org")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id", new_callable=AsyncMock)
+    @patch("farna.cli.migrate.get_membership_by_account_and_org")
     def test_import_skips_verify_when_no_hash(
         self,
         mock_get_membership: MagicMock,
@@ -1051,7 +1051,7 @@ class TestImportHashVerification:
         admin_user_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -1093,9 +1093,9 @@ class TestImportHashVerification:
 
 
 class TestAuthBeforeFileRead:
-    @patch("modulo.cli.migrate.decode_principal")
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_account_by_id")
+    @patch("farna.cli.migrate.decode_principal")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_account_by_id")
     def test_import_fails_on_auth_before_file_access(
         self,
         mock_get_account: MagicMock,
@@ -1104,7 +1104,7 @@ class TestAuthBeforeFileRead:
         org_id: uuid.UUID,
         tmp_path: Path,
     ) -> None:
-        from modulo.auth.jwt import AuthenticatedPrincipal
+        from farna.auth.jwt import AuthenticatedPrincipal
 
         mock_decode.return_value = AuthenticatedPrincipal(
             username="admin",
@@ -1140,9 +1140,9 @@ class TestAuthBeforeFileRead:
 
 class TestAdminSecretAuth:
     @patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "super_secret", "MODULO_ADMIN_TOKEN": ""})
-    @patch("modulo.cli.migrate.AsyncSessionLocal")
-    @patch("modulo.cli.migrate.get_organisation")
-    @patch("modulo.cli.migrate.get_account_by_id")
+    @patch("farna.cli.migrate.AsyncSessionLocal")
+    @patch("farna.cli.migrate.get_organisation")
+    @patch("farna.cli.migrate.get_account_by_id")
     def test_auth_with_env_secret(
         self,
         mock_get_account: MagicMock,

@@ -32,8 +32,8 @@ from opentelemetry import metrics as otel_metrics
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core import evidence_retention
-from modulo.core.evidence_retention import (
+from farna.core import evidence_retention
+from farna.core.evidence_retention import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_LOCK_TIMEOUT_SECONDS,
     DEFAULT_MAX_AGE_DAYS,
@@ -45,13 +45,13 @@ from modulo.core.evidence_retention import (
     purge_evidence,
     save_policy,
 )
-from modulo.db.models import Base
-from modulo.db.models.evidence import Evidence
-from modulo.db.models.organisation import Organisation
-from modulo.db.repositories.locks import LockAcquireError
-from modulo.db.rls import set_rls_org
+from farna.db.models import Base
+from farna.db.models.evidence import Evidence
+from farna.db.models.organisation import Organisation
+from farna.db.repositories.locks import LockAcquireError
+from farna.db.rls import set_rls_org
 
-_RETENTION_LOGGER = "modulo.core.evidence_retention"
+_RETENTION_LOGGER = "farna.core.evidence_retention"
 
 
 # ---------------------------------------------------------------------------

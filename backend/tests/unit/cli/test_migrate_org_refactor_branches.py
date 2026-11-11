@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.cli.migrate_org import _do_import
+from farna.cli.migrate_org import _do_import
 
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -80,7 +80,7 @@ async def _run_import(
     results: list[_ScalarResult] | None = None,
 ) -> tuple[dict[str, int], _FakeSession]:
     session, mock_local = _patched_session(results)
-    with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+    with patch("farna.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
         counts = await _do_import(bundle, ORG_ID, strategy)
     return counts, session
 

@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from modulo.api.routes import analytics as route
-from modulo.auth.jwt import TenantPrincipal
-from modulo.core.analytics.service import AnalyticsRateLimitedError, AnalyticsValidationError
+from farna.api.routes import analytics as route
+from farna.auth.jwt import TenantPrincipal
+from farna.core.analytics.service import AnalyticsRateLimitedError, AnalyticsValidationError
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000c2")

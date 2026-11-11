@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import (
+from farna.core.pipeline_engine.node_runner import (
     _FULL_MODE_DEFAULT_MAX_BYTES,
     _MAX_ARTIFACT_LOG,
     _build_sandbox_node_config,
@@ -23,7 +23,7 @@ from modulo.core.pipeline_engine.node_runner import (
     _coerce_stdout_retention_mode,
     _resolve_stdout_cap,
 )
-from modulo.core.stdout_retention import validate_stdout_retention_config
+from farna.core.stdout_retention import validate_stdout_retention_config
 
 # ---------------------------------------------------------------------------
 # validate_stdout_retention_config

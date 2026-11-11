@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.core.documentation_indexer import DocEntry, DocumentationIndex
+from farna.core.documentation_indexer import DocEntry, DocumentationIndex
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/assistant/assistant_context_sources.feature")

@@ -48,7 +48,7 @@ from alembic.script import ScriptDirectory
 
 from tests.unit._source_scan import iter_source_text
 
-_VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATIONS_DIR = _VERSIONS_DIR.parent
 
 

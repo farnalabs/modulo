@@ -15,7 +15,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session as SASession
 
-from modulo.db.rls import (
+from farna.db.rls import (
     _inject_tenant_filter,
     register_rls_reset_hook,
     set_rls_org,
@@ -725,8 +725,8 @@ async def test_run_node_outputs_repo_module_org_gates(
     the database does not). READ paths skip the consistency check when the
     session has no org context and raise on a mismatched one.
     """
-    from modulo.db.crud.run_node_outputs import read_run_blobs, replace_run_node_outputs
-    from modulo.db.rls import OutputsRlsMismatch
+    from farna.db.crud.run_node_outputs import read_run_blobs, replace_run_node_outputs
+    from farna.db.rls import OutputsRlsMismatch
 
     org_id, _pipeline_id, _snapshot_id, run_id = await _seed_outputs_tenant(db_engine, test_user, label="gates")
     try:
@@ -995,8 +995,8 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
             )
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member
 
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
@@ -1169,8 +1169,8 @@ async def test_team_memberships_isolated_by_org_rls(
     This test creates accounts in different teams within the same org and
     verifies that membership queries are scoped to the correct team.
     """
-    from modulo.db.crud.team import create_team
-    from modulo.db.crud.team_membership import add_team_member, list_team_members
+    from farna.db.crud.team import create_team
+    from farna.db.crud.team_membership import add_team_member, list_team_members
 
     org = await _create_org(db_engine, f"rls-team-membership-{uuid.uuid4().hex[:8]}")
     account_admin = await _create_account(db_engine, "admin@rls-membership.com")

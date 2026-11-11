@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.models (FAR-681 slice 1)."""
+"""Unit tests for farna.cli.apply.models (FAR-681 slice 1)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import ClassVar, get_args
 import pytest
 from pydantic import ValidationError
 
-from modulo.cli.apply.models import (
+from farna.cli.apply.models import (
     ENV_REF_PATTERN,
     SECRET_REF_PATTERN,
     ApplyConfig,
@@ -399,7 +399,7 @@ class TestTriggerEntityContracts:
             "cron_timezone": None,
             "config_json": {"url": "https://resolved.example"},
         }
-        from modulo.cli.apply.plan import plan_entity
+        from farna.cli.apply.plan import plan_entity
 
         decision = plan_entity("trigger", "p/hook", resolved.managed_view(), current)
         assert decision.status == "unchanged"
@@ -414,7 +414,7 @@ class TestTriggerEntityContracts:
         """The helper runs on the RESOLVED mapping: sensitive LEAF keys always
         declare secrets; mask-pattern resolved values declare secrets; plain
         resolved values do not."""
-        from modulo.cli.apply.models import config_declares_secrets
+        from farna.cli.apply.models import config_declares_secrets
 
         assert config_declares_secrets({"hmac_secret": "${env:HS}", "note": "x"})
         assert config_declares_secrets({"smtp": {"password": "${env:PW}"}})
@@ -684,7 +684,7 @@ class TestPipelineEntityContracts:
         """Drift alarm: the apply node mirror must cover every API node field
         (except the agent_id <-> agent swap) — a silently-dropped declarative
         field would create permanent plan drift."""
-        from modulo.api.routes.pipelines import PipelineGraphNode
+        from farna.api.routes.pipelines import PipelineGraphNode
 
         apply_fields = set(ApplyGraphNode.model_fields) - {"agent"}
         api_fields = set(PipelineGraphNode.model_fields) - {"agent_id"}
@@ -699,7 +699,7 @@ class TestPipelineEntityContracts:
         ``connector`` was in FAR-2089) was silently rejected by the declarative
         front-end while the API accepted the same graph.
         """
-        from modulo.api.routes.pipelines import PipelineGraphNode
+        from farna.api.routes.pipelines import PipelineGraphNode
 
         apply_types = set(get_args(ApplyGraphNode.model_fields["node_type"].annotation))
         api_types = set(get_args(PipelineGraphNode.model_fields["node_type"].annotation))
@@ -712,7 +712,7 @@ class TestPipelineEntityContracts:
         of a config the API accepts — the two surfaces would disagree on the same
         graph contract.
         """
-        from modulo.api.routes.pipelines import ConnectorBinding
+        from farna.api.routes.pipelines import ConnectorBinding
 
         assert set(ApplyGraphConnectorBinding.model_fields) == set(ConnectorBinding.model_fields)
 
@@ -721,8 +721,8 @@ class TestPipelineEntityContracts:
         ``ConnectorBinding`` field. ``extra="forbid"`` makes an undeclared key a
         loud load-time rejection, so a missing field means declarative apply
         cannot express the capability the API stores."""
-        from modulo.api.routes.pipelines import ConnectorBinding
-        from modulo.cli.apply.models import ApplyGraphConnectorBinding
+        from farna.api.routes.pipelines import ConnectorBinding
+        from farna.cli.apply.models import ApplyGraphConnectorBinding
 
         assert set(ApplyGraphConnectorBinding.model_fields) == set(ConnectorBinding.model_fields)
 
@@ -840,7 +840,7 @@ class TestPipelineEntityContracts:
         so ``_normalized_node`` must raise a ValidationError naming the field
         instead of carrying it into the write payload.
         """
-        from modulo.cli.apply.pipeline_apply import _normalized_node
+        from farna.cli.apply.pipeline_apply import _normalized_node
 
         agent_node = {
             "id": "00000000-0000-0000-0000-0000000000a1",
@@ -893,15 +893,15 @@ class TestSensitiveKeyTwin:
         """Drift alarm: the CLI runs WITHOUT server settings, so it cannot
         import the FastAPI/DB-heavy mask middleware — the local pattern set
         must stay byte-identical to the canonical set the middleware re-exports
-        (``modulo.core.secret_patterns``)."""
-        from modulo.cli.apply import models
-        from modulo.core.secret_patterns import _SENSITIVE_KEY_PATTERNS
+        (``farna.core.secret_patterns``)."""
+        from farna.cli.apply import models
+        from farna.core.secret_patterns import _SENSITIVE_KEY_PATTERNS
 
         assert models._SENSITIVE_KEY_PATTERNS == _SENSITIVE_KEY_PATTERNS
 
     def test_local_is_sensitive_key_matches_middleware(self) -> None:
-        from modulo.api.middleware.sensitive_mask import is_sensitive_key as middleware_is_sensitive_key
-        from modulo.cli.apply.models import is_sensitive_key
+        from farna.api.middleware.sensitive_mask import is_sensitive_key as middleware_is_sensitive_key
+        from farna.cli.apply.models import is_sensitive_key
 
         for key in ("signing_secret", "API-KEY", "db password", "TokenValue", "hmac_secret", "note", "scan_interval"):
             assert is_sensitive_key(key) == middleware_is_sensitive_key(key), key
@@ -913,12 +913,12 @@ class TestSensitiveKeyTwin:
         hashes stop matching — the org-state sentinel (``••••••``) would be
         treated as a secret on one side only, swinging the graph hash every
         plan run)."""
-        from modulo.api.middleware.sensitive_mask import (
+        from farna.api.middleware.sensitive_mask import (
             is_sensitive_env_key as middleware_is_sensitive_env_key,
         )
-        from modulo.cli.apply.models import _mask_graph_env_vars_for_hash, is_sensitive_env_key
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
-        from modulo.core.secret_patterns import is_sensitive_env_key as core_is_sensitive_env_key
+        from farna.cli.apply.models import _mask_graph_env_vars_for_hash, is_sensitive_env_key
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK, mask_secret_values_in_text
+        from farna.core.secret_patterns import is_sensitive_env_key as core_is_sensitive_env_key
 
         assert is_sensitive_env_key is core_is_sensitive_env_key
 
@@ -975,7 +975,7 @@ class TestPipelineGraphSecretParity:
     def server_view(cls) -> dict:
         """What the API read of DECLARED shows — produced by the shipped
         server mask so a masker-tier change on either side fails this suite."""
-        from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node
+        from farna.api.middleware.sensitive_mask import mask_pipeline_graph_node
 
         return {
             "nodes": [mask_pipeline_graph_node(dict(node)) for node in cls.DECLARED["nodes"]],
@@ -986,7 +986,7 @@ class TestPipelineGraphSecretParity:
         """Hand-pinned expectations against the REAL mask output, so a tier
         changing server-side fails loudly instead of silently re-defining
         'parity'."""
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         node = self.server_view()["nodes"][0]
         # env tier: sensitive key -> whole mask; other keys value-compiled.
@@ -1008,7 +1008,7 @@ class TestPipelineGraphSecretParity:
         """The invariant the runtime verification pass checked directly: the
         CLI's desired-side view must be identical to what the server displays.
         Any divergence is phantom drift (perpetual ``updated`` + graph re-PATCH)."""
-        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.models import strip_secret_shaped_graph
 
         assert strip_secret_shaped_graph(self.DECLARED) == self.server_view()
 
@@ -1016,9 +1016,9 @@ class TestPipelineGraphSecretParity:
         """A secret-shaped value under a NON-sensitive deep key must redact
         identically on both sides — fails if the value tier is dropped from
         ``_mask_graph_deep_config_for_hash``."""
-        from modulo.api.middleware.sensitive_mask import mask_pipeline_graph_node
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.cli.apply.plan import canonical_hash
+        from farna.api.middleware.sensitive_mask import mask_pipeline_graph_node
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.plan import canonical_hash
 
         declared = {
             "nodes": [
@@ -1042,8 +1042,8 @@ class TestPipelineGraphSecretParity:
         """The falsy-value rule (``mask_sensitive_value`` leaves ``""``
         unmasked) must hold in the CLI hash view too, or the managed view
         shows a sentinel the API never returns."""
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.cli.apply.plan import canonical_hash
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.plan import canonical_hash
 
         stripped = strip_secret_shaped_graph(self.DECLARED)
         assert not stripped["nodes"][0]["env_vars"]["PYPI_TOKEN"]
@@ -1051,8 +1051,8 @@ class TestPipelineGraphSecretParity:
         assert canonical_hash(stripped) == canonical_hash(strip_secret_shaped_graph(self.server_view()))
 
     def test_declared_and_masked_read_hash_equal(self) -> None:
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.cli.apply.plan import canonical_hash
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.plan import canonical_hash
 
         stripped = strip_secret_shaped_graph(self.DECLARED)
         raw_sentinel_hash = canonical_hash(strip_secret_shaped_graph(self.server_view()))
@@ -1060,15 +1060,15 @@ class TestPipelineGraphSecretParity:
 
     def test_hash_age_falsifying(self) -> None:
         """The test must fail if the redaction is removed (regression gate)."""
-        from modulo.cli.apply.plan import canonical_hash
+        from farna.cli.apply.plan import canonical_hash
 
         assert canonical_hash(self.DECLARED) != canonical_hash(self.server_view())
 
     def test_masked_current_view_round_trips(self) -> None:
         """Applying the redaction to an already-masked API read (idempotency)
         is identity — the current-side hash is stable across repeated plans."""
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.cli.apply.plan import canonical_hash
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.plan import canonical_hash
 
         server_view = self.server_view()
         once = strip_secret_shaped_graph(server_view)
@@ -1076,7 +1076,7 @@ class TestPipelineGraphSecretParity:
         assert canonical_hash(once) == canonical_hash(twice)
 
     def test_row_resolution_non_secret_env_passthrough(self) -> None:
-        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.models import strip_secret_shaped_graph
 
         stripped = strip_secret_shaped_graph(self.DECLARED)
         assert stripped["nodes"][0]["env_vars"]["LOG_LEVEL"] == "debug"
@@ -1084,8 +1084,8 @@ class TestPipelineGraphSecretParity:
     def test_managed_view_redacts_secret_shaped_graph(self) -> None:
         """FAR-1232: a declared graph with secrets reaches plan output only
         through the redaction — the managed view is the plan view."""
-        from modulo.cli.apply.models import PipelineEntity, strip_secret_shaped_graph
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import PipelineEntity, strip_secret_shaped_graph
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         entity = PipelineEntity.model_validate({"name": "sample", "graph": self.DECLARED})
         view = entity.managed_view(graph=self.DECLARED)
@@ -1093,7 +1093,7 @@ class TestPipelineGraphSecretParity:
         assert view["graph"]["nodes"][0]["env_vars"]["MODULO_USERS"] == SENSITIVE_VALUE_MASK
 
     def test_declares_secrets_per_field(self) -> None:
-        from modulo.cli.apply.models import graph_declares_secrets
+        from farna.cli.apply.models import graph_declares_secrets
 
         assert graph_declares_secrets(self.DECLARED)
         assert graph_declares_secrets(self.server_view()), "a sentinel-masked read still counts as secret-bearing"
@@ -1110,8 +1110,8 @@ class TestPipelineGraphSecretParity:
         ``server_view()`` proves the two implementations agree; this proves
         the agreed-upon output is the intended one, so a change that broke
         BOTH maskers identically cannot silently redefine 'parity'."""
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         node = strip_secret_shaped_graph(self.DECLARED)["nodes"][0]
         assert node["env_vars"] == {
@@ -1133,7 +1133,7 @@ class TestGraphMaskHelpers:
     non-dict nodes, and the fail-closed scrub."""
 
     def test_env_non_string_value_passthrough(self) -> None:
-        from modulo.cli.apply.models import _mask_graph_env_vars_for_hash
+        from farna.cli.apply.models import _mask_graph_env_vars_for_hash
 
         assert _mask_graph_env_vars_for_hash({"REPLICAS": 3, "ENABLED": True, "LOG_LEVEL": "debug"}) == {
             "REPLICAS": 3,
@@ -1142,8 +1142,8 @@ class TestGraphMaskHelpers:
         }
 
     def test_context_files_non_string_value_passthrough(self) -> None:
-        from modulo.cli.apply.models import _mask_graph_context_files_for_hash
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import _mask_graph_context_files_for_hash
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         masked = _mask_graph_context_files_for_hash(
             {"notes": "token ghp_00112233445566778899aabbccddeeff00112233", "binary": 42}
@@ -1152,8 +1152,8 @@ class TestGraphMaskHelpers:
         assert masked["binary"] == 42
 
     def test_deep_config_list_and_non_string_leaves(self) -> None:
-        from modulo.cli.apply.models import _mask_graph_deep_config_for_hash
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import _mask_graph_deep_config_for_hash
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         masked = _mask_graph_deep_config_for_hash(
             {
@@ -1170,8 +1170,8 @@ class TestGraphMaskHelpers:
         assert masked["count"] == 5
 
     def test_strip_graph_preserves_non_dict_nodes(self) -> None:
-        from modulo.cli.apply.models import strip_secret_shaped_graph
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import strip_secret_shaped_graph
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         graph = {
             "nodes": ["raw-node", {"id": "n1", "env_vars": {"TOKEN": "value"}}],
@@ -1183,7 +1183,7 @@ class TestGraphMaskHelpers:
         assert stripped["edges"] == [{"id": "e1"}]
 
     def test_strip_graph_handles_missing_and_non_dict_fields(self) -> None:
-        from modulo.cli.apply.models import strip_secret_shaped_graph
+        from farna.cli.apply.models import strip_secret_shaped_graph
 
         graph = {
             "nodes": [
@@ -1198,8 +1198,8 @@ class TestGraphMaskHelpers:
     def test_strip_graph_fail_closed_when_a_masker_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A masker exception must NEVER leak raw declared values: the graph's
         secret-bearing fields are scrubbed wholesale, other fields preserved."""
-        from modulo.cli.apply import models
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply import models
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         def _boom(_env_vars: dict) -> dict:
             raise RuntimeError("masker exploded")
@@ -1222,8 +1222,8 @@ class TestGraphMaskHelpers:
         assert stripped["nodes"][0]["label"] == "keep"
 
     def test_scrubbed_graph_direct(self) -> None:
-        from modulo.cli.apply.models import _scrubbed_graph
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import _scrubbed_graph
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         scrubbed = _scrubbed_graph(
             {
@@ -1242,13 +1242,13 @@ class TestGraphMaskHelpers:
         assert _scrubbed_graph({}) == {"nodes": [], "edges": []}
 
     def test_scrubbed_graph_non_dict_field_values_pass_through(self) -> None:
-        from modulo.cli.apply.models import _scrubbed_graph
+        from farna.cli.apply.models import _scrubbed_graph
 
         scrubbed = _scrubbed_graph({"nodes": [{"id": "n", "env_vars": ["not-a-dict"]}], "edges": []})
         assert scrubbed["nodes"][0]["env_vars"] == ["not-a-dict"]
 
     def test_graph_declares_secrets_context_and_deep_tiers(self) -> None:
-        from modulo.cli.apply.models import graph_declares_secrets
+        from farna.cli.apply.models import graph_declares_secrets
 
         assert graph_declares_secrets(
             {
@@ -1276,7 +1276,7 @@ class TestGraphMaskHelpers:
         )
 
     def test_graph_declares_secrets_ignores_non_dict_and_non_string(self) -> None:
-        from modulo.cli.apply.models import graph_declares_secrets
+        from farna.cli.apply.models import graph_declares_secrets
 
         assert graph_declares_secrets({"nodes": ["raw", 42], "edges": []}) is False
         assert graph_declares_secrets({"nodes": [{"id": "n", "env_vars": {"REPLICAS": 3}}], "edges": []}) is False
@@ -1300,8 +1300,8 @@ class TestStripSecretShapedConfig:
     """
 
     def test_nested_containers_and_secret_shapes(self) -> None:
-        from modulo.cli.apply.models import strip_secret_shaped_config
-        from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
+        from farna.cli.apply.models import strip_secret_shaped_config
+        from farna.core.secret_patterns import SENSITIVE_VALUE_MASK
 
         config = {
             "plain": "visible",

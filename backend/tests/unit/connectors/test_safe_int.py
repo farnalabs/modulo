@@ -1,6 +1,6 @@
 """Unit tests for the shared safe-int coercion helper.
 
-``modulo.connectors._safe_int.safe_int`` guards pagination parsing and cost
+``farna.connectors._safe_int.safe_int`` guards pagination parsing and cost
 aggregation in Jira, Slack, Opsgenie, Snyk, SonarQube and the dashboard route
 against corrupt/non-finite values — Python's json parser produces ``inf`` for
 overflowing literals such as ``1e999``, so a hostile API response must not be
@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import pytest
 
-from modulo.connectors._safe_int import safe_int
+from farna.connectors._safe_int import safe_int
 
 DEFAULT = 7
 

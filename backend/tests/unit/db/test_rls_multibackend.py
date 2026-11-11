@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.rls import (
+from farna.db.rls import (
     _inject_tenant_filter,
     _operation_label,
     set_rls_org,
@@ -213,7 +213,7 @@ class TestInjectTenantFilter:
         assert _operation_label(delete_state) == "delete"
 
     def test_missing_org_context_for_insert_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.DEBUG, logger="modulo.db.rls")
+        caplog.set_level(logging.DEBUG, logger="farna.db.rls")
         state = _make_execute_state(org_id=None, is_select=False)
         state.is_insert = True
 

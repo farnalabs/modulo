@@ -29,8 +29,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core import health_alerts as ha
-from modulo.settings import Settings
+from farna.core import health_alerts as ha
+from farna.settings import Settings
 
 
 def _make_settings(**overrides: Any) -> Settings:
@@ -382,7 +382,7 @@ async def test_unreadable_store_fails_quiet_without_sending() -> None:
 async def test_observe_readiness_reuses_the_route_evaluation() -> None:
     """The default observer calls the SAME ``evaluate_readiness`` the
     /healthz/ready route runs — the checks are never reimplemented."""
-    from modulo.api.routes.health import CheckResult, ReadinessResponse
+    from farna.api.routes.health import CheckResult, ReadinessResponse
 
     response = ReadinessResponse(
         status="degraded",
@@ -390,7 +390,7 @@ async def test_observe_readiness_reuses_the_route_evaluation() -> None:
         uptime_seconds=12.5,
         checks={"db_hygiene": CheckResult(status="degraded", detail="dead-tuple ratio 0.18")},
     )
-    with patch("modulo.api.routes.health.evaluate_readiness", new=AsyncMock(return_value=response)) as evaluate:
+    with patch("farna.api.routes.health.evaluate_readiness", new=AsyncMock(return_value=response)) as evaluate:
         observation = await ha._observe_readiness()
 
     assert evaluate.await_count == 1
@@ -765,7 +765,7 @@ async def test_observe_readiness_carries_check_latency_into_the_observation() ->
     payload's ``CheckResult.latency_ms`` (worst lag measured by the probe)
     must ride into the alert observation's ``SubCheck`` — without it the
     severity gate can never see a magnitude and would never fire."""
-    from modulo.api.routes.health import CheckResult, ReadinessResponse
+    from farna.api.routes.health import CheckResult, ReadinessResponse
 
     lag_detail = "EVENT-LOOP STALL: loop delayed up to 1400ms during this probe"
     response = ReadinessResponse(
@@ -777,7 +777,7 @@ async def test_observe_readiness_carries_check_latency_into_the_observation() ->
             "event_loop_lag": CheckResult(status="degraded", latency_ms=1400.0, detail=lag_detail),
         },
     )
-    with patch("modulo.api.routes.health.evaluate_readiness", new=AsyncMock(return_value=response)):
+    with patch("farna.api.routes.health.evaluate_readiness", new=AsyncMock(return_value=response)):
         observation = await ha._observe_readiness()
 
     assert observation.checks["event_loop_lag"].latency_ms == 1400.0
@@ -1036,7 +1036,7 @@ def test_sampler_thread_logs_and_exits_when_it_raises(caplog: pytest.LogCaptureF
     try:
         with (
             caplog.at_level(logging.ERROR, logger=ha.__name__),
-            patch("modulo.core.health_alerts._attributed_frame", side_effect=RuntimeError("sampler boom")),
+            patch("farna.core.health_alerts._attributed_frame", side_effect=RuntimeError("sampler boom")),
         ):
             sampler.start()
             for _ in range(200):
@@ -1338,7 +1338,7 @@ def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
     reported), and must never overlap the real-failure set — otherwise a
     future rename/reclassify could drift the reporting set with no test red.
     """
-    from modulo.api.routes import health as health_module
+    from farna.api.routes import health as health_module
 
     source = inspect.getsource(health_module.evaluate_readiness)
     checks_block = re.search(r"checks: dict\[str, CheckResult\] = \{(.*?)\n    \}", source, re.DOTALL)
@@ -1907,7 +1907,7 @@ async def test_print_failure_never_skips_send_or_state_commit(
 
     with (
         patch("builtins.print", new=_failing_stamp_print("[health-alert]")),
-        caplog.at_level(logging.WARNING, logger="modulo.core.health_alerts"),
+        caplog.at_level(logging.WARNING, logger="farna.core.health_alerts"),
     ):
         result = await _tick(observer, sender, store, settings, clock)
 
@@ -1923,7 +1923,7 @@ async def test_print_failure_never_skips_send_or_state_commit(
     caplog.clear()
     with (
         patch("builtins.print", new=_failing_stamp_print("[health-alert]")),
-        caplog.at_level(logging.WARNING, logger="modulo.core.health_alerts"),
+        caplog.at_level(logging.WARNING, logger="farna.core.health_alerts"),
     ):
         result = await _tick(observer, sender, store, settings, clock)
 

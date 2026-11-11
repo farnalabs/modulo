@@ -35,8 +35,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_engine.node_runner as nr
-from modulo.core.pipeline_engine.node_runner import (
+import farna.core.pipeline_engine.node_runner as nr
+from farna.core.pipeline_engine.node_runner import (
     _configure_stall_detector,
     _SandboxWatchdog,
     _StallDetector,
@@ -56,7 +56,7 @@ def _detector_with_clock(*, enable_heartbeat: bool, clock: list[float], sandbox_
     test copy. ``sandbox_mode`` is the FAR-1088 F1 discriminator: ``"llm"``
     (streaming, the default) vs ``"script"`` (quiet, connection stays live).
     """
-    with patch("modulo.core.pipeline_engine.node_runner.time.monotonic", new=lambda: clock[0]):
+    with patch("farna.core.pipeline_engine.node_runner.time.monotonic", new=lambda: clock[0]):
         return _configure_stall_detector(
             enable_heartbeat=enable_heartbeat,
             watch_log_path=None,
@@ -266,7 +266,7 @@ async def test_never_output_node_dies_by_total_timeout_not_by_the_silence_window
     mistaken for a stall under a loaded event loop; the total timeout (2s)
     outlasts the window 4x so the deadline path is what actually fires.
     """
-    from modulo.core.runtime_provider import ExecProcess
+    from farna.core.runtime_provider import ExecProcess
 
     process = ExecProcess(chunks=None, kill=None)  # type: ignore[arg-type]
     killed: list[str] = []

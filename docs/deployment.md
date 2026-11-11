@@ -55,7 +55,7 @@ FERNET_KEY=<random-44-char-base64>
 uv run alembic upgrade heads
 
 # Start the API server
-uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn farna.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -422,7 +422,7 @@ app refuses to start without them:
 
 | Variable | Purpose | How to generate |
 |----------|---------|-----------------|
-| `DATABASE_URL` | SQLAlchemy async DB URL for the application database | `sqlite+aiosqlite:///./modulo.db` for the local SQLite file below |
+| `DATABASE_URL` | SQLAlchemy async DB URL for the application database | `sqlite+aiosqlite:///./farna.db` for the local SQLite file below |
 | `SECRET_KEY` | 32+ byte random string used to sign JWTs | `$(openssl rand -base64 48)` |
 | `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")` (URL-safe base64 of exactly 32 bytes) |
 
@@ -445,18 +445,18 @@ selects the SQLite backend so no separate database server is needed.
 git clone https://github.com/farnalabs/farna-control   # or install the farnalabs-modulo package
 cd backend
 uv sync
-DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
-  MODULO_SYSTEM_DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
+DATABASE_URL=sqlite+aiosqlite:///./farna.db \
+  MODULO_SYSTEM_DATABASE_URL=sqlite+aiosqlite:///./farna.db \
   SECRET_KEY=$(openssl rand -base64 48) \
   FERNET_KEY=$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())") \
   MODULO_USERS=admin:changeme \
   MODULO_DB=sqlite \
-  uv run uvicorn modulo.api.main:app --port 8000
+  uv run uvicorn farna.api.main:app --port 8000
 ```
 
 | Component | How it runs |
 |---|---|
-| Database | SQLite file (`./modulo.db`), no server process needed |
+| Database | SQLite file (`./farna.db`), no server process needed |
 | Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
 | Task queue | SAQ Redis queue (runs worker); Redis is required |
 | Rate limiting | Redis sliding window when Redis is reachable; per-process no-op otherwise |
@@ -644,7 +644,7 @@ readiness. Reconcile the role once after upgrading:
 
 ```bash
 docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
-  python -m modulo.db.bootstrap_role
+  python -m farna.db.bootstrap_role
 ```
 
 It is idempotent (it re-applies the roles/grants from the URLs in the

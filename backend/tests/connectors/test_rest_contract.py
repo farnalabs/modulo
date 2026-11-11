@@ -21,8 +21,8 @@ from typing import Any
 import httpx
 import pytest
 
-from modulo.connectors.base import ConnectorPayload, ConnectorQuery
-from modulo.connectors.rest import RestConnector
+from farna.connectors.base import ConnectorPayload, ConnectorQuery
+from farna.connectors.rest import RestConnector
 from tests.connectors._noop_guard import make_noop_security_guard
 
 
@@ -411,10 +411,10 @@ class TestRestAllowedHosts:
 
         Exercises the ``SSRF_ALLOW_PRIVATE_RANGES`` exemption set by the
         ``rest_test_server`` fixture end-to-end — no ``ssrf_validator`` seam, so
-        the real ``modulo.core`` guard runs and the request goes over a real
+        the real ``farna.core`` guard runs and the request goes over a real
         socket.
         """
-        from modulo.core.connector_hub import _core_security_guard
+        from farna.core.connector_hub import _core_security_guard
 
         cap = _RequestCapture(rest_test_server)
         connector = RestConnector(

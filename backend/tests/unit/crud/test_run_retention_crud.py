@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.crud.run_retention (FAR-427).
+"""Unit tests for farna.db.crud.run_retention (FAR-427).
 
 Mock/fake based — no Postgres. Focuses on the safety-critical purge cascade:
 
@@ -31,8 +31,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from modulo.db.crud import run_retention as rr
-from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from farna.db.crud import run_retention as rr
+from farna.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from tests.unit.crud.helpers import (
     compile_sql,
     fake_nested_cm,
@@ -612,7 +612,7 @@ class TestEstimateBytesByStatus:
             return _FakeEstimateRows([])
 
         session.execute = timing_out_execute
-        caplog.set_level("WARNING", logger="modulo.db.crud.run_retention")
+        caplog.set_level("WARNING", logger="farna.db.crud.run_retention")
         result, degraded = await rr._estimate_bytes_by_status(session, org_id=_ORG)
 
         assert result == {}
@@ -680,7 +680,7 @@ class TestCheckpointDetail:
                 [("t-b", 9, 2)],
             ]
         )
-        caplog.set_level("ERROR", logger="modulo.db.crud.run_retention")
+        caplog.set_level("ERROR", logger="farna.db.crud.run_retention")
         bytes_by_thread, count_by_thread = await rr._checkpoint_detail(session, self.THREADS, _ORG)
         assert bytes_by_thread == {"t-a": 50, "t-b": 9}
         assert count_by_thread == {"t-a": 1, "t-b": 2}
@@ -977,7 +977,7 @@ class TestDeleteQuarantineRows:
         the quarantine table) must not raise into the purge batch."""
         session = AsyncMock()
         session.begin_nested = MagicMock(return_value=fake_nested_cm(enter_exc=RuntimeError("permission denied")))
-        caplog.set_level("WARNING", logger="modulo.db.crud.run_retention")
+        caplog.set_level("WARNING", logger="farna.db.crud.run_retention")
         await rr._delete_quarantine_rows(session, [uuid.uuid4()])
         assert any("quarantine_delete_unavailable" in r.message for r in caplog.records)
 

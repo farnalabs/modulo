@@ -46,9 +46,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.exceptions import PipelineNotRunnableError
-from modulo.db.crud.run import create_run
-from modulo.db.rls import set_rls_execution_context, set_rls_org
+from farna.core.exceptions import PipelineNotRunnableError
+from farna.db.crud.run import create_run
+from farna.db.rls import set_rls_execution_context, set_rls_org
 from tests.integration.test_pipeline_state_gate_rls import _seed_org, _seed_user
 
 pytestmark = [pytest.mark.integration]
@@ -63,7 +63,7 @@ def _alembic_config(db_url: str) -> Config:
     config.set_main_option("sqlalchemy.url", db_url)
     config.set_main_option(
         "script_location",
-        str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"),
+        str(BACKEND_ROOT / "src" / "farna" / "db" / "migrations"),
     )
     config.config_file_name = None
     return config
@@ -96,7 +96,7 @@ def _migration_module() -> Any:
     """Load 0286's module (constants only — ``upgrade()`` needs Alembic's
     migration context, which ``command.upgrade`` provides; the module-level
     SQL constants are what the idempotence re-run uses)."""
-    path = BACKEND_ROOT / "src" / "modulo" / "db" / "migrations" / "versions" / "0286_pipeline_run_state.py"
+    path = BACKEND_ROOT / "src" / "farna" / "db" / "migrations" / "versions" / "0286_pipeline_run_state.py"
     spec = importlib.util.spec_from_file_location("migration_0286_pipeline_run_state", path)
     assert spec is not None
     assert spec.loader is not None

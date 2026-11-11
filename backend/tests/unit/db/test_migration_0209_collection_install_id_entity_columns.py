@@ -20,9 +20,9 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from modulo.db.models import Agent, Pipeline, Schema
+from farna.db.models import Agent, Pipeline, Schema
 
-_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
+_VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0209_collection_install_id_entity_columns"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 

@@ -53,14 +53,14 @@ class TestNonGuardrailEvalResultsClause:
     def test_excludes_guardrail_type(self) -> None:
         from sqlalchemy.sql.elements import BooleanClauseList
 
-        from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
+        from farna.db.crud.eval_run import non_guardrail_eval_results_clause
 
         clause = non_guardrail_eval_results_clause()
         # The clause should be a BooleanClauseList (AND of two conditions)
         assert isinstance(clause, BooleanClauseList)
 
     def test_excludes_error_outcome(self) -> None:
-        from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
+        from farna.db.crud.eval_run import non_guardrail_eval_results_clause
 
         sql = _compiled_sql(non_guardrail_eval_results_clause())
 
@@ -79,7 +79,7 @@ class TestGetRunEvals:
         er2 = _make_eval_result(eval_id=_EVAL_ID_NORMAL2, outcome="fail")
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[er1, er2]))
 
-        from modulo.db.crud.eval_run import get_run_evals
+        from farna.db.crud.eval_run import get_run_evals
 
         results = await get_run_evals(mock_session, _RUN_ID)
 
@@ -90,7 +90,7 @@ class TestGetRunEvals:
 
     async def test_returns_empty_list_when_none_found(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
-        from modulo.db.crud.eval_run import get_run_evals
+        from farna.db.crud.eval_run import get_run_evals
 
         results = await get_run_evals(mock_session, _RUN_ID)
 
@@ -99,7 +99,7 @@ class TestGetRunEvals:
 
     async def test_orders_by_evaluated_at_desc(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
-        from modulo.db.crud.eval_run import get_run_evals
+        from farna.db.crud.eval_run import get_run_evals
 
         await get_run_evals(mock_session, _RUN_ID)
 
@@ -112,7 +112,7 @@ class TestGetRunEvals:
 
 class TestGetEvalsForRuns:
     async def test_returns_empty_on_empty_run_ids(self, mock_session: AsyncMock) -> None:
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         results = await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[])
 
@@ -124,7 +124,7 @@ class TestGetEvalsForRuns:
         er2 = _make_eval_result(run_id=_RUN_ID, eval_id=_EVAL_ID_NORMAL2, outcome="fail")
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[er1, er2]))
 
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         results = await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 
@@ -135,7 +135,7 @@ class TestGetEvalsForRuns:
 
     async def test_returns_empty_when_no_results(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         results = await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 
@@ -145,7 +145,7 @@ class TestGetEvalsForRuns:
     async def test_filters_by_organisation_id(self, mock_session: AsyncMock) -> None:
         er = _make_eval_result(run_id=_RUN_ID, eval_id=_EVAL_ID_NORMAL)
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[er]))
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 
@@ -159,7 +159,7 @@ class TestGetEvalsForRuns:
         er1 = _make_eval_result(run_id=_RUN_ID, eval_id=_EVAL_ID_NORMAL)
         er2 = _make_eval_result(run_id=run_id2, eval_id=_EVAL_ID_NORMAL2)
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[er1, er2]))
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         results = await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID, run_id2])
 
@@ -168,7 +168,7 @@ class TestGetEvalsForRuns:
 
     async def test_orders_by_evaluated_at_asc(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_exec_result(scalars_list=[]))
-        from modulo.db.crud.eval_run import get_evals_for_runs
+        from farna.db.crud.eval_run import get_evals_for_runs
 
         await get_evals_for_runs(mock_session, org_id=_ORG_ID, run_ids=[_RUN_ID])
 

@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from psycopg.rows import dict_row
 
-from modulo.core.pipeline_engine import modulo_saver as ms
-from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from farna.core.pipeline_engine import modulo_saver as ms
+from farna.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 
 
 class OperationalError(Exception):

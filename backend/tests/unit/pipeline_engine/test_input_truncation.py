@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.core.pipeline_engine.input_truncation import truncate_input
+from farna.core.pipeline_engine.input_truncation import truncate_input
 
 
 class TestTruncateInput:
@@ -52,7 +52,7 @@ class TestTruncateInput:
 @pytest.mark.asyncio
 async def test_node_runner_truncates_input_in_state() -> None:
     """Verify that make_node_fn truncates run_context.input when max_input_length is set."""
-    from modulo.core.pipeline_engine.node_runner import make_node_fn
+    from farna.core.pipeline_engine.node_runner import make_node_fn
 
     long_input = "A" * 200
     node_def = {"id": "test-node-id"}
@@ -76,7 +76,7 @@ async def test_node_runner_truncates_input_in_state() -> None:
 @pytest.mark.asyncio
 async def test_node_runner_passes_through_without_limit() -> None:
     """Verify that make_node_fn does NOT truncate when max_input_length is None."""
-    from modulo.core.pipeline_engine.node_runner import make_node_fn
+    from farna.core.pipeline_engine.node_runner import make_node_fn
 
     long_input = "B" * 500
     node_def = {"id": "test-node-id"}
