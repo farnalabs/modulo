@@ -362,7 +362,10 @@ class TestRequestOrgDeletion:
         from farna.db.crud.org_deletion import request_org_deletion
 
         org_id = await _create_org(db_engine, "softdel-pipeline")
-        user_id = await _create_user(db_engine, org_id, "softdel@test.com")
+        # Session-scoped, never-truncated integration DB + globally unique
+        # accounts.email: suffix the address so it cannot collide with the same
+        # fixture in test_team_isolation.py.
+        user_id = await _create_user(db_engine, org_id, f"softdel-{org_id.hex[:8]}@test.com")
 
         # Create a pipeline and soft-delete it
         pid = await _create_pipeline(db_engine, org_id, "Soft-Deleted Pipeline", user_id)
