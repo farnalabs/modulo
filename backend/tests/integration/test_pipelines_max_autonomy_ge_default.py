@@ -49,7 +49,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

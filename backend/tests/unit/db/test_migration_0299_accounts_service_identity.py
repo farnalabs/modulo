@@ -31,7 +31,7 @@ from farna.db.models.account import KIND_HUMAN, KIND_SERVICE
 _PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

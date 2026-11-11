@@ -55,7 +55,7 @@ _CHECK_NAME = "ck_organisations_cum_spend"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

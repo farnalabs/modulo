@@ -32,7 +32,7 @@ _MIGRATION_REVISION = "0257_rename_remy_to_assistant"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

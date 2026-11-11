@@ -27,7 +27,7 @@ from tests.unit._source_scan import iter_source_text
 
 _BACKEND_ROOT = Path(__file__).parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src"
-_SRC_MODULO = _SRC_ROOT / "modulo"
+_SRC_FARNA = _SRC_ROOT / "farna"
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -172,7 +172,7 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
     """
     role_sites: set[str] = set()
     lookup_sites: set[str] = set()
-    for path, source in iter_source_text(_SRC_MODULO):
+    for path, source in iter_source_text(_SRC_FARNA):
         rel = path.relative_to(_SRC_ROOT).as_posix()
         if rel == "farna/db/crud/org_membership.py":
             continue
