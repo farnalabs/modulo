@@ -3675,12 +3675,17 @@ async def _await_executor_task(
         # the node-deadline watchdog to stand down (never fail a finished run).
         tasks.run_done_event.set()
         return None, result
-    except asyncio.CancelledError:
+    except asyncio.CancelledError:  # NOSONAR S7497
         # Heartbeat-loss, watchdog stall, or supersession. Await the watchdogs
         # to completion first so their ``fail_run_terminal`` transactions commit
         # before the ``finally`` below cancels them — cancelling a watchdog
         # mid-write would abort its terminal-fail transaction and leave the run
         # ``running`` forever.
+        # S7497: the cancellation is deliberately consumed here for a
+        # classified cause. A genuine worker-shutdown cancellation is
+        # re-raised inside ``_resolve_cancel_outcome``; swallowing the
+        # classified causes is the FAR-598 contract (SAQ must not re-enqueue a
+        # job whose run is already terminal or owned by a successor claim).
         await _resolve_cancel_outcome(
             watchdog_task=tasks.watchdog_task,
             node_deadline_task=tasks.node_deadline_task,
