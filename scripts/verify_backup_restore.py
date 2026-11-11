@@ -245,7 +245,7 @@ def _provision_roles(maintenance: str) -> None:
 
 def _alembic_config() -> Config:
     config = Config(str(BACKEND_DIR / "alembic.ini"))
-    config.set_main_option("script_location", str(BACKEND_DIR / "src" / "modulo" / "db" / "migrations"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "src" / "farna" / "db" / "migrations"))
     # Alembic's fileConfig() would disable loggers for the rest of the process.
     config.config_file_name = None
     return config
