@@ -368,11 +368,12 @@ The map is stored in dedicated System Maps tables (migration
       wrapper's generic mapping (`api/mcp_server.py::discover_system_map`,
       `core/mcp/scope_validator.py`;
       `tests/unit/mcp/test_mcp_system_map_discovery.py`)
-- [ ] No MCP authoring, publish, diff, restore or overview surface beyond
+- [x] No MCP authoring, publish, diff, restore or overview surface beyond
       discovery: `discover_system_map` is the only System Maps MCP tool. An
       agent cannot create or update a map, author a revision, publish / archive
       / diff / restore a revision, read a revision or its history, or read the
-      overview through MCP (`api/mcp_server.py`)
+      overview through MCP (`api/mcp_server.py`;
+      `tests/unit/mcp/test_mcp_system_map_discovery.py::test_no_system_maps_tools_on_mcp_beyond_discovery`)
 - [x] The revision sidebar switches between the current and a historical
       revision through the version-aware read model: "View current" calls
       `GET /revisions/current`, and a `datetime-local` picker calls
@@ -452,6 +453,15 @@ The map is stored in dedicated System Maps tables (migration
   concurrency are not enforced (deferred to Beta 3).
 
 ## QA History
+
+- 2026-11-10: **Improve Architecture product-map walk** - pinned the MCP tool
+  surface restriction with an explicit test (`test_no_system_maps_tools_on_mcp_beyond_discovery`
+  in `test_mcp_system_map_discovery.py`), asserting that `discover_system_map` is
+  the sole System Maps MCP tool and that authoring, publish, diff, restore and overview
+  tools are not exposed on MCP. Expanded BDD coverage in `access_and_discovery.feature`
+  and `test_system_maps.py` with scenarios verifying discovery name collision rejection
+  (409), viewer published map listing and retrieval, and viewer draft map refusal (404).
+  Updated manifest and product map behavior checkboxes.
 
 - 2026-11-08: **Improve Architecture product-map walk** - fixed a data-loss
   defect where `saveDraft` silently dropped all loop configs on every save,
