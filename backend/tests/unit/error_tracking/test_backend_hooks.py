@@ -379,7 +379,7 @@ class TestAsyncEmitEventData:
     ) -> None:
         from farna.core.logging_config import ErrorTrackingLogHandler, org_id_var
 
-        monkeypatch.setenv("MODULO_ENV", "production")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ENV", "production")
         service, _set_rls, _session = async_emit_chain
         token = org_id_var.set(str(_ORG_ID))
         try:
@@ -577,7 +577,7 @@ class TestEnrichment:
     ) -> None:
         from farna.api.middleware.catch_all import _ingest_unhandled_error
 
-        monkeypatch.setenv("MODULO_ENV", "staging")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ENV", "staging")
         service, _set_rls, _session = ingest_chain
         await _ingest_unhandled_error(self._crash_request())
 

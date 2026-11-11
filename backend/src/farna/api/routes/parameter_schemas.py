@@ -68,9 +68,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["parameter-schemas"])
 
 
-async def _assert_owns_parameter_schema(
-    session: AsyncSession, schema_id: uuid.UUID, principal: TenantPrincipal
-) -> "ParameterSchema":
+async def _assert_owns_parameter_schema(session: AsyncSession, schema_id: uuid.UUID, principal: TenantPrincipal) -> "ParameterSchema":
     """Load a parameter schema by id and assert the caller's org owns it.
 
     The application session is RLS-enforced (the app role is not BYPASSRLS), but
@@ -84,9 +82,7 @@ async def _assert_owns_parameter_schema(
     return schema
 
 
-async def _assert_owns_parameter_set(
-    session: AsyncSession, set_id: uuid.UUID, principal: TenantPrincipal
-) -> "ParameterSet":
+async def _assert_owns_parameter_set(session: AsyncSession, set_id: uuid.UUID, principal: TenantPrincipal) -> "ParameterSet":
     """Load a parameter set by id and assert the caller's org owns it.
 
     The application session is RLS-enforced (the app role is not BYPASSRLS), but
@@ -375,9 +371,7 @@ async def list_parameter_schemas_endpoint(
 @router.post(
     "/parameter-schemas",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("parameter_schema_created", "parameter_schema", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("parameter_schema_created", "parameter_schema", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_CREATE)
 async def create_parameter_schema_endpoint(
@@ -473,9 +467,7 @@ async def get_parameter_schema_endpoint(
 
 @router.put(
     "/parameter-schemas/{schema_id}",
-    dependencies=[
-        Depends(audited("parameter_schema_updated", "parameter_schema", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("parameter_schema_updated", "parameter_schema", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_UPDATE)
 async def update_parameter_schema_endpoint(
@@ -538,9 +530,7 @@ async def update_parameter_schema_endpoint(
 
 @router.delete(
     "/parameter-schemas/{schema_id}",
-    dependencies=[
-        Depends(audited("parameter_schema_deleted", "parameter_schema", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("parameter_schema_deleted", "parameter_schema", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_DELETE)
 async def delete_parameter_schema_endpoint(
@@ -588,9 +578,7 @@ async def delete_parameter_schema_endpoint(
 
 @router.post(
     "/parameter-schemas/{schema_id}/restore",
-    dependencies=[
-        Depends(audited("parameter_schema_restored", "parameter_schema", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("parameter_schema_restored", "parameter_schema", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_PARAMETER_SCHEMAS_RESTORE)
 async def restore_parameter_schema_endpoint(

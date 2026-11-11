@@ -172,9 +172,7 @@ def apply_system_maps(
     Returns the system map name -> id map (current + created).
     """
     current_system_maps = current_entities.get(KIND_SYSTEM_MAP) or {}
-    map_ids: dict[str, str] = {
-        name: str(item["id"]) for name, item in current_system_maps.items() if item.get("id") is not None
-    }
+    map_ids: dict[str, str] = {name: str(item["id"]) for name, item in current_system_maps.items() if item.get("id") is not None}
     for status in ("created", "updated"):
         for entry in tuple(report[status]):
             if entry["kind"] != KIND_SYSTEM_MAP:

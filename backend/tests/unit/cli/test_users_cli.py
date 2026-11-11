@@ -204,12 +204,8 @@ class TestUsersAdd:
                 try:
                     maker = async_session_maker(engine)
                     async with maker() as session:
-                        account = (
-                            await session.execute(select(Account).where(Account.email == "ops@example.com"))
-                        ).scalar_one()
-                        membership = (
-                            await session.execute(select(OrgMembership).where(OrgMembership.account_id == account.id))
-                        ).scalar_one()
+                        account = (await session.execute(select(Account).where(Account.email == "ops@example.com"))).scalar_one()
+                        membership = (await session.execute(select(OrgMembership).where(OrgMembership.account_id == account.id))).scalar_one()
                         return membership.role, verify_password(PASSWORD, account.password_hash)
                 finally:
                     await engine.dispose()
@@ -289,9 +285,7 @@ class TestUsersAddAdminEscalationAudit:
     def _event_types(self, spy: Any) -> list[str]:
         return [call.kwargs["event_type"] for call in spy.await_args_list]
 
-    def test_add_admin_records_the_escalation_separately_from_the_seed(
-        self, seeded_db: str, audit_append_spy: Any
-    ) -> None:
+    def test_add_admin_records_the_escalation_separately_from_the_seed(self, seeded_db: str, audit_append_spy: Any) -> None:
         result = _invoke("add", "chief@example.com", "--admin", "--password", PASSWORD)
         assert result.exit_code == 0, result.output
 
@@ -318,9 +312,7 @@ class TestUsersAddAdminEscalationAudit:
         # Only the seeder's record — no privilege was granted by the CLI.
         assert self._event_types(audit_append_spy) == ["user_seeded"]
 
-    def test_add_admin_never_double_records_the_seeder_admin_special_case(
-        self, seeded_db: str, audit_append_spy: Any
-    ) -> None:
+    def test_add_admin_never_double_records_the_seeder_admin_special_case(self, seeded_db: str, audit_append_spy: Any) -> None:
         # The seeder already grants admin for admin@modulo.run, so --admin
         # escalates nothing: one event, the one that already records it.
         result = _invoke("add", "admin@modulo.run", "--admin", "--password", PASSWORD)
@@ -330,9 +322,7 @@ class TestUsersAddAdminEscalationAudit:
         assert audit_append_spy.await_args_list[0].kwargs["payload_json"]["role"] == "admin"
         assert _account_role(seeded_db, "admin@modulo.run") == "admin"
 
-    def test_escalation_audit_failure_never_blocks_the_grant(
-        self, seeded_db: str, audit_append_spy: Any, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_escalation_audit_failure_never_blocks_the_grant(self, seeded_db: str, audit_append_spy: Any, caplog: pytest.LogCaptureFixture) -> None:
         # Fail-open with a loud log (the same contract the seeder's append
         # has): the grant is still made and the command still succeeds.
         audit_append_spy.side_effect = RuntimeError("audit db down")
@@ -540,27 +530,23 @@ class TestUsersResetPassword:
 
 
 class TestModuloUsersGuard:
-    def test_add_refuses_without_force_when_modulo_users_set(
-        self, seeded_db: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_USERS", "admin@example.com:seeded-password")
+    def test_add_refuses_without_force_when_modulo_users_set(self, seeded_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_USERS", "admin@example.com:seeded-password")
         get_settings.cache_clear()
         result = _invoke("add", "admin@example.com", "--password", PASSWORD)
         assert result.exit_code == 1
-        assert "MODULO_USERS" in result.output
+        assert "FARNA_CONTROL_MODULO_USERS" in result.output
         assert "--force" in result.output
 
-    def test_reset_refuses_without_force_when_modulo_users_set(
-        self, seeded_db: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_USERS", "admin@example.com:seeded-password")
+    def test_reset_refuses_without_force_when_modulo_users_set(self, seeded_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_USERS", "admin@example.com:seeded-password")
         get_settings.cache_clear()
         result = _invoke("reset-password", "ghost@example.com", "--password", NEW_PASSWORD)
         assert result.exit_code == 1
-        assert "MODULO_USERS" in result.output
+        assert "FARNA_CONTROL_MODULO_USERS" in result.output
 
     def test_force_proceeds_with_loud_warning(self, seeded_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_USERS", "other@example.com:seeded-password")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_USERS", "other@example.com:seeded-password")
         get_settings.cache_clear()
         result = _invoke("add", "forced@example.com", "--password", PASSWORD, "--force")
         assert result.exit_code == 0, result.output
@@ -576,9 +562,7 @@ class TestLauncherDbPrecedence:
         # so every default-path invocation takes the Settings branch.
         assert (isolated_launcher_root / STATE_FILENAME).exists() is False
 
-    def test_state_json_beats_database_url(
-        self, seeded_db: str, isolated_launcher_root: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_state_json_beats_database_url(self, seeded_db: str, isolated_launcher_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         launcher_url = f"sqlite+aiosqlite:///{isolated_launcher_root / 'launcher.db'}"
         run_db(lambda: _setup_tables_and_org(launcher_url))
         _make_state_json(isolated_launcher_root)
@@ -647,9 +631,7 @@ def _account_role(db_url: str, email: str) -> str:
             maker = async_session_maker(engine)
             async with maker() as session:
                 account = (await session.execute(select(Account).where(Account.email == email))).scalar_one()
-                membership = (
-                    await session.execute(select(OrgMembership).where(OrgMembership.account_id == account.id))
-                ).scalar_one()
+                membership = (await session.execute(select(OrgMembership).where(OrgMembership.account_id == account.id))).scalar_one()
                 return str(membership.role)
         finally:
             await engine.dispose()

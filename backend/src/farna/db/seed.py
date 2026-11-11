@@ -137,11 +137,7 @@ async def seed_bundled_runner_profile(session: AsyncSession, org_id: uuid.UUID, 
     from farna.db.models.environment_profile import EnvironmentProfile
 
     existing = await session.execute(
-        text(
-            "SELECT id FROM environment_profiles "
-            "WHERE organisation_id = :oid AND provider_type = 'runner_docker' "
-            "AND deleted_at IS NULL LIMIT 1"
-        ),
+        text("SELECT id FROM environment_profiles WHERE organisation_id = :oid AND provider_type = 'runner_docker' AND deleted_at IS NULL LIMIT 1"),
         {"oid": str(org_id)},
     )
     if existing.fetchone() is not None:
@@ -287,9 +283,7 @@ async def seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     existing_account = result.scalar_one_or_none()
     pw_hash = pw_part if pw_part.startswith("$2") else hash_password(pw_part)
 
-    if existing_account is not None and (
-        not existing_account.password_hash or not existing_account.password_hash.startswith("$2")
-    ):
+    if existing_account is not None and (not existing_account.password_hash or not existing_account.password_hash.startswith("$2")):
         await rehash_existing_user(session, org, existing_account, email, pw_hash)
         return
 

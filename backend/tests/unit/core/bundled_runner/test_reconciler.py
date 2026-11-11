@@ -55,7 +55,7 @@ def _configured_docker_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     (CI containers, engine-less dev boxes) and fail non-deterministically.
     Skip-path tests delenv this and patch the filesystem probes explicitly.
     """
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://docker-socket-proxy:2375")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", "tcp://docker-socket-proxy:2375")
 
 
 def _container(run_id: str, age_s: float, cid: str = "c-1") -> _LabelledContainer:
@@ -106,9 +106,7 @@ async def _sweep(
     return await reconcile_runner_workspaces(engine or _engine_with_active_runs([]))
 
 
-async def test_log_only_soak_default_never_destroys(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_log_only_soak_default_never_destroys(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO):
         result = await _sweep(monkeypatch, [_container("gone-run", 9999)], destroy=False)
     assert result == {"scanned": 1, "orphans_destroyed": 0}
@@ -160,9 +158,7 @@ async def test_active_run_container_is_spared(monkeypatch: pytest.MonkeyPatch) -
     source.destroy_by_container_id.assert_not_awaited()
 
 
-async def test_active_run_container_past_max_lifetime_is_reclaimed(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_active_run_container_past_max_lifetime_is_reclaimed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The 24h backstop applies regardless of run state (D1 kill path)."""
     run_id = str(uuid.uuid4())
     source = _fake_source([_container(run_id, 90000.0, "expired-1")])
@@ -178,9 +174,7 @@ async def test_active_run_container_past_max_lifetime_is_reclaimed(
     assert "reclaimed_max_lifetime" in caplog.text
 
 
-async def test_destroy_path_recheck_detects_false_positive(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_destroy_path_recheck_detects_false_positive(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Run appeared active between the bulk query and the destroy re-check —
     the sweep spares the container and logs the D4 rollback signal."""
     source = _fake_source([_container("raced-run", 9999, "race-1")])
@@ -219,9 +213,7 @@ class _RunActiveConn:
         return SimpleNamespace(fetchone=lambda: (1,))
 
 
-async def test_cross_reference_failure_aborts_sweep_destroys_nothing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_cross_reference_failure_aborts_sweep_destroys_nothing(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     source = _fake_source([_container("gone-run", 9999, "orphan-9")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
     monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(True))
@@ -245,9 +237,7 @@ async def test_container_list_failure_aborts_before_cross_reference(monkeypatch:
     source.destroy_by_container_id.assert_not_awaited()
 
 
-async def test_log_only_max_lifetime_is_logged_not_destroyed(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_log_only_max_lifetime_is_logged_not_destroyed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     source = _fake_source([_container("gone-run", 90000.0, "old-1")])
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
     monkeypatch.setattr("farna.settings.get_settings", lambda: _settings(False))
@@ -267,7 +257,7 @@ async def test_log_only_max_lifetime_is_logged_not_destroyed(
 async def test_docker_source_filters_on_deployment_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """The container listing rides the modulo.machine.id label so two
     deployments sharing one engine never destroy each other's workspaces."""
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-a")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "deployment-a")
     client = MagicMock()
     client.containers.list = AsyncMock(return_value=[])
     # Shipped compose-internal endpoint (FAR-1038-exempt).  The test mocks the
@@ -314,7 +304,7 @@ def test_docker_source_rejects_remote_endpoint_without_tls(monkeypatch: pytest.M
     connected."""
     monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
     monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-    monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
     with pytest.raises(ValueError, match="requires TLS"):
         runner_reconciler._DockerWorkspaceSource("tcp://engine:2375")
 
@@ -328,9 +318,9 @@ def test_docker_source_accepts_remote_endpoint_with_tls(monkeypatch: pytest.Monk
 
 
 def test_deployment_identity_env_then_hostname(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "machine-x")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "machine-x")
     assert deployment_identity() == "machine-x"
-    monkeypatch.delenv("MODULO_RUNNER_MACHINE_ID")
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID")
     assert deployment_identity()  # hostname fallback — non-empty
 
 
@@ -346,7 +336,7 @@ def _force_no_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     the result does not depend on the test host having (or lacking) a
     Docker socket/context.
     """
-    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
     monkeypatch.setattr(runner_reconciler, "_context_endpoint_configured", lambda: False)
@@ -376,12 +366,12 @@ def test_skip_reason_present_when_no_endpoint_resolvable(monkeypatch: pytest.Mon
 
     assert reason is not None
     assert "no Docker endpoint configured" in reason
-    assert "MODULO_DOCKER_HOST" in reason  # names the remediation knob
+    assert "FARNA_CONTROL_MODULO_DOCKER_HOST" in reason  # names the remediation knob
 
 
 def test_skip_reason_none_when_docker_host_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """DOCKER_HOST (the documented step-3 fallback) also counts as configured."""
-    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
     monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
     _isolate_from_context_and_socket(monkeypatch)
 
@@ -404,15 +394,11 @@ def test_skip_reason_none_when_local_socket_present(monkeypatch: pytest.MonkeyPa
     assert docker_endpoint_skip_reason() is None
 
 
-async def test_sweep_skips_with_explicit_reason_when_no_endpoint(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_sweep_skips_with_explicit_reason_when_no_endpoint(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Engine-less deployment: the sweep returns a skip envelope, never
     constructs an engine client, and logs the reason (never a silent swallow)."""
     _force_no_endpoint(monkeypatch)
-    source_factory = MagicMock(
-        side_effect=AssertionError("_DockerWorkspaceSource must not be constructed when skipping")
-    )
+    source_factory = MagicMock(side_effect=AssertionError("_DockerWorkspaceSource must not be constructed when skipping"))
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", source_factory)
 
     with caplog.at_level(logging.INFO):
@@ -665,18 +651,18 @@ async def test_sweep_wraps_a_destroy_failure_with_partial_counts(
 async def test_kubernetes_skip_reason_names_the_registration_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unregistered provider is an EXPLICIT skip, never a silent one: the
     reason names the env var that would register it."""
-    monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", raising=False)
 
     reason = await runner_reconciler.kubernetes_endpoint_skip_reason()
 
     assert reason is not None
-    assert "MODULO_KUBERNETES_ENABLED" in reason
+    assert "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED" in reason
 
 
 async def test_kubernetes_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     """The applicability check delegates to the registration matrix: with the
     opt-in flag set (and the SDK installed) the sweep's Kubernetes half runs."""
-    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", "1")
 
     assert await runner_reconciler.kubernetes_endpoint_skip_reason() is None
 
@@ -697,9 +683,7 @@ async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch:
     k8s_source.close.assert_awaited_once()
 
 
-async def test_source_close_failure_does_not_skip_the_other_tier(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_source_close_failure_does_not_skip_the_other_tier(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1051 review: a close() failure on the FIRST tier must not skip the
     second tier's close — teardown is per-tier best-effort, logged not silent."""
     docker_source = _fake_source([])
@@ -742,9 +726,7 @@ async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregister
 ) -> None:
     """The unregistered tier is skipped WITH a logged reason while the
     applicable tier keeps sweeping — the skip is per-tier, never all-or-nothing."""
-    k8s_factory = MagicMock(
-        side_effect=AssertionError("_KubernetesWorkspaceSource must not be built when the provider is unregistered")
-    )
+    k8s_factory = MagicMock(side_effect=AssertionError("_KubernetesWorkspaceSource must not be built when the provider is unregistered"))
     monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", k8s_factory)
     monkeypatch.setattr(
         runner_reconciler,
@@ -831,9 +813,7 @@ async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_
     labels, _annotations = KubernetesRuntimeProvider()._build_metadata(spec)
     source = runner_reconciler._KubernetesWorkspaceSource()
     k8s_provider = MagicMock()
-    k8s_provider.list_workspace_pods = AsyncMock(
-        return_value=[WorkspacePodRef(ref="modulo-ws-f3", labels=labels, created_age_s=42.0)]
-    )
+    k8s_provider.list_workspace_pods = AsyncMock(return_value=[WorkspacePodRef(ref="modulo-ws-f3", labels=labels, created_age_s=42.0)])
     source._provider = k8s_provider
 
     listed = await source.list_labelled_workspaces()
@@ -1044,18 +1024,18 @@ async def test_e2b_skip_reason_names_the_registration_env_var(
 ) -> None:
     """An unregistered provider is an EXPLICIT skip, never a silent one: the
     reason names the env var that would register it."""
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
 
     reason = await runner_reconciler.e2b_endpoint_skip_reason()
 
     assert reason is not None
-    assert "MODULO_E2B_API_KEY" in reason
+    assert "FARNA_CONTROL_MODULO_E2B_API_KEY" in reason
 
 
 async def test_e2b_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     """The applicability check delegates to the registration matrix: with the
     key set the sweep's E2B half runs."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
 
     assert await runner_reconciler.e2b_endpoint_skip_reason() is None
 
@@ -1100,9 +1080,7 @@ async def test_sweep_skips_the_e2b_source_when_the_provider_is_unregistered(
     """The unregistered tier is skipped WITH a logged reason while the
     applicable tier keeps sweeping — the skip is per-tier, never
     all-or-nothing."""
-    e2b_factory = MagicMock(
-        side_effect=AssertionError("_E2BWorkspaceSource must not be built when the provider is unregistered")
-    )
+    e2b_factory = MagicMock(side_effect=AssertionError("_E2BWorkspaceSource must not be built when the provider is unregistered"))
     monkeypatch.setattr(runner_reconciler, "_E2BWorkspaceSource", e2b_factory)
     monkeypatch.setattr(
         runner_reconciler,

@@ -234,15 +234,8 @@ def _version_conflict(
         spec = declared.get(existing.get("version"))
         if spec is None:
             continue
-        if (
-            spec["version_number"] != existing.get("version_number")
-            or spec["definition_json"] != existing.get("definition_json")
-            or spec["published"] != existing.get("published")
-        ):
-            return (
-                f"version {existing.get('version')} exists with different content "
-                "- schema versions are immutable via apply"
-            )
+        if spec["version_number"] != existing.get("version_number") or spec["definition_json"] != existing.get("definition_json") or spec["published"] != existing.get("published"):
+            return f"version {existing.get('version')} exists with different content - schema versions are immutable via apply"
     return None
 
 
@@ -275,8 +268,7 @@ def plan_entity(
     if kind == KIND_SYSTEM_MAP and current is not None:
         if "revision" in desired_view:
             _log.warning(
-                "apply.system_map.revision_create_only: system map %r already exists; "
-                "declared revision content is applied on create only and is not reconciled on update",
+                "apply.system_map.revision_create_only: system map %r already exists; declared revision content is applied on create only and is not reconciled on update",
                 name,
             )
         desired_hash_view = _system_map_managed_desired_view(desired_view)
@@ -296,10 +288,7 @@ def plan_entity(
                 kind=kind,
                 name=name,
                 status="blocked",
-                reason=(
-                    "provider mismatch: cannot change provider from "
-                    f"{current_provider!r} to {desired_provider!r} via apply"
-                ),
+                reason=(f"provider mismatch: cannot change provider from {current_provider!r} to {desired_provider!r} via apply"),
                 desired_hash=desired_hash,
                 current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
             )
@@ -354,11 +343,7 @@ def build_plan(
         current_maps = current_entities.get(kind, {})
         for name, desired_view in entities:
             decision = plan_entity(kind, name, desired_view, current_maps.get(name))
-            entry = (
-                {"kind": kind, "name": name}
-                if decision.status != "blocked"
-                else {"kind": kind, "name": name, "reason": decision.reason}
-            )
+            entry = {"kind": kind, "name": name} if decision.status != "blocked" else {"kind": kind, "name": name, "reason": decision.reason}
             report[decision.status].append(entry)
     return report
 

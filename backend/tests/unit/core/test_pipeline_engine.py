@@ -429,7 +429,7 @@ class TestAgentRepairWiring:
         # Repair loop is a strict-only feature: graduated lenient raises on
         # "required" violations without reaching repair.  This test deliberately
         # forces strict mode to exercise the repair path.
-        monkeypatch.setenv("MODULO_SCHEMA_VALIDATOR_MODE", "strict")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_SCHEMA_VALIDATOR_MODE", "strict")
         node_id = str(uuid.uuid4())
         backend_id = uuid.uuid4()
         node_def = {

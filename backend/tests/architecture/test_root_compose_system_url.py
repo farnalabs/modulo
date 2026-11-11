@@ -48,7 +48,7 @@ def _service_environment(service: str) -> dict[str, object]:
 @pytest.mark.parametrize("service", _SERVICES_REQUIRING_SYSTEM_URL)
 def test_service_wires_the_system_database_url(service: str) -> None:
     environment = _service_environment(service)
-    value = environment.get("MODULO_SYSTEM_DATABASE_URL")
+    value = environment.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
     assert value, (
         f"services.{service} in docker-compose.yml does not pass MODULO_SYSTEM_DATABASE_URL: "
         "the system worker's dispatcher_reconcile cron fails closed without it, so /healthz/ready "
@@ -56,14 +56,6 @@ def test_service_wires_the_system_database_url(service: str) -> None:
         "core/cron_helpers.py::_get_system_engine"
     )
     assert isinstance(value, str)
-    assert value.startswith("postgresql+asyncpg://"), (
-        f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
-    )
-    assert "modulo_system:" in value, (
-        f"MODULO_SYSTEM_DATABASE_URL must authenticate as the modulo_system (BYPASSRLS) role, got {value!r} - "
-        "the app role is NOBYPASSRLS and the cron refuses to fall back to it"
-    )
-    assert "${POSTGRES_PASSWORD" in value, (
-        "MODULO_SYSTEM_DATABASE_URL must interpolate the same POSTGRES_PASSWORD the other URLs use so "
-        f"the role password and the URL can never disagree, got {value!r}"
-    )
+    assert value.startswith("postgresql+asyncpg://"), f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
+    assert "modulo_system:" in value, f"MODULO_SYSTEM_DATABASE_URL must authenticate as the modulo_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
+    assert "${POSTGRES_PASSWORD" in value, f"MODULO_SYSTEM_DATABASE_URL must interpolate the same POSTGRES_PASSWORD the other URLs use so the role password and the URL can never disagree, got {value!r}"

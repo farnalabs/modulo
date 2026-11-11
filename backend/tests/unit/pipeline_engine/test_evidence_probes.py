@@ -128,9 +128,7 @@ class TestExtractStoredOutputJson:
     def test_pure_return_used_when_no_envelope(self) -> None:
         # A P1 split row: node_return returns the pure output_json dict.
         outputs = {str(_NODE_A): {"pr_url": "https://github.com/farnalabs/modulo/pull/1"}}
-        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) == {
-            "pr_url": "https://github.com/farnalabs/modulo/pull/1"
-        }
+        assert extract_stored_output_json(outputs, {}, str(_NODE_A)) == {"pr_url": "https://github.com/farnalabs/modulo/pull/1"}
 
     def test_non_dict_return_is_none(self) -> None:
         assert extract_stored_output_json(None, {}, str(_NODE_A)) is None
@@ -534,9 +532,7 @@ class TestRunEvidenceProbe:
         org_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
             await _seed_complete_run(session, run_id, org_id, outputs_json={}, telemetry={})
-            await write_evidence_row(
-                session, run_id=run_id, node_id=str(_NODE_A), evidence_state="verified_empty", evidence_detail=None
-            )
+            await write_evidence_row(session, run_id=run_id, node_id=str(_NODE_A), evidence_state="verified_empty", evidence_detail=None)
         async with sqlite_factory() as session, session.begin():
             row = (await session.execute(select(RunEvidence))).scalars().one()
         assert row.run_id == run_id
@@ -555,9 +551,7 @@ class TestRunEvidenceProbe:
         """
         run_id = uuid.uuid4()
         async with sqlite_factory() as session, session.begin():
-            await write_evidence_row(
-                session, run_id=run_id, node_id=str(_NODE_A), evidence_state="verified_empty", evidence_detail=None
-            )
+            await write_evidence_row(session, run_id=run_id, node_id=str(_NODE_A), evidence_state="verified_empty", evidence_detail=None)
         async with sqlite_factory() as session, session.begin():
             rows = (await session.execute(select(RunEvidence))).scalars().all()
         assert not rows
@@ -650,9 +644,7 @@ def _stub_meter(monkeypatch: pytest.MonkeyPatch, meter: _FakeMeter | None) -> No
 
 
 class TestHeuristicMetrics:
-    def test_errors_total_fires_when_probe_raises(
-        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    def test_errors_total_fires_when_probe_raises(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         _stub_meter(monkeypatch, fake_meter)
         evidence.record_heuristic_error("probe_raised")
         counter = fake_meter.counter("modulo_heuristic_errors_total")
@@ -660,18 +652,14 @@ class TestHeuristicMetrics:
         assert counter.calls
         assert counter.calls[0]["attributes"] == {"reason": "probe_raised"}
 
-    def test_unverifiable_total_fires_when_row_unverifiable(
-        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    def test_unverifiable_total_fires_when_row_unverifiable(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         _stub_meter(monkeypatch, fake_meter)
         evidence.record_heuristic_unverifiable("probe exceeded the bounded window")
         counter = fake_meter.counter("modulo_heuristic_unverifiable_total")
         assert counter is not None
         assert counter.calls[0]["attributes"] == {"reason": "probe exceeded the bounded window"}
 
-    async def test_probe_latency_and_cost_fire_on_success_path(
-        self, sqlite_factory, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    async def test_probe_latency_and_cost_fire_on_success_path(self, sqlite_factory, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         _stub_meter(monkeypatch, fake_meter)
         provider = FakeEvidenceProvider(EvidenceResult.verified_empty, EvidenceResult.verified_empty)
         result = await run_evidence_probe(
@@ -691,9 +679,7 @@ class TestHeuristicMetrics:
         assert gauge.values
         assert gauge.values[0] >= 0
 
-    async def test_probe_latency_bounded_at_3s_and_unverifiable_on_timeout(
-        self, sqlite_factory, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    async def test_probe_latency_bounded_at_3s_and_unverifiable_on_timeout(self, sqlite_factory, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         _stub_meter(monkeypatch, fake_meter)
 
         class _SlowProvider:
@@ -814,7 +800,7 @@ class TestSandboxProviderUnavailablePaths:
             )
 
     def test_reconcile_disabled_returns_empty_summary(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", "0")
         summary = asyncio.run(
             reconcile_noop_evidence(
                 session_factory=lambda: None,  # type: ignore[arg-type]  # never called when disabled
@@ -878,9 +864,7 @@ class TestReconcileNoopEvidence:
                 org_id,
                 outputs_json={
                     str(_NODE_A): {
-                        "artifacts": [
-                            {"output": {"output_json": {}, "agent_status": "completed", "agent_outcome": "success"}}
-                        ],
+                        "artifacts": [{"output": {"output_json": {}, "agent_status": "completed", "agent_outcome": "success"}}],
                         "output": {"agent_status": "completed", "agent_outcome": "success"},
                     }
                 },
@@ -998,7 +982,7 @@ class TestReconcileNoopEvidence:
 
 class TestEvidenceEnabled:
     def test_default_enabled_without_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", raising=False)
         assert evidence_enabled() is True
 
     @pytest.mark.parametrize(
@@ -1006,7 +990,7 @@ class TestEvidenceEnabled:
         ["1", "true", "TRUE", "yes", "on"],
     )
     def test_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", value)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", value)
         assert evidence_enabled() is True
 
     @pytest.mark.parametrize(
@@ -1014,11 +998,11 @@ class TestEvidenceEnabled:
         ["0", "false", "no", "off", "banana"],
     )
     def test_env_falsy_values(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", value)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", value)
         assert evidence_enabled() is False
 
     def test_settings_fallback_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", raising=False)
 
         class _Settings:
             modulo_heuristic_enabled = True
@@ -1027,7 +1011,7 @@ class TestEvidenceEnabled:
         assert evidence_enabled() is True
 
     def test_settings_fallback_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", raising=False)
 
         class _Settings:
             modulo_heuristic_enabled = False
@@ -1036,7 +1020,7 @@ class TestEvidenceEnabled:
         assert evidence_enabled() is False
 
     def test_settings_lookup_failure_defaults_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_HEURISTIC_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", raising=False)
 
         def _boom() -> None:
             raise ImportError("no settings module")
@@ -1045,7 +1029,7 @@ class TestEvidenceEnabled:
         assert evidence_enabled() is True
 
     async def test_run_probe_disabled_is_unverifiable_without_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_HEURISTIC_ENABLED", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEURISTIC_ENABLED", "0")
         result = await run_evidence_probe(
             provider=object(),  # type: ignore[arg-type]  # never touched when disabled
             session_factory=object(),  # type: ignore[arg-type]

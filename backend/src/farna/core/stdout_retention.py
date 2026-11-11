@@ -13,10 +13,7 @@ from typing import Any
 from pydantic import field_validator
 
 _STDOUT_MAX_BYTES_ERROR_MSG = "stdout_max_bytes must be a positive integer"
-_STDOUT_RETENTION_CONFIG_ERROR_MSG = (
-    "stdout_retention_config must be null or a dict with 'mode' in ('tail', 'full') "
-    "and optional 'max_bytes' as a positive integer"
-)
+_STDOUT_RETENTION_CONFIG_ERROR_MSG = "stdout_retention_config must be null or a dict with 'mode' in ('tail', 'full') and optional 'max_bytes' as a positive integer"
 
 
 def validate_stdout_max_bytes(v: Any) -> int | None:

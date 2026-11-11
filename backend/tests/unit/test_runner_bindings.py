@@ -24,7 +24,7 @@ class TestReservedEnvVarConstant:
     @pytest.mark.parametrize(
         "name",
         [
-            pytest.param("MODULO_API_KEY", id="modulo_minted_runner_key"),
+            pytest.param("FARNA_CONTROL_MODULO_API_KEY", id="modulo_minted_runner_key"),
             pytest.param("GITHUB_TOKEN", id="github_pat_node_wins_override"),
             pytest.param("LD_PRELOAD", id="loader_injective"),
             pytest.param("LD_LIBRARY_PATH", id="loader_library_path"),
@@ -49,7 +49,7 @@ class TestReservedEnvVarConstant:
         assert RESERVED_ENV_VAR_PREFIXES == ("MODULO_", "APP_MODULO_", "GIT_")
 
     def test_modulo_prefix_family_denied(self) -> None:
-        assert is_reserved_env_var("MODULO_RUN_ID")
+        assert is_reserved_env_var("FARNA_CONTROL_MODULO_RUN_ID")
         assert is_reserved_env_var("APP_MODULO_OPENCODE_API_KEY")
 
     def test_application_credential_is_allowed(self) -> None:
@@ -80,7 +80,7 @@ class TestTargetEnvVarValidation:
 
     def test_reserved_rejected(self) -> None:
         with pytest.raises(BindingValidationError, match="reserved"):
-            validate_target_env_var("MODULO_API_KEY")
+            validate_target_env_var("FARNA_CONTROL_MODULO_API_KEY")
         with pytest.raises(BindingValidationError, match="reserved"):
             validate_binding_pair(target_env_var="GIT_PROXY_COMMAND", source_field="api_key", provider="openai")
 
@@ -160,11 +160,11 @@ def test_precedence_runner_bindings_between_profile_and_node() -> None:
         env_vars_extra={"CUSTOM": "node"},
         runner_bindings={"CUSTOM": "binding", "OPENCODE_API_KEY": "stanza-key"},
     )
-    assert envs["MODULO_RUN_ID"] == "r1"
+    assert envs["FARNA_CONTROL_MODULO_RUN_ID"] == "r1"
     assert "APP_MODULO_OPENCODE_API_KEY" in envs  # profile/host creds present
     assert envs["CUSTOM"] == "node"  # THE NODE WINS
     assert envs["OPENCODE_API_KEY"] == "stanza-key"
-    assert envs["MODULO_ORG_ID"] == "o1"  # far-296 reserved path untouched
+    assert envs["FARNA_CONTROL_MODULO_ORG_ID"] == "o1"  # far-296 reserved path untouched
 
     # Script mode gets NO host creds but still merges bindings + extras.
     script_envs = _build_sandbox_envs(
@@ -212,8 +212,4 @@ def test_sandbox_exceptions_cross_module_catchable():
     except sandbox_errors.SandboxTierRefusedError:
         pass  # expected — caught
     else:
-        raise AssertionError(
-            "SandboxTierRefusedError raised via node_runner was NOT caught "
-            "by except sandbox_errors.SandboxTierRefusedError — classes are "
-            "still duplicated"
-        )
+        raise AssertionError("SandboxTierRefusedError raised via node_runner was NOT caught by except sandbox_errors.SandboxTierRefusedError — classes are still duplicated")

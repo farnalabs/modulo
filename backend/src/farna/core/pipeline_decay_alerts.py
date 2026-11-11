@@ -275,15 +275,8 @@ def _reason_label(health: PipelineHealth, reason: str) -> str:
     condition, the number, the threshold and the window are all in the text.
     """
     if reason == "success_rate":
-        return (
-            f"success rate {_rate_label(health)} over the last {WINDOW_MINUTES} minutes "
-            f"({health.runs_complete} of {health.runs_total} terminal webhook runs completed, "
-            f"threshold {DEGRADED_SUCCESS_RATE_PERCENT:.0f}% with at least {MIN_SAMPLE_RUNS} runs)"
-        )
-    return (
-        f"{health.watchdog_firings} node-deadline watchdog firing(s) over the last "
-        f"{WINDOW_MINUTES} minutes (threshold {WATCHDOG_FIRINGS_DEGRADED})"
-    )
+        return f"success rate {_rate_label(health)} over the last {WINDOW_MINUTES} minutes ({health.runs_complete} of {health.runs_total} terminal webhook runs completed, threshold {DEGRADED_SUCCESS_RATE_PERCENT:.0f}% with at least {MIN_SAMPLE_RUNS} runs)"
+    return f"{health.watchdog_firings} node-deadline watchdog firing(s) over the last {WINDOW_MINUTES} minutes (threshold {WATCHDOG_FIRINGS_DEGRADED})"
 
 
 def _common_payload(health: PipelineHealth) -> dict[str, Any]:
@@ -332,11 +325,7 @@ def build_recovered_payload(health: PipelineHealth) -> dict[str, Any]:
     """Payload for the ``pipeline_decay_recovered`` closure event."""
     payload = _common_payload(health)
     payload["reason"] = "recovered"
-    payload["reason_label"] = (
-        f"success rate {_rate_label(health)} over the last {WINDOW_MINUTES} minutes "
-        f"({health.runs_complete} of {health.runs_total} terminal webhook runs completed), "
-        f"{health.watchdog_firings} node-deadline watchdog firing(s)"
-    )
+    payload["reason_label"] = f"success rate {_rate_label(health)} over the last {WINDOW_MINUTES} minutes ({health.runs_complete} of {health.runs_total} terminal webhook runs completed), {health.watchdog_firings} node-deadline watchdog firing(s)"
     return payload
 
 

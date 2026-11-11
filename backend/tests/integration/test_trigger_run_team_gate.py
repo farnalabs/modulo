@@ -38,7 +38,7 @@ from farna.api.main import app
 from farna.auth.jwt import create_access_token
 from farna.settings import Settings, get_settings
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -110,17 +110,11 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"User {email}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id), "role": role},
         )
     return account_id
@@ -146,9 +140,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
         return team.id
 
 
-async def _seed_team_membership(
-    db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID
-) -> None:
+async def _seed_team_membership(db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID) -> None:
     """Add a team member via the CRUD layer.
 
     ``team_memberships.role`` is constrained to ``viewer``/``runner``/``operator``
@@ -464,12 +456,8 @@ class TestTriggerRunTeamGateWiring:
     def test_team_gate_dependency_declared(self) -> None:
         from farna.api.routes.runs import trigger_run
 
-        tagged = [
-            getattr(param.default, "permission", None) for param in inspect.signature(trigger_run).parameters.values()
-        ]
-        assert "team.membership_or_admin" in tagged, (
-            "trigger_run is missing the team.membership_or_admin gate dependency"
-        )
+        tagged = [getattr(param.default, "permission", None) for param in inspect.signature(trigger_run).parameters.values()]
+        assert "team.membership_or_admin" in tagged, "trigger_run is missing the team.membership_or_admin gate dependency"
 
 
 # ---------------------------------------------------------------------------
@@ -498,11 +486,7 @@ async def _seed_trigger(
     trigger_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, name, "
-                "trigger_type, cron_expression, cron_timezone, account_id, config_json) "
-                "VALUES (:id, :oid, :pid, :name, :ttype, :cron_expr, :cron_tz, :uid, '{}'::json)"
-            ),
+            text("INSERT INTO triggers (id, organisation_id, pipeline_id, name, trigger_type, cron_expression, cron_timezone, account_id, config_json) VALUES (:id, :oid, :pid, :name, :ttype, :cron_expr, :cron_tz, :uid, '{}'::json)"),
             {
                 "id": str(trigger_id),
                 "oid": str(org_id),
@@ -833,9 +817,7 @@ class TestTriggerReadTeamVisibility:
         trigger_member_user: uuid.UUID,
         team_private_pipeline: uuid.UUID,
     ) -> None:
-        trigger_id = await _seed_trigger(
-            db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}"
-        )
+        trigger_id = await _seed_trigger(db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}")
         token = _token(org, trigger_member_user, "operator")
         resp = await team_gate_client.get(
             f"/api/v1/triggers?pipeline_id={team_private_pipeline}",
@@ -856,9 +838,7 @@ class TestTriggerReadTeamVisibility:
         trigger_member_user: uuid.UUID,
         team_private_pipeline: uuid.UUID,
     ) -> None:
-        trigger_id = await _seed_trigger(
-            db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}"
-        )
+        trigger_id = await _seed_trigger(db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}")
         token = _token(org, trigger_member_user, "operator")
         resp = await team_gate_client.get(
             f"/api/v1/triggers/{trigger_id}/events",
@@ -929,21 +909,13 @@ class TestTriggerTeamGateWiring:
         from farna.api.routes import triggers as triggers_routes
 
         route_fn = getattr(triggers_routes, route_name)
-        tagged = [
-            getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()
-        ]
-        assert "team.membership_or_admin" in tagged, (
-            f"{route_name} is missing the team.membership_or_admin gate dependency"
-        )
+        tagged = [getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()]
+        assert "team.membership_or_admin" in tagged, f"{route_name} is missing the team.membership_or_admin gate dependency"
 
     @pytest.mark.parametrize("route_name", _READ_ROUTES)
     def test_read_routes_not_team_gated(self, route_name: str) -> None:
         from farna.api.routes import triggers as triggers_routes
 
         route_fn = getattr(triggers_routes, route_name)
-        tagged = [
-            getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()
-        ]
-        assert "team.membership_or_admin" not in tagged, (
-            f"{route_name} is a read route and must not carry the mutation gate"
-        )
+        tagged = [getattr(param.default, "permission", None) for param in inspect.signature(route_fn).parameters.values()]
+        assert "team.membership_or_admin" not in tagged, f"{route_name} is a read route and must not carry the mutation gate"

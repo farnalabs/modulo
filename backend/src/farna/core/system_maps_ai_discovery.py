@@ -101,12 +101,7 @@ def build_discovery_prompt(draft: DiscoveryDraft, *, safe_additions: Sequence[Ma
         "safe_additions": list(safe_additions),
     }
     data_block = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    user_prompt = (
-        "UNTRUSTED_DISCOVERY_DATA_BEGIN\n"
-        f"{data_block}\n"
-        "UNTRUSTED_DISCOVERY_DATA_END\n\n"
-        "Return JSON with additional_nodes, additional_edges, confidence, and reasoning."
-    )
+    user_prompt = f"UNTRUSTED_DISCOVERY_DATA_BEGIN\n{data_block}\nUNTRUSTED_DISCOVERY_DATA_END\n\nReturn JSON with additional_nodes, additional_edges, confidence, and reasoning."
     return [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
 
 
@@ -123,9 +118,7 @@ def _response_text(response: Any) -> str:
 
 
 def _safe_addition_keys(safe_additions: Sequence[Mapping[str, Any]]) -> set[str]:
-    return {
-        str(item["node_key"]) for item in safe_additions if isinstance(item.get("node_key"), str) and item["node_key"]
-    }
+    return {str(item["node_key"]) for item in safe_additions if isinstance(item.get("node_key"), str) and item["node_key"]}
 
 
 def _validate_contract(
@@ -162,16 +155,12 @@ def _validate_contract(
         )
         for edge in draft.relationships
     }
-    candidate_edge_keys = [
-        (edge.source_node_key, edge.target_node_key, edge.relationship_type) for edge in enhancement.additional_edges
-    ]
+    candidate_edge_keys = [(edge.source_node_key, edge.target_node_key, edge.relationship_type) for edge in enhancement.additional_edges]
     if len(candidate_edge_keys) != len(set(candidate_edge_keys)):
         return None
     if any(key in existing_edge_keys for key in candidate_edge_keys):
         return None
-    endpoints = {
-        endpoint for edge in enhancement.additional_edges for endpoint in (edge.source_node_key, edge.target_node_key)
-    }
+    endpoints = {endpoint for edge in enhancement.additional_edges for endpoint in (edge.source_node_key, edge.target_node_key)}
     if any(endpoint not in accepted_node_keys for endpoint in endpoints):
         return None
     return enhancement

@@ -75,12 +75,8 @@ _GOLDEN_PIPELINE_ID = "00000000-0000-0000-0000-0000000000bb"
 def _cli_mock(schemas: list[dict]) -> list[respx.Route]:
     """Mock only what a schema-only config fetches."""
     return [
-        respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(
-            json={"items": schemas, "total": len(schemas), "page": 1, "page_size": 100}
-        ),
-        respx.get("https://api.test/api/v1/model-backends", params=_CLI_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        ),
+        respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": 100}),
+        respx.get("https://api.test/api/v1/model-backends", params=_CLI_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100}),
     ]
 
 
@@ -248,9 +244,7 @@ class TestNonPipelineDriftDetail:
     def test_model_backend_drift_reports_modified_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A backend drifting in model_id surfaces exactly that managed field."""
         monkeypatch.setenv("SK", "resolved-secret")
-        schemas = respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        schemas = respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         backends = respx.get("https://api.test/api/v1/model-backends", params=_CLI_BACKENDS_LIST_PARAMS).respond(
             json={
                 "items": [
@@ -287,9 +281,7 @@ class TestNonPipelineDriftDetail:
         """A trigger whose spend limit differs from the config reports that field."""
         monkeypatch.setenv("SK", "resolved-secret")
         _cli_mock([])
-        respx.get("https://api.test/api/v1/pipelines", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [_golden_pipeline_row()], "total": 1, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/pipelines", params=_CLI_LIST_PARAMS).respond(json={"items": [_golden_pipeline_row()], "total": 1, "page": 1, "page_size": 100})
         nightly = _golden_trigger_row(
             "nightly",
             trigger_type="cron",
@@ -297,9 +289,7 @@ class TestNonPipelineDriftDetail:
             daily_spend_limit=1.5,
         )
         hook = _golden_trigger_row("hook", trigger_type="webhook")
-        respx.get("https://api.test/api/v1/triggers", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [nightly, hook], "total": 2, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/triggers", params=_CLI_LIST_PARAMS).respond(json={"items": [nightly, hook], "total": 2, "page": 1, "page_size": 100})
         config = parse_apply_documents(_TRIGGERS_ONLY_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -382,9 +372,7 @@ class TestNonPipelineDriftDetail:
         current = {"trigger": {"sample/nightly": {"config_json": {"cron_expression": "0 9 * * *"}}}}
         report = {"updated": [{"kind": "trigger", "name": "sample/nightly"}]}
         detail = build_drift_detail(current, desired, report)
-        assert detail == {
-            "trigger:sample/nightly": {"fields": {"added": [], "removed": [], "modified": ["config_json"]}}
-        }
+        assert detail == {"trigger:sample/nightly": {"fields": {"added": [], "removed": [], "modified": ["config_json"]}}}
 
 
 class TestDiffNeverWrites:
@@ -392,12 +380,8 @@ class TestDiffNeverWrites:
     def test_drift_mode_makes_no_mutating_requests(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "resolved-secret")
         routes = _mock_current([], [])
-        patch_any = respx.patch(re.compile(r"https://api\.test/api/v1/.*")).mock(
-            return_value=httpx.Response(500, json={"detail": "must not be called"})
-        )
-        put_any = respx.put(re.compile(r"https://api\.test/api/v1/.*")).mock(
-            return_value=httpx.Response(500, json={"detail": "must not be called"})
-        )
+        patch_any = respx.patch(re.compile(r"https://api\.test/api/v1/.*")).mock(return_value=httpx.Response(500, json={"detail": "must not be called"}))
+        put_any = respx.put(re.compile(r"https://api\.test/api/v1/.*")).mock(return_value=httpx.Response(500, json={"detail": "must not be called"}))
         config = parse_apply_documents(CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -506,12 +490,8 @@ def _golden_drift_report(monkeypatch: pytest.MonkeyPatch) -> dict:
     """
     monkeypatch.setenv("SK", "golden-secret")
     with respx.mock:
-        respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [_STABLE_CURRENT], "total": 1, "page": 1, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/schemas", params=_CLI_LIST_PARAMS).respond(json={"items": [_STABLE_CURRENT], "total": 1, "page": 1, "page_size": 100})
+        respx.get("https://api.test/api/v1/model-backends", params=_CLI_LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         _mock_new_kind_lists(empty_state=True)
         config = parse_apply_documents(GOLDEN_CONFIG_TEXT)
         with httpx.Client() as client:
@@ -531,8 +511,8 @@ class TestDriftGoldenSnapshot:
 class TestDiffExitCodes:
     @respx.mock
     def test_drift_exits_1(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         monkeypatch.setenv("SK", "v")
         _mock_current([], [])
         path = tmp_path / "config.yaml"
@@ -545,8 +525,8 @@ class TestDiffExitCodes:
 
     @respx.mock
     def test_no_drift_exits_0(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         _cli_mock([_schema_item("alpha", "Alpha schema")])
         path = tmp_path / "config.yaml"
         path.write_text(_MATCH_SCHEMA_CONFIG_TEXT, encoding="utf-8")
@@ -559,8 +539,8 @@ class TestDiffExitCodes:
 
     @respx.mock
     def test_diff_table_says_drift_summary(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         monkeypatch.setenv("SK", "v")
         _mock_current([], [])
         path = tmp_path / "config.yaml"
@@ -598,9 +578,7 @@ class TestRuntimeStateExcluded:
             trigger_type="webhook",
             extras={"consecutive_dead_letter_count": 2},
         )
-        respx.get("https://api.test/api/v1/triggers", params=_CLI_LIST_PARAMS).respond(
-            json={"items": [nightly, hook], "total": 2, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/triggers", params=_CLI_LIST_PARAMS).respond(json={"items": [nightly, hook], "total": 2, "page": 1, "page_size": 100})
         config = parse_apply_documents(_TRIGGERS_ONLY_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)

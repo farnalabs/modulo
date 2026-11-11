@@ -152,9 +152,7 @@ async def _reset_stale_claims(session: AsyncSession, claim_ids: list[Any], now: 
 async def _reset_runs_to_awaiting_human(session: AsyncSession, expired: list[dict[str, Any]]) -> None:
     """Batch-reset the affected runs back to awaiting_human."""
     run_ids = list({entry["run_id"] for entry in expired})
-    await session.execute(
-        update(Run).where(Run.id.in_(run_ids), Run.status == "claimed").values(status="awaiting_human")
-    )
+    await session.execute(update(Run).where(Run.id.in_(run_ids), Run.status == "claimed").values(status="awaiting_human"))
 
 
 async def _record_expired_claim_audits(
@@ -174,11 +172,7 @@ async def _record_expired_claim_audits(
                     resource_id=entry["claim_id"],
                     payload_json={
                         "actor": SYSTEM_ACTOR,
-                        "summary": (
-                            f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired "
-                            f"(run {short_id(entry['run_id']) or 'unknown'}, "
-                            f"gate {entry['review_id']})"
-                        ),
+                        "summary": (f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired (run {short_id(entry['run_id']) or 'unknown'}, gate {entry['review_id']})"),
                         "pipeline_run_id": str(entry["run_id"]),
                         "node_id": entry["review_id"],
                         "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,

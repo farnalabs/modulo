@@ -54,10 +54,7 @@ _RUNS_COUNTER = sa.Column(
     sa.Integer(),
     nullable=False,
     server_default="0",
-    comment=(
-        "node-deadline watchdog (FAR-369) firings — incremented on every firing, "
-        "re-dispatch and terminal-fail alike (FAR-1463); copied to run_daily_facts at finalize"
-    ),
+    comment=("node-deadline watchdog (FAR-369) firings — incremented on every firing, re-dispatch and terminal-fail alike (FAR-1463); copied to run_daily_facts at finalize"),
 )
 # Nullable on the fact side, like every other enrichment column: NULL marks a
 # fact finalized before this revision, when no firing was ever recorded.
@@ -65,9 +62,7 @@ _FACTS_COUNTER = sa.Column(
     "node_deadline_watchdog_fired_count",
     sa.Integer(),
     nullable=True,
-    comment=(
-        "node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"
-    ),
+    comment=("node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"),
 )
 
 

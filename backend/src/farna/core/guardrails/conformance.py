@@ -423,9 +423,7 @@ async def _register_profile_surface(
     from farna.db.models.environment_profile import EnvironmentProfile
 
     try:
-        profile = (
-            await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == environment_profile_id))
-        ).scalar_one_or_none()
+        profile = (await session.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == environment_profile_id))).scalar_one_or_none()
         if profile is None:
             _log.warning(
                 "guardrail.conformance.profile_missing",
@@ -477,9 +475,7 @@ async def _sandbox_profile_params(
     from farna.db.models.environment_profile import EnvironmentProfile as EpModel
 
     try:
-        _ep_row = (
-            await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))
-        ).scalar_one_or_none()
+        _ep_row = (await session.execute(select(EpModel).where(EpModel.id == environment_profile_id))).scalar_one_or_none()
         if _ep_row is None:
             return None, None
         profile_network_policy: str | None = getattr(_ep_row, "network_policy", None)
@@ -745,9 +741,7 @@ def _log_unsatisfied_type_qualified(gr: Any, derivation: ConformanceDerivation) 
     log it so a rollout surfaces such claims without altering any stored data
     (detection only).
     """
-    unsatisfied_qualified = [
-        name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None
-    ]
+    unsatisfied_qualified = [name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None]
     if unsatisfied_qualified:
         _log.warning(
             "guardrail.conformance.type_qualified_claim_unsatisfied",
@@ -766,10 +760,7 @@ def _record_guardrail_gap(
     """Record a non-present derivation; return True when the gap is advisory."""
     if action == GuardrailAction.BLOCK.value:
         blocking_guardrails.append(gr.name)
-        blocked_detail_parts.append(
-            f"guardrail {gr.name!r} requires capabilities {required} which are no longer present "
-            f"(state={derivation.state})"
-        )
+        blocked_detail_parts.append(f"guardrail {gr.name!r} requires capabilities {required} which are no longer present (state={derivation.state})")
         return False
     # warn / observe / redact-as-non-blocking: advisory only.
     _log.warning(

@@ -124,9 +124,7 @@ def _eval_def_to_dto(row: Eval, org_id: uuid.UUID) -> EvalDefinitionDTO:
     )
 
 
-def _serialise_record(
-    r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None
-) -> dict[str, Any]:
+def _serialise_record(r: Any, pipeline_name: str | None = None, producing_node_name: str | None = None) -> dict[str, Any]:
     return {
         "id": str(r.id),
         "run_id": str(r.run_id) if r.run_id else None,
@@ -163,9 +161,7 @@ async def create_feedback(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            run_result = await session.execute(
-                select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id)
-            )
+            run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == principal.organisation_id))
             run = run_result.scalar_one_or_none()
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -552,10 +548,7 @@ async def _resolve_publish_context(
     if node_id is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "Could not resolve producing_node_id to a pipeline node. "
-                "Supply an explicit node_id so the published eval is scoped to a run-time node."
-            ),
+            detail=("Could not resolve producing_node_id to a pipeline node. Supply an explicit node_id so the published eval is scoped to a run-time node."),
         )
     return run, node_id
 
@@ -587,9 +580,7 @@ async def publish_eval_proposal(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
-            run, node_id = await _resolve_publish_context(
-                mgr, session, record_id, req.node_id, principal.organisation_id
-            )
+            run, node_id = await _resolve_publish_context(mgr, session, record_id, req.node_id, principal.organisation_id)
 
             from farna.core.eval_engine.eval_definition_write import create_or_update_eval
             from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError
@@ -756,9 +747,7 @@ async def update_feedback_status(
     }
 
 
-async def _update_feedback_status_transaction(
-    session: AsyncSession, principal: TenantPrincipal, record_id: uuid.UUID, new_status: str
-) -> tuple[FeedbackRecord, str]:
+async def _update_feedback_status_transaction(session: AsyncSession, principal: TenantPrincipal, record_id: uuid.UUID, new_status: str) -> tuple[FeedbackRecord, str]:
     """Update the feedback status within a transaction, raising 404 if missing."""
     try:
         async with session.begin():
@@ -1096,9 +1085,7 @@ async def review_feedback(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             mgr = FeedbackManager(session, principal.organisation_id)
-            record, old_status, transitioned_to, correction_run_id = await _apply_review_action(
-                mgr, session, principal, record_id, req
-            )
+            record, old_status, transitioned_to, correction_run_id = await _apply_review_action(mgr, session, principal, record_id, req)
 
     except IntegrityError:
         logger.exception(_CODE_FEEDBACK_REVIEW_FEEDBACK)

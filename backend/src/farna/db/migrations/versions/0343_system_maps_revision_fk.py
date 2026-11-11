@@ -34,19 +34,8 @@ def upgrade() -> None:
     if not _is_postgres():
         return
     op.execute(sa.text(f'ALTER TABLE "{_TABLE}" DROP CONSTRAINT IF EXISTS "{_PLAIN_FK}"'))
-    op.execute(
-        sa.text(
-            f'ALTER TABLE "{_TABLE}" ADD CONSTRAINT "{_COMPOSITE_FK}" '
-            "FOREIGN KEY (system_map_id, organisation_id) "
-            "REFERENCES system_maps (id, organisation_id) ON DELETE CASCADE"
-        )
-    )
-    op.execute(
-        sa.text(
-            f'ALTER TABLE "{_RESERVATIONS_TABLE}" ADD CONSTRAINT "{_RESERVATION_RUN_FK}" '
-            "FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE RESTRICT"
-        )
-    )
+    op.execute(sa.text(f'ALTER TABLE "{_TABLE}" ADD CONSTRAINT "{_COMPOSITE_FK}" FOREIGN KEY (system_map_id, organisation_id) REFERENCES system_maps (id, organisation_id) ON DELETE CASCADE'))
+    op.execute(sa.text(f'ALTER TABLE "{_RESERVATIONS_TABLE}" ADD CONSTRAINT "{_RESERVATION_RUN_FK}" FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE RESTRICT'))
     op.execute(
         sa.text(
             """
@@ -69,38 +58,16 @@ def upgrade() -> None:
             """
         )
     )
-    op.execute(
-        sa.text(
-            'DROP TRIGGER IF EXISTS "trg_system_map_loop_reservations_run_id_tenant" '
-            "ON public.system_map_loop_reservations"
-        )
-    )
-    op.execute(
-        sa.text(
-            'CREATE TRIGGER "trg_system_map_loop_reservations_run_id_tenant" '
-            "BEFORE INSERT OR UPDATE OF run_id, organisation_id "
-            "ON public.system_map_loop_reservations FOR EACH ROW "
-            "EXECUTE FUNCTION public.enforce_system_map_reservation_run()"
-        )
-    )
+    op.execute(sa.text('DROP TRIGGER IF EXISTS "trg_system_map_loop_reservations_run_id_tenant" ON public.system_map_loop_reservations'))
+    op.execute(sa.text('CREATE TRIGGER "trg_system_map_loop_reservations_run_id_tenant" BEFORE INSERT OR UPDATE OF run_id, organisation_id ON public.system_map_loop_reservations FOR EACH ROW EXECUTE FUNCTION public.enforce_system_map_reservation_run()'))
 
 
 def downgrade() -> None:
     """Restore the historical unscoped revision parent FK."""
     if not _is_postgres():
         return
-    op.execute(
-        sa.text(
-            'DROP TRIGGER IF EXISTS "trg_system_map_loop_reservations_run_id_tenant" '
-            "ON public.system_map_loop_reservations"
-        )
-    )
+    op.execute(sa.text('DROP TRIGGER IF EXISTS "trg_system_map_loop_reservations_run_id_tenant" ON public.system_map_loop_reservations'))
     op.execute(sa.text("DROP FUNCTION IF EXISTS public.enforce_system_map_reservation_run()"))
     op.execute(sa.text(f'ALTER TABLE "{_RESERVATIONS_TABLE}" DROP CONSTRAINT IF EXISTS "{_RESERVATION_RUN_FK}"'))
     op.execute(sa.text(f'ALTER TABLE "{_TABLE}" DROP CONSTRAINT IF EXISTS "{_COMPOSITE_FK}"'))
-    op.execute(
-        sa.text(
-            f'ALTER TABLE "{_TABLE}" ADD CONSTRAINT "{_PLAIN_FK}" '
-            "FOREIGN KEY (system_map_id) REFERENCES system_maps (id) ON DELETE CASCADE"
-        )
-    )
+    op.execute(sa.text(f'ALTER TABLE "{_TABLE}" ADD CONSTRAINT "{_PLAIN_FK}" FOREIGN KEY (system_map_id) REFERENCES system_maps (id) ON DELETE CASCADE'))

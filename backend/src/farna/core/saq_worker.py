@@ -404,9 +404,7 @@ def _probe_database() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def execute_run(
-    ctx: dict[str, Any], *, run_id: str, org_id: str, claim_token: str | None = None
-) -> dict[str, Any]:
+async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str, claim_token: str | None = None) -> dict[str, Any]:
     """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window).
 
     Zombie protection (2026-08-05): the heartbeat loop starts BEFORE
@@ -586,12 +584,7 @@ async def _load_run_for_execution(
             run_id,
             org_id,
             error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
-            error_detail=(
-                f"load_and_setup (pre-node setup) exceeded setup grace "
-                f"({setup_grace_seconds}s) — likely DB connection "
-                "exhaustion or a wedged worker; was riding to the 35-min "
-                "agent.stall backstop"
-            ),
+            error_detail=(f"load_and_setup (pre-node setup) exceeded setup grace ({setup_grace_seconds}s) — likely DB connection exhaustion or a wedged worker; was riding to the 35-min agent.stall backstop"),
         )
         return None, None, {"status": "setup_failed"}
     except asyncio.CancelledError:
@@ -725,9 +718,7 @@ async def fire_polling_trigger(
     return await _dispatch_created_run(result, org_id=org_id, log_context="fire_polling_trigger")
 
 
-async def fire_report_trigger(
-    _ctx: dict[str, Any], *, report_id: str, org_id: str, epoch: str | None = None
-) -> dict[str, Any]:
+async def fire_report_trigger(_ctx: dict[str, Any], *, report_id: str, org_id: str, epoch: str | None = None) -> dict[str, Any]:
     """Per-item report fire job — generate + deliver (SAQ bounded job).
 
     ``epoch`` is the enqueue tick replayed verbatim by SAQ on a retry, keeping
@@ -1168,9 +1159,7 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
         raise
 
 
-async def _persist_suite_run_execution_failure(
-    factory: Any, suite_run_id: uuid.UUID, org_id: uuid.UUID, exc: Exception
-) -> None:
+async def _persist_suite_run_execution_failure(factory: Any, suite_run_id: uuid.UUID, org_id: uuid.UUID, exc: Exception) -> None:
     """Persist a SuiteRun orchestration failure in its OWN committed transaction.
 
     Called from ``execute_suite_run``'s outer handler AFTER the runner's execution
@@ -1489,11 +1478,7 @@ async def _retention_purge_targets(factory: Any) -> dict[uuid.UUID, int]:
 
     cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_MAX_AGE_DAYS)
     async with factory() as session, session.begin():
-        result = await session.execute(
-            select(Run.organisation_id, func.count(Run.id))
-            .where(Run.status.in_(TERMINAL_STATUSES), Run.created_at < cutoff)
-            .group_by(Run.organisation_id)
-        )
+        result = await session.execute(select(Run.organisation_id, func.count(Run.id)).where(Run.status.in_(TERMINAL_STATUSES), Run.created_at < cutoff).group_by(Run.organisation_id))
         return {row[0]: int(row[1]) for row in result.all() if row[1]}
 
 
@@ -2537,8 +2522,7 @@ async def _shutdown_handoff_hook(_ctx: dict[str, Any]) -> None:
         return
     if result.get("handed_back") or result.get("terminalised"):
         _log.warning(
-            "saq_worker.shutdown_handoff handed_back=%d terminalised=%d skipped=%d "
-            "(in-flight runs released for re-dispatch — or truthfully failed in place — on worker shutdown)",
+            "saq_worker.shutdown_handoff handed_back=%d terminalised=%d skipped=%d (in-flight runs released for re-dispatch — or truthfully failed in place — on worker shutdown)",
             result["handed_back"],
             result.get("terminalised", 0),
             result.get("skipped", 0),
@@ -2615,19 +2599,9 @@ def _get_system_async_engine() -> AsyncEngine:
         else:
             _log.error(
                 "saq_worker.system_engine_misconfigured",
-                extra={
-                    "reason": (
-                        "MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org "
-                        "system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would "
-                        "silently return zero rows. Set the modulo_system role URL."
-                    )
-                },
+                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would silently return zero rows. Set the modulo_system role URL.")},
             )
-            raise RuntimeError(
-                "MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require "
-                "the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to "
-                "modulo_app (NOBYPASSRLS), which would silently return zero rows."
-            )
+            raise RuntimeError("MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to modulo_app (NOBYPASSRLS), which would silently return zero rows.")
     return _SYSTEM_ASYNC_ENGINE
 
 
@@ -3122,13 +3096,9 @@ def _assert_system_auth_configured() -> None:
     """Fail-closed: the system worker refuses to boot without web auth (F1)."""
     settings = get_settings()
     if not settings.saq_auth_password:
-        raise RuntimeError(
-            "Refusing to boot SAQ system worker: SAQ_AUTH_PASSWORD must be set (fail-closed web UI auth)."
-        )
+        raise RuntimeError("Refusing to boot SAQ system worker: SAQ_AUTH_PASSWORD must be set (fail-closed web UI auth).")
     if not settings.saq_auth_username:
-        raise RuntimeError(
-            "Refusing to boot SAQ system worker: SAQ_AUTH_USERNAME must be set (fail-closed web UI auth)."
-        )
+        raise RuntimeError("Refusing to boot SAQ system worker: SAQ_AUTH_USERNAME must be set (fail-closed web UI auth).")
 
 
 def runs_settings() -> dict[str, Any]:

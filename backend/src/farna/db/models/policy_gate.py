@@ -50,9 +50,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
         # enabled ⟹ enabled_at NOT NULL AND disabled_at NULL;
         # NOT enabled ⟹ disabled_at NOT NULL AND enabled_at NULL.
         CheckConstraint(
-            "(enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL) "
-            "OR "
-            "(NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL)",
+            "(enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL) OR (NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL)",
             name="ck_policy_gates_enabled_timestamps",
         ),
         ForeignKeyConstraint(

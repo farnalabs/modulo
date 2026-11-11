@@ -210,9 +210,7 @@ async def get_observability_settings(
 @router.put(
     "",
     dependencies=[
-        Depends(
-            audited("observability_settings_updated", "observability_settings", principal_dep=get_current_tenant_user)
-        ),
+        Depends(audited("observability_settings_updated", "observability_settings", principal_dep=get_current_tenant_user)),
         require_feature("observability"),
     ],
     responses={

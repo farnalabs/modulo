@@ -63,32 +63,11 @@ _DECISIONS_ACTION_ORIGINAL = "resolved_action IN ('continue', 'warn', 'block')"
 # cannot be sent as a single prepared statement through asyncpg). Each pair of
 # DROP/ADD is existence-gated + NOT VALID then VALIDATEd.
 _PG_WIDEN_UP: tuple[str, ...] = (
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' "
-        "AND conrelid='public.policy_gates'::regclass) "
-        "THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_action; END IF; END $$;"
-    ),
-    (
-        "ALTER TABLE public.policy_gates ADD CONSTRAINT ck_policy_gates_action "
-        "CHECK (action IN ('warn', 'block', 'escalate')) NOT VALID;"
-    ),
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' "
-        "AND conrelid='public.policy_gates'::regclass AND NOT convalidated) "
-        "THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_action; END IF; END $$;"
-    ),
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-        "WHERE conname='ck_policy_gate_decisions_resolved_action' "
-        "AND conrelid='public.policy_gate_decisions'::regclass) "
-        "THEN ALTER TABLE public.policy_gate_decisions "
-        "DROP CONSTRAINT ck_policy_gate_decisions_resolved_action; END IF; END $$;"
-    ),
-    (
-        "ALTER TABLE public.policy_gate_decisions "
-        "ADD CONSTRAINT ck_policy_gate_decisions_resolved_action "
-        "CHECK (resolved_action IN ('continue', 'warn', 'block', 'escalate')) NOT VALID;"
-    ),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' AND conrelid='public.policy_gates'::regclass) THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_action; END IF; END $$;"),
+    ("ALTER TABLE public.policy_gates ADD CONSTRAINT ck_policy_gates_action CHECK (action IN ('warn', 'block', 'escalate')) NOT VALID;"),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' AND conrelid='public.policy_gates'::regclass AND NOT convalidated) THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_action; END IF; END $$;"),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gate_decisions_resolved_action' AND conrelid='public.policy_gate_decisions'::regclass) THEN ALTER TABLE public.policy_gate_decisions DROP CONSTRAINT ck_policy_gate_decisions_resolved_action; END IF; END $$;"),
+    ("ALTER TABLE public.policy_gate_decisions ADD CONSTRAINT ck_policy_gate_decisions_resolved_action CHECK (resolved_action IN ('continue', 'warn', 'block', 'escalate')) NOT VALID;"),
     (
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
         "WHERE conname='ck_policy_gate_decisions_resolved_action' "
@@ -99,32 +78,11 @@ _PG_WIDEN_UP: tuple[str, ...] = (
 )
 
 _PG_NARROW_DOWN: tuple[str, ...] = (
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' "
-        "AND conrelid='public.policy_gates'::regclass) "
-        "THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_action; END IF; END $$;"
-    ),
-    (
-        "ALTER TABLE public.policy_gates ADD CONSTRAINT ck_policy_gates_action "
-        "CHECK (action IN ('warn', 'block')) NOT VALID;"
-    ),
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' "
-        "AND conrelid='public.policy_gates'::regclass AND NOT convalidated) "
-        "THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_action; END IF; END $$;"
-    ),
-    (
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-        "WHERE conname='ck_policy_gate_decisions_resolved_action' "
-        "AND conrelid='public.policy_gate_decisions'::regclass) "
-        "THEN ALTER TABLE public.policy_gate_decisions "
-        "DROP CONSTRAINT ck_policy_gate_decisions_resolved_action; END IF; END $$;"
-    ),
-    (
-        "ALTER TABLE public.policy_gate_decisions "
-        "ADD CONSTRAINT ck_policy_gate_decisions_resolved_action "
-        "CHECK (resolved_action IN ('continue', 'warn', 'block')) NOT VALID;"
-    ),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' AND conrelid='public.policy_gates'::regclass) THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_action; END IF; END $$;"),
+    ("ALTER TABLE public.policy_gates ADD CONSTRAINT ck_policy_gates_action CHECK (action IN ('warn', 'block')) NOT VALID;"),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_action' AND conrelid='public.policy_gates'::regclass AND NOT convalidated) THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_action; END IF; END $$;"),
+    ("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gate_decisions_resolved_action' AND conrelid='public.policy_gate_decisions'::regclass) THEN ALTER TABLE public.policy_gate_decisions DROP CONSTRAINT ck_policy_gate_decisions_resolved_action; END IF; END $$;"),
+    ("ALTER TABLE public.policy_gate_decisions ADD CONSTRAINT ck_policy_gate_decisions_resolved_action CHECK (resolved_action IN ('continue', 'warn', 'block')) NOT VALID;"),
     (
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
         "WHERE conname='ck_policy_gate_decisions_resolved_action' "

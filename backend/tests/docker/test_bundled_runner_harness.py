@@ -67,12 +67,12 @@ from farna.core.runtime_provider.docker import DockerRuntimeProvider
 pytestmark = [pytest.mark.docker]
 
 #: env vars the CI job (and local runs) set to point the harness at the rig.
-_HARNESS_PROXY_ENV = "MODULO_RUNNER_HARNESS_PROXY_HOST"
-_HARNESS_DIND_ENV = "MODULO_RUNNER_HARNESS_DIND_HOST"
+_HARNESS_PROXY_ENV = "FARNA_CONTROL_MODULO_RUNNER_HARNESS_PROXY_HOST"
+_HARNESS_DIND_ENV = "FARNA_CONTROL_MODULO_RUNNER_HARNESS_DIND_HOST"
 #: the workspace-network env var the CI job sets to the overlay's compose
 #: network name. EXPLICITLY SET in CI — so a missing network there is a
 #: loud failure, not a skip (plain local engines leave it unset).
-_HARNESS_NETWORK_ENV = "MODULO_RUNNER_HARNESS_NETWORK"
+_HARNESS_NETWORK_ENV = "FARNA_CONTROL_MODULO_RUNNER_HARNESS_NETWORK"
 #: the compose overlay's workspace network name (workspace-network-holder
 #: makes compose materialize it).
 _HARNESS_WORKSPACE_NETWORK = os.environ.get(_HARNESS_NETWORK_ENV, "runner-ci-workspace")
@@ -176,10 +176,7 @@ def _dind_host() -> str | None:
 def _require_rig() -> str:
     host = _proxy_host()
     if not host:
-        pytest.skip(
-            f"runner-ci compose rig not up (set {_HARNESS_PROXY_ENV} to the "
-            "socket-proxy tcp:// endpoint; see deploy/compose/README-runner-ci.md)"
-        )
+        pytest.skip(f"runner-ci compose rig not up (set {_HARNESS_PROXY_ENV} to the socket-proxy tcp:// endpoint; see deploy/compose/README-runner-ci.md)")
     return host
 
 
@@ -250,12 +247,7 @@ async def test_proxy_allow_deny_matrix() -> None:
         pre_refine = _proxy_log_lines()
         for path in refine_paths:
             status = await _http_get(session, host, path)
-            assert status == 403, (
-                f"GET {path} through the proxy must stay denied by the linuxserver "
-                "deny-refinement (ALLOW_* = 0, even with CONTAINERS=1) - a non-403 "
-                "here means the rig's proxy config drifted from production's, and "
-                "widening ALLOW_LOGS in prod would silently pass CI"
-            )
+            assert status == 403, f"GET {path} through the proxy must stay denied by the linuxserver deny-refinement (ALLOW_* = 0, even with CONTAINERS=1) - a non-403 here means the rig's proxy config drifted from production's, and widening ALLOW_LOGS in prod would silently pass CI"
         # The PR-- flag must ACTUALLY appear for these denials (spike
         # criterion 3) - bounded poll for HAProxy's log flush.
         rejections: list[str] = []
@@ -264,10 +256,7 @@ async def test_proxy_allow_deny_matrix() -> None:
             if rejections:
                 break
             await asyncio.sleep(0.5)
-        assert rejections, (
-            "the deny-refinement probes must carry the PR-- proxy-reject flag in "
-            f"the proxy log (only 403-without-PR-- observed) for: {refine_paths}"
-        )
+        assert rejections, f"the deny-refinement probes must carry the PR-- proxy-reject flag in the proxy log (only 403-without-PR-- observed) for: {refine_paths}"
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +354,7 @@ def _require_workspace_network_rig(network: str) -> None:
             "service materialised the network. Only a plain local engine without "
             "the rig (env var unset) may skip this topology-dependent test."
         )
-    pytest.skip(
-        f"compose workspace network '{network}' not found (plain local engine, "
-        f"no runner-ci rig — {_HARNESS_NETWORK_ENV} is unset)"
-    )
+    pytest.skip(f"compose workspace network '{network}' not found (plain local engine, no runner-ci rig — {_HARNESS_NETWORK_ENV} is unset)")
 
 
 async def _control_probe_reachable_op(network: str, proxy_ip: str) -> bool:
@@ -389,9 +375,7 @@ async def _control_probe_reachable_op(network: str, proxy_ip: str) -> bool:
         started: Any = None
         try:
             await container.start()
-            exec_instance = await container.exec(
-                cmd=["sh", "-c", f"wget -q -T 3 -O - http://{proxy_ip}:2375/_ping 2>&1 || echo IP-BLOCKED"]
-            )
+            exec_instance = await container.exec(cmd=["sh", "-c", f"wget -q -T 3 -O - http://{proxy_ip}:2375/_ping 2>&1 || echo IP-BLOCKED"])
             started = exec_instance.start(detach=False)
             if asyncio.iscoroutine(started):
                 started = await started
@@ -488,10 +472,7 @@ async def test_nested_roundtrip_through_proxy_and_completeness() -> None:
     post_lines = _proxy_log_lines()
     exercise_lines = post_lines[len(pre_lines) :]
     rejections = _rejection_lines(exercise_lines)
-    assert not rejections, (
-        "the proxy rejected at least one request during the harness exercise "
-        f"(allowlist derivation incomplete): {rejections[:5]}"
-    )
+    assert not rejections, f"the proxy rejected at least one request during the harness exercise (allowlist derivation incomplete): {rejections[:5]}"
 
 
 def test_workspace_network_guard_fails_loud_when_env_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -531,12 +512,8 @@ async def test_provisioned_workspace_cannot_reach_proxy() -> None:
     try:
         ref = await provider.create_workspace(_spec(network))
         # Name-blocked: the alias does not resolve from the workspace net.
-        name_result = await provider.exec_command(
-            ref, ["sh", "-c", "wget -q -T 3 -O - http://docker-socket-proxy:2375/_ping 2>&1 || echo NAME-BLOCKED"]
-        )
-        assert "NAME-BLOCKED" in name_result.stdout or "bad address" in name_result.stdout, (
-            f"workspace must not resolve the proxy alias; got exit={name_result.exit_code} out={name_result.stdout!r}"
-        )
+        name_result = await provider.exec_command(ref, ["sh", "-c", "wget -q -T 3 -O - http://docker-socket-proxy:2375/_ping 2>&1 || echo NAME-BLOCKED"])
+        assert "NAME-BLOCKED" in name_result.stdout or "bad address" in name_result.stdout, f"workspace must not resolve the proxy alias; got exit={name_result.exit_code} out={name_result.stdout!r}"
         # IP-blocked: even the proxy's harness-network IP is unreachable from
         # the workspace bridge — WHERE THE ENGINE ENFORCES bridge isolation.
         # The premise is engine-dependent (observed 2026-09-10: Docker
@@ -555,9 +532,7 @@ async def test_provisioned_workspace_cannot_reach_proxy() -> None:
                 ref,
                 ["sh", "-c", f"wget -q -T 3 -O - http://{proxy_ip}:2375/_ping 2>&1 || echo IP-BLOCKED"],
             )
-            assert "IP-BLOCKED" in ip_result.stdout or ip_result.exit_code != 0, (
-                f"workspace must not reach the proxy by IP; got exit={ip_result.exit_code} out={ip_result.stdout!r}"
-            )
+            assert "IP-BLOCKED" in ip_result.stdout or ip_result.exit_code != 0, f"workspace must not reach the proxy by IP; got exit={ip_result.exit_code} out={ip_result.stdout!r}"
         else:
             pytest.skip(
                 "engine does not enforce cross-bridge isolation (control experiment reached the proxy from the "
@@ -599,10 +574,7 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
     The nested container's state is discarded with the engine."""
     dind_host = _dind_host()
     if not dind_host:
-        pytest.skip(
-            f"runner-ci dind not up (set {_HARNESS_DIND_ENV} to the dind tcp:// endpoint; "
-            "see deploy/compose/README-runner-ci.md)"
-        )
+        pytest.skip(f"runner-ci dind not up (set {_HARNESS_DIND_ENV} to the dind tcp:// endpoint; see deploy/compose/README-runner-ci.md)")
 
     dind_client = await _dind_ready(dind_host)
     # dind has no compose networks, so create a dedicated NAMED bridge for the
@@ -743,9 +715,7 @@ def _proxy_env_block(text: str, source: str) -> dict[str, str]:
     block_match = re.compile(r"^  docker-socket-proxy:\n(.*?)(?=^  \S|\Z)", re.DOTALL | re.MULTILINE).search(text)
     assert block_match is not None, f"{source} must define a docker-socket-proxy service"
     env = dict(_PROXY_ENV_RE.findall(block_match.group(1)))
-    assert set(env) == _EXPECTED_PROXY_ENV_KEYS, (
-        f"{source}'s proxy env block must be exactly the 13-key production allowlist; got {sorted(env)}"
-    )
+    assert set(env) == _EXPECTED_PROXY_ENV_KEYS, f"{source}'s proxy env block must be exactly the 13-key production allowlist; got {sorted(env)}"
     return env
 
 
@@ -761,14 +731,8 @@ def test_overlay_matches_prod_proxy_config() -> None:
 
     rig_digest = _proxy_digest(rig_text, "deploy/compose/runner-ci.yml")
     prod_digest = _proxy_digest(prod_text, "deploy/compose/runner.yml")
-    assert rig_digest == prod_digest, (
-        "the CI rig's socket-proxy digest must match production's pin "
-        "(digest bumps must move runner-ci.yml + runner.yml together): "
-        f"rig={rig_digest} prod={prod_digest}"
-    )
+    assert rig_digest == prod_digest, f"the CI rig's socket-proxy digest must match production's pin (digest bumps must move runner-ci.yml + runner.yml together): rig={rig_digest} prod={prod_digest}"
 
     rig_env = _proxy_env_block(rig_text, "deploy/compose/runner-ci.yml")
     prod_env = _proxy_env_block(prod_text, "deploy/compose/runner.yml")
-    assert rig_env == prod_env, (
-        f"the rig's proxy allowlist env block must match production key-for-key (rig={rig_env} prod={prod_env})"
-    )
+    assert rig_env == prod_env, f"the rig's proxy allowlist env block must match production key-for-key (rig={rig_env} prod={prod_env})"

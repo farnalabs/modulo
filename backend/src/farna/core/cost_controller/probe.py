@@ -286,9 +286,7 @@ async def _evaluate_trigger(
 
     fired = False
     if sampled_count >= PROBE_MIN_SAMPLE and distinct >= PROBE_MIN_DISTINCT_MISMATCHES:
-        adjacent = (
-            last_cadence_at is not None and (now - last_cadence_at).total_seconds() <= PROBE_ADJACENCY_GAP_SECONDS
-        )
+        adjacent = last_cadence_at is not None and (now - last_cadence_at).total_seconds() <= PROBE_ADJACENCY_GAP_SECONDS
         if adjacent and prior_count >= PROBE_MIN_DISTINCT_MISMATCHES:
             fired = True
 

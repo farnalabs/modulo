@@ -24,14 +24,8 @@ depends_on: str | None = None
 
 
 def _upgrade_postgres() -> None:
-    op.execute(
-        'ALTER TABLE public."pipeline_edges" '
-        "ADD COLUMN IF NOT EXISTS \"source_port\" varchar(64) NOT NULL DEFAULT 'out';"
-    )
-    op.execute(
-        'ALTER TABLE public."pipeline_edges" '
-        "ADD COLUMN IF NOT EXISTS \"target_port\" varchar(64) NOT NULL DEFAULT 'in';"
-    )
+    op.execute('ALTER TABLE public."pipeline_edges" ADD COLUMN IF NOT EXISTS "source_port" varchar(64) NOT NULL DEFAULT \'out\';')
+    op.execute('ALTER TABLE public."pipeline_edges" ADD COLUMN IF NOT EXISTS "target_port" varchar(64) NOT NULL DEFAULT \'in\';')
     # Keep the server default. The ORM model declares server_default="out"/"in",
     # so inserts that omit the columns (clone, template, import, versioning paths)
     # rely on the database to supply the legacy port. NOT NULL is still enforced;

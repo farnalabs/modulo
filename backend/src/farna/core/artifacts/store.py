@@ -403,7 +403,7 @@ def get_store() -> LocalArtifactStore:
 
 def _resolve_artifacts_dir() -> Path:
     """Resolve the artifact storage directory from settings."""
-    env_val = os.environ.get("MODULO_ARTIFACTS_DIR", "")
+    env_val = os.environ.get("FARNA_CONTROL_MODULO_ARTIFACTS_DIR", "")
     if env_val:
         return Path(env_val)
     # Default: <backend>/.data/artifacts

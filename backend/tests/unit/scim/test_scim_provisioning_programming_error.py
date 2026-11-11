@@ -162,7 +162,7 @@ class TestGetBaseUrl:
         ):
             resp = client.get("/scim/v2/Users", headers=AUTH_HEADERS)
         assert resp.status_code == 500
-        assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")
+        assert "FARNA_CONTROL_MODULO_PUBLIC_URL" in resp.json().get("detail", "")
 
     def test_get_user_returns_500(self, client: TestClient) -> None:
         with (
@@ -171,4 +171,4 @@ class TestGetBaseUrl:
         ):
             resp = client.get(f"/scim/v2/Users/{USER_ID}", headers=AUTH_HEADERS)
         assert resp.status_code == 500
-        assert "MODULO_PUBLIC_URL" in resp.json().get("detail", "")
+        assert "FARNA_CONTROL_MODULO_PUBLIC_URL" in resp.json().get("detail", "")

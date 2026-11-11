@@ -61,15 +61,9 @@ _NOW_SERVER_DEFAULT = "now()"
 # Shared DDL fragments (S1192) — byte-identical to the inline literals.
 _RLS_ALTER_PREFIX = 'ALTER TABLE public."'
 
-_OWNER_TRANSFER_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
-    "THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
-)
+_OWNER_TRANSFER_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
 
-_GRANT_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') "
-    "THEN GRANT SELECT, INSERT, UPDATE, DELETE ON public.{table} TO modulo_app; END IF; END $$;"
-)
+_GRANT_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') THEN GRANT SELECT, INSERT, UPDATE, DELETE ON public.{table} TO modulo_app; END IF; END $$;"
 
 # Mandatory catch-all seed (§2.4): viewer redacts both classes for any key
 # before an admin classifies it. Guarded by NOT EXISTS so a re-run is a no-op.
@@ -96,9 +90,7 @@ def _enable_rls() -> None:
         op.execute(text(_RLS_ALTER_PREFIX + table + '" FORCE ROW LEVEL SECURITY'))
         # Step 4: org-isolation policy.
         op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + table + '"'))
-        op.execute(
-            text('CREATE POLICY rls_org_isolation ON public."' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")")
-        )
+        op.execute(text('CREATE POLICY rls_org_isolation ON public."' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")"))
 
 
 def _is_postgres() -> bool:

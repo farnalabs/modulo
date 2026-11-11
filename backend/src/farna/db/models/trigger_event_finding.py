@@ -51,9 +51,7 @@ class TriggerEventFinding(OrgScoped):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     trigger_event_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     eval_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     passed: Mapped[bool] = mapped_column(nullable=False)
@@ -63,12 +61,8 @@ class TriggerEventFinding(OrgScoped):
     resolution: Mapped[str] = mapped_column(Text(), nullable=False, server_default="pending")
     resolution_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
-    )
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

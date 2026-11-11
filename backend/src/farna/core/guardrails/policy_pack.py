@@ -65,9 +65,7 @@ PackRolloutMode = Literal["observe", "warn", "block"]
 # Rollout modes valid for warn-mode-first rollout + block promotion. ``redact``
 # is not a rollout mode — a pack control that needs redaction declares it on
 # its own guardrail; a rollout never silences a redact into another action.
-_ROLLOUT_MODES: frozenset[GuardrailAction] = frozenset(
-    {GuardrailAction.OBSERVE, GuardrailAction.WARN, GuardrailAction.BLOCK}
-)
+_ROLLOUT_MODES: frozenset[GuardrailAction] = frozenset({GuardrailAction.OBSERVE, GuardrailAction.WARN, GuardrailAction.BLOCK})
 
 
 class PolicyControl(BaseModel):
@@ -140,12 +138,8 @@ class PackValidationReport:
     @property
     def errors(self) -> list[str]:
         """Flat, human-readable list of every gap (unmapped + uninstantiable)."""
-        errors = [
-            f"control {control_id!r} is unmapped (no concrete guardrail)" for control_id in self.unmapped_controls
-        ]
-        errors.extend(
-            f"control {control_id!r} is uninstantiable: {error}" for control_id, error in self.uninstantiable_controls
-        )
+        errors = [f"control {control_id!r} is unmapped (no concrete guardrail)" for control_id in self.unmapped_controls]
+        errors.extend(f"control {control_id!r} is uninstantiable: {error}" for control_id, error in self.uninstantiable_controls)
         return errors
 
     @property
@@ -162,9 +156,7 @@ class PackValidationReport:
             "uninstantiable": self.uninstantiable,
             "total": self.total,
             "unmapped_controls": list(self.unmapped_controls),
-            "uninstantiable_controls": [
-                {"control_id": control_id, "error": error} for control_id, error in self.uninstantiable_controls
-            ],
+            "uninstantiable_controls": [{"control_id": control_id, "error": error} for control_id, error in self.uninstantiable_controls],
             "errors": self.errors,
             "ci_ready": self.ci_ready,
         }
@@ -236,12 +228,8 @@ def instantiate_pack(pack: PolicyPack) -> GuardrailConfigSet:
     report = validate_pack(pack)
     if report.uninstantiable:
         first_id, first_error = report.uninstantiable_controls[0]
-        raise GuardrailConfigError(
-            f"Policy pack {pack.id!r} cannot be instantiated: control {first_id!r} is uninstantiable: {first_error}"
-        )
-    return GuardrailConfigSet(
-        guardrails=[control.guardrail for control in pack.controls if control.mapped and control.guardrail is not None]
-    )
+        raise GuardrailConfigError(f"Policy pack {pack.id!r} cannot be instantiated: control {first_id!r} is uninstantiable: {first_error}")
+    return GuardrailConfigSet(guardrails=[control.guardrail for control in pack.controls if control.mapped and control.guardrail is not None])
 
 
 def assert_pack_ci_ready(pack: PolicyPack) -> None:
@@ -254,10 +242,7 @@ def assert_pack_ci_ready(pack: PolicyPack) -> None:
     report = validate_pack(pack)
     if report.unmapped or report.uninstantiable:
         details = "\n".join(report.errors)
-        raise GuardrailConfigError(
-            f"Policy pack {pack.id!r} is not CI-ready: {report.unmapped} unmapped control(s) and "
-            f"{report.uninstantiable} uninstantiable control(s):\n{details}"
-        )
+        raise GuardrailConfigError(f"Policy pack {pack.id!r} is not CI-ready: {report.unmapped} unmapped control(s) and {report.uninstantiable} uninstantiable control(s):\n{details}")
 
 
 def pack_rollout_config(
@@ -280,20 +265,13 @@ def pack_rollout_config(
         try:
             action = GuardrailAction(str(mode))
         except ValueError:
-            raise GuardrailConfigError(
-                f"Invalid rollout mode {mode!r}; valid modes are observe, warn, block."
-            ) from None
+            raise GuardrailConfigError(f"Invalid rollout mode {mode!r}; valid modes are observe, warn, block.") from None
     if action not in _ROLLOUT_MODES:
-        raise GuardrailConfigError(
-            f"Invalid rollout mode {mode!r}; observe, warn, and block only (redact is not a rollout mode)."
-        )
+        raise GuardrailConfigError(f"Invalid rollout mode {mode!r}; observe, warn, and block only (redact is not a rollout mode).")
     config_set = instantiate_pack(pack)
     # A rollout never silences a redact into another action (module invariant
     # _ROLLOUT_MODES): a guardrail that declares REDACT on its own keeps it.
-    rolled_guardrails = [
-        item if item.action == GuardrailAction.REDACT else item.model_copy(update={"action": action})
-        for item in config_set.guardrails
-    ]
+    rolled_guardrails = [item if item.action == GuardrailAction.REDACT else item.model_copy(update={"action": action}) for item in config_set.guardrails]
     return config_set.model_copy(update={"guardrails": rolled_guardrails})
 
 

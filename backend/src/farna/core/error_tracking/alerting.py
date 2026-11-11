@@ -185,14 +185,8 @@ class AlertEngine:
             return None
 
         cross_key = _CooldownKey(org_id=context.org_id, rule_id=rule.id, fingerprint=context.fingerprint)
-        run_key = (
-            _CooldownKey(org_id=context.org_id, rule_id=rule.id, fingerprint=context.fingerprint, run_id=context.run_id)
-            if context.run_id is not None
-            else None
-        )
-        if await self._is_suppressed(
-            rule=rule, now=context.now, cross_key=cross_key, run_key=run_key, run_id=context.run_id
-        ):
+        run_key = _CooldownKey(org_id=context.org_id, rule_id=rule.id, fingerprint=context.fingerprint, run_id=context.run_id) if context.run_id is not None else None
+        if await self._is_suppressed(rule=rule, now=context.now, cross_key=cross_key, run_key=run_key, run_id=context.run_id):
             return None
 
         await self._persist_firing(rule=rule, cross_key=cross_key, run_key=run_key, now=context.now)

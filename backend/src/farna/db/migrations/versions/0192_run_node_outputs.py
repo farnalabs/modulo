@@ -213,11 +213,7 @@ _MARKER_KEY_PREFIX_LEN = 46
 # null (the ORM writes Python None as jsonb null) and SQL NULL both mean the
 # side is absent; '{}' markers means "no markers" and is NOT meaningful on its
 # own (outputs/telemetry '{}' IS meaningful — it produces the metadata row).
-_ANY_BLOB_OBJECT_SQL = (
-    "(jsonb_typeof(r.outputs_json) = 'object' "
-    "OR jsonb_typeof(r.node_telemetry_json) = 'object' "
-    "OR (jsonb_typeof(r.raw_output_markers) = 'object' AND r.raw_output_markers <> '{}'::jsonb))"
-)
+_ANY_BLOB_OBJECT_SQL = "(jsonb_typeof(r.outputs_json) = 'object' OR jsonb_typeof(r.node_telemetry_json) = 'object' OR (jsonb_typeof(r.raw_output_markers) = 'object' AND r.raw_output_markers <> '{}'::jsonb))"
 _WINDOW_PREDICATE_SQL = "COALESCE(r.completed_at, r.updated_at) >= now() - make_interval(days => :window_days)"
 _NOT_QUARANTINED_SQL = f"NOT EXISTS (SELECT 1 FROM {_QUARANTINE_TABLE} q WHERE q.run_id = r.id)"  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
 
@@ -236,21 +232,13 @@ _MARKER_LAST_COLON_SQL = f"position(':' IN reverse({_MARKER_REMAINDER_SQL}))"
 # remainder's LAST colon leaves a non-empty suffix (colon not the last char
 # => position-from-end >= 2) AND a non-empty node id (colon not at position
 # len => position-from-end <= length - 1).
-_MARKER_NODE_ID_SQL = (
-    f"CASE WHEN mk.key ~ :marker_re "
-    f"AND {_MARKER_LAST_COLON_SQL} BETWEEN 2 AND length({_MARKER_REMAINDER_SQL}) - 1 "
-    f"THEN substr({_MARKER_REMAINDER_SQL}, 1, length({_MARKER_REMAINDER_SQL}) - {_MARKER_LAST_COLON_SQL}) "
-    f"ELSE '{_UNKNOWN_NODE_ID}' END"
-)
+_MARKER_NODE_ID_SQL = f"CASE WHEN mk.key ~ :marker_re AND {_MARKER_LAST_COLON_SQL} BETWEEN 2 AND length({_MARKER_REMAINDER_SQL}) - 1 THEN substr({_MARKER_REMAINDER_SQL}, 1, length({_MARKER_REMAINDER_SQL}) - {_MARKER_LAST_COLON_SQL}) ELSE '{_UNKNOWN_NODE_ID}' END"
 
 # The quarantine predicate: any '__'-prefixed node id in the outputs/telemetry
 # dicts, or any marker key that is itself '__'-prefixed OR parses to a
 # '__'-prefixed node id. Data anomaly -> copy the run's blobs aside + skip;
 # never abort.
-_QUARANTINE_MARKER_KEYS_SQL = (
-    "jsonb_each(CASE WHEN jsonb_typeof(r.raw_output_markers) = 'object' THEN r.raw_output_markers END) "
-    "AS mk(key, value)"
-)
+_QUARANTINE_MARKER_KEYS_SQL = "jsonb_each(CASE WHEN jsonb_typeof(r.raw_output_markers) = 'object' THEN r.raw_output_markers END) AS mk(key, value)"
 _QUARANTINE_CONDITION_SQL = (
     f"(EXISTS (SELECT 1 FROM jsonb_object_keys("  # noqa: S608  # nosec B608 - interpolates module constants only, never caller data
     f"CASE WHEN jsonb_typeof(r.outputs_json) = 'object' THEN r.outputs_json END) k "
@@ -270,25 +258,10 @@ _UNKNOWN_FILTER_SQL = "r.status = 'unknown' AND " + _WINDOW_PREDICATE_SQL
 _TERMINAL_WINDOW_SQL = "r.id > :last_id AND r.id <= :upper_id AND " + _TERMINAL_FILTER_SQL
 _UNKNOWN_WINDOW_SQL = "r.id > :last_id AND r.id <= :upper_id AND " + _UNKNOWN_FILTER_SQL
 
-_QUARANTINE_INSERT_COLUMNS_SQL = (
-    "(run_id, organisation_id, legacy_outputs_json, legacy_node_telemetry_json, "
-    "legacy_raw_output_markers, quarantined_at)"
-)
-_QUARANTINE_SELECT_SQL = (
-    "SELECT r.id, r.organisation_id, r.outputs_json, r.node_telemetry_json, r.raw_output_markers, now() FROM runs r "
-)
-_QUARANTINE_TERMINAL_SQL = (
-    f"INSERT INTO {_QUARANTINE_TABLE} {_QUARANTINE_INSERT_COLUMNS_SQL} "
-    f"{_QUARANTINE_SELECT_SQL}"
-    f"WHERE {_TERMINAL_WINDOW_SQL} AND {_QUARANTINE_CONDITION_SQL} "
-    f"ON CONFLICT (run_id) DO NOTHING RETURNING run_id"
-)
-_QUARANTINE_UNKNOWN_SQL = (
-    f"INSERT INTO {_QUARANTINE_TABLE} {_QUARANTINE_INSERT_COLUMNS_SQL} "
-    f"{_QUARANTINE_SELECT_SQL}"
-    f"WHERE {_UNKNOWN_WINDOW_SQL} AND {_QUARANTINE_CONDITION_SQL} "
-    f"ON CONFLICT (run_id) DO NOTHING RETURNING run_id"
-)
+_QUARANTINE_INSERT_COLUMNS_SQL = "(run_id, organisation_id, legacy_outputs_json, legacy_node_telemetry_json, legacy_raw_output_markers, quarantined_at)"
+_QUARANTINE_SELECT_SQL = "SELECT r.id, r.organisation_id, r.outputs_json, r.node_telemetry_json, r.raw_output_markers, now() FROM runs r "
+_QUARANTINE_TERMINAL_SQL = f"INSERT INTO {_QUARANTINE_TABLE} {_QUARANTINE_INSERT_COLUMNS_SQL} {_QUARANTINE_SELECT_SQL}WHERE {_TERMINAL_WINDOW_SQL} AND {_QUARANTINE_CONDITION_SQL} ON CONFLICT (run_id) DO NOTHING RETURNING run_id"
+_QUARANTINE_UNKNOWN_SQL = f"INSERT INTO {_QUARANTINE_TABLE} {_QUARANTINE_INSERT_COLUMNS_SQL} {_QUARANTINE_SELECT_SQL}WHERE {_UNKNOWN_WINDOW_SQL} AND {_QUARANTINE_CONDITION_SQL} ON CONFLICT (run_id) DO NOTHING RETURNING run_id"
 
 # Explode the UNION of both dicts' keys into '__final__' rows. Values stored
 # AS-IS: ``r.outputs_json -> k`` yields the jsonb value (including the
@@ -450,11 +423,7 @@ def _create_tables(*, postgres_types: bool) -> None:
     blob_type = sa.JSON().with_variant(JSONB(), "postgresql") if postgres_types else sa.JSON()
     if postgres_types:
         meta_shape_check = sa.CheckConstraint(
-            f"node_id <> '{_META_NODE_ID}' OR ("
-            "jsonb_typeof(outputs_json) = 'object' "
-            "AND outputs_json - 'empty_outputs' - 'empty_telemetry' = '{}'::jsonb "
-            "AND jsonb_typeof(outputs_json->'empty_outputs') = 'boolean' "
-            "AND jsonb_typeof(outputs_json->'empty_telemetry') = 'boolean')",
+            f"node_id <> '{_META_NODE_ID}' OR (jsonb_typeof(outputs_json) = 'object' AND outputs_json - 'empty_outputs' - 'empty_telemetry' = '{{}}'::jsonb AND jsonb_typeof(outputs_json->'empty_outputs') = 'boolean' AND jsonb_typeof(outputs_json->'empty_telemetry') = 'boolean')",
             name="ck_run_node_outputs_meta_shape",
         )
     else:
@@ -529,9 +498,7 @@ def _preflight(bind: sa.Connection) -> None:
     window_count = _count(bind, _WINDOW_COUNT_SQL, {"window_days": _WINDOW_DAYS})
     anomaly_count = _count(bind, _ANOMALY_COUNT_SQL)
     _log.info(
-        "FAR-583 preflight: runs with a meaningful blob: %(any_blob)d; duplicating ~%(size)d blob bytes "
-        "(runs table total %(table_bytes)d); terminal runs in the %(days)d-day window: %(window)d; "
-        "non-object blob anomalies (skipped, never abort): %(anomalies)d",
+        "FAR-583 preflight: runs with a meaningful blob: %(any_blob)d; duplicating ~%(size)d blob bytes (runs table total %(table_bytes)d); terminal runs in the %(days)d-day window: %(window)d; non-object blob anomalies (skipped, never abort): %(anomalies)d",
         {
             "any_blob": any_blob_count,
             "size": size_bytes,
@@ -627,11 +594,7 @@ def _verify_window_coverage(bind: sa.Connection, migration_started_at: object) -
     terminal_missing = _count(bind, _TERMINAL_COVERAGE_SQL, params)
     unknown_missing = _count(bind, _UNKNOWN_COVERAGE_SQL, params)
     if terminal_missing > 0 or unknown_missing > 0:
-        raise RuntimeError(
-            "FAR-583 backfill coverage violation: "
-            f"{terminal_missing} terminal-window run(s) and {unknown_missing} unknown-status "
-            "run(s) with a meaningful blob have no run_node_outputs rows (infrastructure failure)"
-        )
+        raise RuntimeError(f"FAR-583 backfill coverage violation: {terminal_missing} terminal-window run(s) and {unknown_missing} unknown-status run(s) with a meaningful blob have no run_node_outputs rows (infrastructure failure)")
 
 
 def _backfill_window(bind: sa.Connection, *, terminal: bool) -> None:
@@ -673,9 +636,7 @@ def _completion_summary(bind: sa.Connection, quarantined_total: int) -> None:
     rows_total = _count(bind, _ROWS_TOTAL_SQL)
     unknown_keys = _count(bind, _UNKNOWN_KEY_COUNT_SQL)
     _log.info(
-        "FAR-583 completion: %(rows)d run_node_outputs rows; %(quarantined)d run(s) quarantined "
-        "(remediate via ops SQL against %(quarantine_table)s); %(unknown)d '__unknown__' marker key(s) "
-        "(evidence preserved under their full original attempt keys)",
+        "FAR-583 completion: %(rows)d run_node_outputs rows; %(quarantined)d run(s) quarantined (remediate via ops SQL against %(quarantine_table)s); %(unknown)d '__unknown__' marker key(s) (evidence preserved under their full original attempt keys)",
         {
             "rows": rows_total,
             "quarantined": quarantined_total,

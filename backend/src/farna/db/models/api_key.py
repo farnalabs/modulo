@@ -58,13 +58,9 @@ class OrgApiKey(OrgScoped):
     # keys, same shape as oauth_clients.scopes). TRI-STATE: NULL = legacy
     # role-bundle behaviour; "" = explicit deny-all; otherwise the exact set.
     # IMMUTABLE post-mint. NULL and "" must never be collapsed.
-    grants: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="Space-separated permission grants; NULL=legacy role bundle, ''=deny-all"
-    )
+    grants: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Space-separated permission grants; NULL=legacy role bundle, ''=deny-all")
     team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="CASCADE"), index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
     run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="SET NULL"))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

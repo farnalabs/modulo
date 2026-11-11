@@ -57,36 +57,15 @@ _OUTCOME_CHECK = "ck_eval_results_outcome"
 _CONFIDENCE_CHECK = "ck_eval_results_judge_confidence_kind"
 _EVAL_TYPE_CHECK = "ck_evals_type"
 
-_BACKFILL_OUTCOME = (
-    "WITH batch AS ("
-    "SELECT id FROM eval_results WHERE id > :last AND outcome IS NULL "
-    "ORDER BY id LIMIT :batch_size"
-    ") UPDATE eval_results AS e "
-    "SET outcome = CASE WHEN e.passed THEN 'pass' ELSE 'fail' END "
-    "FROM batch WHERE e.id = batch.id RETURNING e.id"
-)
+_BACKFILL_OUTCOME = "WITH batch AS (SELECT id FROM eval_results WHERE id > :last AND outcome IS NULL ORDER BY id LIMIT :batch_size) UPDATE eval_results AS e SET outcome = CASE WHEN e.passed THEN 'pass' ELSE 'fail' END FROM batch WHERE e.id = batch.id RETURNING e.id"
 
 _ADD_NOT_NULL_CHECK = (
-    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome_not_null' "
-    "AND conrelid='public.eval_results'::regclass) THEN "
-    "ALTER TABLE public.eval_results ADD CONSTRAINT ck_eval_results_outcome_not_null "
-    "CHECK (outcome IS NOT NULL) NOT VALID; END IF; END $$;"
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome_not_null' AND conrelid='public.eval_results'::regclass) THEN ALTER TABLE public.eval_results ADD CONSTRAINT ck_eval_results_outcome_not_null CHECK (outcome IS NOT NULL) NOT VALID; END IF; END $$;"
 )
 _VALIDATE_NOT_NULL_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome_not_null' "
-    "AND conrelid='public.eval_results'::regclass AND NOT convalidated) THEN "
-    "ALTER TABLE public.eval_results VALIDATE CONSTRAINT ck_eval_results_outcome_not_null; "
-    "END IF; END $$;"
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome_not_null' AND conrelid='public.eval_results'::regclass AND NOT convalidated) THEN ALTER TABLE public.eval_results VALIDATE CONSTRAINT ck_eval_results_outcome_not_null; END IF; END $$;"
 )
-_DROP_NOT_NULL_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome_not_null' "
-    "AND conrelid='public.eval_results'::regclass) THEN "
-    "ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_outcome_not_null; "
-    "END IF; END $$;"
-)
+_DROP_NOT_NULL_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome_not_null' AND conrelid='public.eval_results'::regclass) THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_outcome_not_null; END IF; END $$;"
 _NARROW_EVAL_TYPE_CHECK = (
     "ALTER TABLE public.evals ADD CONSTRAINT ck_evals_type CHECK ("
     "(eval_type)::text = ANY (ARRAY['model_judge'::character varying, "
@@ -117,17 +96,7 @@ def _set_migration_lock_timeout() -> None:
 
 
 def _migration_holds_eval_results_lock() -> bool:
-    return bool(
-        op.get_bind()
-        .execute(
-            sa.text(
-                "SELECT count(*) FROM pg_locks "
-                "WHERE pid = pg_backend_pid() "
-                "AND relation = to_regclass('public.eval_results')"
-            )
-        )
-        .scalar()
-    )
+    return bool(op.get_bind().execute(sa.text("SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = to_regclass('public.eval_results')")).scalar())
 
 
 @contextmanager
@@ -177,34 +146,18 @@ def _backfill_outcome(conn: Any) -> int:
 
 
 def _drop_eval_type_check() -> None:
-    op.execute(
-        sa.text(
-            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' "
-            "AND conrelid='public.evals'::regclass) THEN ALTER TABLE public.evals "
-            "DROP CONSTRAINT ck_evals_type; END IF; END $$;"
-        )
-    )
+    op.execute(sa.text("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' AND conrelid='public.evals'::regclass) THEN ALTER TABLE public.evals DROP CONSTRAINT ck_evals_type; END IF; END $$;"))
 
 
 def _validate_eval_type_check() -> None:
-    op.execute(
-        sa.text(
-            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' "
-            "AND conrelid='public.evals'::regclass AND NOT convalidated) THEN ALTER TABLE public.evals "
-            "VALIDATE CONSTRAINT ck_evals_type; END IF; END $$;"
-        )
-    )
+    op.execute(sa.text("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' AND conrelid='public.evals'::regclass AND NOT convalidated) THEN ALTER TABLE public.evals VALIDATE CONSTRAINT ck_evals_type; END IF; END $$;"))
 
 
 def _assert_readiness(eval_results_conn: Any) -> None:
-    null_outcomes = eval_results_conn.execute(
-        sa.text("SELECT count(*) FROM public.eval_results WHERE outcome IS NULL")
-    ).scalar_one()
+    null_outcomes = eval_results_conn.execute(sa.text("SELECT count(*) FROM public.eval_results WHERE outcome IS NULL")).scalar_one()
     if null_outcomes != 0:
         raise RuntimeError("FAR-2058 readiness failed: eval_results.outcome IS NULL count is " + str(null_outcomes))
-    legacy_types = (
-        op.get_bind().execute(sa.text("SELECT count(*) FROM public.evals WHERE eval_type = 'llm_judge'")).scalar_one()
-    )
+    legacy_types = op.get_bind().execute(sa.text("SELECT count(*) FROM public.evals WHERE eval_type = 'llm_judge'")).scalar_one()
     if legacy_types != 0:
         raise RuntimeError("FAR-2058 readiness failed: evals.eval_type='llm_judge' count is " + str(legacy_types))
 

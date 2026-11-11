@@ -126,9 +126,7 @@ async def count_legacy_agent_return_rows(
     caller re-raises into SAQ's retry loop), never reported as a clean zero.
     """
     predicate = _legacy_predicate()
-    legacy_count = int(
-        (await session.execute(select(func.count()).select_from(RunNodeOutput).where(predicate))).scalar_one()
-    )
+    legacy_count = int((await session.execute(select(func.count()).select_from(RunNodeOutput).where(predicate))).scalar_one())
 
     sample: list[tuple[str, str]] = []
     if legacy_count:

@@ -155,10 +155,7 @@ def _resolve_database_url(data_dir: Path | None, *, readonly: bool = False) -> s
     if data_dir is not None:
         state_path = data_dir / STATE_FILENAME
         if not state_path.exists():
-            raise click.ClickException(
-                f"no state.json at {state_path} — pass a bootstrapped data dir, "
-                "or omit --data-dir and rely on DATABASE_URL"
-            )
+            raise click.ClickException(f"no state.json at {state_path} — pass a bootstrapped data dir, or omit --data-dir and rely on DATABASE_URL")
         return _launcher_url_for(data_dir, readonly=readonly)
     try:
         from farna.launcher.entry import default_data_dir
@@ -186,11 +183,7 @@ def _guard_modulo_users(force: bool) -> None:
         modulo_users = ""
     if not modulo_users:
         return
-    message = (
-        "WARNING: MODULO_USERS is set — the boot seeder re-applies its entries on every boot, but ONLY for "
-        "accounts whose stored hash is missing or already non-bcrypt (plaintext). A bcrypt hash written by "
-        "this CLI is NOT reverted, and accounts not listed in MODULO_USERS are never touched."
-    )
+    message = "WARNING: MODULO_USERS is set — the boot seeder re-applies its entries on every boot, but ONLY for accounts whose stored hash is missing or already non-bcrypt (plaintext). A bcrypt hash written by this CLI is NOT reverted, and accounts not listed in MODULO_USERS are never touched."
     if force:
         click.echo(f"{message} Proceeding (--force).", err=True)
         return
@@ -245,9 +238,7 @@ async def _first_org(session: AsyncSession) -> Any:
     from farna.db.models.organisation import Organisation
     from farna.db.soft_delete import include_soft_deleted
 
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).order_by(Organisation.created_at).limit(1))
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation).order_by(Organisation.created_at).limit(1)))
     org = result.scalar_one_or_none()
     if org is None:
         raise UserCliError("no organisation exists in this database — run 'modulo start' once to bootstrap")
@@ -305,10 +296,7 @@ async def _add_user(url: str, email: str, password: str, as_admin: bool) -> str:
                     actor_source="cli_admin_escalation",
                     log_key="cli.users.admin_escalation_audit_failed",
                     payload={
-                        "summary": (
-                            f"User {email} escalated from {previous_role} to admin "
-                            f"in organisation '{org.name}' by 'modulo users add --admin'"
-                        ),
+                        "summary": (f"User {email} escalated from {previous_role} to admin in organisation '{org.name}' by 'modulo users add --admin'"),
                         "email": email,
                         "role": "admin",
                         "previous_role": previous_role,
@@ -339,10 +327,7 @@ async def _reset_password(url: str, email: str, password: str) -> str:
             # Strict boolean compare (the admin route compares the same way):
             # a break-glass account must never have its hash overwritten.
             if account.is_break_glass is True:
-                raise UserCliError(
-                    f"{email} is a break-glass account — password reset refused (the admin route refuses too): "
-                    "overwriting its hash breaks the break-glass CAS and orphans the last-resort recovery credential."
-                )
+                raise UserCliError(f"{email} is a break-glass account — password reset refused (the admin route refuses too): overwriting its hash breaks the break-glass CAS and orphans the last-resort recovery credential.")
             account.password_hash = hash_password(password)
             families = await list_families_for_account(session, account.id)
             for family in families:
@@ -373,9 +358,7 @@ async def _list_rows(url: str) -> tuple[list[ListRow], str]:
                     select(Account, OrgMembership.role)
                     .outerjoin(
                         OrgMembership,
-                        (OrgMembership.account_id == Account.id)
-                        & (OrgMembership.organisation_id == org.id)
-                        & (OrgMembership.deactivated_at.is_(None)),
+                        (OrgMembership.account_id == Account.id) & (OrgMembership.organisation_id == org.id) & (OrgMembership.deactivated_at.is_(None)),
                     )
                     .order_by(Account.email)
                 )
@@ -451,10 +434,7 @@ def add(email: str, admin: bool, force: bool, password_option: str | None, data_
     # pre-computed bcrypt hash — an account that could never log in. Refuse
     # before seeding instead.
     if password.startswith("$2"):
-        raise click.ClickException(
-            "password must not start with '$2' — the seeder stores that prefix verbatim as a "
-            "pre-computed bcrypt hash, which would create an account that can never log in"
-        )
+        raise click.ClickException("password must not start with '$2' — the seeder stores that prefix verbatim as a pre-computed bcrypt hash, which would create an account that can never log in")
     url = _resolve_database_url(data_dir)
     click.echo(_run_db_command(_add_user(url, email, password, admin)))
 

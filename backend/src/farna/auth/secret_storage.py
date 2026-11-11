@@ -251,9 +251,7 @@ async def decode_stored_secret_scoped(
     from farna.db.rls import set_rls_org
 
     if not session.in_transaction():
-        raise RuntimeError(
-            "decode_stored_secret_scoped requires an active transaction; wrap the call in `async with session.begin():`"
-        )
+        raise RuntimeError("decode_stored_secret_scoped requires an active transaction; wrap the call in `async with session.begin():`")
 
     if org_id is None:
         org_id = await _read_rls_org_id(session)

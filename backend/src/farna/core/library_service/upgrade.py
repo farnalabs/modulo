@@ -132,11 +132,7 @@ def _snapshot_pins(install: CollectionInstall, collection: LibraryPrimitive) -> 
     # ``manifest_pins`` is the canonical source; the legacy
     # ``content_json["pins"]`` key (written by an earlier version of the API
     # routes) is accepted last so already-persisted rows keep resolving.
-    manifest_pins = (
-        collection.manifest_pins
-        or (collection.content_json or {}).get("manifest_pins")
-        or (collection.content_json or {}).get("pins")
-    )
+    manifest_pins = collection.manifest_pins or (collection.content_json or {}).get("manifest_pins") or (collection.content_json or {}).get("pins")
     return [{**p, "primitive_type": ""} for p in _pins_from_manifest(manifest_pins)]
 
 
@@ -150,9 +146,7 @@ def _pin_entity_map(install: CollectionInstall) -> dict[str, dict[str, list[str]
     for slug, per_type in raw.items():
         if not isinstance(per_type, dict):
             continue
-        out[str(slug)] = {
-            str(etype): [str(eid) for eid in ids] for etype, ids in per_type.items() if isinstance(ids, list)
-        }
+        out[str(slug)] = {str(etype): [str(eid) for eid in ids] for etype, ids in per_type.items() if isinstance(ids, list)}
     return out
 
 
@@ -204,12 +198,7 @@ async def find_newer_version(
     stamped_id = collection.update_available_version_id
     if stamped_id is not None:
         stamped = await session.get(LibraryPrimitive, stamped_id)
-        if (
-            stamped is not None
-            and stamped.deleted_at is None
-            and stamped.status == "published"
-            and _version_key(stamped.version) > installed_key
-        ):
+        if stamped is not None and stamped.deleted_at is None and stamped.status == "published" and _version_key(stamped.version) > installed_key:
             return stamped
 
     group_id = collection.version_group_id or collection.id
@@ -360,18 +349,12 @@ def _append_synthesised_pipeline_entry(
     """
     if not pipeline_entity_id:
         return
-    covered = any(
-        e["entities"] and any(ent["entity_type"] == "pipeline" for ent in e["entities"])
-        for bucket in delta.values()
-        for e in bucket
-    )
+    covered = any(e["entities"] and any(ent["entity_type"] == "pipeline" for ent in e["entities"]) for bucket in delta.values() for e in bucket)
     if covered:
         return
     # The synthesised pipeline's node set changes only when agent pins
     # are added/removed — content changes do not alter the graph.
-    structural = any(
-        e["change"] in ("added", "removed") and e["entity_type"] == "agent" for b in delta.values() for e in b
-    )
+    structural = any(e["change"] in ("added", "removed") and e["entity_type"] == "agent" for b in delta.values() for e in b)
     delta["pipelines"].append(
         {
             "entity_type": "pipeline",
@@ -410,9 +393,7 @@ def build_collection_delta(
 
     old_by_slug = {p["slug"]: p for p in old_pins}
     new_by_slug = {p["slug"]: p for p in new_pins}
-    types_by_slug: dict[str, str] = {
-        p["slug"]: p.get("primitive_type", "") for p in old_pins if p.get("primitive_type")
-    }
+    types_by_slug: dict[str, str] = {p["slug"]: p.get("primitive_type", "") for p in old_pins if p.get("primitive_type")}
     for p in new_pins:
         if p.get("primitive_type"):
             types_by_slug.setdefault(p["slug"], p["primitive_type"])
@@ -644,9 +625,7 @@ async def detect_collection_update(
     pin_entity_ids = await _load_pin_entity_ids(session, org_id, install, old_pins)
 
     entity_states = await _classify_entities(session, org_id, install, pin_entity_ids)
-    pipeline_id, pipeline_modified = await _pipeline_state(
-        session, install, (install.resolved_manifest or {}).get("pipeline_id")
-    )
+    pipeline_id, pipeline_modified = await _pipeline_state(session, install, (install.resolved_manifest or {}).get("pipeline_id"))
 
     delta = build_collection_delta(
         old_pins,
@@ -916,15 +895,11 @@ class _CollectionReconciler:
             if ok:
                 await self._fingerprint_and_record("agent", ent["entity_id"], slug)
 
-    async def _reconcile_embedded_pin(
-        self, entry: dict[str, Any], slug: str, new_prim: LibraryPrimitive | None
-    ) -> None:
+    async def _reconcile_embedded_pin(self, entry: dict[str, Any], slug: str, new_prim: LibraryPrimitive | None) -> None:
         for ent in entry["entities"]:
             if ent["entity_type"] == "pipeline":
                 # The pipeline graph is never auto-rewritten.
-                self.preserved.append(
-                    {"slug": slug, "entity_type": "pipeline", "entity_id": ent["entity_id"], "reason": "structural"}
-                )
+                self.preserved.append({"slug": slug, "entity_type": "pipeline", "entity_id": ent["entity_id"], "reason": "structural"})
                 continue
             if ent["modified"]:
                 self.preserved.append(
@@ -950,21 +925,15 @@ class _CollectionReconciler:
         if ok:
             await self._fingerprint_and_record(ent["entity_type"], ent["entity_id"], slug)
 
-    async def _reconcile_embedded_agent(
-        self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive
-    ) -> bool:
+    async def _reconcile_embedded_agent(self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive) -> bool:
         embedded = _embedded_agent_contents(new_prim)
         idx = self._embedded_index(slug, "agent", ent["entity_id"], embedded)
         if idx < 0:
             self.warnings.append(f"Embedded agent {ent['entity_id']} of pin '{slug}' not aligned; skipped.")
             return False
-        return await _reconcile_agent_entity(
-            self._session, self._org_id, eid, embedded[idx], self._schema_map, self.warnings
-        )
+        return await _reconcile_agent_entity(self._session, self._org_id, eid, embedded[idx], self._schema_map, self.warnings)
 
-    async def _reconcile_embedded_schema(
-        self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive
-    ) -> bool:
+    async def _reconcile_embedded_schema(self, ent: dict[str, Any], slug: str, eid: uuid.UUID, new_prim: LibraryPrimitive) -> bool:
         embedded_schemas = _embedded_schema_contents(new_prim)
         idx = self._embedded_index(slug, "schema", ent["entity_id"], embedded_schemas)
         if idx < 0:
@@ -1023,9 +992,7 @@ async def _load_new_pins(
     """Resolve the newer version's manifest pins and the primitives they map to."""
     # ``manifest_pins`` column is canonical; ``content_json["pins"]`` is the
     # legacy API-authored key, accepted last for already-persisted rows.
-    new_pin_dicts = _pins_from_manifest(
-        newer.manifest_pins or (newer.content_json or {}).get("manifest_pins") or (newer.content_json or {}).get("pins")
-    )
+    new_pin_dicts = _pins_from_manifest(newer.manifest_pins or (newer.content_json or {}).get("manifest_pins") or (newer.content_json or {}).get("pins"))
     new_pins: list[dict[str, str]] = []
     new_pin_prims: dict[str, LibraryPrimitive] = {}
     for pin in new_pin_dicts:
@@ -1058,12 +1025,8 @@ def _apply_new_snapshot(
     new_fingerprints: dict[str, str],
 ) -> None:
     """Point the install at the new version row and refresh its snapshot."""
-    new_snapshot_pins = [
-        {"slug": p["slug"], "version": p["version"], "primitive_type": p["primitive_type"]} for p in new_pins
-    ]
-    new_pin_entity_ids: dict[str, dict[str, list[str]]] = {
-        slug: per_type for slug, per_type in pin_entity_ids.items() if slug in {p["slug"] for p in new_pins}
-    }
+    new_snapshot_pins = [{"slug": p["slug"], "version": p["version"], "primitive_type": p["primitive_type"]} for p in new_pins]
+    new_pin_entity_ids: dict[str, dict[str, list[str]]] = {slug: per_type for slug, per_type in pin_entity_ids.items() if slug in {p["slug"] for p in new_pins}}
     manifest = dict(install.resolved_manifest or {})
     manifest["pins"] = new_snapshot_pins
     manifest["pin_entity_ids"] = new_pin_entity_ids
@@ -1105,19 +1068,14 @@ async def upgrade_collection(
 
     newer = await find_newer_version(session, install, collection)
     if newer is None:
-        raise NoUpdateAvailableError(
-            f"Install {install_id} is already at the newest published version "
-            f"'{install.collection_version or collection.version}'"
-        )
+        raise NoUpdateAvailableError(f"Install {install_id} is already at the newest published version '{install.collection_version or collection.version}'")
 
     from_version = install.collection_version or collection.version
     old_pins = await _load_old_pins(session, org_id, install, collection)
     new_pins, new_pin_prims = await _load_new_pins(session, org_id, newer)
     pin_entity_ids = await _load_pin_entity_ids(session, org_id, install, old_pins)
     entity_states = await _classify_entities(session, org_id, install, pin_entity_ids)
-    pipeline_id, pipeline_modified = await _pipeline_state(
-        session, install, (install.resolved_manifest or {}).get("pipeline_id")
-    )
+    pipeline_id, pipeline_modified = await _pipeline_state(session, install, (install.resolved_manifest or {}).get("pipeline_id"))
     delta = build_collection_delta(
         old_pins,
         new_pins,

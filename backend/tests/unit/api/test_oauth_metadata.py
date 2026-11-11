@@ -91,15 +91,15 @@ def client() -> Generator[TestClient, None, None]:
     override is cleared for the duration and restored afterwards.
     """
     store = get_runtime_config_store()
-    previous = store.get_override("MODULO_PUBLIC_URL")
-    store.clear_override("MODULO_PUBLIC_URL")
+    previous = store.get_override("FARNA_CONTROL_MODULO_PUBLIC_URL")
+    store.clear_override("FARNA_CONTROL_MODULO_PUBLIC_URL")
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
     if previous is None:
-        store.clear_override("MODULO_PUBLIC_URL")
+        store.clear_override("FARNA_CONTROL_MODULO_PUBLIC_URL")
     else:
-        store.set_override("MODULO_PUBLIC_URL", previous)
+        store.set_override("FARNA_CONTROL_MODULO_PUBLIC_URL", previous)
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +252,7 @@ def test_challenge_falls_back_to_request_origin_when_public_url_unset(client: Te
         request.base_url = "http://dev.example.com/"
         headers = _resource_metadata_challenge(request)
 
-    assert headers == {
-        "WWW-Authenticate": ('Bearer resource_metadata="http://dev.example.com/.well-known/oauth-protected-resource"')
-    }
+    assert headers == {"WWW-Authenticate": ('Bearer resource_metadata="http://dev.example.com/.well-known/oauth-protected-resource"')}
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +278,7 @@ def test_discovery_is_not_shadowed_by_the_spa_fallback(tmp_path: Path) -> None:
     # A pinned public URL: discovery now fails visible (500) when unconfigured,
     # so the routing-order proof needs a configured origin.
     test_app.dependency_overrides[get_settings] = _make_settings
-    mounted = _init_once_mount_spa(test_app, {"MODULO_SERVE_SPA": "1", "MODULO_FRONTEND_DIST": str(dist)})
+    mounted = _init_once_mount_spa(test_app, {"FARNA_CONTROL_MODULO_SERVE_SPA": "1", "FARNA_CONTROL_MODULO_FRONTEND_DIST": str(dist)})
     assert mounted is True
 
     # base_url matches the loopback Host/Origin allowlist the SPA mount adds.
@@ -349,9 +347,7 @@ def test_mcp_401_challenge_added_by_the_boundary_helper() -> None:
     with patch("farna.api.routes.oauth_metadata.get_settings", _make_settings):
         out = _with_resource_metadata(unauthorized, MagicMock())
     assert out.status_code == 401
-    assert out.headers["WWW-Authenticate"] == (
-        f'Bearer resource_metadata="{_PUBLIC}/.well-known/oauth-protected-resource"'
-    )
+    assert out.headers["WWW-Authenticate"] == (f'Bearer resource_metadata="{_PUBLIC}/.well-known/oauth-protected-resource"')
 
 
 def test_mcp_401_challenge_leaves_5xx_alone() -> None:
@@ -380,6 +376,4 @@ def test_missing_bearer_response_built_by_extract_bearer_token_has_the_header() 
     assert token is None
     assert err is not None
     assert err.status_code == 401
-    assert err.headers["WWW-Authenticate"] == (
-        f'Bearer resource_metadata="{_PUBLIC}/.well-known/oauth-protected-resource"'
-    )
+    assert err.headers["WWW-Authenticate"] == (f'Bearer resource_metadata="{_PUBLIC}/.well-known/oauth-protected-resource"')

@@ -368,15 +368,8 @@ REASON_ANCHOR_MISMATCH = "anchor_mismatch"
 REASON_DEV_ANCHOR_NOT_TRUSTED = "dev_anchor_not_trusted"
 REASON_EXPIRED = "expired"
 
-_ANCHOR_MISMATCH_HINT = (
-    "This deployment is verifying licences with the built-in development anchor, which cannot "
-    "verify a production licence. Set MODULO_LICENSE_PUBLIC_KEY to the Ed25519 public key "
-    "Farnalabs issued with your licence (anchor mismatch)."
-)
-_SIGNATURE_MISMATCH_HINT = (
-    "The key was not signed by the authority this deployment trusts. If Farnalabs issued it, "
-    "MODULO_LICENSE_PUBLIC_KEY does not match the signing keypair (anchor mismatch)."
-)
+_ANCHOR_MISMATCH_HINT = "This deployment is verifying licences with the built-in development anchor, which cannot verify a production licence. Set MODULO_LICENSE_PUBLIC_KEY to the Ed25519 public key Farnalabs issued with your licence (anchor mismatch)."
+_SIGNATURE_MISMATCH_HINT = "The key was not signed by the authority this deployment trusts. If Farnalabs issued it, MODULO_LICENSE_PUBLIC_KEY does not match the signing keypair (anchor mismatch)."
 
 
 @dataclass
@@ -763,9 +756,7 @@ async def read_persisted_license_state(session: Any) -> PersistedLicenseState:
     return _state_from_value(value)
 
 
-async def _write_persisted_license_state(
-    session: Any, state: PersistedLicenseState, *, updated_by: uuid.UUID | None = None
-) -> None:
+async def _write_persisted_license_state(session: Any, state: PersistedLicenseState, *, updated_by: uuid.UUID | None = None) -> None:
     """Upsert the persisted instance licence through the shared atomic crud path.
 
     Delegates to :func:`modulo.db.crud.system_config.update_config`, whose
@@ -788,9 +779,7 @@ def _install_persisted_state(state: PersistedLicenseState) -> None:
     _persisted_state_checked_at = time.monotonic()
 
 
-async def persist_installed_system_license(
-    session: Any, raw_key: str, *, parked: bool, updated_by: uuid.UUID | None = None
-) -> PersistedLicenseState:
+async def persist_installed_system_license(session: Any, raw_key: str, *, parked: bool, updated_by: uuid.UUID | None = None) -> PersistedLicenseState:
     """Persist an operator install of the instance-scope licence.
 
     ``parked`` is the install's ``is_parked`` verdict. A PARKED (future-start)
@@ -927,12 +916,7 @@ async def restore_persisted_system_license(session: Any, settings: Any | None = 
     """
     global _persisted_state, _persisted_state_checked_at
     state = await read_persisted_license_state(session)
-    if (
-        settings is not None
-        and not bool(getattr(settings, "debug", False))
-        and using_builtin_dev_anchor()
-        and not state.is_empty()
-    ):
+    if settings is not None and not bool(getattr(settings, "debug", False)) and using_builtin_dev_anchor() and not state.is_empty():
         raise PersistedLicenseAnchorError(DEV_ANCHOR_STARTUP_ERROR)
     if state.is_empty():
         if _persisted_state is not None and not _persisted_state.is_empty():
@@ -973,11 +957,7 @@ async def refresh_persisted_system_license(session: Any, *, force: bool = False)
     # Throttle on the attempt timestamp alone (not on the observed state): a
     # persistently failing read must also honour the window, otherwise every
     # plan resolution would retry AND log a traceback.
-    if (
-        not force
-        and _persisted_state_checked_at > 0.0
-        and (now - _persisted_state_checked_at) < (SYSTEM_LICENSE_REFRESH_TTL_SECONDS)
-    ):
+    if not force and _persisted_state_checked_at > 0.0 and (now - _persisted_state_checked_at) < (SYSTEM_LICENSE_REFRESH_TTL_SECONDS):
         return False
     # Advance the throttle BEFORE the read so a persistently failing read is
     # retried once per window, not once per call.
@@ -1033,7 +1013,5 @@ def check_production_public_key(settings: Any) -> None:
     """
     if using_builtin_dev_anchor() and not getattr(settings, "debug", False):
         _log.critical(
-            "LICENSE_CRITICAL: the built-in DEVELOPMENT licence anchor is in use outside debug. "
-            "Production licences are signed by a different keypair and will FAIL verification. "
-            "Set MODULO_LICENSE_PUBLIC_KEY to the public key Farnalabs issued with your licence.",
+            "LICENSE_CRITICAL: the built-in DEVELOPMENT licence anchor is in use outside debug. Production licences are signed by a different keypair and will FAIL verification. Set MODULO_LICENSE_PUBLIC_KEY to the public key Farnalabs issued with your licence.",
         )

@@ -259,10 +259,7 @@ _SHAPE_ASSERT_SQL = (
 # adds an outermost-parentheses wrapper at EVERY splice site; these constants
 # therefore carry their OWN outer parens (the 0192 module-constant assembly
 # style splices with bare AND) — never splice without them.
-_HAS_OUT_TEL_BLOB_SQL = (
-    "((r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null') "
-    "OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null'))"
-)
+_HAS_OUT_TEL_BLOB_SQL = "((r.outputs_json IS NOT NULL AND jsonb_typeof(r.outputs_json) IS DISTINCT FROM 'null') OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null'))"
 _FOLDED_OUT_SQL = "(CASE WHEN jsonb_typeof(r.outputs_json) = 'object' THEN r.outputs_json END)"
 _FOLDED_TEL_SQL = "(CASE WHEN jsonb_typeof(r.node_telemetry_json) = 'object' THEN r.node_telemetry_json END)"
 
@@ -287,10 +284,7 @@ _JUNK_OUT_TEL_GUARD_SQL = (
     "OR (r.node_telemetry_json IS NOT NULL AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'null' "
     " AND jsonb_typeof(r.node_telemetry_json) IS DISTINCT FROM 'object'))"
 )
-_JUNK_MARKERS_GUARD_SQL = (
-    "r.raw_output_markers IS NOT NULL AND jsonb_typeof(r.raw_output_markers) IS DISTINCT FROM 'null' "
-    "AND jsonb_typeof(r.raw_output_markers) IS DISTINCT FROM 'object'"
-)
+_JUNK_MARKERS_GUARD_SQL = "r.raw_output_markers IS NOT NULL AND jsonb_typeof(r.raw_output_markers) IS DISTINCT FROM 'null' AND jsonb_typeof(r.raw_output_markers) IS DISTINCT FROM 'object'"
 _JUNK_OUT_TEL_POPULATION_SQL = (
     "SELECT count(*) FROM runs r "  # noqa: S608  # nosec B608 - module constants only
     f"WHERE {_JUNK_OUT_TEL_GUARD_SQL} "
@@ -380,12 +374,7 @@ _MARKER_LAST_COLON_SQL = f"position(':' IN reverse({_MARKER_REMAINDER_SQL}))"
 # Anchored twin partial: parseable iff the anchored regex matches AND the
 # remainder's LAST colon leaves a non-empty suffix AND a non-empty node id;
 # unparseable keys become '__unknown__' with the FULL original key.
-_MARKER_NODE_ID_SQL = (
-    f"CASE WHEN mk.key ~ :marker_re "
-    f"AND {_MARKER_LAST_COLON_SQL} BETWEEN 2 AND length({_MARKER_REMAINDER_SQL}) - 1 "
-    f"THEN substr({_MARKER_REMAINDER_SQL}, 1, length({_MARKER_REMAINDER_SQL}) - {_MARKER_LAST_COLON_SQL}) "
-    f"ELSE '{_UNKNOWN_NODE_ID}' END"
-)
+_MARKER_NODE_ID_SQL = f"CASE WHEN mk.key ~ :marker_re AND {_MARKER_LAST_COLON_SQL} BETWEEN 2 AND length({_MARKER_REMAINDER_SQL}) - 1 THEN substr({_MARKER_REMAINDER_SQL}, 1, length({_MARKER_REMAINDER_SQL}) - {_MARKER_LAST_COLON_SQL}) ELSE '{_UNKNOWN_NODE_ID}' END"
 _REPAIR_MARKERS_BODY_SQL = (
     "INSERT INTO run_node_outputs "  # noqa: S608  # nosec B608 - module constants only
     "(run_id, node_id, attempt_key, organisation_id, raw_output_markers, created_at, updated_at) "
@@ -400,9 +389,7 @@ _REPAIR_MARKERS_BODY_SQL = (
 )
 
 # Repair candidate walks: runs whose new-table rows are ABSENT.
-_ABSENT_FINAL_ROW_PREDICATE_SQL = (
-    f"NOT EXISTS (SELECT 1 FROM {_TABLE} n WHERE n.run_id = r.id AND n.attempt_key = '{_FINAL_ATTEMPT_KEY}')"  # noqa: S608  # nosec B608 - module constants only
-)
+_ABSENT_FINAL_ROW_PREDICATE_SQL = f"NOT EXISTS (SELECT 1 FROM {_TABLE} n WHERE n.run_id = r.id AND n.attempt_key = '{_FINAL_ATTEMPT_KEY}')"  # noqa: S608  # nosec B608 - module constants only
 _ABSENT_META_ROW_PREDICATE_SQL = (
     f"NOT EXISTS (SELECT 1 FROM {_TABLE} n WHERE n.run_id = r.id "  # noqa: S608  # nosec B608 - module constants only
     f"AND n.node_id = '{_META_NODE_ID}' AND n.attempt_key = '{_FINAL_ATTEMPT_KEY}')"
@@ -411,9 +398,7 @@ _ABSENT_META_ROW_PREDICATE_SQL = (
 # absent but no '{}' side needs nothing (the metadata row exists iff a
 # legacy side was '{}'). Without this coupling a meta-absent run that
 # needs no metadata row would loop forever as a phantom repair candidate.
-_ABSENT_META_RELEVANT_PREDICATE_SQL = (
-    f"{_ABSENT_META_ROW_PREDICATE_SQL} AND (r.outputs_json = '{{}}'::jsonb OR r.node_telemetry_json = '{{}}'::jsonb)"
-)
+_ABSENT_META_RELEVANT_PREDICATE_SQL = f"{_ABSENT_META_ROW_PREDICATE_SQL} AND (r.outputs_json = '{{}}'::jsonb OR r.node_telemetry_json = '{{}}'::jsonb)"
 _REPAIR_CANDIDATES_TERMINAL_SQL = (
     "SELECT r.id FROM runs r "  # noqa: S608  # nosec B608 - module constants only
     f"WHERE r.status IN {_TERMINAL_SQL} AND r.created_at < :b1_cutoff "
@@ -675,9 +660,7 @@ def _parity_outputs_telemetry(bind: sa.Connection) -> int:
     overwritten = 0
     attempts: dict[uuid.UUID, int] = {}
     while True:
-        rows = bind.execute(
-            sa.text(_PARITY_OUT_TEL_MISMATCH_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF, "batch": _PARITY_BATCH}
-        ).all()
+        rows = bind.execute(sa.text(_PARITY_OUT_TEL_MISMATCH_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF, "batch": _PARITY_BATCH}).all()
         run_ids = [uuid.UUID(str(row[0])) for row in rows]
         if not run_ids:
             return overwritten
@@ -719,9 +702,7 @@ def _parity_markers(bind: sa.Connection) -> tuple[int, int, uuid.UUID | None]:
     divergent = 0
     divergent_sample: uuid.UUID | None = None
     while True:
-        rows = bind.execute(
-            sa.text(_PARITY_MARKERS_MISMATCH_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF, "batch": _PARITY_BATCH}
-        ).all()
+        rows = bind.execute(sa.text(_PARITY_MARKERS_MISMATCH_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF, "batch": _PARITY_BATCH}).all()
         if not rows:
             return (repaired, divergent, divergent_sample)
         for row in rows:
@@ -836,8 +817,7 @@ def upgrade() -> None:
     inserted = _repair_installation(bind)
     quarantined_remaining = _count_sql(bind, f"SELECT count(*) FROM {_QUARANTINE_TABLE}")  # noqa: S608  # nosec B608 - module constants only
     _log.info(
-        "FAR-583 drop repair: %(final)d '__final__' row(s), %(meta)d metadata row(s), %(markers)d "
-        "marker row(s) inserted; 0192-quarantined run(s) excluded but KEPT: %(quarantined)d",
+        "FAR-583 drop repair: %(final)d '__final__' row(s), %(meta)d metadata row(s), %(markers)d marker row(s) inserted; 0192-quarantined run(s) excluded but KEPT: %(quarantined)d",
         {**inserted, "quarantined": quarantined_remaining},
     )
 
@@ -845,8 +825,7 @@ def upgrade() -> None:
     out_pop = bind.execute(sa.text(_PARITY_OUT_POPULATION_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF}).one()
     markers_pop = bind.execute(sa.text(_PARITY_MARKERS_POPULATION_SQL), {"b1_cutoff": _B1_DEPLOY_CUTOFF}).one()
     _log.info(
-        "FAR-583 drop parity populations: outputs/telemetry checked=%(out_checked)d "
-        "post_cutoff=%(out_post)d; markers checked=%(mk_checked)d post_cutoff=%(mk_post)d",
+        "FAR-583 drop parity populations: outputs/telemetry checked=%(out_checked)d post_cutoff=%(out_post)d; markers checked=%(mk_checked)d post_cutoff=%(mk_post)d",
         {
             "out_checked": int(out_pop.checked),
             "out_post": int(out_pop.post_cutoff),
@@ -858,8 +837,7 @@ def upgrade() -> None:
     overwritten = _parity_outputs_telemetry(bind)
     if overwritten:
         _log.info(
-            "FAR-583 drop parity overwrite: %d pre-cutoff TERMINAL run(s) re-mapped LEGACY-AUTHORITATIVELY "
-            "(terminal + pre-cutoff runs are immutable after the drain gate — safe, self-healing)",
+            "FAR-583 drop parity overwrite: %d pre-cutoff TERMINAL run(s) re-mapped LEGACY-AUTHORITATIVELY (terminal + pre-cutoff runs are immutable after the drain gate — safe, self-healing)",
             overwritten,
         )
 
@@ -883,8 +861,7 @@ def upgrade() -> None:
     marker_rows = _count_sql(bind, f"SELECT count(*) FROM {_TABLE} WHERE attempt_key <> '{_FINAL_ATTEMPT_KEY}'")  # noqa: S608  # nosec B608 - module constants only
     unknown_rows = _count_sql(bind, f"SELECT count(*) FROM {_TABLE} WHERE node_id = '{_UNKNOWN_NODE_ID}'")  # noqa: S608  # nosec B608 - module constants only
     _log.info(
-        "FAR-583 drop completion: %(final)d '__final__' row(s); %(markers)d marker row(s); "
-        "%(unknown)d '__unknown__' node row(s) (full original attempt keys preserved, FAR-188)",
+        "FAR-583 drop completion: %(final)d '__final__' row(s); %(markers)d marker row(s); %(unknown)d '__unknown__' node row(s) (full original attempt keys preserved, FAR-188)",
         {"final": final_rows, "markers": marker_rows, "unknown": unknown_rows},
     )
 
@@ -902,8 +879,7 @@ def upgrade() -> None:
             description=f"DROP COLUMN runs.{col}",
         )
     _log.info(
-        "FAR-583 drop: the 0193 sweep index + runs blob columns %s DROPPED (lock_timeout=%s, "
-        "per-attempt savepoint retry on every DDL statement)",
+        "FAR-583 drop: the 0193 sweep index + runs blob columns %s DROPPED (lock_timeout=%s, per-attempt savepoint retry on every DDL statement)",
         ", ".join(_RUNS_OUTPUT_COLS),
         _DROP_COL_LOCK_TIMEOUT,
     )
@@ -937,8 +913,4 @@ def downgrade() -> None:
     Re-running THIS migration afterwards is idempotent (every leg is
     ON CONFLICT DO NOTHING) and re-verifies parity before returning.
     """
-    raise RuntimeError(
-        "FAR-583 drop: migration 0215 downgrade is a DOCUMENTED NO-OP "
-        '("never rewind past this migration"); the emergency re-add-columns '
-        "snippet lives in the docstring above"
-    )
+    raise RuntimeError('FAR-583 drop: migration 0215 downgrade is a DOCUMENTED NO-OP ("never rewind past this migration"); the emergency re-add-columns snippet lives in the docstring above')

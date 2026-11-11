@@ -65,20 +65,8 @@ def _is_postgres() -> bool:
 
 
 def upgrade() -> None:
-    op.execute(
-        sa.text(
-            "CREATE INDEX IF NOT EXISTS ix_invitations_org_email_live "
-            "ON public.invitations (organisation_id, email) "
-            f"WHERE {_LIVE_WHERE}"
-        )
-    )
-    op.execute(
-        sa.text(
-            "CREATE INDEX IF NOT EXISTS ix_invitations_expires_at_live "
-            "ON public.invitations (expires_at) "
-            f"WHERE {_LIVE_WHERE}"
-        )
-    )
+    op.execute(sa.text(f"CREATE INDEX IF NOT EXISTS ix_invitations_org_email_live ON public.invitations (organisation_id, email) WHERE {_LIVE_WHERE}"))
+    op.execute(sa.text(f"CREATE INDEX IF NOT EXISTS ix_invitations_expires_at_live ON public.invitations (expires_at) WHERE {_LIVE_WHERE}"))
     if not _is_postgres():
         return
     op.create_check_constraint(

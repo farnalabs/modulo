@@ -166,9 +166,7 @@ class ConcurrentRunLimitError(RuntimeError):
 
 class PipelineRateLimitError(RuntimeError):
     def __init__(self, pipeline_id: uuid.UUID, key: str | None, max_triggers: int, window_seconds: int) -> None:
-        super().__init__(
-            f"Pipeline {pipeline_id} rate limit exceeded: {max_triggers} triggers per {window_seconds}s for key {key}"
-        )
+        super().__init__(f"Pipeline {pipeline_id} rate limit exceeded: {max_triggers} triggers per {window_seconds}s for key {key}")
         self.pipeline_id = pipeline_id
         self.key = key
         self.max_triggers = max_triggers
@@ -537,8 +535,7 @@ def _warn_unrecognised_config_keys(trigger_id: uuid.UUID, cfg: dict[str, Any]) -
     unrecognised = sorted(set(cfg) - _RECOGNISED_TRIGGER_CONFIG_KEYS)
     if unrecognised:
         _log.warning(
-            "Trigger %s config_json contains key(s) the engine does not read: %s. "
-            "Recognised keys: %s. The declared key(s) are silently ignored at delivery time.",
+            "Trigger %s config_json contains key(s) the engine does not read: %s. Recognised keys: %s. The declared key(s) are silently ignored at delivery time.",
             trigger_id,
             unrecognised,
             sorted(_RECOGNISED_TRIGGER_CONFIG_KEYS),
@@ -919,9 +916,7 @@ class TriggerEngine:
         # consume a dedup slot. The engine writes NO TriggerEvent here; the
         # route's in-transaction catch is the single writer of the
         # ``paused`` event. Read failures propagate (never fabricate).
-        await ensure_triggers_resumable(
-            session, delivery.org_id, trigger_id=delivery.trigger.id, trigger_type="webhook"
-        )
+        await ensure_triggers_resumable(session, delivery.org_id, trigger_id=delivery.trigger.id, trigger_type="webhook")
 
         # Event type + value filtering — skip the delivery unless it
         # satisfies the trigger's accepted-events presence check and any
@@ -1730,9 +1725,7 @@ class TriggerEngine:
         accepted_events: list[str] | None = cfg.get("accepted_events")
         if accepted_events:
             if use_dot_notation:
-                has_accepted_event = any(
-                    isinstance(_extract_field(delivery.raw_payload, event), dict) for event in accepted_events
-                )
+                has_accepted_event = any(isinstance(_extract_field(delivery.raw_payload, event), dict) for event in accepted_events)
             else:
                 has_accepted_event = any(isinstance(delivery.raw_payload.get(event), dict) for event in accepted_events)
             if not has_accepted_event:
@@ -1752,10 +1745,7 @@ class TriggerEngine:
                 )
                 raise EventNotAcceptedError(
                     delivery.trigger.id,
-                    reason=(
-                        f"none of the accepted event types {accepted_events} "
-                        f"found in {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
-                    ),
+                    reason=(f"none of the accepted event types {accepted_events} found in {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"),
                 )
 
         event_filters = cfg.get("event_filters")
@@ -1776,10 +1766,7 @@ class TriggerEngine:
             )
             raise EventNotAcceptedError(
                 delivery.trigger.id,
-                reason=(
-                    f"event value filters {event_filters} "
-                    f"not satisfied by {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"
-                ),
+                reason=(f"event value filters {event_filters} not satisfied by {payload_subject} payload (keys: {list(delivery.raw_payload.keys())})"),
             )
 
     async def _run_pre_trigger_guardrail(
@@ -1881,9 +1868,7 @@ class TriggerEngine:
             await set_rls_execution_context(session)
             from farna.db.soft_delete import include_soft_deleted
 
-            pipe_result = await session.execute(
-                include_soft_deleted(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id))
-            )
+            pipe_result = await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == delivery.trigger.pipeline_id)))
             pipeline = pipe_result.scalar_one_or_none()
             if pipeline is not None:
                 pipeline_rate_limit = pipeline.rate_limit_config
@@ -1894,9 +1879,7 @@ class TriggerEngine:
         max_triggers = int(pipeline_rate_limit["max_triggers"])
         window_seconds = int(pipeline_rate_limit.get("window_seconds", 3600))
         rate_limit_key = self._compute_rate_limit_key(input_payload, pipeline_rate_limit)
-        recent_count = await self._count_recent_rate_limited(
-            session, delivery.trigger.pipeline_id, rate_limit_key, window_seconds
-        )
+        recent_count = await self._count_recent_rate_limited(session, delivery.trigger.pipeline_id, rate_limit_key, window_seconds)
         if recent_count >= max_triggers:
             _log.warning(
                 "Rate limit exceeded for pipeline %s: %d >= %d for key %s",

@@ -153,10 +153,10 @@ def test_resolve_unregistered_provider_type_raises_with_env_var() -> None:
     hub = RuntimeProviderHub()
     hub.register("local", LocalRuntimeProvider())
 
-    with pytest.raises(ProviderNotConfiguredError, match="MODULO_E2B_API_KEY") as exc_info:
+    with pytest.raises(ProviderNotConfiguredError, match="FARNA_CONTROL_MODULO_E2B_API_KEY") as exc_info:
         hub.resolve(SimpleNamespace(provider_type="e2b"))
     assert exc_info.value.provider_type == "e2b"
-    assert exc_info.value.env_var == "MODULO_E2B_API_KEY"
+    assert exc_info.value.env_var == "FARNA_CONTROL_MODULO_E2B_API_KEY"
 
 
 def test_resolve_docker_type_without_docker_env_raises_with_remediation() -> None:
@@ -165,9 +165,9 @@ def test_resolve_docker_type_without_docker_env_raises_with_remediation() -> Non
     hub.register("local", LocalRuntimeProvider())
 
     for legacy_type in ("local_docker", "docker", "runner_docker"):
-        with pytest.raises(ProviderNotConfiguredError, match="MODULO_DOCKER_HOST") as exc_info:
+        with pytest.raises(ProviderNotConfiguredError, match="FARNA_CONTROL_MODULO_DOCKER_HOST") as exc_info:
             hub.resolve(SimpleNamespace(provider_type=legacy_type))
-        assert exc_info.value.env_var == "MODULO_DOCKER_HOST"
+        assert exc_info.value.env_var == "FARNA_CONTROL_MODULO_DOCKER_HOST"
 
 
 def test_resolve_unknown_provider_type_raises_without_fallback() -> None:

@@ -34,9 +34,7 @@ async def cleanup_old_webhook_events(
         raise ValueError(f"retention_days must be >= 1, got {retention_days}")
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
-    result = await db_session.execute(
-        select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).order_by(TriggerEvent.id).limit(BATCH_SIZE)
-    )
+    result = await db_session.execute(select(TriggerEvent.id).where(TriggerEvent.created_at < cutoff).order_by(TriggerEvent.id).limit(BATCH_SIZE))
     ids = result.scalars().all()
     if not ids:
         return 0

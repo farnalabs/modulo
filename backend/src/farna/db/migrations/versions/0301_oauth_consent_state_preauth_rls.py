@@ -41,17 +41,8 @@ depends_on: tuple[str, ...] | None = None
 # Static DDL literals only — the FAR-915 ``migration-fstring-sql`` semgrep rule
 # forbids f-string identifier interpolation in migrations.
 _DROP_POLICY_SQL = "DROP POLICY IF EXISTS rls_org_isolation ON public.oauth_consent_states"
-_CREATE_POLICY_STRICT_SQL = (
-    "CREATE POLICY rls_org_isolation ON public.oauth_consent_states "
-    "USING ((organisation_id = "
-    "(NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid))"
-)
-_CREATE_POLICY_PREAUTH_SQL = (
-    "CREATE POLICY rls_org_isolation ON public.oauth_consent_states "
-    "USING ((organisation_id = "
-    "(NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) "
-    "OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL))"
-)
+_CREATE_POLICY_STRICT_SQL = "CREATE POLICY rls_org_isolation ON public.oauth_consent_states USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid))"
+_CREATE_POLICY_PREAUTH_SQL = "CREATE POLICY rls_org_isolation ON public.oauth_consent_states USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (NULLIF(current_setting('app.organisation_id'::text, true), ''::text) IS NULL))"
 
 
 def upgrade() -> None:

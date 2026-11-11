@@ -42,9 +42,7 @@ async def list_tiers_endpoint(
     # Attempt Redis cache read (300s TTL — tiers don't change often)
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         cache_key = f"tiers:{current_user.organisation_id}"
         cached = await redis.get(cache_key)
         if cached:
@@ -63,9 +61,7 @@ async def list_tiers_endpoint(
 
         # Write to Redis cache (best-effort, 300s TTL)
         try:
-            redis = Redis.from_url(
-                settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-            )
+            redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
             cache_key = f"tiers:{current_user.organisation_id}"
             await redis.setex(cache_key, 300, json.dumps(response_data, default=str))
         except Exception:

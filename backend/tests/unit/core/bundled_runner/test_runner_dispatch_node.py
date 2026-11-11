@@ -99,7 +99,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         "ScriptSideEffectUnknownError": _FakeError,
         "SupersededNodeError": _FakeError,
         "_SandboxNodeOutput": _FakeOutput,
-        "_build_sandbox_envs": lambda **kw: {"MODULO_RUN_ID": kw.get("run_id", "")},
+        "_build_sandbox_envs": lambda **kw: {"FARNA_CONTROL_MODULO_RUN_ID": kw.get("run_id", "")},
         "_build_sandbox_node_envelope": lambda **kw: {"envelope": True, **kw},
         "_compute_sandbox_cost": lambda *a, **k: 0.0,
         "_configure_stall_detector": lambda **kw: SimpleNamespace(touch=lambda *a, **k: None),
@@ -120,9 +120,7 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         "_sandbox_acquire_dispatch_marker": AsyncMock(return_value="attempt-key"),
         "_sandbox_clear_dispatch_marker": AsyncMock(),
-        "_sandbox_issue_run_credential_for_sandbox": AsyncMock(
-            return_value=IssuedRunCredential(run_id=uuid.uuid4(), node_id="node-1", secret="apikey")
-        ),
+        "_sandbox_issue_run_credential_for_sandbox": AsyncMock(return_value=IssuedRunCredential(run_id=uuid.uuid4(), node_id="node-1", secret="apikey")),
         "_sandbox_resolve_secret_ref": AsyncMock(return_value="secret"),
         "_sandbox_store_dispatch_marker_sandbox": AsyncMock(),
         "_sandbox_store_script_lease": AsyncMock(),
@@ -279,9 +277,7 @@ async def test_run_script_mode_happy_path(patch_node_runner) -> None:
     assert provider.created  # workspace was provisioned
 
 
-async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_none(
-    patch_node_runner, monkeypatch
-) -> None:
+async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_none(patch_node_runner, monkeypatch) -> None:
     """FAR-1690 A1: a failed (``None``) issuance leaves the key and provenance absent."""
     import farna.core.pipeline_engine.node_runner as nrm
 
@@ -301,8 +297,8 @@ async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_n
         input_json="{}",
         provider="runner_docker",
     )
-    assert "MODULO_API_KEY" not in envs
-    assert "MODULO_CREDENTIAL_PROVENANCE" not in envs
+    assert "FARNA_CONTROL_MODULO_API_KEY" not in envs
+    assert "FARNA_CONTROL_MODULO_CREDENTIAL_PROVENANCE" not in envs
 
 
 async def test_run_llm_mode_happy_path(patch_node_runner) -> None:
@@ -839,18 +835,9 @@ def test_resolve_stdout_cap_coercion(patch_node_runner) -> None:
 
     assert runner_dispatch._resolve_stdout_cap({}) == nrm._MAX_ARTIFACT_LOG
     assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full"}) == nrm._FULL_MODE_DEFAULT_MAX_BYTES
-    assert (
-        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "all", "stdout_max_bytes": 99})
-        == nrm._MAX_ARTIFACT_LOG
-    )
-    assert (
-        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": -3})
-        == nrm._FULL_MODE_DEFAULT_MAX_BYTES
-    )
-    assert (
-        runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": True})
-        == nrm._FULL_MODE_DEFAULT_MAX_BYTES
-    )
+    assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "all", "stdout_max_bytes": 99}) == nrm._MAX_ARTIFACT_LOG
+    assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": -3}) == nrm._FULL_MODE_DEFAULT_MAX_BYTES
+    assert runner_dispatch._resolve_stdout_cap({"stdout_retention_mode": "full", "stdout_max_bytes": True}) == nrm._FULL_MODE_DEFAULT_MAX_BYTES
 
 
 def test_resolve_stdout_cap_pipeline_default(patch_node_runner) -> None:
@@ -1093,7 +1080,7 @@ class _HarvestReplyProvider(_FakeProvider):
         self._harvest_reply = harvest_reply
 
     async def exec_command(self, ref, cmd, *, cmd_timeout=None):
-        if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+        if cmd and "FARNA_CONTROL_MODULO_CLAIM_RECEIPT" in cmd[-1]:
             self.exec_calls.append(list(cmd))
             return _ExecResult(exit_code=0, stdout=self._harvest_reply, stderr="")
         return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
@@ -1141,7 +1128,7 @@ async def test_flagged_node_spends_from_the_harvested_receipt_without_a_sentinel
 
     run_id, state = _fresh_flagged_state()
     provider = _HarvestReplyProvider(
-        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT",
         stream_chunks=[("stdout", "post-create agent noise\n")],
     )
     try:
@@ -1162,7 +1149,7 @@ async def test_flagged_node_shim_read_transcript_never_spends_on_the_runner_tier
 
     run_id, state = _fresh_flagged_state()
     provider = _HarvestReplyProvider(
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
         stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
     )
     try:
@@ -1219,16 +1206,13 @@ async def test_pr_url_never_outranks_a_definitive_receipt_false_on_the_runner_ti
     )
     run_id, state = _fresh_flagged_state()
     provider = _HarvestReplyProvider(
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
         stream_chunks=[("stdout", f"attempted create, reporting {url}\n")],
     )
     try:
         out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
         assert out["envelope"] is True
-        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
-            "a definitive receipt=False from a LIVE install must release the hold, "
-            "never be outranked by an agent-authored pr_url"
-        )
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", "a definitive receipt=False from a LIVE install must release the hold, never be outranked by an agent-authored pr_url"
     finally:
         reset_run_pr_guard_claims()
 
@@ -1258,23 +1242,18 @@ async def test_absent_install_leaves_the_receipt_meaningless_on_the_runner_tier(
                 return _ExecResult(
                     exit_code=0,
                     stdout="",
-                    stderr=(
-                        "modulo: gh guard: WARNING no gh on PATH; nothing to guard\n"
-                        "modulo: gh guard: flagged run is NOT platform-guarded (prompt-level only)"
-                    ),
+                    stderr=("modulo: gh guard: WARNING no gh on PATH; nothing to guard\nmodulo: gh guard: flagged run is NOT platform-guarded (prompt-level only)"),
                 )
             return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
 
     provider = _AbsentInstallProvider(
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
         stream_chunks=[("stdout", shim_created_pr_stdout(tmp_path))],
     )
     try:
         out = await runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
         assert out["envelope"] is True
-        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
-            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
-        )
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
     finally:
         reset_run_pr_guard_claims()
 
@@ -1299,7 +1278,7 @@ async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_ti
 
     class _BlockingHarvestProvider(_FakeProvider):
         async def exec_command(self, ref, cmd, *, cmd_timeout=None):
-            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+            if cmd and "FARNA_CONTROL_MODULO_CLAIM_RECEIPT" in cmd[-1]:
                 harvest_started.set()
                 await asyncio.Event().wait()  # parks until the probe is cancelled
             return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
@@ -1314,13 +1293,9 @@ async def test_cancel_during_the_claim_harvest_still_tears_down_on_the_runner_ti
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert provider.destroyed, (
-        f"the workspace must still be destroyed after a cancel during the harvest: {provider.destroyed}"
-    )
+    assert provider.destroyed, f"the workspace must still be destroyed after a cancel during the harvest: {provider.destroyed}"
     assert provider.closed, "the provider must still be closed after a cancel during the harvest"
-    assert clear_mock.await_count >= 1, (
-        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
-    )
+    assert clear_mock.await_count >= 1, "the fenced dispatch marker must still be cleared after a cancel during the harvest"
 
 
 # --- FAR-1315 coverage hardening: the dispatch finally's defensive arms -----
@@ -1474,16 +1449,14 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
 
     class _BlockingHarvestProvider(_FakeProvider):
         async def exec_command(self, ref, cmd, *, cmd_timeout=None):
-            if cmd and "MODULO_CLAIM_RECEIPT" in cmd[-1]:
+            if cmd and "FARNA_CONTROL_MODULO_CLAIM_RECEIPT" in cmd[-1]:
                 harvest_started.set()
                 await asyncio.Event().wait()  # parks until the probe is cancelled
             return await super().exec_command(ref, cmd, cmd_timeout=cmd_timeout)
 
     provider = _BlockingHarvestProvider()
     try:
-        task = asyncio.ensure_future(
-            runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider))
-        )
+        task = asyncio.ensure_future(runner_dispatch.run_bundled_runner_node(state, _flagged_config(), _route(provider)))
         await asyncio.wait_for(harvest_started.wait(), timeout=10)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1572,9 +1545,7 @@ async def test_teardown_one_resource_unbounded_when_timeout_omitted() -> None:
         await release.wait()
         completed.set()
 
-    task = asyncio.ensure_future(
-        runner_dispatch._teardown_one_resource(_slow(), log_event="runner_dispatch.test_step_unbounded")
-    )
+    task = asyncio.ensure_future(runner_dispatch._teardown_one_resource(_slow(), log_event="runner_dispatch.test_step_unbounded"))
     await asyncio.wait_for(started.wait(), timeout=10)
     assert not completed.is_set(), "the step must still be pending while its resource has not finished"
     release.set()

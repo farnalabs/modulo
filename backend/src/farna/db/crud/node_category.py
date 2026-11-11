@@ -63,9 +63,7 @@ async def create_node_category(
     return category
 
 
-async def get_node_category(
-    session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID, include_deleted: bool = False
-) -> NodeCategory | None:
+async def get_node_category(session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID, include_deleted: bool = False) -> NodeCategory | None:
     stmt = select(NodeCategory).where(
         NodeCategory.id == category_id,
         NodeCategory.organisation_id == org_id,
@@ -94,13 +92,7 @@ async def list_node_categories(
         total = (await session.execute(count_stmt)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    stmt = (
-        select(NodeCategory)
-        .where(*where_conditions)
-        .order_by(NodeCategory.sort_order, NodeCategory.name)
-        .offset(offset)
-        .limit(page_size)
-    )
+    stmt = select(NodeCategory).where(*where_conditions).order_by(NodeCategory.sort_order, NodeCategory.name).offset(offset).limit(page_size)
     if include_deleted:
         stmt = include_soft_deleted(stmt)
     items = list((await session.execute(stmt)).scalars())
@@ -155,9 +147,7 @@ async def node_category_in_use(
     return referencing
 
 
-async def soft_delete_node_category(
-    session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID
-) -> NodeCategory | None:
+async def soft_delete_node_category(session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID) -> NodeCategory | None:
     """Soft-delete: set deleted_at. Returns None if not found or already deleted.
 
     Raises ``NodeCategoryInUseError`` when any active pipeline's graph nodes
@@ -181,9 +171,7 @@ async def soft_delete_node_category(
     return result.scalar_one_or_none()
 
 
-async def restore_node_category(
-    session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID
-) -> NodeCategory | None:
+async def restore_node_category(session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID) -> NodeCategory | None:
     """Restore a soft-deleted node category. Returns None if not found."""
     result = await session.execute(
         update(NodeCategory)

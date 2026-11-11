@@ -474,9 +474,7 @@ class TestEffectiveRedisPoolSize:
             # effective pool is a runtime override)
         ],
     )
-    def test_effective_pool_never_below_concurrency_plus_reserve(
-        self, pool_size: int, concurrency: int, expected: int
-    ) -> None:
+    def test_effective_pool_never_below_concurrency_plus_reserve(self, pool_size: int, concurrency: int, expected: int) -> None:
         assert sw._effective_redis_pool_size(pool_size, concurrency) == expected
 
     def test_effective_pool_always_exceeds_concurrency(self) -> None:
@@ -553,9 +551,7 @@ class TestEffectiveDbPoolSize:
             # effective pool is a runtime override)
         ],
     )
-    def test_effective_db_pool_never_below_concurrency_plus_reserve(
-        self, pool_size: int, concurrency: int, expected: int
-    ) -> None:
+    def test_effective_db_pool_never_below_concurrency_plus_reserve(self, pool_size: int, concurrency: int, expected: int) -> None:
         assert sw._effective_db_pool_size(pool_size, concurrency) == expected
 
     def test_effective_db_pool_always_exceeds_concurrency(self) -> None:
@@ -656,9 +652,7 @@ class TestExecuteResumeWrappers:
 
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch(
-                "farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"
-            ) as claim,
+            patch("farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim") as claim,
             patch("farna.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
             patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
             patch(
@@ -671,9 +665,7 @@ class TestExecuteResumeWrappers:
             executor = MagicMock()
             executor.execute = AsyncMock()
             load.return_value = (run, executor)
-            result = await sw.execute_run(
-                ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run(ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
         assert result == {"status": "complete"}
         claim.assert_awaited_once()
@@ -728,9 +720,7 @@ class TestExecuteResumeWrappers:
             executor = MagicMock()
             executor.execute = AsyncMock()
             load.return_value = (run, executor)
-            result = await sw.execute_run(
-                ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run(ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
         assert result == {"status": "complete"}
         complete.assert_awaited_once()
@@ -762,9 +752,7 @@ class TestExecuteResumeWrappers:
             executor = MagicMock()
             executor.execute = AsyncMock()
             load.return_value = (run, executor)
-            result = await sw.execute_run(
-                ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run(ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
         assert result == {"status": "failed"}
         complete.assert_not_awaited()
@@ -776,9 +764,7 @@ class TestExecuteResumeWrappers:
             patch("farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=None),
             patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
         ):
-            result = await sw.execute_run(
-                {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run({}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
         assert result == {"status": "not_claimed"}
         complete.assert_not_awaited()
 
@@ -826,9 +812,7 @@ class TestExecuteResumeWrappers:
             ) as fail,
             patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
         ):
-            result = await sw.execute_run(
-                {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run({}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
         assert result == {"status": "setup_failed"}
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_setup_failed"
@@ -872,14 +856,10 @@ class TestExecuteResumeWrappers:
                 side_effect=RuntimeError("OperationalError: FK corrupt"),
             ),
             patch("farna.core.pipeline_execution._advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            patch(
-                "farna.core.pipeline_execution._record_fact_for_terminal_failed_run", new_callable=AsyncMock
-            ) as record_facts,
+            patch("farna.core.pipeline_execution._record_fact_for_terminal_failed_run", new_callable=AsyncMock) as record_facts,
             patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
         ):
-            result = await sw.execute_run(
-                {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
-            )
+            result = await sw.execute_run({}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70")
 
         assert result == {"status": "setup_failed"}
         complete.assert_not_awaited()
@@ -938,9 +918,7 @@ class TestExecuteResumeWrappers:
     async def test_resume_run_delegates(self) -> None:
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch(
-                "farna.core.pipeline_execution.resume_run", new_callable=AsyncMock, return_value={"status": "complete"}
-            ) as core,
+            patch("farna.core.pipeline_execution.resume_run", new_callable=AsyncMock, return_value={"status": "complete"}) as core,
         ):
             result = await sw.resume_run(
                 {},
@@ -968,9 +946,7 @@ class TestExecuteResumeWrappers:
 
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch(
-                "farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-fresh"
-            ) as claim,
+            patch("farna.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-fresh") as claim,
             patch("farna.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
             patch("farna.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
             patch(
@@ -1009,9 +985,7 @@ class TestExecuteResumeWrappers:
         core without TypeError."""
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch(
-                "farna.core.pipeline_execution.resume_run", new_callable=AsyncMock, return_value={"status": "complete"}
-            ) as core,
+            patch("farna.core.pipeline_execution.resume_run", new_callable=AsyncMock, return_value={"status": "complete"}) as core,
         ):
             result = await sw.resume_run(
                 {},
@@ -1033,9 +1007,7 @@ class TestFireWrappersDispatchRuns:
         fired = {"status": "fired", "run_id": "run-9"}
         with (
             patch("farna.core.cron_helpers.fire_cron_trigger", new_callable=AsyncMock, return_value=fired) as ch,
-            patch(
-                "farna.core.dispatch.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job-1")
-            ) as dispatch,
+            patch("farna.core.dispatch.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job-1")) as dispatch,
             patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="runs")),
         ):
             result = await sw.fire_cron_trigger(
@@ -1053,9 +1025,7 @@ class TestFireWrappersDispatchRuns:
     @pytest.mark.asyncio
     async def test_fire_cron_trigger_not_fired_no_dispatch(self) -> None:
         with (
-            patch(
-                "farna.core.cron_helpers.fire_cron_trigger", new_callable=AsyncMock, return_value={"status": "skipped"}
-            ),
+            patch("farna.core.cron_helpers.fire_cron_trigger", new_callable=AsyncMock, return_value={"status": "skipped"}),
             patch("farna.core.dispatch.dispatch_run", new_callable=AsyncMock) as dispatch,
         ):
             result = await sw.fire_cron_trigger(
@@ -1648,9 +1618,7 @@ class TestSystemJobDelegates:
         assert stats["last_run_at"]
 
     @pytest.mark.asyncio
-    async def test_stale_run_recovery_persist_failure_does_not_break_sweep(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_stale_run_recovery_persist_failure_does_not_break_sweep(self, caplog: pytest.LogCaptureFixture) -> None:
         """A stats-persistence failure must never fail the sweep itself."""
         redis_client = AsyncMock()
         redis_client.set.side_effect = RuntimeError("redis down")
@@ -1734,9 +1702,7 @@ class TestSystemJobDelegates:
         assert stats["last_run_at"]
 
     @pytest.mark.asyncio
-    async def test_slot_reconciliation_persist_failure_does_not_break_sweep(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_slot_reconciliation_persist_failure_does_not_break_sweep(self, caplog: pytest.LogCaptureFixture) -> None:
         """A stats-persistence failure must never fail the sweep itself."""
         redis_client = AsyncMock()
         redis_client.set.side_effect = RuntimeError("redis down")
@@ -1927,9 +1893,7 @@ class TestSystemJobDelegates:
         factory.return_value = session_cm
         result_obj = MagicMock(success=True, entries_count=3, revoked_count=1, error=None)
         with (
-            patch.object(
-                sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")
-            ),
+            patch.object(sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")),
             patch.object(sw, "_make_session_factory", return_value=factory),
             patch("farna.core.library_sync.sync_library", new_callable=AsyncMock, return_value=result_obj) as sync,
         ):
@@ -1943,9 +1907,7 @@ class TestSystemJobDelegates:
     async def test_library_sync_fail_open_on_cron_failure(self) -> None:
         """A session/DB failure in the cron wrapper must never raise (fail-open)."""
         with (
-            patch.object(
-                sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")
-            ),
+            patch.object(sw, "get_settings", return_value=_settings(modulo_library_endpoint="https://library.modulo.run")),
             patch.object(sw, "_make_session_factory", side_effect=RuntimeError("redis down")),
         ):
             result = await sw.library_sync({})
@@ -2221,9 +2183,7 @@ class TestHitlDeadlineWarning:
         assert "hitl_deadline_warning: notifier init failed" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_redis_client_failure_still_dispatches_with_memory_backstop(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_redis_client_failure_still_dispatches_with_memory_backstop(self, caplog: pytest.LogCaptureFixture) -> None:
         """No Redis client → dispatch proceeds with ``redis_client=None``
         (the in-process fire-once backstop) — a dead Redis must not silence
         the warning."""
@@ -2453,9 +2413,7 @@ class TestGetSystemAsyncEngine:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_translates_sslmode_require_for_the_system_engine(self) -> None:
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2475,9 +2433,7 @@ class TestGetSystemAsyncEngine:
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require' (TLS
         required, fail-closed), not be silently downgraded to ssl=False."""
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2495,9 +2451,7 @@ class TestGetSystemAsyncEngine:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_honours_sslmode_verify_full(self) -> None:
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=verify-full"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=verify-full")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2513,9 +2467,7 @@ class TestGetSystemAsyncEngine:
 
     def test_rejects_downgrading_sslmode(self) -> None:
         """FAR-1441: prefer/allow silently downgrade to plaintext — refused."""
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2557,7 +2509,7 @@ class TestGetSystemAsyncEngine:
             with (
                 patch.object(sw, "get_settings", return_value=mock_settings),
                 patch.object(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra))),
-                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+                pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
             ):
                 sw._get_system_async_engine()
 

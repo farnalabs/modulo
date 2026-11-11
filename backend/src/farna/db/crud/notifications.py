@@ -42,9 +42,7 @@ _DEFAULT_EXPIRY_DAYS = 90
 #
 # The link is the run deep-link written by the event mapper
 # (``/runs/{run_id}``) — there is deliberately no run FK on ``notifications``.
-_RUN_LINK_RE = re.compile(
-    r"^/runs/(?P<run_id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#].*)?$"
-)
+_RUN_LINK_RE = re.compile(r"^/runs/(?P<run_id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#].*)?$")
 
 
 @dataclass(frozen=True)
@@ -117,11 +115,7 @@ async def get_linked_run_states(
             status=str(status_raw),
             cancel_reason=None if cancel_reason_raw is None else str(cancel_reason_raw),
         )
-    return {
-        notification_id: states[run_id]
-        for notification_id, run_id in run_link_by_notification.items()
-        if run_id in states
-    }
+    return {notification_id: states[run_id] for notification_id, run_id in run_link_by_notification.items() if run_id in states}
 
 
 def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
@@ -153,11 +147,7 @@ def _visible_to_user_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
         )
         .exists()
     )
-    return (
-        (Notification.scope == "org")
-        | ((Notification.scope == "admin") & is_org_admin)
-        | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
-    )
+    return (Notification.scope == "org") | ((Notification.scope == "admin") & is_org_admin) | ((Notification.scope == "user") & (Notification.target_user_id == user_id))
 
 
 def _not_expired_clause() -> ColumnElement[bool]:
@@ -392,9 +382,7 @@ async def get_dashboard_notifications(
     )
     q = q.order_by(Notification.created_at.desc()).limit(limit)
     try:
-        return await _rows_with_prefs_fail_open(
-            session, q, user_id, log_key="notifications.dashboard.prefs_filter_fail_open"
-        )
+        return await _rows_with_prefs_fail_open(session, q, user_id, log_key="notifications.dashboard.prefs_filter_fail_open")
     except ProgrammingError:
         return []
 
@@ -427,9 +415,7 @@ async def get_notifications_for_user(
 
     q = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit)
     try:
-        return await _rows_with_prefs_fail_open(
-            session, q, user_id, log_key="notifications.list.prefs_filter_fail_open"
-        )
+        return await _rows_with_prefs_fail_open(session, q, user_id, log_key="notifications.list.prefs_filter_fail_open")
     except ProgrammingError:
         return []
 
@@ -511,9 +497,7 @@ async def count_notifications_for_user(
     q = _apply_status_filter(q, user_id=user_id, status_filter=status_filter)
 
     try:
-        return await _count_with_prefs_fail_open(
-            session, q, user_id, log_key="notifications.count.prefs_filter_fail_open"
-        )
+        return await _count_with_prefs_fail_open(session, q, user_id, log_key="notifications.count.prefs_filter_fail_open")
     except ProgrammingError:
         return 0
 
@@ -688,9 +672,7 @@ async def get_unread_count(
         _visible_to_user_clause(user_id),
     )
     try:
-        return await _count_with_prefs_fail_open(
-            session, q, user_id, log_key="notifications.unread.prefs_filter_fail_open"
-        )
+        return await _count_with_prefs_fail_open(session, q, user_id, log_key="notifications.unread.prefs_filter_fail_open")
     except ProgrammingError:
         return 0
 
@@ -748,8 +730,5 @@ async def set_notification_preferences(
             )
         )
     if to_add:
-        session.add_all(
-            NotificationPreference(organisation_id=org_id, account_id=account_id, category=category)
-            for category in sorted(to_add)
-        )
+        session.add_all(NotificationPreference(organisation_id=org_id, account_id=account_id, category=category) for category in sorted(to_add))
     await session.flush()

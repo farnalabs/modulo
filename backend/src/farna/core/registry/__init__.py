@@ -384,10 +384,7 @@ _BUILTIN_REGISTRY: dict[str, RegistryEntry] = {
             author="modulo",
             name="modulo-dogfood-pipeline",
             primitive_type="workflow",
-            description=(
-                "End-to-end pipeline that builds Modulo from a GitHub issue: reads spec, "
-                "generates code, applies changes, runs tests, and creates a PR with HITL review."
-            ),
+            description=("End-to-end pipeline that builds Modulo from a GitHub issue: reads spec, generates code, applies changes, runs tests, and creates a PR with HITL review."),
             tags=["workflow", "dogfood", "modulo", "pipeline"],
             content_json={
                 "nodes": [

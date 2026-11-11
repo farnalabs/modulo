@@ -66,7 +66,7 @@ def test_production_docs_document_a_login_verification() -> None:
 
 def test_production_docs_document_the_readiness_requirement() -> None:
     text = _read(_DEPLOYMENT_DOC)
-    assert "MODULO_SYSTEM_DATABASE_URL" in text
+    assert "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" in text
     assert "dispatcher_reconcile" in text
 
 

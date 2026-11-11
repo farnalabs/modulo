@@ -23,11 +23,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 SENTRY_INTEGRATION: dict[str, Any] = {
     "name": "Sentry",
-    "description": (
-        "Error tracking and performance monitoring integration. Captures "
-        "exceptions, transactions, and crash reports from applications and "
-        "surfaces them in the Modulo pipeline for triage and alerting."
-    ),
+    "description": ("Error tracking and performance monitoring integration. Captures exceptions, transactions, and crash reports from applications and surfaces them in the Modulo pipeline for triage and alerting."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["monitoring", "error-tracking", "observability", "canonical"],
@@ -57,10 +53,7 @@ SENTRY_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 BITBUCKET_INTEGRATION: dict[str, Any] = {
     "name": "Bitbucket",
-    "description": (
-        "Bitbucket Cloud git hosting integration. Provides repository "
-        "access, pull request management, and code review workflows."
-    ),
+    "description": ("Bitbucket Cloud git hosting integration. Provides repository access, pull request management, and code review workflows."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["git", "hosting", "code-review", "canonical"],
@@ -85,9 +78,7 @@ BITBUCKET_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 AZURE_DEVOPS_INTEGRATION: dict[str, Any] = {
     "name": "Azure DevOps",
-    "description": (
-        "Azure DevOps Services integration including Azure Repos (git), Azure Pipelines (CI/CD), Boards, and Wiki."
-    ),
+    "description": ("Azure DevOps Services integration including Azure Repos (git), Azure Pipelines (CI/CD), Boards, and Wiki."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["devops", "ci-cd", "azure", "repos", "canonical"],
@@ -113,11 +104,7 @@ AZURE_DEVOPS_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 PROMETHEUS_INTEGRATION: dict[str, Any] = {
     "name": "Prometheus",
-    "description": (
-        "Prometheus monitoring and alerting integration. Queries metrics "
-        "via PromQL, retrieves alertmanager alerts, and feeds time-series "
-        "data into pipeline analysis."
-    ),
+    "description": ("Prometheus monitoring and alerting integration. Queries metrics via PromQL, retrieves alertmanager alerts, and feeds time-series data into pipeline analysis."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["monitoring", "metrics", "observability", "promql", "canonical"],
@@ -159,11 +146,7 @@ PROMETHEUS_INTEGRATION: dict[str, Any] = {
 # ``initialise()`` until re-credentialed.
 DATADOG_INTEGRATION: dict[str, Any] = {
     "name": "Datadog",
-    "description": (
-        "Datadog observability integration. Ingests metrics, traces, "
-        "logs, and monitors from Datadog for pipeline-driven alerting "
-        "and incident analysis."
-    ),
+    "description": ("Datadog observability integration. Ingests metrics, traces, logs, and monitors from Datadog for pipeline-driven alerting and incident analysis."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["monitoring", "observability", "logs", "metrics", "canonical"],
@@ -195,11 +178,7 @@ DATADOG_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 PAGERDUTY_INTEGRATION: dict[str, Any] = {
     "name": "PagerDuty",
-    "description": (
-        "Incident management integration. Creates, acknowledges, and "
-        "resolves PagerDuty incidents from pipeline failures and alert "
-        "conditions."
-    ),
+    "description": ("Incident management integration. Creates, acknowledges, and resolves PagerDuty incidents from pipeline failures and alert conditions."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["incidents", "alerting", "on-call", "canonical"],
@@ -224,9 +203,7 @@ PAGERDUTY_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 JIRA_INTEGRATION: dict[str, Any] = {
     "name": "Jira",
-    "description": (
-        "Jira issue and project tracking integration. Supports issue CRUD, sprint management, and custom field mapping."
-    ),
+    "description": ("Jira issue and project tracking integration. Supports issue CRUD, sprint management, and custom field mapping."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["issue-tracking", "project-management", "agile", "canonical"],
@@ -256,11 +233,7 @@ JIRA_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 GITLAB_INTEGRATION: dict[str, Any] = {
     "name": "GitLab",
-    "description": (
-        "GitLab git hosting and CI/CD integration. Provides repository "
-        "access, merge request management, CI pipeline triggers, and "
-        "issue tracking."
-    ),
+    "description": ("GitLab git hosting and CI/CD integration. Provides repository access, merge request management, CI pipeline triggers, and issue tracking."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["git", "ci-cd", "hosting", "devops", "canonical"],
@@ -285,11 +258,7 @@ GITLAB_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SLACK_INTEGRATION: dict[str, Any] = {
     "name": "Slack",
-    "description": (
-        "Slack messaging integration. Sends pipeline notifications, "
-        "receives slash-command triggers, and posts structured messages "
-        "with blocks and attachments."
-    ),
+    "description": ("Slack messaging integration. Sends pipeline notifications, receives slash-command triggers, and posts structured messages with blocks and attachments."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["messaging", "notifications", "collaboration", "canonical"],
@@ -314,10 +283,7 @@ SLACK_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CONFLUENCE_INTEGRATION: dict[str, Any] = {
     "name": "Confluence",
-    "description": (
-        "Confluence wiki and documentation integration. Creates, updates, "
-        "and retrieves pages, attachments, and blog posts."
-    ),
+    "description": ("Confluence wiki and documentation integration. Creates, updates, and retrieves pages, attachments, and blog posts."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["wiki", "documentation", "knowledge-base", "canonical"],
@@ -347,10 +313,7 @@ CONFLUENCE_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 NOTION_INTEGRATION: dict[str, Any] = {
     "name": "Notion",
-    "description": (
-        "Notion knowledge-base integration. Reads and writes pages, "
-        "databases, and blocks for documentation and project tracking."
-    ),
+    "description": ("Notion knowledge-base integration. Reads and writes pages, databases, and blocks for documentation and project tracking."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["documentation", "knowledge-base", "project-management", "canonical"],
@@ -375,11 +338,7 @@ NOTION_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SONARQUBE_INTEGRATION: dict[str, Any] = {
     "name": "SonarQube",
-    "description": (
-        "Code quality and static analysis integration. Retrieves quality "
-        "gate status, code smells, bugs, vulnerabilities, and coverage "
-        "metrics from SonarQube."
-    ),
+    "description": ("Code quality and static analysis integration. Retrieves quality gate status, code smells, bugs, vulnerabilities, and coverage metrics from SonarQube."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["code-quality", "static-analysis", "linting", "canonical"],
@@ -404,11 +363,7 @@ SONARQUBE_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 ELASTIC_INTEGRATION: dict[str, Any] = {
     "name": "Elasticsearch",
-    "description": (
-        "Elasticsearch search and observability integration. Queries "
-        "indices for log analytics, application performance data, and "
-        "structured search operations."
-    ),
+    "description": ("Elasticsearch search and observability integration. Queries indices for log analytics, application performance data, and structured search operations."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["search", "observability", "logs", "analytics", "canonical"],
@@ -444,10 +399,7 @@ ELASTIC_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 N8N_INTEGRATION: dict[str, Any] = {
     "name": "n8n",
-    "description": (
-        "n8n workflow automation integration. Triggers and manages n8n "
-        "workflows from pipeline events and receives webhook callbacks."
-    ),
+    "description": ("n8n workflow automation integration. Triggers and manages n8n workflows from pipeline events and receives webhook callbacks."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["automation", "workflow", "integration", "canonical"],
@@ -472,10 +424,7 @@ N8N_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TERRAFORM_INTEGRATION: dict[str, Any] = {
     "name": "Terraform",
-    "description": (
-        "Infrastructure as Code integration. Plans and applies Terraform "
-        "configurations, retrieves state, and validates HCL syntax."
-    ),
+    "description": ("Infrastructure as Code integration. Plans and applies Terraform configurations, retrieves state, and validates HCL syntax."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["infrastructure", "iac", "terraform", "cloud", "canonical"],
@@ -512,11 +461,7 @@ TERRAFORM_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TEAMS_INTEGRATION: dict[str, Any] = {
     "name": "Microsoft Teams",
-    "description": (
-        "Microsoft Teams messaging integration. Sends adaptive card "
-        "notifications, receives commands, and posts pipeline updates "
-        "to Teams channels."
-    ),
+    "description": ("Microsoft Teams messaging integration. Sends adaptive card notifications, receives commands, and posts pipeline updates to Teams channels."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["messaging", "notifications", "collaboration", "microsoft", "canonical"],
@@ -541,10 +486,7 @@ TEAMS_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 DISCORD_INTEGRATION: dict[str, Any] = {
     "name": "Discord",
-    "description": (
-        "Discord messaging integration. Sends pipeline notifications "
-        "via webhooks, manages threads, and listens for bot commands."
-    ),
+    "description": ("Discord messaging integration. Sends pipeline notifications via webhooks, manages threads, and listens for bot commands."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["messaging", "notifications", "collaboration", "canonical"],
@@ -568,9 +510,7 @@ DISCORD_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 JENKINS_INTEGRATION: dict[str, Any] = {
     "name": "Jenkins",
-    "description": (
-        "Jenkins CI/CD integration. Triggers builds, retrieves build logs and status, and monitors job health."
-    ),
+    "description": ("Jenkins CI/CD integration. Triggers builds, retrieves build logs and status, and monitors job health."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["ci-cd", "automation", "jenkins", "build", "canonical"],
@@ -603,10 +543,7 @@ JENKINS_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 GITHUB_ACTIONS_INTEGRATION: dict[str, Any] = {
     "name": "GitHub Actions",
-    "description": (
-        "GitHub Actions CI/CD integration. Triggers workflow runs, "
-        "monitors run status and logs, and dispatches repository events."
-    ),
+    "description": ("GitHub Actions CI/CD integration. Triggers workflow runs, monitors run status and logs, and dispatches repository events."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["ci-cd", "github", "automation", "workflows", "canonical"],
@@ -636,11 +573,7 @@ GITHUB_ACTIONS_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SNYK_INTEGRATION: dict[str, Any] = {
     "name": "Snyk",
-    "description": (
-        "Vulnerability scanning integration. Tests dependencies and "
-        "container images for known CVEs, retrieves advisory details, "
-        "and monitors project risk."
-    ),
+    "description": ("Vulnerability scanning integration. Tests dependencies and container images for known CVEs, retrieves advisory details, and monitors project risk."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["security", "vulnerability", "dependencies", "scanning", "canonical"],
@@ -666,11 +599,7 @@ SNYK_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 KUBERNETES_INTEGRATION: dict[str, Any] = {
     "name": "Kubernetes",
-    "description": (
-        "Kubernetes container orchestration integration. Retrieves pod "
-        "status, deployment health, events, and logs for pipeline-driven "
-        "deployment monitoring and incident analysis."
-    ),
+    "description": ("Kubernetes container orchestration integration. Retrieves pod status, deployment health, events, and logs for pipeline-driven deployment monitoring and incident analysis."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["kubernetes", "containers", "orchestration", "infrastructure", "canonical"],
@@ -715,10 +644,7 @@ KUBERNETES_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 DOCKER_INTEGRATION: dict[str, Any] = {
     "name": "Docker",
-    "description": (
-        "Docker container management integration. Builds, pulls, and "
-        "manages container images and containers via the Docker API."
-    ),
+    "description": ("Docker container management integration. Builds, pulls, and manages container images and containers via the Docker API."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["containers", "docker", "build", "deployment", "canonical"],
@@ -753,9 +679,7 @@ DOCKER_INTEGRATION: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CIRCLECI_INTEGRATION: dict[str, Any] = {
     "name": "CircleCI",
-    "description": (
-        "CircleCI CI/CD integration. Triggers pipeline runs, monitors job status, retrieves test results and artifacts."
-    ),
+    "description": ("CircleCI CI/CD integration. Triggers pipeline runs, monitors job status, retrieves test results and artifacts."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["ci-cd", "automation", "testing", "build", "canonical"],

@@ -28,10 +28,7 @@ class SchemaDeletionProtectedError(Exception):
 
     def __init__(self, schema_id: uuid.UUID, detail: str | None = None) -> None:
         if detail is None:
-            detail = (
-                f"Schema {schema_id} cannot be deleted: one or more Agents reference it. "
-                "Reassign or delete those Agents first."
-            )
+            detail = f"Schema {schema_id} cannot be deleted: one or more Agents reference it. Reassign or delete those Agents first."
         super().__init__(detail)
         self.schema_id = schema_id
 
@@ -172,14 +169,7 @@ async def delete_schema(
         if agent_count:
             refs.append("Agents")
 
-        snap_pin_count = (
-            await session.execute(
-                select(func.count())
-                .select_from(SnapshotSchemaPin)
-                .where(SnapshotSchemaPin.schema_id == schema_id)
-                .limit(1)
-            )
-        ).scalar_one()
+        snap_pin_count = (await session.execute(select(func.count()).select_from(SnapshotSchemaPin).where(SnapshotSchemaPin.schema_id == schema_id).limit(1))).scalar_one()
         if snap_pin_count:
             refs.append("PipelineSnapshots (snapshot_schema_pins)")
 
@@ -197,11 +187,7 @@ async def delete_schema(
             refs.append("LibraryPrimitives (local schema entries)")
 
         if refs:
-            detail = (
-                f"Schema {schema_id} cannot be deleted: references exist in "
-                f"{' and '.join(refs)}. "
-                "Remove those references or use force=true to delete unconditionally."
-            )
+            detail = f"Schema {schema_id} cannot be deleted: references exist in {' and '.join(refs)}. Remove those references or use force=true to delete unconditionally."
             raise SchemaDeletionProtectedError(schema_id, detail=detail)
     await session.delete(schema)
     await session.flush()
@@ -261,22 +247,8 @@ async def list_schema_versions(
 ) -> PageResult[SchemaVersion]:
     offset = (page - 1) * page_size
     try:
-        total = (
-            await session.execute(
-                select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id)
-            )
-        ).scalar_one()
-        items = list(
-            (
-                await session.execute(
-                    select(SchemaVersion)
-                    .where(SchemaVersion.schema_id == schema_id)
-                    .order_by(SchemaVersion.version_number.desc())
-                    .offset(offset)
-                    .limit(page_size)
-                )
-            ).scalars()
-        )
+        total = (await session.execute(select(func.count()).select_from(SchemaVersion).where(SchemaVersion.schema_id == schema_id))).scalar_one()
+        items = list((await session.execute(select(SchemaVersion).where(SchemaVersion.schema_id == schema_id).order_by(SchemaVersion.version_number.desc()).offset(offset).limit(page_size))).scalars())
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     has_more = (offset + len(items)) < total

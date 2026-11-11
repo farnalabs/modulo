@@ -162,9 +162,7 @@ def build_desired_views(
         if failure is not None:
             blocked.append((KIND_TRIGGER, composite_key, failure))
             continue
-        desired[KIND_TRIGGER].append(
-            (composite_key, _trigger_desired_view(entity, composite_key, resolved_configs, refresh_secrets))
-        )
+        desired[KIND_TRIGGER].append((composite_key, _trigger_desired_view(entity, composite_key, resolved_configs, refresh_secrets)))
     return desired, blocked
 
 
@@ -184,10 +182,7 @@ def _trigger_block_reason(
     if ambiguous_count is not None:
         return f"pipeline {entity.pipeline!r}: ambiguous name, {ambiguous_count} matches"
     if entity.pipeline not in current_pipelines and entity.pipeline not in declared_pipelines:
-        return (
-            f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
-            "earlier document) or apply the pipeline first"
-        )
+        return f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an earlier document) or apply the pipeline first"
     return None
 
 
@@ -241,10 +236,7 @@ def _apply_one_trigger(
         if entity.pipeline in declared_pipelines:
             msg = f"pipeline {entity.pipeline!r} apply failed upstream - see the pipeline's failed entry"
         else:
-            msg = (
-                f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
-                "earlier document) or apply the pipeline first"
-            )
+            msg = f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an earlier document) or apply the pipeline first"
         raise KeyError(msg)
     resolved_config = resolved_configs.get(entry_name)
     if resolved_config is None:

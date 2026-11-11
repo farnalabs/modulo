@@ -483,11 +483,7 @@ def _gated_edge_weakenings(
     candidates; the new edge is matched on the
     ``(source, target, edge_type)`` topology key.
     """
-    old_by_key = {
-        _topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e
-        for e in old_norm
-        if e["hitl_review_config"] is not None
-    }
+    old_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in old_norm if e["hitl_review_config"] is not None}
     new_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in new_norm}
     weakened: list[EdgeWeakening] = []
     for key, old_edge in old_by_key.items():
@@ -756,22 +752,11 @@ async def enforce_guardrail_binding_strip(
         pipeline_id=pipeline_id,
         organisation_id=org_id,
     )
-    stripped = sorted(
-        {
-            str(row.node_id)
-            for row in guardrail_rows
-            if row.node_id is not None and str(row.node_id) not in incoming_node_ids
-        }
-    )
+    stripped = sorted({str(row.node_id) for row in guardrail_rows if row.node_id is not None and str(row.node_id) not in incoming_node_ids})
     if stripped:
         raise GuardrailBindingStripDenied(
             stripped_node_ids=stripped,
-            detail=(
-                "Non-admin cannot strip a guardrail binding: removing node(s) "
-                + ", ".join(stripped)
-                + " from the graph would drop a node-bound guardrail. Only an "
-                "admin can remove a node that has a bound guardrail."
-            ),
+            detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + ", ".join(stripped) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
         )
 
 

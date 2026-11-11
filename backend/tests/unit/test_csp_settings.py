@@ -33,7 +33,7 @@ class TestCspSettings:
 
     def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_settings(monkeypatch)
-        monkeypatch.delenv("MODULO_MONITOR_DOMAINS", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_MONITOR_DOMAINS", raising=False)
         assert not Settings().modulo_monitor_domains
 
     def test_empty_string_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:

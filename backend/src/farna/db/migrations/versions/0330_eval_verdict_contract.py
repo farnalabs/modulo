@@ -156,16 +156,7 @@ _ADD_CONFIDENCE = "ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS judge_confi
 _ADD_ERROR_CODE = "ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS error_code VARCHAR(64)"
 
 # --- primary-key keyset backfill (index-backed; never a full seq scan) ------
-_BACKFILL_OUTCOME = (
-    "WITH batch AS ("
-    "SELECT id FROM eval_results WHERE id > :last AND outcome IS NULL "
-    "ORDER BY id LIMIT :batch_size"
-    ") "
-    "UPDATE eval_results AS e "
-    "SET outcome = CASE WHEN e.passed THEN 'pass' ELSE 'fail' END "
-    "FROM batch WHERE e.id = batch.id "
-    "RETURNING e.id"
-)
+_BACKFILL_OUTCOME = "WITH batch AS (SELECT id FROM eval_results WHERE id > :last AND outcome IS NULL ORDER BY id LIMIT :batch_size) UPDATE eval_results AS e SET outcome = CASE WHEN e.passed THEN 'pass' ELSE 'fail' END FROM batch WHERE e.id = batch.id RETURNING e.id"
 _ZERO_UUID = uuid.UUID(int=0)
 
 #: Locks the migration transaction itself already holds on ``eval_results``.
@@ -173,18 +164,12 @@ _ZERO_UUID = uuid.UUID(int=0)
 #: Alembic transaction) creates an index on this table and keeps its SHARE lock
 #: until the transaction ends, so an ACCESS EXCLUSIVE from a side connection
 #: would wait on a lock our own transaction holds.
-_EVAL_RESULTS_LOCKS_HELD_BY_THIS_TRANSACTION = (
-    "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = to_regclass('public.eval_results')"
-)
+_EVAL_RESULTS_LOCKS_HELD_BY_THIS_TRANSACTION = "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = to_regclass('public.eval_results')"
 
 # --- evals vocabulary (TRANSITIONAL: both stored names are accepted) --------
 _RENAME_EVAL_TYPES = "UPDATE evals SET eval_type = 'model_judge' WHERE eval_type = 'llm_judge'"
 _RESTORE_EVAL_TYPES = "UPDATE evals SET eval_type = 'llm_judge' WHERE eval_type = 'model_judge'"
-_DROP_EVAL_TYPE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' "
-    "AND conrelid = 'public.evals'::regclass) THEN "
-    "ALTER TABLE public.evals DROP CONSTRAINT ck_evals_type; END IF; END $$;"
-)
+_DROP_EVAL_TYPE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' AND conrelid = 'public.evals'::regclass) THEN ALTER TABLE public.evals DROP CONSTRAINT ck_evals_type; END IF; END $$;"
 _ADD_TRANSITIONAL_EVAL_TYPE_CHECK = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
     "WHERE conname='ck_evals_type' AND conrelid = 'public.evals'::regclass) THEN "
@@ -204,27 +189,13 @@ _ADD_OLD_EVAL_TYPE_CHECK = (
     "'custom_function'::character varying, 'guardrail'::character varying, "
     "'human_set'::character varying]::text[])) NOT VALID; END IF; END $$;"
 )
-_VALIDATE_EVAL_TYPE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_evals_type' AND conrelid = 'public.evals'::regclass "
-    "AND NOT convalidated) THEN "
-    "ALTER TABLE public.evals VALIDATE CONSTRAINT ck_evals_type; END IF; END $$;"
-)
+_VALIDATE_EVAL_TYPE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_type' AND conrelid = 'public.evals'::regclass AND NOT convalidated) THEN ALTER TABLE public.evals VALIDATE CONSTRAINT ck_evals_type; END IF; END $$;"
 
 # --- eval_results CHECKs (added NOT VALID, validated separately) ------------
 _ADD_OUTCOME_CHECK = (
-    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome' "
-    "AND conrelid = 'public.eval_results'::regclass) THEN "
-    "ALTER TABLE public.eval_results ADD CONSTRAINT "
-    "ck_eval_results_outcome CHECK (outcome IN ('pass', 'fail', 'error')) NOT VALID; END IF; END $$;"
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome' AND conrelid = 'public.eval_results'::regclass) THEN ALTER TABLE public.eval_results ADD CONSTRAINT ck_eval_results_outcome CHECK (outcome IN ('pass', 'fail', 'error')) NOT VALID; END IF; END $$;"
 )
-_VALIDATE_OUTCOME_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome' "
-    "AND conrelid = 'public.eval_results'::regclass AND NOT convalidated) THEN "
-    "ALTER TABLE public.eval_results VALIDATE CONSTRAINT ck_eval_results_outcome; END IF; END $$;"
-)
+_VALIDATE_OUTCOME_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome' AND conrelid = 'public.eval_results'::regclass AND NOT convalidated) THEN ALTER TABLE public.eval_results VALIDATE CONSTRAINT ck_eval_results_outcome; END IF; END $$;"
 _ADD_CONFIDENCE_CHECK = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
     "WHERE conname='ck_eval_results_judge_confidence_kind' "
@@ -236,24 +207,10 @@ _ADD_CONFIDENCE_CHECK = (
     ") NOT VALID; END IF; END $$;"
 )
 _VALIDATE_CONFIDENCE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_judge_confidence_kind' "
-    "AND conrelid = 'public.eval_results'::regclass AND NOT convalidated) "
-    "THEN ALTER TABLE public.eval_results VALIDATE CONSTRAINT "
-    "ck_eval_results_judge_confidence_kind; END IF; END $$;"
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_judge_confidence_kind' AND conrelid = 'public.eval_results'::regclass AND NOT convalidated) THEN ALTER TABLE public.eval_results VALIDATE CONSTRAINT ck_eval_results_judge_confidence_kind; END IF; END $$;"
 )
-_DROP_OUTCOME_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_outcome' "
-    "AND conrelid = 'public.eval_results'::regclass) "
-    "THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_outcome; END IF; END $$;"
-)
-_DROP_CONFIDENCE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_eval_results_judge_confidence_kind' "
-    "AND conrelid = 'public.eval_results'::regclass) "
-    "THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_judge_confidence_kind; END IF; END $$;"
-)
+_DROP_OUTCOME_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_outcome' AND conrelid = 'public.eval_results'::regclass) THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_outcome; END IF; END $$;"
+_DROP_CONFIDENCE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_eval_results_judge_confidence_kind' AND conrelid = 'public.eval_results'::regclass) THEN ALTER TABLE public.eval_results DROP CONSTRAINT ck_eval_results_judge_confidence_kind; END IF; END $$;"
 
 
 def _is_postgres() -> bool:
@@ -391,9 +348,7 @@ def _backfill_outcome() -> int:
             logger.info("0330_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
         logger.info(
-            "0330_eval_verdict_contract: starting online outcome backfill "
-            "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "
-            "progress every %d batches or %ds)",
+            "0330_eval_verdict_contract: starting online outcome backfill (batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; progress every %d batches or %ds)",
             _BATCH_SIZE,
             _PROGRESS_EVERY_BATCHES,
             int(_PROGRESS_EVERY_SECONDS),
@@ -410,9 +365,7 @@ def _backfill_outcome() -> int:
             total += len(ids)
             batches += 1
             last = max(ids)
-            if batches % _PROGRESS_EVERY_BATCHES == 0 or (
-                time.monotonic() - progress_started >= _PROGRESS_EVERY_SECONDS
-            ):
+            if batches % _PROGRESS_EVERY_BATCHES == 0 or (time.monotonic() - progress_started >= _PROGRESS_EVERY_SECONDS):
                 logger.info(
                     "0330_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
                     total,

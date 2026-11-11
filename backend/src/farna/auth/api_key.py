@@ -351,11 +351,7 @@ async def revoke_run_api_key(
 
     result = cast(
         "CursorResult[Any]",
-        await session.execute(
-            update(OrgApiKey)
-            .where(OrgApiKey.organisation_id == org_id, OrgApiKey.run_id == run_id, OrgApiKey.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        ),
+        await session.execute(update(OrgApiKey).where(OrgApiKey.organisation_id == org_id, OrgApiKey.run_id == run_id, OrgApiKey.revoked_at.is_(None)).values(revoked_at=datetime.now(UTC))),
     )
     return result.rowcount or 0
 
@@ -672,11 +668,7 @@ async def list_api_keys(
     """
     from farna.db.models.account import Account
 
-    stmt = (
-        select(OrgApiKey, Account.kind, Account.display_name, Account.email)
-        .join(Account, Account.id == OrgApiKey.account_id)
-        .where(OrgApiKey.organisation_id == org_id)
-    )
+    stmt = select(OrgApiKey, Account.kind, Account.display_name, Account.email).join(Account, Account.id == OrgApiKey.account_id).where(OrgApiKey.organisation_id == org_id)
     if not include_revoked:
         stmt = stmt.where(OrgApiKey.revoked_at.is_(None))
     stmt = stmt.order_by(OrgApiKey.created_at.desc())

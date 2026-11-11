@@ -49,24 +49,15 @@ depends_on: tuple[str, ...] | None = None
 _INDEXES = [
     (
         "ix_webhook_payloads_trigger_event_org",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_webhook_payloads_trigger_event_org "
-            'ON public."webhook_payloads" (trigger_event_id, organisation_id);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_webhook_payloads_trigger_event_org ON public."webhook_payloads" (trigger_event_id, organisation_id);'),
     ),
     (
         "ix_webhook_dedup_hashes_org_expires",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_webhook_dedup_hashes_org_expires "
-            'ON public."webhook_dedup_hashes" (organisation_id, expires_at);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_webhook_dedup_hashes_org_expires ON public."webhook_dedup_hashes" (organisation_id, expires_at);'),
     ),
     (
         "ix_webhook_payloads_org_expires",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_webhook_payloads_org_expires "
-            'ON public."webhook_payloads" (organisation_id, expires_at);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_webhook_payloads_org_expires ON public."webhook_payloads" (organisation_id, expires_at);'),
     ),
 ]
 

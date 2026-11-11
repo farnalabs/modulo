@@ -110,8 +110,7 @@ def _parse_starts_at_value(value: str) -> datetime:
     except ValueError as exc:
         raise StartsAtRejectedError(
             REASON_STARTS_AT_MALFORMED,
-            f"The chosen licence start {value!r} is not a valid ISO 8601 date (expected e.g. 2027-03-12), "
-            "so no licence was issued.",
+            f"The chosen licence start {value!r} is not a valid ISO 8601 date (expected e.g. 2027-03-12), so no licence was issued.",
             value=value,
         ) from exc
 
@@ -132,15 +131,13 @@ def _check_past_start(
         if start.date() < reference.date():
             raise StartsAtRejectedError(
                 REASON_STARTS_AT_IN_PAST,
-                f"The chosen licence start {value} has already passed (today is {reference.date().isoformat()}); "
-                "a licence cannot start in the past, so no licence was issued.",
+                f"The chosen licence start {value} has already passed (today is {reference.date().isoformat()}); a licence cannot start in the past, so no licence was issued.",
                 value=value,
             )
     elif start < reference:
         raise StartsAtRejectedError(
             REASON_STARTS_AT_IN_PAST,
-            f"The chosen licence start {value} has already passed (now is {reference.isoformat()}); "
-            "a licence cannot start in the past, so no licence was issued.",
+            f"The chosen licence start {value} has already passed (now is {reference.isoformat()}); a licence cannot start in the past, so no licence was issued.",
             value=value,
         )
 
@@ -157,15 +154,13 @@ def _check_future_horizon(
         if start.date() > horizon.date():
             raise StartsAtRejectedError(
                 REASON_STARTS_AT_TOO_FAR_AHEAD,
-                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
-                f"the latest allowed start is {horizon.date().isoformat()}, so no licence was issued.",
+                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; the latest allowed start is {horizon.date().isoformat()}, so no licence was issued.",
                 value=value,
             )
     elif start > horizon:
         raise StartsAtRejectedError(
             REASON_STARTS_AT_TOO_FAR_AHEAD,
-            f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
-            f"the latest allowed start is {horizon.isoformat()}, so no licence was issued.",
+            f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; the latest allowed start is {horizon.isoformat()}, so no licence was issued.",
             value=value,
         )
 
@@ -410,8 +405,7 @@ async def _send_license_email(
     """Send license email. Returns True on success, False on failure."""
     if not await email_team_license(settings, customer_email, license_key, expires_at, starts_at):
         _log.error(
-            "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
-            "event left unclaimed so Stripe's retries will re-attempt",
+            "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — event left unclaimed so Stripe's retries will re-attempt",
             event_id,
         )
         return False

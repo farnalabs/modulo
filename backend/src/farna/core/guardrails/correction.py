@@ -174,9 +174,7 @@ def _declared_detection_type(config: Mapping[str, Any]) -> str | None:
 def _config_declares_schema(config: Mapping[str, Any]) -> bool:
     """True when *config* carries a JSON Schema (top-level or in the envelope)."""
     envelope = config.get("detection")
-    return isinstance(config.get("schema"), dict) or (
-        isinstance(envelope, dict) and isinstance(envelope.get("schema"), dict)
-    )
+    return isinstance(config.get("schema"), dict) or (isinstance(envelope, dict) and isinstance(envelope.get("schema"), dict))
 
 
 def _revalidation_backend_error(defn: CorrectionDefinition) -> str | None:
@@ -190,15 +188,9 @@ def _revalidation_backend_error(defn: CorrectionDefinition) -> str | None:
     if defn.revalidation_detector_family != CorrectionDetectorFamily.MODEL_JUDGE:
         return None
     if not defn.revalidation_model_backend_id:
-        return (
-            "revalidation_detector_family='model_judge' requires revalidation_model_backend_id "
-            "(never two model-judges from the same backend)"
-        )
+        return "revalidation_detector_family='model_judge' requires revalidation_model_backend_id (never two model-judges from the same backend)"
     if defn.revalidation_model_backend_id == defn.model_backend_id:
-        return (
-            "revalidation model_judge must use a DIFFERENT backend than the correction backend "
-            "(never two model-judges from the same backend)"
-        )
+        return "revalidation model_judge must use a DIFFERENT backend than the correction backend (never two model-judges from the same backend)"
     return None
 
 
@@ -213,15 +205,9 @@ def _regex_revalidation_config_error(defn: CorrectionDefinition) -> str | None:
         return None
     regex_config = defn.revalidation_config or {}
     if not str(regex_config.get("pattern") or "").strip():
-        return (
-            "revalidation_detector_family='regex' requires revalidation_config.pattern "
-            "(a REGEX revalidator with no pattern would fail open)"
-        )
+        return "revalidation_detector_family='regex' requires revalidation_config.pattern (a REGEX revalidator with no pattern would fail open)"
     if not str(regex_config.get("field") or "").strip():
-        return (
-            "revalidation_detector_family='regex' requires revalidation_config.field "
-            "(the engine cannot re-validate without a field to scan)"
-        )
+        return "revalidation_detector_family='regex' requires revalidation_config.field (the engine cannot re-validate without a field to scan)"
     return None
 
 
@@ -299,17 +285,10 @@ class CorrectionDefinition(BaseModel):
         """
         action = guardrail.config.get("action") if isinstance(guardrail.config, dict) else None
         if action == GuardrailAction.REDACT.value:
-            raise RedactCorrectBlockedError(
-                f"Correction {self.id!r} on guardrail {self.guardrail_id!r} is HARD-BLOCKED: "
-                "a correction on a redaction-action guardrail is an exfiltration channel "
-                "for the exact data redaction protects."
-            )
+            raise RedactCorrectBlockedError(f"Correction {self.id!r} on guardrail {self.guardrail_id!r} is HARD-BLOCKED: a correction on a redaction-action guardrail is an exfiltration channel for the exact data redaction protects.")
         fired_family = self.guardrail_detection_family(guardrail)
         if fired_family == self.revalidation_detector_family.value:
-            raise DifferentFamilyViolationError(
-                f"Correction {self.id!r} re-validation family {self.revalidation_detector_family.value!r} "
-                f"does not differ from the fired guardrail's detection family {fired_family!r}."
-            )
+            raise DifferentFamilyViolationError(f"Correction {self.id!r} re-validation family {self.revalidation_detector_family.value!r} does not differ from the fired guardrail's detection family {fired_family!r}.")
 
     def validate_restricted_backend(self, capabilities: Sequence[str] = ()) -> None:
         """Fail-closed when the correction backend claims privileged access.
@@ -320,10 +299,7 @@ class CorrectionDefinition(BaseModel):
         """
         for capability in capabilities:
             if str(capability).lower() in _PRIVILEGED_CAPABILITIES:
-                raise RestrictedBackendViolationError(
-                    f"Correction {self.id!r} backend {self.model_backend_id!r} claims "
-                    f"privileged capability {capability!r}; the correction backend must be restricted."
-                )
+                raise RestrictedBackendViolationError(f"Correction {self.id!r} backend {self.model_backend_id!r} claims privileged capability {capability!r}; the correction backend must be restricted.")
 
     @classmethod
     def from_eval_config(cls, config: dict[str, Any]) -> CorrectionDefinition:
@@ -793,10 +769,7 @@ def _revalidate_model_judge(
     loudly instead of judging with a default prompt.
     """
     if not model_backend_id:
-        raise ValueError(
-            "model_judge revalidation cannot be represented: no revalidation model "
-            "backend is bound (revalidation_model_backend_id is required)"
-        )
+        raise ValueError("model_judge revalidation cannot be represented: no revalidation model backend is bound (revalidation_model_backend_id is required)")
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
         org_id=uuid.uuid4(),
@@ -1161,17 +1134,12 @@ def _check_input_convergence(ctx: _CorrectionRunContext) -> CorrectionOutcome | 
         return _escalated_outcome(
             ctx,
             converged,
-            detail=(
-                "convergence check: previously-seen or strictly-worse input state, "
-                "escalating to HITL (no oscillation burn / no budget burn)"
-            ),
+            detail=("convergence check: previously-seen or strictly-worse input state, escalating to HITL (no oscillation burn / no budget burn)"),
         )
     return None
 
 
-def _process_produced_output(
-    ctx: _CorrectionRunContext, produced: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]]:
+def _process_produced_output(ctx: _CorrectionRunContext, produced: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Redact produced output and compute violation metric."""
     produced_redacted = redact_payload(produced, ctx.correction.input_redaction_patterns)
     output_metric = compute_violation_metric(produced_redacted, ctx.bound_guardrails)
@@ -1191,10 +1159,7 @@ def _check_output_convergence(
             repeated,
             produced_output=produced_redacted,
             output_violation_metric=output_metric,
-            detail=(
-                "convergence check: previously-seen or strictly-worse produced output, "
-                "escalating to HITL (no oscillation burn / no budget burn)"
-            ),
+            detail=("convergence check: previously-seen or strictly-worse produced output, escalating to HITL (no oscillation burn / no budget burn)"),
         )
     return None
 
@@ -1343,9 +1308,7 @@ def _run_model_judge_revalidation(
         judge_callable=judge_callable,
         rubric=str(config.get("rubric") or "does the corrected output still contain the guarded data?"),
         threshold=float(config.get("threshold", 0.5)),
-        model_backend_id=(
-            str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None
-        ),
+        model_backend_id=(str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None),
     )
 
 
@@ -1556,11 +1519,7 @@ async def resume_interrupted_correction(
     )
     if not revalidation.passed:
         budget_exhausted = attempt >= correction.max_attempts
-        detail = (
-            f"correction_interrupted: budget exhausted mid-resume (attempt {attempt}): {revalidation.detail}"
-            if budget_exhausted
-            else f"resumed re-validation failed: {revalidation.detail}"
-        )
+        detail = f"correction_interrupted: budget exhausted mid-resume (attempt {attempt}): {revalidation.detail}" if budget_exhausted else f"resumed re-validation failed: {revalidation.detail}"
         return _resume_revalidation_failure(produced_redacted, revalidation, state, detail, budget_exhausted)
     return CorrectionOutcome(
         verdict=CorrectionVerdict.RESOLVED,

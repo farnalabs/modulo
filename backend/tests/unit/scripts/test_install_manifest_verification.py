@@ -39,9 +39,7 @@ _PLACEHOLDERS = {
 }
 # The historical (FAR-2182) argv, kept verbatim so the suite proves that the
 # malformed shape is rejected when EXECUTED — a string assertion cannot.
-_LEGACY_INFORM_ARGV = (
-    'openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}"'
-)
+_LEGACY_INFORM_ARGV = 'openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}"'
 
 
 @dataclass(frozen=True)
@@ -92,11 +90,7 @@ def _openssl_argv_tokens() -> list[str]:
     Fails loudly when the script no longer carries exactly one such command —
     the extraction is the link between the production script and this gate.
     """
-    lines = [
-        line
-        for line in _INSTALL_SH.read_text(encoding="utf-8").splitlines()
-        if _OPENSSL_MARKER in line and "-verify" in line
-    ]
+    lines = [line for line in _INSTALL_SH.read_text(encoding="utf-8").splitlines() if _OPENSSL_MARKER in line and "-verify" in line]
     assert len(lines) == 1, f"expected exactly one `openssl pkeyutl -verify` line in install.sh, found {len(lines)}"
     command = lines[0][lines[0].index(_OPENSSL_MARKER) :]
     for redirect in (" > ", " 2>", " 1>"):
@@ -159,9 +153,7 @@ def test_extracted_argv_rejects_a_tampered_manifest(signed_manifest: _SignedMani
 
 def test_extracted_argv_rejects_a_wrong_trust_key(signed_manifest: _SignedManifest, openssl_bin: str) -> None:
     """A key that did not sign the manifest must fail for the SIGNATURE reason."""
-    signed_manifest.key_der.write_bytes(
-        Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
-    )
+    signed_manifest.key_der.write_bytes(Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo))
     result = _run(_installer_argv(signed_manifest), openssl_bin)
     combined = result.stdout + result.stderr
     assert result.returncode != 0
@@ -232,9 +224,7 @@ def _run_signature_parser(
 # them on Windows lives in ``backend/tests/conftest.py``; the module's remaining
 # tests assert on workflow/file text and still run on Windows.
 @pytest.mark.posix_only
-def test_installer_signature_parser_executes_rejection_for_malformed_envelopes(
-    signature_text: str, tmp_path: Path
-) -> None:
+def test_installer_signature_parser_executes_rejection_for_malformed_envelopes(signature_text: str, tmp_path: Path) -> None:
     result = _run_signature_parser(signature_text, tmp_path)
     assert result.returncode != 0
     output = result.stderr + result.stdout
@@ -297,10 +287,10 @@ _ENV_KEYS_TO_DROP = (
     "XDG_STATE_HOME",
     "XDG_DATA_HOME",
     "VERSION",
-    "MODULO_INSTALL_ROOT",
-    "MODULO_BIN_DIR",
-    "MODULO_DATA_DIR",
-    "MODULO_LEGACY_SHIM_PATH",
+    "FARNA_CONTROL_MODULO_INSTALL_ROOT",
+    "FARNA_CONTROL_MODULO_BIN_DIR",
+    "FARNA_CONTROL_MODULO_DATA_DIR",
+    "FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH",
 )
 
 
@@ -327,9 +317,9 @@ def _run_installer_from_cwd(tmp_path: Path, tarball_arg: str) -> subprocess.Comp
     env.update(
         {
             "HOME": str(home),
-            "MODULO_INSTALL_ROOT": str(tmp_path / "install-root"),
-            "MODULO_BIN_DIR": str(tmp_path / "bin"),
-            "MODULO_LEGACY_SHIM_PATH": str(tmp_path / "no-legacy-shim"),
+            "FARNA_CONTROL_MODULO_INSTALL_ROOT": str(tmp_path / "install-root"),
+            "FARNA_CONTROL_MODULO_BIN_DIR": str(tmp_path / "bin"),
+            "FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH": str(tmp_path / "no-legacy-shim"),
         }
     )
     return subprocess.run(  # noqa: S603 - resolved bash and test-owned paths
@@ -352,9 +342,7 @@ def test_from_file_bare_filename_resolves_the_manifest_beside_the_tarball(tmp_pa
     combined = result.stdout + result.stderr
     assert result.returncode == 1
     assert "offline install REFUSED" in combined
-    assert f"{tarball_name}/RELEASE_MANIFEST.json" not in combined, (
-        "install.sh treated the bare tarball filename as the manifest's directory:\n" + combined
-    )
+    assert f"{tarball_name}/RELEASE_MANIFEST.json" not in combined, "install.sh treated the bare tarball filename as the manifest's directory:\n" + combined
     assert "./RELEASE_MANIFEST.json" in combined
 
 

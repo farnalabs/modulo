@@ -46,11 +46,7 @@ def _column_exists(conn, table: str, column: str) -> bool:
 def _fk_exists(conn, table: str, fk_name: str) -> bool:
     return (
         conn.execute(
-            text(
-                "SELECT 1 FROM information_schema.table_constraints "
-                "WHERE table_name = :table "
-                "AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"
-            ),
+            text("SELECT 1 FROM information_schema.table_constraints WHERE table_name = :table AND constraint_name = :fk AND constraint_type = 'FOREIGN KEY'"),
             {"table": table, "fk": fk_name},
         ).scalar()
         is not None

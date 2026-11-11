@@ -49,7 +49,7 @@ _REDIS_DB = "0"
 _COMPOSED_FIELDS: dict[str, str] = {
     "DATABASE_URL": "database_url",
     "REDIS_URL": "redis_url",
-    "MODULO_SYSTEM_DATABASE_URL": "modulo_system_database_url",
+    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "modulo_system_database_url",
 }
 
 # The launcher-owned public surface (consumed by the entry; vulture's
@@ -95,17 +95,14 @@ def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, 
     # URL (an '@' or '/' inside the password changed the host/userinfo split
     # and could leak the password into the path). Generated token_urlsafe
     # secrets are unaffected.
-    database_url = (
-        f"postgresql+asyncpg://modulo:{quote_plus(secrets.postgres_password)}"
-        f"@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
-    )
+    database_url = f"postgresql+asyncpg://modulo:{quote_plus(secrets.postgres_password)}@{POSTGRES_HOST}:{state.postgres_port}/{APP_DB_NAME}"
     system_url = derive_system_database_url(database_url)
     secret_key, fernet_key = _native_settings_keys(secrets)
     return {
         "DATABASE_URL": database_url,
         "DATABASE_ADMIN_URL": database_url,
         "REDIS_URL": f"redis://:{secrets.redis_password}@{POSTGRES_HOST}:{state.redis_port}/{_REDIS_DB}",
-        "MODULO_SYSTEM_DATABASE_URL": system_url or "",
+        "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": system_url or "",
         "SECRET_KEY": secret_key,
         "FERNET_KEY": fernet_key,
     }
@@ -151,8 +148,7 @@ def write_pinned_env_file(
     try:
         if path.exists() and path.read_text(encoding="utf-8") != rendered:
             _log.warning(
-                "launcher.config_env_overwritten path=%s (existing content differs — "
-                "likely a port/credential rotation or a manual edit)",
+                "launcher.config_env_overwritten path=%s (existing content differs — likely a port/credential rotation or a manual edit)",
                 path,
             )
     except OSError:
@@ -182,7 +178,7 @@ class LauncherConfigSource:
         state, secrets = load_launcher_config_inputs(self.data_dir)
         composed = compose_config(state, secrets)
         operator_database_url = os.environ.get("DATABASE_URL")
-        operator_system_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL")
+        operator_system_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
         derived_system = _derive_operator_system_url(operator_database_url, operator_system_url)
         resolved: dict[str, Any] = {}
         for env_name, field_name in _COMPOSED_FIELDS.items():
@@ -228,7 +224,7 @@ def _resolve_composed_field(
         # the branch below (derived from the operator's URL so the pair stays
         # on one Postgres instance).
         return None
-    if env_name == "MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
+    if env_name == "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
         return derived_system
     value = composed.get(env_name, "")
     if not value:

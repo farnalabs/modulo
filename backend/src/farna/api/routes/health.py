@@ -509,12 +509,7 @@ def _grade_db_hygiene(
     work, so it must be structurally incapable of returning ``unavailable``
     and flipping /healthz/ready to 503.
     """
-    over_floor = (
-        reading.worst_table is not None
-        and reading.n_dead_tup is not None
-        and reading.dead_ratio is not None
-        and reading.n_dead_tup >= min_dead_tuples
-    )
+    over_floor = reading.worst_table is not None and reading.n_dead_tup is not None and reading.dead_ratio is not None and reading.n_dead_tup >= min_dead_tuples
     bloat = bool(over_floor and reading.dead_ratio is not None and reading.dead_ratio >= dead_ratio_threshold)
 
     if reading.worst_table is None:
@@ -522,17 +517,11 @@ def _grade_db_hygiene(
     else:
         live = reading.n_live_tup or 0
         dead = reading.n_dead_tup or 0
-        table_part = (
-            f'worst table "{reading.worst_table}": {dead:,} dead of {live + dead:,} rows '
-            f"({(reading.dead_ratio or 0.0) * 100:.1f}% dead)"
-        )
+        table_part = f'worst table "{reading.worst_table}": {dead:,} dead of {live + dead:,} rows ({(reading.dead_ratio or 0.0) * 100:.1f}% dead)'
 
     if bloat:
         parts = [
-            (
-                f"DEAD-TUPLE BLOAT: {table_part} at/above the "
-                f"{dead_ratio_threshold * 100:.0f}% threshold (floor {min_dead_tuples:,} dead)"
-            ),
+            (f"DEAD-TUPLE BLOAT: {table_part} at/above the {dead_ratio_threshold * 100:.0f}% threshold (floor {min_dead_tuples:,} dead)"),
         ]
     else:
         parts = [f"dead-tuples within thresholds ({table_part}; threshold {dead_ratio_threshold * 100:.0f}%)"]
@@ -645,10 +634,7 @@ async def _check_db_hygiene() -> CheckResult:
             status="degraded",
             advisory=True,
             latency_ms=round((time.monotonic() - start) * 1000, 1),
-            detail=(
-                f"database-hygiene probe did not complete within {timeout:g}s "
-                "(likely an event-loop stall; see event_loop_lag) — hygiene not measured"
-            ),
+            detail=(f"database-hygiene probe did not complete within {timeout:g}s (likely an event-loop stall; see event_loop_lag) — hygiene not measured"),
         )
     except Exception:
         # The check could not run — degraded, never "clean" (a crashed check
@@ -835,9 +821,7 @@ async def _migration_detail_parts(
         # the report without blocking readiness.
         parts.append("divergence check could not run (exception raised, see logs)")
     elif divergence is not None and divergence.diverged:
-        divergence_msg = (
-            f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
-        )
+        divergence_msg = f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
         # Include the latest deploy run URL for correlation
         deploy_run_url = await _fetch_latest_deploy_run_url(settings)
         if deploy_run_url:
@@ -1176,18 +1160,12 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     if stale_seconds > _RECONCILE_UNAVAILABLE_SECONDS:
         return CheckResult(
             status="unavailable",
-            detail=(
-                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, "
-                f"last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"
-            ),
+            detail=(f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"),
         )
     if stale_seconds > _RECONCILE_STALE_SECONDS:
         return CheckResult(
             status="degraded",
-            detail=(
-                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, "
-                f"last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"
-            ),
+            detail=(f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"),
         )
     # FAR-746 failure heartbeat: when the stats are FRESH but the sweep
     # reported a failure (inner deadline or unexpected exception), return
@@ -1198,12 +1176,7 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     if tick_status in ("timeout", "failed"):
         return CheckResult(
             status="degraded",
-            detail=(
-                f"dispatcher_reconcile fresh but status={tick_status} "
-                f"(last_run_at={stats['last_run_at']}, "
-                f"last_error={stats.get('last_error', 'n/a')}); "
-                f"{_format_reconcile_detail(stats)}"
-            ),
+            detail=(f"dispatcher_reconcile fresh but status={tick_status} (last_run_at={stats['last_run_at']}, last_error={stats.get('last_error', 'n/a')}); {_format_reconcile_detail(stats)}"),
         )
     return CheckResult(
         status="ok",
@@ -1340,9 +1313,7 @@ def _sweep_missing_key_result(stale_seconds: int, not_applicable: str | None) ->
     return CheckResult(status="degraded", detail="sweep has never run")
 
 
-async def _check_sweep_stats_advisory(
-    key: str, stale_seconds: int, count_key: str, *, not_applicable: str | None = None
-) -> CheckResult:
+async def _check_sweep_stats_advisory(key: str, stale_seconds: int, count_key: str, *, not_applicable: str | None = None) -> CheckResult:
     """Shared ADVISORY reader for a sweep's Redis liveness stats key.
 
     Sweep wrappers persist their outcome (``last_run_at`` + a count) to a
@@ -1446,9 +1417,7 @@ async def _check_stale_run_recovery() -> CheckResult:
     "degraded" to alert operators while the app remains healthy. Fail-open on
     Redis read errors.
     """
-    return await _check_sweep_stats_advisory(
-        _STALE_RUN_RECOVERY_STATS_KEY, _STALE_RUN_RECOVERY_STALE_SECONDS, "recovered"
-    )
+    return await _check_sweep_stats_advisory(_STALE_RUN_RECOVERY_STATS_KEY, _STALE_RUN_RECOVERY_STALE_SECONDS, "recovered")
 
 
 async def _check_slot_reconciliation() -> CheckResult:
@@ -1461,9 +1430,7 @@ async def _check_slot_reconciliation() -> CheckResult:
     invisibly, so a missing or >15min-stale key reports "degraded" to alert
     operators while the app remains healthy. Fail-open on Redis read errors.
     """
-    return await _check_sweep_stats_advisory(
-        _SLOT_RECONCILIATION_STATS_KEY, _SLOT_RECONCILIATION_STALE_SECONDS, "released"
-    )
+    return await _check_sweep_stats_advisory(_SLOT_RECONCILIATION_STATS_KEY, _SLOT_RECONCILIATION_STALE_SECONDS, "released")
 
 
 async def _check_hitl_park_sweep() -> CheckResult:
@@ -1864,12 +1831,7 @@ async def evaluate_readiness() -> ReadinessResponse:
     lag_check = CheckResult(
         status="degraded" if lag_degraded else "ok",
         latency_ms=round(worst_lag_ms, 1),
-        detail=(
-            f"EVENT-LOOP STALL: loop delayed up to {worst_lag_ms:.0f}ms during this probe "
-            "(a synchronous call blocked the event loop — see FAR-1439)"
-            if lag_degraded
-            else f"event loop responsive (worst scheduling delay {worst_lag_ms:.0f}ms during probe)"
-        ),
+        detail=(f"EVENT-LOOP STALL: loop delayed up to {worst_lag_ms:.0f}ms during this probe (a synchronous call blocked the event loop — see FAR-1439)" if lag_degraded else f"event loop responsive (worst scheduling delay {worst_lag_ms:.0f}ms during probe)"),
     )
 
     checks: dict[str, CheckResult] = {

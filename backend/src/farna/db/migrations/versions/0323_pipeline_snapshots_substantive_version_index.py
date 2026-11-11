@@ -59,11 +59,7 @@ down_revision = "0322_pipeline_queue_timeout"
 branch_labels = None
 depends_on = None
 
-_CREATE_SQL = (
-    "CREATE INDEX IF NOT EXISTS ix_pipeline_snapshots_version_substantive "
-    "ON pipeline_snapshots (pipeline_id, snapshot_version DESC) "
-    "WHERE created_kind <> 'run'"
-)
+_CREATE_SQL = "CREATE INDEX IF NOT EXISTS ix_pipeline_snapshots_version_substantive ON pipeline_snapshots (pipeline_id, snapshot_version DESC) WHERE created_kind <> 'run'"
 
 # Literal (not interpolated) so no f-string DDL trips the migration-fstring-sql
 # / raw-sql-fstring semgrep rules; the name is a compile-time constant, so the

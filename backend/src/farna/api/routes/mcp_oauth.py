@@ -247,9 +247,7 @@ async def register_oauth_client(
             )
     except ProgrammingError:
         _log.exception(_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
-        _log.warning(
-            "mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.warning("mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
@@ -257,9 +255,7 @@ async def register_oauth_client(
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
         _log.exception(_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
-        _log.warning(
-            "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.warning("mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -269,9 +265,7 @@ async def register_oauth_client(
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception(
-            "mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.exception("mcp_oauth.register_oauth_client.unexpected_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -322,9 +316,7 @@ async def list_oauth_clients_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception(
-            "mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.exception("mcp_oauth.list_oauth_clients.unexpected_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
@@ -360,11 +352,7 @@ async def list_oauth_scopes(
             detail="Only admin, operator or runner users can list OAuth scopes",
         )
     caller_level = org_role_level(principal.org_role)
-    return [
-        OAuthScopeItem(key=key, min_role=min_role)
-        for key, min_role in sorted(PERMISSIONS.items())
-        if is_delegable(key) and org_role_level(min_role) <= caller_level
-    ]
+    return [OAuthScopeItem(key=key, min_role=min_role) for key, min_role in sorted(PERMISSIONS.items()) if is_delegable(key) and org_role_level(min_role) <= caller_level]
 
 
 # Revoking a client invalidates its issued credentials -> fail closed.

@@ -708,9 +708,7 @@ class JiraConnector(ConnectorBase):
         raw_bytes = raw.encode("utf-8") if isinstance(raw, str) else raw
         mime_type = data.get("mime_type") or _OCTET_STREAM
         files: dict[str, Any] = {"file": (filename, raw_bytes, mime_type)}
-        form_data = {
-            k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file", "mime_type")
-        }
+        form_data = {k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file", "mime_type")}
         r = await self._call_api(
             "POST",
             f"/issue/{issue_key}/attachments",

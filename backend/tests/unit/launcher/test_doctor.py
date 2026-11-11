@@ -326,9 +326,7 @@ def test_run_doctor_failing_check_exits_one(tmp_path: Path, capsys: pytest.Captu
     assert "postgres" in out
 
 
-def test_run_doctor_state_unavailable_reports_distinct_failed_checks(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_run_doctor_state_unavailable_reports_distinct_failed_checks(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code = run_doctor(tmp_path, probes=_probes())
     # FAR-676: an uninitialized data dir has its own documented exit code (3).
     assert code == EXIT_UNINITIALIZED
@@ -414,11 +412,11 @@ def test_ambient_pg_env_pass_clean() -> None:
 
 
 def test_settings_source_warns_modulo_db_not_postgres() -> None:
-    probes = _probes(env_value=lambda name: {"MODULO_DB": "sqlite"}.get(name))
+    probes = _probes(env_value=lambda name: {"FARNA_CONTROL_MODULO_DB": "sqlite"}.get(name))
     result = check_settings_source(Path(), _state(), probes)
     assert result.ok is True
     assert result.warning is True
-    assert "MODULO_DB" in result.detail
+    assert "FARNA_CONTROL_MODULO_DB" in result.detail
 
 
 def test_settings_source_warns_database_url_port_conflict() -> None:
@@ -481,9 +479,7 @@ def test_service_installed_without_linger_fails() -> None:
 
 
 def test_service_installed_pass() -> None:
-    result = check_service_identity(
-        Path(), None, _probes(service_installed=lambda: True, service_enabled=lambda: True, service_linger=lambda: True)
-    )
+    result = check_service_identity(Path(), None, _probes(service_installed=lambda: True, service_enabled=lambda: True, service_linger=lambda: True))
     assert result.ok is True
 
 
@@ -525,9 +521,7 @@ def test_bundle_version_pass_major_only_pg_version() -> None:
     # initdb writes PG_VERSION as MAJOR-ONLY ("16"); the bundled binary reports
     # "16.4". A healthy install must not be flagged as drift (regression: the
     # data-dir probe feeds the REAL PG_VERSION content, not an injected "16.4").
-    result = check_bundle_versions(
-        Path(), None, _probes(data_dir_pg_version=lambda: "16", bundle_pg_version=lambda: "16.4")
-    )
+    result = check_bundle_versions(Path(), None, _probes(data_dir_pg_version=lambda: "16", bundle_pg_version=lambda: "16.4"))
     assert result.ok is True
 
 
@@ -599,9 +593,7 @@ def test_port_collisions_pass_clean() -> None:
 
 
 def test_install_shadows_warn_path_shadowing() -> None:
-    result = check_install_shadows(
-        Path("/data/modulo/data"), None, _probes(modulo_on_path=lambda: "/usr/local/bin/modulo")
-    )
+    result = check_install_shadows(Path("/data/modulo/data"), None, _probes(modulo_on_path=lambda: "/usr/local/bin/modulo"))
     assert result.ok is True
     assert result.warning is True
     assert "shadow" in result.detail
@@ -866,9 +858,7 @@ async def test_healthy_backends_summarise_to_ok_not_failed() -> None:
         secrets_backend = _FakeSecretsBackend(json.dumps({"api_key": "sk-live"}))
         results = [
             await doctor_module._probe_backend_row(_provider_row("openai", name="gpt"), secrets_backend),
-            await doctor_module._probe_backend_row(
-                _provider_row("anthropic", name="claude", model_id="claude-3"), secrets_backend
-            ),
+            await doctor_module._probe_backend_row(_provider_row("anthropic", name="claude", model_id="claude-3"), secrets_backend),
         ]
 
     summary = doctor_module._summarise_provider_results(results)
@@ -881,9 +871,7 @@ async def test_healthy_backends_summarise_to_ok_not_failed() -> None:
     ("response_status", "expected_status"),
     [(401, "error HTTP 401"), (404, "error HTTP 404"), (503, "error HTTP 503")],
 )
-async def test_health_check_maps_http_status_without_echoing_the_body(
-    response_status: int, expected_status: str
-) -> None:
+async def test_health_check_maps_http_status_without_echoing_the_body(response_status: int, expected_status: str) -> None:
     secret = "sk-SECRET-DO-NOT-PRINT"
 
     def _handler(_request: httpx.Request) -> httpx.Response:
@@ -1050,9 +1038,7 @@ def test_summary_with_no_backends_is_an_honest_skip() -> None:
 
 
 def test_summary_treats_skipped_backends_as_not_failed() -> None:
-    summary = doctor_module._summarise_provider_results(
-        [doctor_module._provider_result("bedrock/primary", status=doctor_module.SKIPPED_NO_PROBE, skipped=True)]
-    )
+    summary = doctor_module._summarise_provider_results([doctor_module._provider_result("bedrock/primary", status=doctor_module.SKIPPED_NO_PROBE, skipped=True)])
     assert summary.ok is True
     assert summary.warning is False
 
@@ -1285,9 +1271,7 @@ def test_build_doctor_secrets_backend_falls_back_to_the_db_fernet_store(
 
 
 async def test_probe_backend_row_skips_a_provider_with_no_probe() -> None:
-    result = await doctor_module._probe_backend_row(
-        _provider_row("custom"), _FakeSecretsBackend(json.dumps({"api_key": "k"}))
-    )
+    result = await doctor_module._probe_backend_row(_provider_row("custom"), _FakeSecretsBackend(json.dumps({"api_key": "k"})))
 
     assert result["skipped"] is True
     assert result["status"] == doctor_module.SKIPPED_NO_PROBE
@@ -1510,9 +1494,7 @@ def _exit_recipe(code: int, tmp_path: Path) -> int:
         pytest.param(EXIT_HEALTHY, "default probes back the happy path (CI-automatable)", id="exit-0-healthy"),
         pytest.param(EXIT_UNHEALTHY, "redis stopped (CI-automatable)", id="exit-1-unhealthy"),
         pytest.param(EXIT_DEGRADED, "stale backup warning (CI-automatable)", id="exit-2-degraded"),
-        pytest.param(
-            EXIT_UNINITIALIZED, "no state/secrets in the data dir (CI-automatable)", id="exit-3-uninitialized"
-        ),
+        pytest.param(EXIT_UNINITIALIZED, "no state/secrets in the data dir (CI-automatable)", id="exit-3-uninitialized"),
     ],
 )
 def test_documented_exit_codes_are_exhaustive(code: int, recipe_name: str, tmp_path: Path) -> None:

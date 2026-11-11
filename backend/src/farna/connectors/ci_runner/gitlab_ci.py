@@ -141,14 +141,11 @@ class GitLabCIRunner(CIRunnerBase):
                 # rejects while the pipeline already runs.
                 if run.id.count("/") != 1:
                     raise ValueError(
-                        f"GitLab accepted the pipeline request for {project_id!r} but the response "
-                        "did not yield a consumable run id — refusing to return an unusable run id",
+                        f"GitLab accepted the pipeline request for {project_id!r} but the response did not yield a consumable run id — refusing to return an unusable run id",
                     )
                 return run
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -164,9 +161,7 @@ class GitLabCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 return self._parse_run(r.json(), project_ref=project_id)
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -223,9 +218,7 @@ class GitLabCIRunner(CIRunnerBase):
                     truncated=skipped_jobs > 0,
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -263,9 +256,7 @@ class GitLabCIRunner(CIRunnerBase):
                 raw_runs: list[dict[str, Any]] = r.json()
                 return [self._parse_run(run, project_ref=pipeline_id) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 

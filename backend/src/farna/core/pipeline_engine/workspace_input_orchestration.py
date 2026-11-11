@@ -231,8 +231,7 @@ async def _derive_url_from_connector(
     ci = result.scalar_one_or_none()
     if ci is None:
         raise ProvisioningError(
-            f"connector instance {connector_instance_id} not found — "
-            "cannot derive clone URL for connector-backed workspace input",
+            f"connector instance {connector_instance_id} not found — cannot derive clone URL for connector-backed workspace input",
             error_code=_CODE_INPUT_CREDENTIAL_FAILED,
             retryable=False,
         )
@@ -249,8 +248,7 @@ async def _derive_url_from_connector(
         repo = str(config.get("repo") or "").strip().rstrip("/")
         if not repo or "/" not in repo:
             raise ProvisioningError(
-                f"connector instance {connector_instance_id} (github) has no "
-                "'repo' (owner/repo) in its config — cannot derive a clone URL",
+                f"connector instance {connector_instance_id} (github) has no 'repo' (owner/repo) in its config — cannot derive a clone URL",
                 error_code=_CODE_INPUT_RESOLUTION_FAILED,
                 retryable=False,
             )
@@ -259,9 +257,7 @@ async def _derive_url_from_connector(
         return f"https://{clone_host}/{repo}.git"
 
     raise ProvisioningError(
-        f"connector type {ci.connector_type_id!r} does not support URL "
-        "derivation for workspace inputs — provide an explicit url or "
-        "use a connector type with a known clone URL derivation",
+        f"connector type {ci.connector_type_id!r} does not support URL derivation for workspace inputs — provide an explicit url or use a connector type with a known clone URL derivation",
         error_code=_CODE_INPUT_RESOLUTION_FAILED,
         retryable=False,
     )
@@ -303,15 +299,12 @@ async def _resolve_url_from_connector_input(
         )
     if session_factory is None:
         raise ProvisioningError(
-            f"workspace_input dest={dest!r} has no url but a connector_instance_id "
-            "requires a session_factory to derive the clone URL",
+            f"workspace_input dest={dest!r} has no url but a connector_instance_id requires a session_factory to derive the clone URL",
             error_code=_CODE_INPUT_RESOLUTION_FAILED,
             retryable=False,
         )
 
-    connector_instance_id = (
-        uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
-    )
+    connector_instance_id = uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
     try:
         async with session_factory() as session, session.begin():
             resolved_url = await _derive_url_from_connector(session, connector_instance_id)
@@ -427,9 +420,7 @@ async def _resolve_credential_scripts_for_input(
             ).scalar_one_or_none()
             if _ci_row is None:
                 raise ProvisioningError(
-                    f"workspace_input dest={dest!r}: connector instance "
-                    f"{connector_instance_id} not found in current org "
-                    "(tenancy check failed)",
+                    f"workspace_input dest={dest!r}: connector instance {connector_instance_id} not found in current org (tenancy check failed)",
                     error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 )
@@ -569,9 +560,7 @@ async def resolve_managed_inputs_host_side(
         host = _extract_host_from_url(url)
 
         if session_factory is not None and connector_id_raw is not None:
-            connector_instance_id = (
-                uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
-            )
+            connector_instance_id = uuid.UUID(str(connector_id_raw)) if not isinstance(connector_id_raw, uuid.UUID) else connector_id_raw
             cred_setup, cred_teardown = await _resolve_credential_scripts_for_input(
                 session_factory,
                 connector_instance_id,

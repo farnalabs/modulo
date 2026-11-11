@@ -112,8 +112,7 @@ class GuardrailOverrideNoCheckpointError(GuardrailOverrideError):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(
             run_id,
-            "run started a node but has no resumable checkpoint — resuming would re-execute the "
-            "node-started run (FAR-1649), so the override is refused; the run stays eval_blocked",
+            "run started a node but has no resumable checkpoint — resuming would re-execute the node-started run (FAR-1649), so the override is refused; the run stays eval_blocked",
         )
         self.run_id = run_id
 
@@ -131,11 +130,7 @@ class GuardrailOverrideRequiredError(RuntimeError):
     """
 
     def __init__(self, run_id: uuid.UUID) -> None:
-        super().__init__(
-            f"Run {run_id} is blocked by a guardrail (eval_blocked) — the generic recovery path would not "
-            "re-run the guardrail pass on the supplied input. Use the guardrail-override endpoint instead "
-            "(it is re-block safe)."
-        )
+        super().__init__(f"Run {run_id} is blocked by a guardrail (eval_blocked) — the generic recovery path would not re-run the guardrail pass on the supplied input. Use the guardrail-override endpoint instead (it is re-block safe).")
         self.run_id = run_id
 
 
@@ -184,9 +179,7 @@ _CLAIM_STALE_SKEW_GUARD_SECONDS = 60
 # (``checkpoint_ns = ''``) is the one the resume path's ``aupdate_state``
 # reads for the run's ``langgraph_thread_id`` — the same predicate spelling
 # the reconcile age gate's zero-progress shape uses against ``checkpoints``.
-_HAS_ROOT_CHECKPOINT_SQL = text(
-    "SELECT 1 FROM checkpoints WHERE organisation_id = :oid AND thread_id = :tid AND checkpoint_ns = '' LIMIT 1"
-)
+_HAS_ROOT_CHECKPOINT_SQL = text("SELECT 1 FROM checkpoints WHERE organisation_id = :oid AND thread_id = :tid AND checkpoint_ns = '' LIMIT 1")
 
 
 async def _run_has_resumable_checkpoint(
@@ -427,9 +420,7 @@ async def _fetch_locked_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     # be acquired for recovery.
     from farna.db.soft_delete import include_soft_deleted
 
-    await session.execute(
-        include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
-    )
+    await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update()))
 
     # Re-fetch the run after the lock to get the latest status.
     run = await get_run(session, run_id)
@@ -519,9 +510,7 @@ async def _acquire_recovery_lock(session: AsyncSession, run: Run, run_id: uuid.U
     run.status = _RECOVERY_LOCK_STATUS
 
 
-async def _apply_recovery_markers(
-    session: AsyncSession, run: Run, node_id: str, input_data: dict[str, Any] | None
-) -> None:
+async def _apply_recovery_markers(session: AsyncSession, run: Run, node_id: str, input_data: dict[str, Any] | None) -> None:
     """Write the recovery markers onto the run's blob sides.
 
     The PURE return lands on the *outputs* side and the marker on the
@@ -708,17 +697,13 @@ async def guardrail_override(
     # be acquired for guardrail override.
     from farna.db.soft_delete import include_soft_deleted
 
-    await session.execute(
-        include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
-    )
+    await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update()))
 
     run = await get_run(session, run_id)
     if run is None:
         raise GuardrailOverrideError(run_id, "run not found")
     if run.status != "eval_failed" or run.error_code != "eval_blocked":
-        raise GuardrailOverrideError(
-            run_id, f"status={run.status!r} error_code={run.error_code!r} (expected eval_failed/eval_blocked)"
-        )
+        raise GuardrailOverrideError(run_id, f"status={run.status!r} error_code={run.error_code!r} (expected eval_failed/eval_blocked)")
 
     # FAR-967 F1: a pin-fingerprint mismatch is a MECHANISM failure (the
     # snapshot's pinned gate set and its stored digest disagree), not a

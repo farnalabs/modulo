@@ -345,30 +345,18 @@ def _validate_generic_agent(
     if is_executable and not description:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                f"Generic agent '{name}' has no description. "
-                "User-defined executable agents must include a description "
-                "so that pipeline authors can understand the agent's purpose."
-            ),
+            detail=(f"Generic agent '{name}' has no description. User-defined executable agents must include a description so that pipeline authors can understand the agent's purpose."),
         )
 
     if not is_executable and not description:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                f"Non-executable agent '{name}' has no description. "
-                "Template and blueprint agents must include a description "
-                "that documents the intended use of the agent."
-            ),
+            detail=(f"Non-executable agent '{name}' has no description. Template and blueprint agents must include a description that documents the intended use of the agent."),
         )
 
     if is_executable and not evals:
         _log.warning(
-            "Generic executable agent '%s' has no eval definitions. "
-            "Per PRD §8.2, generic agents are experimental and require "
-            "an eval rubric before production promotion. "
-            "Consider adding at least one eval before deploying this agent "
-            "in a production pipeline.",
+            "Generic executable agent '%s' has no eval definitions. Per PRD §8.2, generic agents are experimental and require an eval rubric before production promotion. Consider adding at least one eval before deploying this agent in a production pipeline.",
             _sanitise_log_value(name),
         )
 
@@ -702,9 +690,7 @@ async def _write_agent_patch(
         ) from None
 
 
-@router.patch(
-    "/{agent_id}", dependencies=[Depends(audited("agent_updated", "agent", principal_dep=get_current_tenant_user))]
-)
+@router.patch("/{agent_id}", dependencies=[Depends(audited("agent_updated", "agent", principal_dep=get_current_tenant_user))])
 @handle_db_errors(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
@@ -1396,11 +1382,7 @@ async def replace_bindings_endpoint(
 @router.delete(
     "/{agent_id}/bindings/{binding_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            audited("agent_binding_deleted", "agent_binding", principal_dep=get_current_tenant_user, fail_closed=True)
-        )
-    ],
+    dependencies=[Depends(audited("agent_binding_deleted", "agent_binding", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors("agents.delete_binding_endpoint")
 async def delete_binding_endpoint(

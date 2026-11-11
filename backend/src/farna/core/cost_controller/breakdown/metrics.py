@@ -124,9 +124,7 @@ def _ensure() -> None:
     )
     _probe_mismatch_runs_total = meter.create_counter(
         name="modulo_cost_probe_mismatch_runs_total",
-        description=(
-            "Sampled runs where total_cost_usd != sum(billable component.amount_usd) (billable:false entries skipped)"
-        ),
+        description=("Sampled runs where total_cost_usd != sum(billable component.amount_usd) (billable:false entries skipped)"),
         unit="1",
     )
     _probe_total_eq_mismatch_total = meter.create_counter(

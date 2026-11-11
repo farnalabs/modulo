@@ -97,9 +97,7 @@ async def _delete_namespace_bounded(core: Any, namespace: str) -> None:
     try:
         await asyncio.wait_for(core.delete_namespace(name=namespace), timeout=_SETUP_TIMEOUT_S)
     except Exception as exc:
-        raise RuntimeError(
-            f"conformance teardown could not delete namespace {namespace!r}: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise RuntimeError(f"conformance teardown could not delete namespace {namespace!r}: {type(exc).__name__}: {exc}") from exc
     if not await _await_namespace_gone(core, namespace):
         _log.warning(
             "conformance namespace %s still terminating after %ss (finalizers); it will finish on its own",
@@ -130,7 +128,7 @@ async def k8s_cluster() -> AsyncIterator[K8sConformanceCluster]:
     provider: KubernetesRuntimeProvider | None = None
     namespace_created = False
     try:
-        monkeypatch.setenv("MODULO_KUBERNETES_SERVICE_ACCOUNT", service_account)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_SERVICE_ACCOUNT", service_account)
         provider = KubernetesRuntimeProvider(namespace=namespace)
         labels = {
             _CLEANUP_LABEL: "true",
@@ -142,9 +140,7 @@ async def k8s_cluster() -> AsyncIterator[K8sConformanceCluster]:
         )
         namespace_created = True
         await asyncio.wait_for(
-            core.create_namespaced_service_account(
-                namespace, V1ServiceAccount(metadata=V1ObjectMeta(name=service_account))
-            ),
+            core.create_namespaced_service_account(namespace, V1ServiceAccount(metadata=V1ObjectMeta(name=service_account))),
             timeout=_SETUP_TIMEOUT_S,
         )
         yield K8sConformanceCluster(

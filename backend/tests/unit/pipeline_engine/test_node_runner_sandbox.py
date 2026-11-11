@@ -467,9 +467,7 @@ async def test_sandbox_resolve_secret_ref_warns_on_invalid_org_id(caplog):
         return session
 
     with caplog.at_level(logging.WARNING):
-        result = await _sandbox_resolve_secret_ref(
-            "GITHUB_TOKEN", session_factory=_fake_session_factory, org_id="not-a-uuid"
-        )
+        result = await _sandbox_resolve_secret_ref("GITHUB_TOKEN", session_factory=_fake_session_factory, org_id="not-a-uuid")
 
     assert result is None
     assert any("env_var.secret_ref_no_org_context" in m and "GITHUB_TOKEN" in m for m in caplog.messages)
@@ -1975,7 +1973,7 @@ def test_no_output_json_message_survives_executor_terminal_fail_surface():
 
 async def test_read_log_tail_via_provider_returns_empty_without_api_key(monkeypatch):
     """No E2B key configured -> helper returns '' without attempting a fetch."""
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     with patch("urllib.request.urlopen") as _urlopen:
         assert not await _read_log_tail_via_provider("sbx-nokey")
@@ -1993,7 +1991,7 @@ async def test_read_log_tail_via_provider_never_raises_on_network_failure(monkey
 
 async def test_read_log_tail_via_provider_returns_empty_for_invalid_id(monkeypatch):
     """A non-string/None sandbox id never triggers a network call."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
     with patch("urllib.request.urlopen") as _urlopen:
         assert not await _read_log_tail_via_provider(None)
     _urlopen.assert_not_called()
@@ -2052,10 +2050,7 @@ async def test_agent_command_renders_parameter_model():
 
 async def test_agent_command_default_filter():
     """A missing input.model falls back to the `default()` filter value."""
-    node_def = _model_node_def(
-        'opencode run --model {{ input.model | default("opencode-go/deepseek-v4-flash") }} '
-        "--auto --format json < /home/user/prompt.md"
-    )
+    node_def = _model_node_def('opencode run --model {{ input.model | default("opencode-go/deepseek-v4-flash") }} --auto --format json < /home/user/prompt.md')
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
@@ -2090,9 +2085,7 @@ async def test_agent_command_undefined_error_skips():
     """A command template referencing a missing nested input field raises
     UndefinedError -> the node returns status 'skipped' and NO sandbox command
     is executed (mirrors the prompt's UndefinedError handling)."""
-    node_def = _model_node_def(
-        "opencode run --model {{ input.missing.deep.path }} --auto --format json < /home/user/prompt.md"
-    )
+    node_def = _model_node_def("opencode run --model {{ input.missing.deep.path }} --auto --format json < /home/user/prompt.md")
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
@@ -2108,9 +2101,7 @@ async def test_agent_command_invalid_template_falls_back_verbatim():
     """A legacy command with Jinja-like syntax that is NOT a valid template
     (e.g. an empty ``{{ }}`` or an unclosed ``{{``) must NOT crash the run with
     TemplateSyntaxError — it executes verbatim, as it did before #1291."""
-    node_def = _model_node_def(
-        "opencode run --model deepseek-v4-flash {{ }} --auto --format json < /home/user/prompt.md"
-    )
+    node_def = _model_node_def("opencode run --model deepseek-v4-flash {{ }} --auto --format json < /home/user/prompt.md")
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
@@ -2651,9 +2642,7 @@ async def test_agent_command_tojson_on_undefined_skips():
     """An agent_command template using `{{ missing | tojson }}` on an undefined
     variable raises TypeError, not UndefinedError. It must return status
     'skipped' and execute NO sandbox command, mirroring the prompt handling."""
-    node_def = _model_node_def(
-        "opencode run --model {{ missing | tojson }} --auto --format json < /home/user/prompt.md"
-    )
+    node_def = _model_node_def("opencode run --model {{ missing | tojson }} --auto --format json < /home/user/prompt.md")
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
@@ -2675,11 +2664,7 @@ async def test_context_scope_gates_sandbox_agent_render_view():
     same bypass class the make_node_fn fix closed, still open on this node type.
     """
     node_def = _base_node_def(
-        agent_prompt=(
-            "tier={{ run_context.model_tier }}|"
-            "leak-rc={{ run_context.secret }}|"
-            "leak-state={{ state.run_context.secret }}"
-        ),
+        agent_prompt=("tier={{ run_context.model_tier }}|leak-rc={{ run_context.secret }}|leak-state={{ state.run_context.secret }}"),
         capability_scope={"context_scope": ["model_tier"]},
     )
     fn = make_sandbox_agent_fn(node_def)
@@ -2698,9 +2683,7 @@ async def test_context_scope_gates_sandbox_agent_render_view():
     assert result["telemetry"]["status"] == "completed"
 
     # Pull the rendered prompt back out of the /home/user/prompt.md write.
-    prompt_writes = [
-        c.args[1] for c in sandbox.files.write.call_args_list if c.args and c.args[0] == "/home/user/prompt.md"
-    ]
+    prompt_writes = [c.args[1] for c in sandbox.files.write.call_args_list if c.args and c.args[0] == "/home/user/prompt.md"]
     assert prompt_writes, "rendered prompt was not written to /home/user/prompt.md"
     rendered = prompt_writes[0]
 
@@ -3291,7 +3274,7 @@ def _resolve_usable_bash() -> str | None:
     verifying each candidate with a trivial probe command.
     """
     candidates = [
-        os.environ.get("MODULO_TEST_BASH"),
+        os.environ.get("FARNA_CONTROL_MODULO_TEST_BASH"),
         r"C:\Program Files\Git\bin\bash.exe",
         shutil.which("bash"),
     ]

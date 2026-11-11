@@ -81,18 +81,10 @@ async def list_notification_rules(
         async with session.begin():
             await set_rls_org(session, org_id)
 
-            result = await session.execute(
-                select(ErrorNotificationRule)
-                .where(ErrorNotificationRule.organisation_id == org_id)
-                .order_by(ErrorNotificationRule.created_at.desc())
-                .offset(offset)
-                .limit(limit)
-            )
+            result = await session.execute(select(ErrorNotificationRule).where(ErrorNotificationRule.organisation_id == org_id).order_by(ErrorNotificationRule.created_at.desc()).offset(offset).limit(limit))
             rules = list(result.scalars().all())
 
-            count_result = await session.execute(
-                select(func.count(ErrorNotificationRule.id)).where(ErrorNotificationRule.organisation_id == org_id)
-            )
+            count_result = await session.execute(select(func.count(ErrorNotificationRule.id)).where(ErrorNotificationRule.organisation_id == org_id))
             total = count_result.scalar_one() or 0
     except HTTPException:
         raise
@@ -129,11 +121,7 @@ async def list_notification_rules(
     "",
     response_model=ErrorNotificationRuleResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            audited("error_notification_rule_created", "error_notification_rule", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("error_notification_rule_created", "error_notification_rule", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE)
 async def create_notification_rule(
@@ -286,11 +274,7 @@ def _translate_update_db_error(exc: Exception) -> HTTPException:
 @router.put(
     "/{rule_id}",
     response_model=ErrorNotificationRuleResponse,
-    dependencies=[
-        Depends(
-            audited("error_notification_rule_updated", "error_notification_rule", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("error_notification_rule_updated", "error_notification_rule", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("error_notification_rules.update_notification_rule")
 async def update_notification_rule(

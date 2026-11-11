@@ -42,9 +42,7 @@ class PyPIConnector(ConnectorBase):
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        return pinned_async_client_sync(
-            _API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self))
 
     async def health_check(self) -> HealthResult:
         try:
@@ -56,9 +54,7 @@ class PyPIConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid PyPI auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="PyPI token lacks required permissions")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to PyPI registry")
         except asyncio.CancelledError:
@@ -114,9 +110,7 @@ class PyPIConnector(ConnectorBase):
         operator = q.filters.get("operator", "and")
         xml_body = xmlrpc.client.dumps((spec, operator), "search")
 
-        async with pinned_async_client_sync(
-            _API_BASE, base_url=_API_BASE, timeout=30, verify=egress_ssl_context(self)
-        ) as c:
+        async with pinned_async_client_sync(_API_BASE, base_url=_API_BASE, timeout=30, verify=egress_ssl_context(self)) as c:
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()
             results: list[dict[str, Any]] = cast("list[dict[str, Any]]", xmlrpc.client.loads(resp.text)[0][0])

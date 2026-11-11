@@ -128,9 +128,7 @@ $_$;
 """
 
 _KIND_IMMUTABLE_TRIGGER_DDL = (
-    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_accounts_kind_immutable') "
-    "THEN CREATE TRIGGER trg_accounts_kind_immutable BEFORE UPDATE OF kind ON public.accounts "
-    "FOR EACH ROW EXECUTE FUNCTION public.enforce_account_kind_immutable(); END IF; END $$;"
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_accounts_kind_immutable') THEN CREATE TRIGGER trg_accounts_kind_immutable BEFORE UPDATE OF kind ON public.accounts FOR EACH ROW EXECUTE FUNCTION public.enforce_account_kind_immutable(); END IF; END $$;"
 )
 
 

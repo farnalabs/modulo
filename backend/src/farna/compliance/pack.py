@@ -230,10 +230,7 @@ def _require_row_vocabulary(row: MappingRow) -> None:
 def _require_responsibility_statement(row: MappingRow) -> None:
     """A one-word placeholder must not satisfy the honesty requirement."""
     if len(row.responsibility.strip()) < _MIN_RESPONSIBILITY_LENGTH:
-        raise MappingPackError(
-            f"mapping row {row.id!r}: responsibility must state, in a sentence, what "
-            "remains the customer's responsibility"
-        )
+        raise MappingPackError(f"mapping row {row.id!r}: responsibility must state, in a sentence, what remains the customer's responsibility")
 
 
 def _require_row_honesty(row: MappingRow) -> None:
@@ -241,22 +238,15 @@ def _require_row_honesty(row: MappingRow) -> None:
     # A row Modulo claims to SATISFY can never rest on material only the
     # customer holds - that would present a customer control as ours.
     if row.coverage == COVERAGE_SATISFIED and row.provenance == PROVENANCE_CUSTOMER_SUPPLIED:
-        raise MappingPackError(
-            f"mapping row {row.id!r}: a 'satisfied' row cannot be evidenced by customer-supplied material"
-        )
+        raise MappingPackError(f"mapping row {row.id!r}: a 'satisfied' row cannot be evidenced by customer-supplied material")
     # A customer-responsibility row's evidence is, by definition, the
     # customer's own record - never an observed Modulo artefact.
     if row.coverage == COVERAGE_CUSTOMER_RESPONSIBILITY and row.provenance != PROVENANCE_CUSTOMER_SUPPLIED:
-        raise MappingPackError(
-            f"mapping row {row.id!r}: a 'customer-responsibility' row must be tagged 'customer-supplied'"
-        )
+        raise MappingPackError(f"mapping row {row.id!r}: a 'customer-responsibility' row must be tagged 'customer-supplied'")
     # Material the instance does not produce cannot evidence something
     # Modulo claims to satisfy or support.
     if not ARTIFACT_TYPES[row.artifact_type].indexed and row.coverage in {COVERAGE_SATISFIED, COVERAGE_SUPPORTED}:
-        raise MappingPackError(
-            f"mapping row {row.id!r}: artefact type {row.artifact_type!r} is not produced "
-            "by the instance, so it cannot evidence a satisfied/supported claim"
-        )
+        raise MappingPackError(f"mapping row {row.id!r}: artefact type {row.artifact_type!r} is not produced by the instance, so it cannot evidence a satisfied/supported claim")
 
 
 def validate_mapping_rows(rows: tuple[MappingRow, ...]) -> None:
@@ -283,9 +273,7 @@ def validate_frameworks(frameworks: dict[str, Framework]) -> None:
     if present != expected:
         missing = sorted(expected - present)
         unexpected = sorted(present - expected)
-        raise MappingPackError(
-            f"pack frameworks must be exactly {sorted(expected)}; missing={missing} unexpected={unexpected}"
-        )
+        raise MappingPackError(f"pack frameworks must be exactly {sorted(expected)}; missing={missing} unexpected={unexpected}")
 
     for framework_id, framework in frameworks.items():
         if framework.id != framework_id:
@@ -294,16 +282,11 @@ def validate_frameworks(frameworks: dict[str, Framework]) -> None:
             raise MappingPackError(f"framework {framework_id!r} has no mapping rows")
         for row in framework.rows:
             if row.framework != framework_id:
-                raise MappingPackError(
-                    f"mapping row {row.id!r} is filed under {framework_id!r} but declares framework {row.framework!r}"
-                )
+                raise MappingPackError(f"mapping row {row.id!r} is filed under {framework_id!r} but declares framework {row.framework!r}")
         # "A pack that claims everything is worse than no pack": every
         # framework must be honest about at least one thing it does not satisfy.
         if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows):
-            raise MappingPackError(
-                f"framework {framework_id!r} claims every clause as met; the pack must "
-                "name at least one gap or customer responsibility"
-            )
+            raise MappingPackError(f"framework {framework_id!r} claims every clause as met; the pack must name at least one gap or customer responsibility")
 
     soc2_clauses = {row.clause for row in frameworks[FRAMEWORK_SOC2].rows}
     missing_soc2 = sorted(SOC2_REQUIRED_CLAUSES - soc2_clauses)
@@ -345,10 +328,7 @@ def _required_text(document: dict[str, Any], key: str, context: str) -> str:
     """
     value = document.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise MappingPackError(
-            f"{context}: {key!r} must be a non-empty string; a YAML null or an omitted "
-            "key drops a limitation the pack must state"
-        )
+        raise MappingPackError(f"{context}: {key!r} must be a non-empty string; a YAML null or an omitted key drops a limitation the pack must state")
     return value.strip()
 
 
@@ -382,10 +362,7 @@ def _build_pack() -> MappingPack:
         if not isinstance(raw_rows, list) or not raw_rows:
             raise MappingPackError(f"{filename}: 'rows' must be a non-empty list")
 
-        rows = tuple(
-            MappingRow.model_validate({**_as_mapping(raw_row, filename), "framework": framework_id})
-            for raw_row in raw_rows
-        )
+        rows = tuple(MappingRow.model_validate({**_as_mapping(raw_row, filename), "framework": framework_id}) for raw_row in raw_rows)
         all_rows.extend(rows)
 
         framework_context = f"{_MAPPINGS_PACKAGE}/{filename}"

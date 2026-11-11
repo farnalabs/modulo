@@ -183,10 +183,7 @@ async def emit_autonomy_telemetry(
 
         payload: dict[str, Any] = {
             "actor": SYSTEM_ACTOR,
-            "summary": (
-                f'Autonomy level "{autonomy_level}" applied to run '
-                f"{short_id(run_id) or 'unknown'} (gate {review_id}, {gate_outcome})"
-            ),
+            "summary": (f'Autonomy level "{autonomy_level}" applied to run {short_id(run_id) or "unknown"} (gate {review_id}, {gate_outcome})'),
             "review_id": review_id,
             "autonomy_level": autonomy_level,
             "gate_outcome": gate_outcome,
@@ -257,11 +254,7 @@ async def emit_autonomy_clamp_telemetry(
 
         payload: dict[str, Any] = {
             "actor": SYSTEM_ACTOR,
-            "summary": (
-                f'Autonomy recommendation "{requested}" clamped to "{effective}" '
-                f'(ceiling "{ceiling}") on run {short_id(run_id) or "unknown"} '
-                f"(gate {review_id})"
-            ),
+            "summary": (f'Autonomy recommendation "{requested}" clamped to "{effective}" (ceiling "{ceiling}") on run {short_id(run_id) or "unknown"} (gate {review_id})'),
             "review_id": review_id,
             "requested": requested,
             "effective": effective,

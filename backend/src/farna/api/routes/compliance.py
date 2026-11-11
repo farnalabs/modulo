@@ -65,10 +65,7 @@ router = APIRouter(prefix="/api/v1/compliance", tags=["compliance"])
 #: enough to fail fast instead of holding a connection.
 _EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS = 30_000
 
-_MSG_TIMEOUT = (
-    "The compliance evidence index exceeded its time bound. "
-    "Narrow the audit period with the 'from' and 'to' parameters and retry."
-)
+_MSG_TIMEOUT = "The compliance evidence index exceeded its time bound. Narrow the audit period with the 'from' and 'to' parameters and retry."
 
 #: Structured-log / log-prefix key for this route. One spelling, used by BOTH
 #: the ``@handle_db_errors`` backstop and the timeout arm's own record, so the
@@ -106,20 +103,14 @@ async def get_evidence_index_endpoint(
         datetime | None,
         Query(
             alias="from",
-            description=(
-                "Audit period start (inclusive, ISO 8601). Omit for the organisation's full history. "
-                "The period is half-open: [from, to)."
-            ),
+            description=("Audit period start (inclusive, ISO 8601). Omit for the organisation's full history. The period is half-open: [from, to)."),
         ),
     ] = None,
     period_to: Annotated[
         datetime | None,
         Query(
             alias="to",
-            description=(
-                "Audit period end (EXCLUSIVE, ISO 8601). Omit for the organisation's full history. "
-                "The period is half-open: [from, to)."
-            ),
+            description=("Audit period end (EXCLUSIVE, ISO 8601). Omit for the organisation's full history. The period is half-open: [from, to)."),
         ),
     ] = None,
 ) -> EvidenceIndex:

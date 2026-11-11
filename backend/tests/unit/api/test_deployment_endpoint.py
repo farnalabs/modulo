@@ -52,11 +52,9 @@ class TestDeploymentDrain:
         ("authorization", "expected_status"),
         [(None, 503), ("Basic secret", 503), ("Bearer wrong", 403)],
     )
-    def test_missing_or_invalid_token_is_rejected(
-        self, client: TestClient, authorization: str | None, expected_status: int
-    ) -> None:
+    def test_missing_or_invalid_token_is_rejected(self, client: TestClient, authorization: str | None, expected_status: int) -> None:
         headers = {} if authorization is None else {"Authorization": authorization}
-        with patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False):
+        with patch.dict("os.environ", {"FARNA_CONTROL_MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False):
             response = client.post("/api/v1/deployment/drain?active=true", headers=headers)
         assert response.status_code == expected_status
 
@@ -69,7 +67,7 @@ class TestDeploymentDrain:
     def test_valid_token_persists_value_and_audits(self, client: TestClient, active: bool) -> None:
         session = app.dependency_overrides[deployment.get_system_db_session]()
         with (
-            patch.dict("os.environ", {"MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False),
+            patch.dict("os.environ", {"FARNA_CONTROL_MODULO_DEPLOY_DRAIN_TOKEN": "right"}, clear=False),
             patch.object(deployment, "_set_drain", new_callable=AsyncMock) as set_drain,
         ):
             response = client.post(

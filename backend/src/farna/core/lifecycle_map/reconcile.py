@@ -517,9 +517,7 @@ async def _drift_refs(
             .execution_options(populate_existing=True)
         )
     ).all()
-    found: dict[tuple[str, str], tuple[datetime | None, datetime | None]] = {
-        (row[0], row[1]): (row[2], row[3]) for row in rows
-    }
+    found: dict[tuple[str, str], tuple[datetime | None, datetime | None]] = {(row[0], row[1]): (row[2], row[3]) for row in rows}
     drift: list[dict[str, Any]] = []
     dismissed = 0
     for entry in canonical:

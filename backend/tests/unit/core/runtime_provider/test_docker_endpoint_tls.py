@@ -157,23 +157,23 @@ class TestIsTlsConfigured:
 
 class TestIsInsecureEndpointAllowed:
     def test_not_set_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         assert is_insecure_endpoint_allowed() is False
 
     def test_set_to_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
         assert is_insecure_endpoint_allowed() is True
 
     def test_set_to_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "true")
         assert is_insecure_endpoint_allowed() is True
 
     def test_set_to_false_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "false")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "false")
         assert is_insecure_endpoint_allowed() is False
 
     def test_set_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "0")
         assert is_insecure_endpoint_allowed() is False
 
 
@@ -201,21 +201,21 @@ class TestValidateDockerEndpointTls:
     def test_remote_no_tls_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         with pytest.raises(ValueError, match="requires TLS"):
             validate_docker_endpoint_tls("tcp://remote-host:2375")
 
     def test_remote_no_tls_error_message_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         with pytest.raises(ValueError, match="DOCKER_TLS_VERIFY") as exc_info:
             validate_docker_endpoint_tls("tcp://10.0.0.5:2375")
         msg = str(exc_info.value)
         assert "10.0.0.5:2375" in msg
         assert "DOCKER_CERT_PATH" in msg
         assert "bundled-runner-operator-guide" in msg
-        assert "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT" in msg
+        assert "FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT" in msg
 
     def test_remote_with_tls_verify_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCKER_TLS_VERIFY", "1")
@@ -227,12 +227,10 @@ class TestValidateDockerEndpointTls:
         monkeypatch.setenv("DOCKER_CERT_PATH", "/certs")
         assert validate_docker_endpoint_tls("tcp://remote-host:2375") is None
 
-    def test_remote_with_escape_hatch_passes_and_logs(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_remote_with_escape_hatch_passes_and_logs(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
         import logging
 
         with caplog.at_level(logging.WARNING):
@@ -250,7 +248,7 @@ class TestDockerProviderTlsValidation:
     def test_constructor_rejects_remote_no_tls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", raising=False)
         from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         with pytest.raises(ValueError, match="requires TLS"):
@@ -298,7 +296,7 @@ class TestDockerProviderTlsValidation:
     def test_constructor_accepts_remote_with_escape_hatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DOCKER_TLS_VERIFY", raising=False)
         monkeypatch.delenv("DOCKER_CERT_PATH", raising=False)
-        monkeypatch.setenv("MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT", "1")
         from farna.core.runtime_provider.docker import DockerRuntimeProvider
 
         p = DockerRuntimeProvider(docker_host="tcp://remote-host:2375")

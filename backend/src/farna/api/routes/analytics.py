@@ -659,9 +659,7 @@ async def analytics_query(
     """
     org_id = _require_org(principal)
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
         result = await run_analytics_query(
             org_id=org_id,
             params=params,
@@ -720,9 +718,7 @@ async def analytics_concurrency(
         limit=limit,
     )
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
         result = await run_concurrency_query(
             org_id=org_id,
             params=params,
@@ -773,9 +769,7 @@ async def analytics_capacity(
     """
     org_id = _require_org(principal)
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
         params = CapacityParams(
             window_minutes=window_minutes,
             interval_seconds=interval_seconds,
@@ -819,9 +813,7 @@ async def analytics_guardrails(
     """
     org_id = _require_org(principal)
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
         result = await run_guardrail_scorecard(
             org_id=org_id,
             factory=_analytics_session_factory(settings),
@@ -858,9 +850,7 @@ async def analytics_export(
     """
     org_id = _require_org(principal)
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
         result = await export_facts(
             org_id=org_id,
             params=params,
@@ -979,9 +969,7 @@ async def analytics_scan(
     # in ``_resolve_scoped_team_ids``); preserve its existing fallback for a
     # non-HTTP escape unchanged.
     try:
-        team_ids = await _resolve_scoped_team_ids(
-            _analytics_session_factory(settings), org_id=org_id, principal=principal
-        )
+        team_ids = await _resolve_scoped_team_ids(_analytics_session_factory(settings), org_id=org_id, principal=principal)
     except HTTPException:
         raise
     except Exception as exc:

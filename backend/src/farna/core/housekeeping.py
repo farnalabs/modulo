@@ -251,11 +251,7 @@ async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list
     if not secrets:
         return []
 
-    connectors = (
-        (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
+    connectors = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id))).scalars().all()
     agents = (await session.execute(select(Agent).where(Agent.organisation_id == org_id))).scalars().all()
 
     referenced_keys = _connector_secret_keys(connectors) | _agent_secret_keys(agents)
@@ -286,19 +282,11 @@ def _collect_bound_connector_ids(snapshots: Sequence[Any]) -> set[uuid.UUID]:
 
 
 async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    connectors = (
-        (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
+    connectors = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id))).scalars().all()
     if not connectors:
         return []
 
-    snapshots = (
-        (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
+    snapshots = (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.organisation_id == org_id))).scalars().all()
 
     bound_ids = _collect_bound_connector_ids(snapshots)
 
@@ -383,15 +371,9 @@ async def _scan_stale_pipelines(session: AsyncSession, org_id: uuid.UUID) -> lis
 
 
 async def _scan_unused_model_backends(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
-    used_ids = (
-        (await session.execute(select(Agent.model_backend_id).distinct().where(Agent.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
+    used_ids = (await session.execute(select(Agent.model_backend_id).distinct().where(Agent.organisation_id == org_id))).scalars().all()
     used_set = set(used_ids)
-    backends = (
-        (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
-    )
+    backends = (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
     return [
         Candidate(
             id=str(mb.id),
@@ -484,9 +466,7 @@ async def _trigger_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID)
     soft-deleted-but-restorable trigger's pin (``/triggers/{id}/restore``).
     """
     trigger_table = Trigger.__table__
-    configs = (
-        await session.execute(select(trigger_table.c.config_json).where(trigger_table.c.organisation_id == org_id))
-    ).scalars()
+    configs = (await session.execute(select(trigger_table.c.config_json).where(trigger_table.c.organisation_id == org_id))).scalars()
     pinned: set[uuid.UUID] = set()
     for config in configs:
         snapshot_id = _canonical_snapshot_id((config or {}).get("snapshot_id"))
@@ -506,9 +486,7 @@ async def _variant_pinned_snapshot_ids(session: AsyncSession, org_id: uuid.UUID)
     dialect-portable across the JSON storage differences.
     """
     variant_table = VariantGroup.__table__
-    variant_lists = (
-        await session.execute(select(variant_table.c.variants).where(variant_table.c.organisation_id == org_id))
-    ).scalars()
+    variant_lists = (await session.execute(select(variant_table.c.variants).where(variant_table.c.organisation_id == org_id))).scalars()
     pinned: set[uuid.UUID] = set()
     for variants in variant_lists:
         if not isinstance(variants, list):
@@ -646,25 +624,18 @@ async def _scan_edit_snapshot_retention(session: AsyncSession, org_id: uuid.UUID
     for row in rows:
         per_pipeline[row.pipeline_id] = per_pipeline.get(row.pipeline_id, 0) + 1
     _log.warning(
-        "housekeeping.edit_snapshot_retention: org %s has %d edit snapshot(s) beyond the newest %d retained "
-        "per pipeline across %d pipeline(s): %s",
+        "housekeeping.edit_snapshot_retention: org %s has %d edit snapshot(s) beyond the newest %d retained per pipeline across %d pipeline(s): %s",
         org_id,
         len(rows),
         EDIT_SNAPSHOT_RETENTION_LIMIT,
         len(per_pipeline),
-        ", ".join(
-            f"{pid}:{count}"
-            for pid, count in sorted((str(pipeline_id), count) for pipeline_id, count in per_pipeline.items())
-        ),
+        ", ".join(f"{pid}:{count}" for pid, count in sorted((str(pipeline_id), count) for pipeline_id, count in per_pipeline.items())),
     )
     return [
         Candidate(
             id=str(row.id),
             name=f"Snapshot v{row.snapshot_version} for pipeline {row.pipeline_id}",
-            detail=(
-                f"Edit snapshot beyond retention — only the newest {EDIT_SNAPSHOT_RETENTION_LIMIT} "
-                "edit versions are kept per pipeline"
-            ),
+            detail=(f"Edit snapshot beyond retention — only the newest {EDIT_SNAPSHOT_RETENTION_LIMIT} edit versions are kept per pipeline"),
             created_at=row.created_at.isoformat() if row.created_at else None,
         )
         for row in rows
@@ -741,8 +712,7 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
         Candidate(
             id=str(t.id),
             name=f"Trigger {ttype} for pipeline {pid}",
-            detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
-            f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
+            detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
             created_at=t.created_at.isoformat() if t.created_at else None,
         )
         for (pid, ttype), triggers in groups.items()
@@ -827,9 +797,7 @@ async def _scan_stale_api_keys(session: AsyncSession, org_id: uuid.UUID) -> list
 
 async def _scan_unused_sso_providers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """SSO providers with no accounts using SSO authentication in this org."""
-    providers = (
-        (await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id))).scalars().all()
-    )
+    providers = (await session.execute(select(SsoProvider).where(SsoProvider.organisation_id == org_id))).scalars().all()
     if not providers:
         return []
 
@@ -864,9 +832,7 @@ async def _scan_unused_sso_providers(session: AsyncSession, org_id: uuid.UUID) -
 
 async def _scan_empty_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Teams with no active user members."""
-    teams_with_members = (
-        select(TeamMembership.team_id).where(TeamMembership.organisation_id == org_id).distinct().subquery()
-    )
+    teams_with_members = select(TeamMembership.team_id).where(TeamMembership.organisation_id == org_id).distinct().subquery()
 
     teams = (
         (
@@ -930,26 +896,11 @@ async def _scan_unused_parameter_schemas(session: AsyncSession, org_id: uuid.UUI
 async def _scan_unused_schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
     """Schemas not referenced by any agent (input/output) or snapshot schema pin. Excludes system schemas."""
     # IDs used by agents (input or output schema)
-    agent_input_ids = (
-        select(Agent.input_schema_id)
-        .where(Agent.organisation_id == org_id, Agent.input_schema_id.is_not(None))
-        .distinct()
-        .subquery()
-    )
-    agent_output_ids = (
-        select(Agent.output_schema_id)
-        .where(Agent.organisation_id == org_id, Agent.output_schema_id.is_not(None))
-        .distinct()
-        .subquery()
-    )
+    agent_input_ids = select(Agent.input_schema_id).where(Agent.organisation_id == org_id, Agent.input_schema_id.is_not(None)).distinct().subquery()
+    agent_output_ids = select(Agent.output_schema_id).where(Agent.organisation_id == org_id, Agent.output_schema_id.is_not(None)).distinct().subquery()
 
     # IDs used by snapshot schema pins
-    pin_schema_ids = (
-        select(SnapshotSchemaPin.schema_id)
-        .where(SnapshotSchemaPin.organisation_id == org_id, SnapshotSchemaPin.schema_id.is_not(None))
-        .distinct()
-        .subquery()
-    )
+    pin_schema_ids = select(SnapshotSchemaPin.schema_id).where(SnapshotSchemaPin.organisation_id == org_id, SnapshotSchemaPin.schema_id.is_not(None)).distinct().subquery()
 
     schemas = (
         (
@@ -1028,9 +979,7 @@ def _lifecycle_map_has_no_stages(session: AsyncSession) -> ColumnElement[bool]:
         # scanner's category, the exception class and the traceback — so the
         # empty category is attributable to a scanner FAILURE, never silently
         # indistinguishable from a clean scan. Mirrors ``dialect_insert``.
-        raise NotImplementedError(
-            f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)"
-        )
+        raise NotImplementedError(f"_lifecycle_map_has_no_stages is not implemented for the {dialect!r} backend (postgres/sqlite only)")
     return func.coalesce(length, 0) == 0
 
 
@@ -1074,9 +1023,7 @@ async def _scan_invalid_org_fk(session: AsyncSession, org_id: uuid.UUID) -> list
     signal is: if ``organisation_id`` no longer exists in ``organisations``, every
     tenant-scoped row still carrying that value is orphaned and is floated here.
     """
-    org_exists = (
-        await session.execute(select(Organisation.id).where(Organisation.id == org_id))
-    ).scalar_one_or_none() is not None
+    org_exists = (await session.execute(select(Organisation.id).where(Organisation.id == org_id))).scalar_one_or_none() is not None
 
     if org_exists:
         # The org is valid, so no row within this scope can reference a missing org.
@@ -1217,8 +1164,7 @@ async def _scan_degraded_composite_templates(session: AsyncSession, org_id: uuid
         )
     if candidates:
         _log.warning(
-            "housekeeping.degraded_composite_templates: org %s has %d composite template(s) still "
-            "carrying credential mask sentinels - repair via editor re-entry (FAR-1374)",
+            "housekeeping.degraded_composite_templates: org %s has %d composite template(s) still carrying credential mask sentinels - repair via editor re-entry (FAR-1374)",
             org_id,
             len(candidates),
         )
@@ -1354,31 +1300,21 @@ _SCANNERS: list[Scanner] = [
         category="invalid_org_fk",
         scan_func=_scan_invalid_org_fk,
         label="Invalid Organisation FK",
-        description=(
-            "Tenant-scoped rows whose organisation_id references a non-existent "
-            "organisation (orphaned data) — surfaced for triage, not auto-deleted."
-        ),
+        description=("Tenant-scoped rows whose organisation_id references a non-existent organisation (orphaned data) — surfaced for triage, not auto-deleted."),
         entity_type=None,
     ),
     Scanner(
         category="checkpoint_retention",
         scan_func=_scan_checkpoint_retention,
         label="Checkpoint Retention",
-        description=(
-            "Terminal runs with LangGraph graph-state checkpoints beyond the retention "
-            "window - surfaced for purge via the Checkpoint Retention panel (bulk, age-based)."
-        ),
+        description=("Terminal runs with LangGraph graph-state checkpoints beyond the retention window - surfaced for purge via the Checkpoint Retention panel (bulk, age-based)."),
         entity_type=None,
     ),
     Scanner(
         category="degraded_composite_templates",
         scan_func=_scan_degraded_composite_templates,
         label="Degraded Composite Templates",
-        description=(
-            "Composite templates whose stored sub-graph still carries a credential mask "
-            "sentinel (pre-fix rows) - surfaced for manual editor re-entry, never "
-            "auto-repaired or auto-deleted (FAR-1374)."
-        ),
+        description=("Composite templates whose stored sub-graph still carries a credential mask sentinel (pre-fix rows) - surfaced for manual editor re-entry, never auto-repaired or auto-deleted (FAR-1374)."),
         # DETECTION-ONLY (entity_type=None, set directly on the candidates) so
         # the registry never treats these rows as cleanup targets - the
         # non-deletable entity type gives cleanup callers the triage message.
@@ -1434,8 +1370,7 @@ async def scan_all(session: AsyncSession, org_id: uuid.UUID) -> list[CategoryRes
             results.append(CategoryResult(category=entry.category, candidates=candidates))
         except Exception as exc:
             _log.exception(
-                "Housekeeping scanner '%s' failed with %s; reporting its category empty "
-                "- this is a scanner FAILURE, not a clean no-candidates scan",
+                "Housekeeping scanner '%s' failed with %s; reporting its category empty - this is a scanner FAILURE, not a clean no-candidates scan",
                 entry.category,
                 type(exc).__name__,
             )

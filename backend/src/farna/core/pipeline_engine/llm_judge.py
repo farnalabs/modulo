@@ -93,11 +93,7 @@ SYNC_BRIDGE_TIMEOUT_SECONDS = 75.0
 
 def _timeout_detail() -> str:
     """Coded detail for a judge timeout (reads the bounds at call time)."""
-    return (
-        "Model judge backend call timed out "
-        f"(invoke bound {BACKEND_INVOKE_TIMEOUT_SECONDS:g}s, "
-        f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); no verdict was produced"
-    )
+    return f"Model judge backend call timed out (invoke bound {BACKEND_INVOKE_TIMEOUT_SECONDS:g}s, bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); no verdict was produced"
 
 
 def _reject_json_constant(value: str) -> Any:
@@ -261,23 +257,14 @@ def _build_judge_prompt(config: dict[str, Any], content: Any) -> str:
     """The legacy prompt (typed definitions use the transport's per-question prompt)."""
     guidance = _legacy_guidance(config)
     guidance_block = f"{guidance}\n\n" if guidance else ""
-    return (
-        "Evaluate the following output and return JSON with keys passed "
-        "(bool), score (float 0-1), detail (str).\n\n"
-        f"{guidance_block}"
-        f"Output:\n{content}"
-    )
+    return f"Evaluate the following output and return JSON with keys passed (bool), score (float 0-1), detail (str).\n\n{guidance_block}Output:\n{content}"
 
 
 def _backend_not_found_error(
     backend_id: uuid.UUID,
     identity: JudgeIdentity,
 ) -> JudgeExecutionError:
-    detail = (
-        f"model_judge eval's model_backend_id {backend_id} is not an active "
-        "model backend for this organisation; fix the eval definition's "
-        "config['model_backend_id'] (or the typed backing)"
-    )
+    detail = f"model_judge eval's model_backend_id {backend_id} is not an active model backend for this organisation; fix the eval definition's config['model_backend_id'] (or the typed backing)"
     _log.error(
         "model_judge.unknown_model_backend_id",
         extra={"model_backend_id": str(backend_id), "detail": detail},
@@ -558,11 +545,7 @@ def build_model_judge_callable(
     try:
         backend_id = uuid.UUID(backend_id_str)
     except (ValueError, TypeError) as exc:
-        detail = (
-            f"model_judge eval has a malformed model_backend_id {backend_id_str!r}: "
-            f"not a valid UUID ({exc}); fix the eval definition's "
-            "config['model_backend_id'] or config['backing']['model_backend_id']"
-        )
+        detail = f"model_judge eval has a malformed model_backend_id {backend_id_str!r}: not a valid UUID ({exc}); fix the eval definition's config['model_backend_id'] or config['backing']['model_backend_id']"
         _log.error(
             "model_judge.malformed_model_backend_id",
             extra={"model_backend_id": backend_id_str, "detail": detail},

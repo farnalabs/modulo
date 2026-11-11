@@ -76,9 +76,7 @@ class LocalRuntimeProvider(RuntimeProvider):
         try:
             workspace_dir = tempfile.mkdtemp(prefix=f"modulo-workspace-{spec.environment_profile_id}-")
         except OSError as exc:
-            raise RuntimeError(
-                f"Failed to create workspace temp directory for profile {spec.environment_profile_id}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to create workspace temp directory for profile {spec.environment_profile_id}: {exc}") from exc
         ref = str(uuid.uuid4())
 
         try:
@@ -222,7 +220,7 @@ def create_local_provider_from_env() -> LocalRuntimeProvider:
     """
     from farna.core.runtime_config.key_bridge import override_or
 
-    raw = override_or("MODULO_MAX_LOCAL_CONCURRENCY", os.environ.get("MODULO_MAX_LOCAL_CONCURRENCY", "2"))
+    raw = override_or("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", os.environ.get("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", "2"))
     try:
         max_concurrency = max(1, int(raw))
     except ValueError:

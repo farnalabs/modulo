@@ -46,11 +46,7 @@ _ADD_CHECK_NOT_VALID = (
     "cancel_reason IN ('user_requested', 'agent_requested', 'hitl_review_expired', 'hitl_review_missing')"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_cancel_reason' "
-    "AND NOT convalidated) THEN ALTER TABLE public.runs VALIDATE CONSTRAINT "
-    "ck_runs_cancel_reason; END IF; END $$;"
-)
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_cancel_reason' AND NOT convalidated) THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_cancel_reason; END IF; END $$;"
 
 
 def upgrade() -> None:

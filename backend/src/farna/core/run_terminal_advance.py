@@ -83,13 +83,7 @@ async def advance_journeys_from_stored_refs(
             # behind the org flag (fail-closed). The raw writers have no
             # finalize hook, so without this gate an agent-sourced entry on a
             # RAW-TERMINALISED run would mint/advance its journey unconditioned.
-            canonical_agent = [
-                c
-                for c in _canonicalise_and_dedupe(
-                    [e for e in refs if isinstance(e, dict) and e.get("source") == "agent"]
-                )
-                if c.get("source") == "agent"
-            ]
+            canonical_agent = [c for c in _canonicalise_and_dedupe([e for e in refs if isinstance(e, dict) and e.get("source") == "agent"]) if c.get("source") == "agent"]
             refs = await _apply_agent_mint_gate(session, run.organisation_id, run_id, refs, canonical_agent)
             if not refs:
                 return

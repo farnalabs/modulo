@@ -155,7 +155,7 @@ async def test_create_workspace_stamps_identity_metadata_when_spec_carries_none(
     ``modulo.created_at``, so both must be present on EVERY sandbox. The
     spec's own keys stay absent (the legacy
     ``metadata=_metadata or None`` parity holds for THEM)."""
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-egress")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "deployment-egress")
     provider = E2BRuntimeProvider(api_key="sk-test")
     await provider.create_workspace(_spec(egress_policy="deny_all"))
 

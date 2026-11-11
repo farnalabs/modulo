@@ -57,9 +57,9 @@ class TestCapInfraHealth:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/modulo_integration")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-        monkeypatch.setenv("MODULO_ADMIN_PASSWORD", "test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
         monkeypatch.setenv("REDIS_URL", f"redis://127.0.0.1:{port}/0")
-        monkeypatch.setenv("MODULO_HEALTH_REDIS_TIMEOUT_SECONDS", "2")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEALTH_REDIS_TIMEOUT_SECONDS", "2")
         get_settings.cache_clear()
 
         result = await _check_redis()

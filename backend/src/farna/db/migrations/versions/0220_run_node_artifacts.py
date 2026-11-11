@@ -34,15 +34,7 @@ def _artifacts_column_exists(bind: sa.Connection) -> bool:
     ``alembic_version`` to the previous revision and re-apply the chain) is a
     no-op instead of raising ``DuplicateColumn``.
     """
-    return bool(
-        bind.execute(
-            sa.text(
-                "SELECT count(*) FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'run_node_outputs' "
-                "AND column_name = 'artifacts_json'"
-            )
-        ).scalar()
-    )
+    return bool(bind.execute(sa.text("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'run_node_outputs' AND column_name = 'artifacts_json'")).scalar())
 
 
 def upgrade() -> None:

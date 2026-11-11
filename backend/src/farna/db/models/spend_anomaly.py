@@ -30,9 +30,7 @@ class SpendAnomaly(OrgScoped):
     )
 
     anomaly_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"), index=True
-    )
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipelines.id", ondelete="SET NULL"), index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     baseline: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     percent_above: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)

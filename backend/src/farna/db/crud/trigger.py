@@ -39,10 +39,7 @@ def apply_trigger_event_cursor(q: Select[Any], cursor: str | None) -> Select[Any
     except (ValueError, AttributeError):
         _log.warning("Malformed cursor ignored: %s", sanitise_log_value(cursor), exc_info=True)
         return q
-    return q.where(
-        (TriggerEvent.created_at < cursor_dt)
-        | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid))
-    )
+    return q.where((TriggerEvent.created_at < cursor_dt) | ((TriggerEvent.created_at == cursor_dt) & (TriggerEvent.id < cursor_uuid)))
 
 
 async def list_triggers(
@@ -109,12 +106,7 @@ async def soft_delete_trigger(
     trigger_id: uuid.UUID,
 ) -> Trigger | None:
     """Mark a trigger as deleted (soft delete). Returns None if not found or already deleted."""
-    result = await session.execute(
-        update(Trigger)
-        .where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None))
-        .values(deleted_at=func.now())
-        .returning(Trigger)
-    )
+    result = await session.execute(update(Trigger).where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None)).values(deleted_at=func.now()).returning(Trigger))
     await session.flush()
     return result.scalar_one_or_none()
 
@@ -124,12 +116,7 @@ async def restore_trigger(
     trigger_id: uuid.UUID,
 ) -> Trigger | None:
     """Restore a soft-deleted trigger. Returns None if not found."""
-    result = await session.execute(
-        update(Trigger)
-        .where(Trigger.id == trigger_id, Trigger.deleted_at.is_not(None))
-        .values(deleted_at=None)
-        .returning(Trigger)
-    )
+    result = await session.execute(update(Trigger).where(Trigger.id == trigger_id, Trigger.deleted_at.is_not(None)).values(deleted_at=None).returning(Trigger))
     await session.flush()
     return result.scalar_one_or_none()
 
@@ -177,9 +164,7 @@ async def load_trigger_and_org_global(
             skipped its guard and could 500 on ``AttributeError``).
     """
     async with system_session.begin():
-        trigger_row = await system_session.execute(
-            select(Trigger).where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None))
-        )
+        trigger_row = await system_session.execute(select(Trigger).where(Trigger.id == trigger_id, Trigger.deleted_at.is_(None)))
         trigger = trigger_row.scalar_one_or_none()
     if trigger is None:
         raise TriggerNotFoundError(trigger_id=trigger_id)

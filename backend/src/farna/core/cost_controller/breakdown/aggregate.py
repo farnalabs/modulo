@@ -279,9 +279,7 @@ def _eval_self_reported(
             # ``agent_not_reported`` — no cost key was presented at all.
             # The rejection marker is stamped only for the ``model_cost_usd``
             # fold, so only that report_key earns a distinct reason.
-            entry["missing_self_report_reason"] = _missing_self_report_reason(
-                rk, rejected_zero_nodes, rejection_reasons
-            )
+            entry["missing_self_report_reason"] = _missing_self_report_reason(rk, rejected_zero_nodes, rejection_reasons)
     return entry, amount
 
 

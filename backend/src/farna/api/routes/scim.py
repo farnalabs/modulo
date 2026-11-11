@@ -115,11 +115,7 @@ def _require_human_scim_user(account: Account | None, user_id: uuid.UUID) -> Acc
     return account
 
 
-_SCIM_ADMIN_CALLER_SQL = text(
-    "SELECT a.id FROM org_memberships om JOIN accounts a ON a.id = om.account_id "
-    "WHERE om.organisation_id = :org AND om.role = 'admin' AND om.deactivated_at IS NULL "
-    "AND a.active IS TRUE AND a.is_break_glass IS FALSE ORDER BY om.joined_at, a.id LIMIT 1"
-)
+_SCIM_ADMIN_CALLER_SQL = text("SELECT a.id FROM org_memberships om JOIN accounts a ON a.id = om.account_id WHERE om.organisation_id = :org AND om.role = 'admin' AND om.deactivated_at IS NULL AND a.active IS TRUE AND a.is_break_glass IS FALSE ORDER BY om.joined_at, a.id LIMIT 1")
 
 
 async def _resolve_scim_admin_caller(session: AsyncSession, org_id: uuid.UUID) -> uuid.UUID | None:

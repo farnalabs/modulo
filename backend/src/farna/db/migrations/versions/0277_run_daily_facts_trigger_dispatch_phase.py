@@ -82,9 +82,7 @@ _BACKFILL = """
 # Data columns only — downgrade drops them and the copied values go with them.
 _DROP_TRIGGER_ID = 'ALTER TABLE public."run_daily_facts" DROP COLUMN IF EXISTS "trigger_id";'
 _DROP_DISPATCH_PHASE = 'ALTER TABLE public."run_daily_facts" DROP COLUMN IF EXISTS "dispatch_phase";'
-_DROP_DISPATCH_PHASE_ENTERED_AT = (
-    'ALTER TABLE public."run_daily_facts" DROP COLUMN IF EXISTS "dispatch_phase_entered_at";'
-)
+_DROP_DISPATCH_PHASE_ENTERED_AT = 'ALTER TABLE public."run_daily_facts" DROP COLUMN IF EXISTS "dispatch_phase_entered_at";'
 
 
 def upgrade() -> None:

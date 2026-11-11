@@ -121,9 +121,7 @@ class LinearConnector(TicketTrackerBase):
         # never re-resolves at connect time (closes DNS-rebind).
         # ``trust_env=False`` stops a proxy from re-resolving the destination
         # and defeating the pin.
-        return pinned_async_client_sync(
-            _LINEAR_GRAPHQL_URL, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_LINEAR_GRAPHQL_URL, headers=self._headers(), timeout=30, verify=egress_ssl_context(self))
 
     @redacting
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:

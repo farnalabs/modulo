@@ -84,12 +84,10 @@ class CIRunnerBase(ConnectorBase):
 
     async def query(self, _q: ConnectorQuery) -> ConnectorResult:
         raise ConnectorTypeError(
-            "CI runners do not support query(). Use CI-specific methods "
-            "(trigger_run, get_run_status, get_run_logs, list_runs) instead.",
+            "CI runners do not support query(). Use CI-specific methods (trigger_run, get_run_status, get_run_logs, list_runs) instead.",
         )
 
     async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:
         raise ConnectorTypeError(
-            "CI runners do not support write(). Use CI-specific methods "
-            "(trigger_run, get_run_status, get_run_logs, list_runs) instead.",
+            "CI runners do not support write(). Use CI-specific methods (trigger_run, get_run_status, get_run_logs, list_runs) instead.",
         )

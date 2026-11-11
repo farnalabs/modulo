@@ -91,11 +91,7 @@ def test_each_worker_program_matches_the_root_compose_command():
         )
         actual = shlex.split(parser.get(section, "command"))
         expected = _root_compose_service_command(service)
-        assert actual == expected, (
-            f"[{section}].command drifted from docker-compose.yml's `{service}` command:\n"
-            f"  supervisord: {actual}\n  compose:     {expected}\n"
-            "The two deployments must run the same worker, or one of them is wrong."
-        )
+        assert actual == expected, f"[{section}].command drifted from docker-compose.yml's `{service}` command:\n  supervisord: {actual}\n  compose:     {expected}\nThe two deployments must run the same worker, or one of them is wrong."
 
 
 def test_each_worker_program_autostarts_and_logs_where_an_operator_can_read_them():
@@ -103,41 +99,23 @@ def test_each_worker_program_autostarts_and_logs_where_an_operator_can_read_them
     parser = _supervisord()
     for section in _WORKER_PROGRAMS:
         assert parser.has_section(section)
-        assert parser.get(section, "autostart").strip().lower() == "true", (
-            f"[{section}] must autostart - a worker an operator has to remember to start is a "
-            "worker the deployment will not have"
-        )
-        assert parser.get(section, "directory").strip() == "/app", (
-            f"[{section}] must run in /app (the venv, alembic.ini and the source tree live there, "
-            "exactly as for [program:backend])"
-        )
+        assert parser.get(section, "autostart").strip().lower() == "true", f"[{section}] must autostart - a worker an operator has to remember to start is a worker the deployment will not have"
+        assert parser.get(section, "directory").strip() == "/app", f"[{section}] must run in /app (the venv, alembic.ini and the source tree live there, exactly as for [program:backend])"
         for key in ("stdout_logfile", "stderr_logfile"):
             value = parser.get(section, key).strip()
-            assert value.startswith(f"{_LOG_DIR}/"), (
-                f"[{section}].{key} = {value!r} - worker output must land in {_LOG_DIR} beside the "
-                "backend and nginx logs, or an operator has nothing to read when a run never starts"
-            )
+            assert value.startswith(f"{_LOG_DIR}/"), f"[{section}].{key} = {value!r} - worker output must land in {_LOG_DIR} beside the backend and nginx logs, or an operator has nothing to read when a run never starts"
         # PATH must reach the venv, or `python` resolves to the system
         # interpreter and the worker dies on import - the same reason
         # [program:backend] declares it.
         environment = parser.get(section, "environment")
-        assert "/app/.venv/bin" in environment, (
-            f"[{section}].environment must put /app/.venv/bin on PATH (got {environment!r})"
-        )
+        assert "/app/.venv/bin" in environment, f"[{section}].environment must put /app/.venv/bin on PATH (got {environment!r})"
 
 
 def test_supervisord_conf_is_actually_shipped_by_the_all_in_one_dockerfile():
     """A program nobody copies into the image cannot run (FAR-1509)."""
     dockerfile = _ALL_IN_ONE_DOCKERFILE.read_text(encoding="utf-8")
-    copied = [
-        line
-        for line in dockerfile.splitlines()
-        if line.startswith("COPY") and "deploy/supervisor/supervisord.conf" in line
-    ]
-    assert copied, (
-        f"{_ALL_IN_ONE_DOCKERFILE.relative_to(_REPO_ROOT)} never copies deploy/supervisor/"
-        "supervisord.conf, so whatever it declares would not ship in the image"
-    )
+    copied = [line for line in dockerfile.splitlines() if line.startswith("COPY") and "deploy/supervisor/supervisord.conf" in line]
+    assert copied, f"{_ALL_IN_ONE_DOCKERFILE.relative_to(_REPO_ROOT)} never copies deploy/supervisor/supervisord.conf, so whatever it declares would not ship in the image"
 
 
 def test_the_workers_are_not_a_compose_side_service():
@@ -189,24 +167,16 @@ def test_the_compose_wires_the_system_database_url_the_system_worker_requires():
     environment = compose.get("services", {}).get(_APP_SERVICE, {}).get("environment", {})
     assert isinstance(environment, dict), f"services.{_APP_SERVICE}.environment must be a mapping"
 
-    value = environment.get("MODULO_SYSTEM_DATABASE_URL")
+    value = environment.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
     assert value, (
         f"deploy/compose/docker-compose.prod.yml does not pass MODULO_SYSTEM_DATABASE_URL to "
         f"{_APP_SERVICE}: the system worker's dispatcher_reconcile cron fails closed without it, "
         "so /healthz/ready never reports ready (the API + workers can all be up and the deployment is "
         "still permanently 503) - see core/cron_helpers.py::_get_system_engine"
     )
-    assert value.startswith("postgresql+asyncpg://"), (
-        f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
-    )
-    assert "modulo_system:" in value, (
-        f"MODULO_SYSTEM_DATABASE_URL must authenticate as the modulo_system (BYPASSRLS) role, got {value!r} - "
-        "the app role is NOBYPASSRLS and the cron refuses to fall back to it"
-    )
+    assert value.startswith("postgresql+asyncpg://"), f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
+    assert "modulo_system:" in value, f"MODULO_SYSTEM_DATABASE_URL must authenticate as the modulo_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
     # Same password as the app role: bootstrap_role parses the password out of
     # this URL when it creates/alters the role, so both sides must reference the
     # ONE operator secret (MODULO_DB_PASSWORD) rather than two literals drifting.
-    assert "${MODULO_DB_PASSWORD" in value, (
-        f"MODULO_SYSTEM_DATABASE_URL must interpolate ${{MODULO_DB_PASSWORD}} so the role password and the "
-        f"URL agree, got {value!r}"
-    )
+    assert "${MODULO_DB_PASSWORD" in value, f"MODULO_SYSTEM_DATABASE_URL must interpolate ${{MODULO_DB_PASSWORD}} so the role password and the URL agree, got {value!r}"

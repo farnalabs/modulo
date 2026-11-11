@@ -67,8 +67,7 @@ def _state() -> LauncherState:
 def _write_state_secrets(tmp_path: Path) -> LauncherSecrets:
     secrets = LauncherSecrets(postgres_password="pg-pw", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
     (tmp_path / "secrets.json").write_text(
-        '{"postgres_password": "pg-pw", "redis_password": "redis-pw", '
-        f'"state_hmac_key": "{secrets.state_hmac_key_hex}"}}',
+        f'{{"postgres_password": "pg-pw", "redis_password": "redis-pw", "state_hmac_key": "{secrets.state_hmac_key_hex}"}}',
         encoding="utf-8",
     )
     save_state(_state(), tmp_path / "state.json", secrets.state_hmac_key)
@@ -86,54 +85,42 @@ def _touch_secrets(tmp_path: Path) -> None:
 
 def test_secrets_permissions_probe_failure(tmp_path: Path):
     _touch_secrets(tmp_path)
-    res = check_secrets_permissions(
-        tmp_path, None, _probes(secrets_mode=lambda _d: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
     assert "secrets-permission probe failed" in res.detail
 
 
 def test_ambient_pg_env_probe_failure(tmp_path: Path):
-    res = check_ambient_pg_env(
-        tmp_path, None, _probes(ambient_env_names=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_ambient_pg_env(tmp_path, None, _probes(ambient_env_names=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_settings_source_probe_failure(tmp_path: Path):
-    res = check_settings_source(
-        tmp_path, _state(), _probes(env_value=lambda _n: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_settings_source(tmp_path, _state(), _probes(env_value=lambda _n: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_settings_source_moduledb_away(tmp_path: Path):
-    res = check_settings_source(tmp_path, _state(), _probes(env_value=lambda n: "mysql" if n == "MODULO_DB" else None))
+    res = check_settings_source(tmp_path, _state(), _probes(env_value=lambda n: "mysql" if n == "FARNA_CONTROL_MODULO_DB" else None))
     assert res.ok is True
     assert res.warning is True
-    assert "MODULO_DB" in res.detail
+    assert "FARNA_CONTROL_MODULO_DB" in res.detail
 
 
 def test_settings_source_db_url_port_conflict(tmp_path: Path):
-    res = check_settings_source(
-        tmp_path, _state(), _probes(env_value=lambda n: "postgresql://h:19999/db" if n == "DATABASE_URL" else None)
-    )
+    res = check_settings_source(tmp_path, _state(), _probes(env_value=lambda n: "postgresql://h:19999/db" if n == "DATABASE_URL" else None))
     assert res.ok is True
     assert res.warning is True
     assert "19999" in res.detail
 
 
 def test_cloud_sync_probe_failure(tmp_path: Path):
-    res = check_cloud_sync_root(
-        tmp_path, None, _probes(cloud_sync_hit=lambda _d: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_cloud_sync_root(tmp_path, None, _probes(cloud_sync_hit=lambda _d: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_service_identity_probe_failure(tmp_path: Path):
-    res = check_service_identity(
-        tmp_path, None, _probes(service_installed=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_service_identity(tmp_path, None, _probes(service_installed=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
@@ -148,9 +135,7 @@ def test_service_identity_installed_degraded(tmp_path: Path):
 
 
 def test_memory_probe_failure(tmp_path: Path):
-    res = check_memory_headroom(
-        tmp_path, None, _probes(available_memory_bytes=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
@@ -160,23 +145,17 @@ def test_memory_unknown(tmp_path: Path):
 
 
 def test_bundle_versions_probe_failure(tmp_path: Path):
-    res = check_bundle_versions(
-        tmp_path, _state(), _probes(data_dir_pg_version=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_bundle_versions(tmp_path, _state(), _probes(data_dir_pg_version=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_bundle_versions_bundle_none(tmp_path: Path):
-    res = check_bundle_versions(
-        tmp_path, _state(), _probes(data_dir_pg_version=lambda: "16", bundle_pg_version=lambda: None)
-    )
+    res = check_bundle_versions(tmp_path, _state(), _probes(data_dir_pg_version=lambda: "16", bundle_pg_version=lambda: None))
     assert res.ok is True
 
 
 def test_bundle_versions_drift(tmp_path: Path):
-    res = check_bundle_versions(
-        tmp_path, _state(), _probes(data_dir_pg_version=lambda: "15", bundle_pg_version=lambda: "16.4")
-    )
+    res = check_bundle_versions(tmp_path, _state(), _probes(data_dir_pg_version=lambda: "15", bundle_pg_version=lambda: "16.4"))
     assert res.ok is False
 
 
@@ -195,54 +174,40 @@ def test_bundle_versions_older_binary(tmp_path: Path):
 
 
 def test_bundled_binaries_probe_failure(tmp_path: Path):
-    res = check_bundled_binaries(
-        tmp_path, None, _probes(bundled_binaries=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_bundled_binaries(tmp_path, None, _probes(bundled_binaries=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_port_collisions_launcher_probe_failure(tmp_path: Path):
-    res = check_port_collisions(
-        tmp_path, _state(), _probes(launcher_running=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_port_collisions(tmp_path, _state(), _probes(launcher_running=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_port_collisions_owner_probe_failure(tmp_path: Path):
-    res = check_port_collisions(
-        tmp_path, _state(), _probes(port_owner_description=lambda _p: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_port_collisions(tmp_path, _state(), _probes(port_owner_description=lambda _p: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_port_collisions_with_owner(tmp_path: Path):
-    res = check_port_collisions(
-        tmp_path, _state(), _probes(port_owner_description=lambda _p: "foreign service bound to 1.2.3.4")
-    )
+    res = check_port_collisions(tmp_path, _state(), _probes(port_owner_description=lambda _p: "foreign service bound to 1.2.3.4"))
     assert res.ok is False
     assert "collision" in res.detail
 
 
 def test_install_shadows_probe_failure(tmp_path: Path):
-    res = check_install_shadows(
-        tmp_path, None, _probes(modulo_on_path=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_install_shadows(tmp_path, None, _probes(modulo_on_path=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
 def test_install_shadows_path_shadow(tmp_path: Path):
-    res = check_install_shadows(
-        tmp_path, None, _probes(modulo_on_path=lambda: "/other/bin/modulo", install_root=lambda: "/install")
-    )
+    res = check_install_shadows(tmp_path, None, _probes(modulo_on_path=lambda: "/other/bin/modulo", install_root=lambda: "/install"))
     assert res.ok is True
     assert res.warning is True
     assert "PATH shadowing" in res.detail
 
 
 def test_install_shadows_second_install(tmp_path: Path):
-    res = check_install_shadows(
-        tmp_path, None, _probes(second_install_hint=lambda: "a second native install lives at /x")
-    )
+    res = check_install_shadows(tmp_path, None, _probes(second_install_hint=lambda: "a second native install lives at /x"))
     assert res.ok is True
     assert res.warning is True
 
@@ -283,15 +248,7 @@ def _selfsigned_cert(lifetime_seconds: float) -> tuple[object, bytes]:
     key = Ed25519PrivateKey.generate()
     now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "modulo-tls-test")])
-    builder = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(seconds=lifetime_seconds))
-    )
+    builder = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(seconds=lifetime_seconds))
     cert = builder.sign(key, algorithm=None)
     return cert, cert.public_bytes(serialization.Encoding.PEM)
 
@@ -325,9 +282,7 @@ def test_tls_keypair_expiry_absent_or_unparseable_is_none(tmp_path: Path):
 
 
 def test_stale_backup_probe_failure(tmp_path: Path):
-    res = check_stale_backup(
-        tmp_path, None, _probes(last_backup_at=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    )
+    res = check_stale_backup(tmp_path, None, _probes(last_backup_at=lambda: (_ for _ in ()).throw(RuntimeError("boom"))))
     assert res.ok is False
 
 
@@ -695,8 +650,7 @@ def test_listen_hosts_in_table_skips_undecodable_address(tmp_path: Path) -> None
     # and the per-line except continues instead of aborting the whole table.
     table = tmp_path / "tcp"
     table.write_text(
-        "  sl  local_address rem_address   st\n"
-        "   0: ZZZZZZZZ:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000\n",
+        "  sl  local_address rem_address   st\n   0: ZZZZZZZZ:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000\n",
         encoding="ascii",
     )
     assert not doctor_module._listen_hosts_in_table(table, socket.AF_INET, 8080)

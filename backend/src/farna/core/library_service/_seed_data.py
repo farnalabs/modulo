@@ -201,11 +201,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="schema",
         name="PR Review Decision",
         slug="pr-review-decision",
-        description=(
-            "Output schema for PR-review inline-prompt agents: an APPROVE or"
-            " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
-            " per-finding details."
-        ),
+        description=("Output schema for PR-review inline-prompt agents: an APPROVE or REQUEST_CHANGES verdict, a one-paragraph summary, and optional per-finding details."),
         content_json={
             "fields": [
                 {
@@ -239,10 +235,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         content_json={
             "input_schema": "prd-input",
             "output_schema": "prd-input",
-            "prompt_template": (
-                "You are a technical analyst. Read the following product requirements document "
-                "and extract the key information into structured form.\n\nDocument:\n{{ input }}"
-            ),
+            "prompt_template": ("You are a technical analyst. Read the following product requirements document and extract the key information into structured form.\n\nDocument:\n{{ input }}"),
         },
         tags=["agent", "prd", "ingestion"],
     ),
@@ -255,11 +248,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         content_json={
             "input_schema": "prd-input",
             "output_schema": "requirements-output",
-            "prompt_template": (
-                "You are a senior software engineer. Given the following product requirements, "
-                "produce a structured list of functional and non-functional requirements.\n\n"
-                "PRD:\n{{ input }}"
-            ),
+            "prompt_template": ("You are a senior software engineer. Given the following product requirements, produce a structured list of functional and non-functional requirements.\n\nPRD:\n{{ input }}"),
         },
         tags=["agent", "requirements", "prd"],
     ),
@@ -287,12 +276,8 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         description="Example StubModelBackend fixture map for a PRD-to-requirements pipeline run.",
         content_json={
             "fixture_map": {
-                "Extract requirements from: Build a login system with SSO": (
-                    "Functional: SSO authentication\nNon-functional: 99.9% uptime"
-                ),
-                "Refine requirements: SSO authentication, 99.9% uptime": (
-                    "1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA"
-                ),
+                "Extract requirements from: Build a login system with SSO": ("Functional: SSO authentication\nNon-functional: 99.9% uptime"),
+                "Refine requirements: SSO authentication, 99.9% uptime": ("1. Integrate SAML 2.0 SSO\n2. Support OIDC providers\n3. 99.9% uptime SLA"),
             },
             "pipeline_id": None,
             "run_id": None,
@@ -307,11 +292,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="agent",
         name="Spec Implementer",
         slug="spec-implementer",
-        description=(
-            "Reads a freeform specification (markdown), implements the required "
-            "changes in a target code path, runs a test command to validate, "
-            "and optionally git-commits the result."
-        ),
+        description=("Reads a freeform specification (markdown), implements the required changes in a target code path, runs a test command to validate, and optionally git-commits the result."),
         content_json={
             "input_schema": None,
             "output_schema": None,
@@ -372,10 +353,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": True,
                     "description": "Instructions for what to approve/reject",
-                    "default_value": (
-                        "You are an approver. Respond with APPROVED or REJECTED"
-                        " as the first word, followed by your reasoning."
-                    ),
+                    "default_value": ("You are an approver. Respond with APPROVED or REJECTED as the first word, followed by your reasoning."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "decision-agent",
@@ -424,10 +402,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": True,
                     "description": "Instructions for what to evaluate as true or false",
-                    "default_value": (
-                        "You are a boolean evaluator. Respond with TRUE"
-                        " or FALSE as the first word, followed by your reasoning."
-                    ),
+                    "default_value": ("You are a boolean evaluator. Respond with TRUE or FALSE as the first word, followed by your reasoning."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "decision-agent",
@@ -467,10 +442,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="Devil\u2019s Advocate",
         slug="devils-advocate",
-        description=(
-            "Takes a position, argues for it, then argues against it. Synthesises both sides"
-            " into balanced advice. Use when you need rigorous critique of a plan."
-        ),
+        description=("Takes a position, argues for it, then argues against it. Synthesises both sides into balanced advice. Use when you need rigorous critique of a plan."),
         content_json={
             "parameter_ports": [
                 {
@@ -492,9 +464,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": False,
                     "description": "Prompt shaping how the pro side argues",
-                    "default_value": (
-                        "You are an advocate. Argue strongly in favour of this position: {{parameter.position}}"
-                    ),
+                    "default_value": ("You are an advocate. Argue strongly in favour of this position: {{parameter.position}}"),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "advocate-for",
@@ -520,12 +490,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": False,
                     "description": "Prompt shaping how the mediator synthesises",
-                    "default_value": (
-                        "You are a mediator. Below are two arguments about: {{parameter.position}}"
-                        "\n\n--- PRO ---\n{{nodes.advocate-for.output}}"
-                        "\n\n--- CON ---\n{{nodes.advocate-against.output}}"
-                        "\n\nSynthesise both sides into balanced, actionable advice."
-                    ),
+                    "default_value": ("You are a mediator. Below are two arguments about: {{parameter.position}}\n\n--- PRO ---\n{{nodes.advocate-for.output}}\n\n--- CON ---\n{{nodes.advocate-against.output}}\n\nSynthesise both sides into balanced, actionable advice."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "mediator",
@@ -571,11 +536,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": True,
                     "description": "Instructions for the triage classification",
-                    "default_value": (
-                        "You are a triage classifier. Respond with one of"
-                        " BUG, FEATURE, INFRA, or DOCS as the first word,"
-                        " followed by your reasoning."
-                    ),
+                    "default_value": ("You are a triage classifier. Respond with one of BUG, FEATURE, INFRA, or DOCS as the first word, followed by your reasoning."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "classifier-agent",
@@ -615,10 +576,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="LLM Council",
         slug="llm-council",
-        description=(
-            "Runs N parallel LLM calls with the same prompt, then a mediator synthesises their"
-            " responses into a single output. Configure model count and backends."
-        ),
+        description=("Runs N parallel LLM calls with the same prompt, then a mediator synthesises their responses into a single output. Configure model count and backends."),
         content_json={
             "parameter_ports": [
                 {
@@ -649,11 +607,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": False,
                     "description": "How the mediator should combine responses",
-                    "default_value": (
-                        "Below are {{council_member_count}} responses from different AI council"
-                        " members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single"
-                        " coherent recommendation, noting areas of agreement and disagreement."
-                    ),
+                    "default_value": ("Below are {{council_member_count}} responses from different AI council members.\n\n{{nodes.council.output}}\n\nSynthesise them into a single coherent recommendation, noting areas of agreement and disagreement."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "council-mediator",
@@ -693,11 +647,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="Structured Output Enforcer",
         slug="structured-output-enforcer",
-        description=(
-            "Takes free-form text and restructures it according to a target JSON Schema."
-            " Retries if the output doesn\u2019t conform."
-            " Use when you need guaranteed structural consistency."
-        ),
+        description=("Takes free-form text and restructures it according to a target JSON Schema. Retries if the output doesn\u2019t conform. Use when you need guaranteed structural consistency."),
         content_json={
             "parameter_ports": [
                 {
@@ -706,10 +656,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": True,
                     "description": "Instructions describing how to structure the output",
-                    "default_value": (
-                        "Restructure the input text into the required JSON format."
-                        " Ensure all required fields are present and correctly typed."
-                    ),
+                    "default_value": ("Restructure the input text into the required JSON format. Ensure all required fields are present and correctly typed."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "structurer",
@@ -758,10 +705,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="composite",
         name="Complexity Estimator",
         slug="complexity-estimator",
-        description=(
-            "Estimates work complexity as XS, S, M, L, or XL with structured reasoning."
-            " Forces a valid size as the first word. Self-corrects on invalid output."
-        ),
+        description=("Estimates work complexity as XS, S, M, L, or XL with structured reasoning. Forces a valid size as the first word. Self-corrects on invalid output."),
         content_json={
             "parameter_ports": [
                 {
@@ -770,11 +714,7 @@ _MODULO_PRIMITIVES: list[LibraryPrimitive] = [
                     "type": "string",
                     "required": True,
                     "description": "Instructions describing what to estimate complexity for",
-                    "default_value": (
-                        "Analyse the following work item and estimate its complexity."
-                        " Respond with exactly one of XS, S, M, L, or XL as the first word,"
-                        " followed by your reasoning."
-                    ),
+                    "default_value": ("Analyse the following work item and estimate its complexity. Respond with exactly one of XS, S, M, L, or XL as the first word, followed by your reasoning."),
                     "target_injection": {
                         "mode": "prompt_replace",
                         "node_id": "estimator",
@@ -816,32 +756,21 @@ _PR_TEMPLATE_AGENTS = [
     {
         "name": "Issue Reader",
         "description": "Reads a GitHub issue via GitHubConnector and extracts structured requirements.",
-        "prompt_template": (
-            "Read the following GitHub issue and extract structured requirements for code review."
-            "\n\nIssue:\n{{ input }}"
-        ),
+        "prompt_template": ("Read the following GitHub issue and extract structured requirements for code review.\n\nIssue:\n{{ input }}"),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
         "required_environment_capabilities": [_EGRESS_GITHUB],
     },
     {
         "name": "Code Diff Analyzer",
-        "description": (
-            "Analyses code changes and identifies potential issues, style violations, and security concerns."
-        ),
-        "prompt_template": (
-            "Review the following code diff and identify: 1) logic errors, 2) style violations,"
-            " 3) security issues, 4) performance concerns.\n\nDiff:\n{{ input }}"
-        ),
+        "description": ("Analyses code changes and identifies potential issues, style violations, and security concerns."),
+        "prompt_template": ("Review the following code diff and identify: 1) logic errors, 2) style violations, 3) security issues, 4) performance concerns.\n\nDiff:\n{{ input }}"),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
     {
         "name": "Comment Generator",
         "description": "Generates actionable review comments from the diff analysis.",
-        "prompt_template": (
-            "Based on the analysis below, generate clear, actionable PR review comments."
-            " Be constructive and specific.\n\nAnalysis:\n{{ input }}"
-        ),
+        "prompt_template": ("Based on the analysis below, generate clear, actionable PR review comments. Be constructive and specific.\n\nAnalysis:\n{{ input }}"),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
@@ -858,10 +787,7 @@ _RELEASE_TEMPLATE_AGENTS = [
     {
         "name": "Version Bumper",
         "description": "Reads the current version from a file and proposes the next semantic version.",
-        "prompt_template": (
-            "Read the current version and determine the next semantic version based on the changes described."
-            "\n\nChanges:\n{{ input }}"
-        ),
+        "prompt_template": ("Read the current version and determine the next semantic version based on the changes described.\n\nChanges:\n{{ input }}"),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["issue_read"]}],
         "required_environment_capabilities": [_EGRESS_GITHUB],
     },
@@ -882,10 +808,7 @@ _RELEASE_TEMPLATE_AGENTS = [
     {
         "name": "Tag Creator",
         "description": "Creates a Git tag for the new version via GitHubConnector.",
-        "prompt_template": (
-            "Create a Git tag for version {{ version }} and push it to the remote repository."
-            "\n\nRelease notes:\n{{ input }}"
-        ),
+        "prompt_template": ("Create a Git tag for version {{ version }} and push it to the remote repository.\n\nRelease notes:\n{{ input }}"),
         "connector_type_refs": [{"connector_type": "github", "capabilities": ["create_pr"]}],
         "required_environment_capabilities": [_EGRESS_GITHUB],
     },
@@ -902,20 +825,14 @@ _INCIDENT_TEMPLATE_AGENTS = [
     {
         "name": "Severity Classifier",
         "description": "Classifies the incident severity based on the alert payload.",
-        "prompt_template": (
-            "Classify the following incident as CRITICAL, HIGH, MEDIUM, or LOW based on impact and urgency:"
-            "\n\nIncident:\n{{ input }}"
-        ),
+        "prompt_template": ("Classify the following incident as CRITICAL, HIGH, MEDIUM, or LOW based on impact and urgency:\n\nIncident:\n{{ input }}"),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
     {
         "name": "Runbook Matcher",
         "description": "Matches the incident to the most relevant runbook based on patterns.",
-        "prompt_template": (
-            "Match the following incident to the appropriate runbook based on the alert type and service:"
-            "\n\nIncident:\n{{ input }}"
-        ),
+        "prompt_template": ("Match the following incident to the appropriate runbook based on the alert type and service:\n\nIncident:\n{{ input }}"),
         "connector_type_refs": [],
         "required_environment_capabilities": [],
     },
@@ -1148,10 +1065,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="PR Review Pipeline",
             slug="pr-review-pipeline",
-            description=(
-                "Automated PR review pipeline: reads a GitHub issue, analyses the code diff,"
-                " generates review comments with a HITL gate, and posts to the PR."
-            ),
+            description=("Automated PR review pipeline: reads a GitHub issue, analyses the code diff, generates review comments with a HITL gate, and posts to the PR."),
             content_json={
                 "agents": _PR_TEMPLATE_AGENTS,
                 "graph_nodes": _PR_TEMPLATE_NODES,
@@ -1167,10 +1081,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Release Checklist Pipeline",
             slug="release-checklist-pipeline",
-            description=(
-                "Automated release pipeline: bumps the version, generates a changelog,"
-                " formats release notes with a HITL gate, and creates a Git tag."
-            ),
+            description=("Automated release pipeline: bumps the version, generates a changelog, formats release notes with a HITL gate, and creates a Git tag."),
             content_json={
                 "agents": _RELEASE_TEMPLATE_AGENTS,
                 "graph_nodes": _RELEASE_TEMPLATE_NODES,
@@ -1186,10 +1097,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Incident Response Pipeline",
             slug="incident-response-pipeline",
-            description=(
-                "Automated incident response pipeline: ingests alerts, classifies severity,"
-                " matches runbooks, applies remediation with a HITL gate, and generates a postmortem."
-            ),
+            description=("Automated incident response pipeline: ingests alerts, classifies severity, matches runbooks, applies remediation with a HITL gate, and generates a postmortem."),
             content_json={
                 "agents": _INCIDENT_TEMPLATE_AGENTS,
                 "graph_nodes": _INCIDENT_TEMPLATE_NODES,
@@ -1205,11 +1113,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name="PR Review Agent",
             slug="pr-review-agent",
-            description=(
-                "Reviews a GitHub PR diff and returns a structured"
-                " APPROVE/REQUEST_CHANGES verdict following the PR Review"
-                " Decision schema."
-            ),
+            description=("Reviews a GitHub PR diff and returns a structured APPROVE/REQUEST_CHANGES verdict following the PR Review Decision schema."),
             content_json={
                 "output_schema": "pr-review-decision",
                 "prompt_template": (
@@ -1237,11 +1141,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="GitHub PR Reviewer",
             slug="github-pr-reviewer",
-            description=(
-                "One-click AI PR review for GitHub repos. Installs a review"
-                " agent, decision schema, and pipeline. Requires: model"
-                " backend + GitHub token."
-            ),
+            description=("One-click AI PR review for GitHub repos. Installs a review agent, decision schema, and pipeline. Requires: model backend + GitHub token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "pr-review-decision", "version": "1.0"},
@@ -1267,10 +1167,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name="Prompt-to-PR Implement Agent",
             slug="prompt-to-pr-implement-agent",
-            description=(
-                "Reads a task description, explores the codebase, implements the"
-                " change, runs tests, commits, pushes, and creates a pull request."
-            ),
+            description=("Reads a task description, explores the codebase, implements the change, runs tests, commits, pushes, and creates a pull request."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1302,10 +1199,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Prompt-to-PR Pipeline",
             slug="prompt-to-pr-pipeline",
-            description=(
-                "End-to-end pipeline: implement a task from a prompt, review the"
-                " resulting PR, and create it automatically."
-            ),
+            description=("End-to-end pipeline: implement a task from a prompt, review the resulting PR, and create it automatically."),
             content_json={
                 "agents": [
                     {
@@ -1380,11 +1274,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="Prompt-to-PR",
             slug="prompt-to-pr",
-            description=(
-                "Turn a task description into a GitHub PR. Installs an"
-                " implement agent, review agent, and pipeline. Requires:"
-                " model backend + GitHub token."
-            ),
+            description=("Turn a task description into a GitHub PR. Installs an implement agent, review agent, and pipeline. Requires: model backend + GitHub token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "pr-review-decision", "version": "1.0"},
@@ -1411,10 +1301,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name=_CHANGELOG_AGENT_NAME,
             slug="changelog-agent",
-            description=(
-                "Reads merged PRs since a given tag and generates a"
-                " conventional-commits markdown changelog grouped by type."
-            ),
+            description=("Reads merged PRs since a given tag and generates a conventional-commits markdown changelog grouped by type."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1506,10 +1393,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name=_CHANGELOG_GENERATOR_NAME,
             slug="changelog-generator",
-            description=(
-                "Auto-generate a conventional-commits changelog from merged PRs."
-                " Installs a changelog agent and pipeline. Requires: GitHub token."
-            ),
+            description=("Auto-generate a conventional-commits changelog from merged PRs. Installs a changelog agent and pipeline. Requires: GitHub token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "changelog-agent", "version": "1.0"},
@@ -1534,11 +1418,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name=_RELEASE_NOTES_AGENT_NAME,
             slug="release-notes-agent",
-            description=(
-                "Reads merged PRs and closed issues for a milestone and"
-                " generates marketing-ready release notes with highlights,"
-                " breaking changes, and categorized features/fixes."
-            ),
+            description=("Reads merged PRs and closed issues for a milestone and generates marketing-ready release notes with highlights, breaking changes, and categorized features/fixes."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1627,11 +1507,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="Release Notes Generator",
             slug="release-notes-generator",
-            description=(
-                "Generate marketing-ready release notes from merged PRs and"
-                " closed issues. Installs a release-notes agent and pipeline."
-                " Requires: GitHub or Linear token."
-            ),
+            description=("Generate marketing-ready release notes from merged PRs and closed issues. Installs a release-notes agent and pipeline. Requires: GitHub or Linear token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "release-notes-agent", "version": "1.0"},
@@ -1656,10 +1532,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name=_PR_DESCRIPTION_AGENT_NAME,
             slug="pr-description-agent",
-            description=(
-                "Reads a branch diff and writes a structured PR description"
-                " with What/Why/How/Testing/Related Issues sections."
-            ),
+            description=("Reads a branch diff and writes a structured PR description with What/Why/How/Testing/Related Issues sections."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1695,12 +1568,7 @@ _MODULO_PRIMITIVES.extend(
                     {
                         "name": _PR_DESCRIPTION_AGENT_NAME,
                         "description": "Writes a structured PR description from a branch diff.",
-                        "prompt_template": (
-                            "You are a technical writer. Given a branch diff, write a"
-                            " structured pull request description.\n\n"
-                            "Use these sections: What, Why, How, Testing, Related Issues.\n\n"
-                            "Diff:\n{{ input }}"
-                        ),
+                        "prompt_template": ("You are a technical writer. Given a branch diff, write a structured pull request description.\n\nUse these sections: What, Why, How, Testing, Related Issues.\n\nDiff:\n{{ input }}"),
                         "connector_type_refs": [
                             {"connector_type": "github", "capabilities": ["read", "write"]},
                         ],
@@ -1728,11 +1596,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="PR Description Writer",
             slug="pr-description-writer",
-            description=(
-                "Auto-generate structured PR descriptions (What/Why/How/Testing)"
-                " from a branch diff. Installs a PR description agent and pipeline."
-                " Requires: GitHub token."
-            ),
+            description=("Auto-generate structured PR descriptions (What/Why/How/Testing) from a branch diff. Installs a PR description agent and pipeline. Requires: GitHub token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "pr-description-agent", "version": "1.0"},
@@ -1757,11 +1621,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name=_ISSUE_TRIAGE_AGENT_NAME,
             slug="issue-triage-agent",
-            description=(
-                "Reads a new issue and categorizes it (bug/feature/question/docs),"
-                " suggests priority P0-P3, writes acceptance criteria, and suggests"
-                " labels."
-            ),
+            description=("Reads a new issue and categorizes it (bug/feature/question/docs), suggests priority P0-P3, writes acceptance criteria, and suggests labels."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1792,21 +1652,14 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="Issue Triage Pipeline",
             slug="issue-triage-pipeline",
-            description=(
-                "Triages new issues with categorization, priority, and"
-                " label suggestions, with a HITL gate before applying labels."
-            ),
+            description=("Triages new issues with categorization, priority, and label suggestions, with a HITL gate before applying labels."),
             content_json={
                 "agents": [
                     {
                         "name": _ISSUE_TRIAGE_AGENT_NAME,
                         "description": "Categorizes issues and suggests priority, labels, and acceptance criteria.",
                         "prompt_template": (
-                            "You are an issue triage specialist. Read the following new issue"
-                            " and produce a structured triage report.\n\n"
-                            "Determine: category (bug/feature/question/docs), priority (P0-P3),"
-                            " acceptance criteria, suggested labels, summary, and reasoning.\n\n"
-                            "Issue:\n{{ input }}"
+                            "You are an issue triage specialist. Read the following new issue and produce a structured triage report.\n\nDetermine: category (bug/feature/question/docs), priority (P0-P3), acceptance criteria, suggested labels, summary, and reasoning.\n\nIssue:\n{{ input }}"
                         ),
                         "connector_type_refs": [
                             {"connector_type": "github", "capabilities": ["read", "write"]},
@@ -1857,11 +1710,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="Issue Triage",
             slug="issue-triage",
-            description=(
-                "Auto-triage new GitHub issues with category, priority,"
-                " acceptance criteria, and label suggestions. Installs a"
-                " triage agent and pipeline. Requires: GitHub token."
-            ),
+            description=("Auto-triage new GitHub issues with category, priority, acceptance criteria, and label suggestions. Installs a triage agent and pipeline. Requires: GitHub token."),
             content_json={
                 "manifest_pins": [
                     {"slug": "issue-triage-agent", "version": "1.0"},
@@ -1886,12 +1735,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="agent",
             name=_LICENSE_CHECKER_AGENT_NAME,
             slug="license-checker-agent",
-            description=(
-                "Scans dependency manifests (build.gradle, package.json,"
-                " requirements.txt, go.mod, Cargo.toml, pyproject.toml),"
-                " resolves licenses via SPDX/API, classifies by restrictiveness,"
-                " and generates a structured report with commercial-use flags."
-            ),
+            description=("Scans dependency manifests (build.gradle, package.json, requirements.txt, go.mod, Cargo.toml, pyproject.toml), resolves licenses via SPDX/API, classifies by restrictiveness, and generates a structured report with commercial-use flags."),
             content_json={
                 "input_schema": None,
                 "output_schema": None,
@@ -1929,10 +1773,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="pipeline_template",
             name="License Checker Pipeline",
             slug="license-checker-pipeline",
-            description=(
-                "Scans a repo's dependency manifests for license compliance"
-                " with a HITL gate before finalizing the report."
-            ),
+            description=("Scans a repo's dependency manifests for license compliance with a HITL gate before finalizing the report."),
             content_json={
                 "agents": [
                     {
@@ -1996,12 +1837,7 @@ _MODULO_PRIMITIVES.extend(
             primitive_type="library_collection",
             name="License Checker",
             slug="license-checker",
-            description=(
-                "Scan a repo's dependency manifests for license compliance."
-                " Classifies each dependency by restrictiveness and flags"
-                " commercial-use concerns. Installs a license-checker agent"
-                " and pipeline. Requires: GitHub token or filesystem access."
-            ),
+            description=("Scan a repo's dependency manifests for license compliance. Classifies each dependency by restrictiveness and flags commercial-use concerns. Installs a license-checker agent and pipeline. Requires: GitHub token or filesystem access."),
             content_json={
                 "manifest_pins": [
                     {"slug": "license-checker-agent", "version": "1.0"},
@@ -2044,11 +1880,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="workflow",
         name="Translate to French",
         slug="translate-to-french",
-        description=(
-            "Translates freeform input text into French. A narrow, "
-            "single-purpose example pipeline — not maintained to Native "
-            "library standards. Use as a starting point and adapt as needed."
-        ),
+        description=("Translates freeform input text into French. A narrow, single-purpose example pipeline — not maintained to Native library standards. Use as a starting point and adapt as needed."),
         content_json={
             "nodes": [{"id": "translator", "agent": "french-translator"}],
             "edges": [],
@@ -2057,10 +1889,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 {
                     "name": "French Translator",
                     "description": "Translates the given text into French.",
-                    "prompt_template": (
-                        "Translate the following text into French. Preserve tone and "
-                        "meaning; do not add commentary.\n\nText:\n{{ input }}"
-                    ),
+                    "prompt_template": ("Translate the following text into French. Preserve tone and meaning; do not add commentary.\n\nText:\n{{ input }}"),
                     "connector_type_refs": [],
                     "required_environment_capabilities": [],
                 }
@@ -2073,11 +1902,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="workflow",
         name="QA Reviewer",
         slug="qa-reviewer",
-        description=(
-            "Reviews a code diff or PR description and flags likely bugs, "
-            "missing tests, and style issues. Opinionated and narrow — "
-            "contributed by users, not verified by Modulo."
-        ),
+        description=("Reviews a code diff or PR description and flags likely bugs, missing tests, and style issues. Opinionated and narrow — contributed by users, not verified by Modulo."),
         content_json={
             "nodes": [{"id": "reviewer", "agent": "qa-review-agent"}],
             "edges": [],
@@ -2086,11 +1911,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 {
                     "name": "QA Review Agent",
                     "description": "Reviews a code diff for bugs, missing tests, and style issues.",
-                    "prompt_template": (
-                        "You are a QA reviewer. Review the following code diff and list: "
-                        "1) likely bugs, 2) missing test coverage, 3) style issues.\n\n"
-                        "Diff:\n{{ input }}"
-                    ),
+                    "prompt_template": ("You are a QA reviewer. Review the following code diff and list: 1) likely bugs, 2) missing test coverage, 3) style issues.\n\nDiff:\n{{ input }}"),
                     "connector_type_refs": [],
                     "required_environment_capabilities": [],
                 }
@@ -2103,11 +1924,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
         primitive_type="workflow",
         name="Commit Message Linter",
         slug="commit-message-linter",
-        description=(
-            "Checks a commit message against Conventional Commits style and "
-            "suggests a corrected version. A small, illustrative example "
-            "pipeline — not held to Native maintenance standards."
-        ),
+        description=("Checks a commit message against Conventional Commits style and suggests a corrected version. A small, illustrative example pipeline — not held to Native maintenance standards."),
         content_json={
             "nodes": [{"id": "linter", "agent": "commit-lint-agent"}],
             "edges": [],
@@ -2116,11 +1933,7 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
                 {
                     "name": "Commit Lint Agent",
                     "description": "Checks a commit message against Conventional Commits style.",
-                    "prompt_template": (
-                        "Check whether the following commit message follows the Conventional "
-                        "Commits style (type(scope): summary). If it does not, suggest a "
-                        "corrected version.\n\nCommit message:\n{{ input }}"
-                    ),
+                    "prompt_template": ("Check whether the following commit message follows the Conventional Commits style (type(scope): summary). If it does not, suggest a corrected version.\n\nCommit message:\n{{ input }}"),
                     "connector_type_refs": [],
                     "required_environment_capabilities": [],
                 }
@@ -2131,6 +1944,4 @@ _COMMUNITY_PRIMITIVES: list[LibraryPrimitive] = [
 ]
 
 _COMMUNITY_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _COMMUNITY_PRIMITIVES}
-_COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {
-    (p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES
-}
+_COMMUNITY_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {(p.primitive_type, p.slug): p for p in _COMMUNITY_PRIMITIVES}

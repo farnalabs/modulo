@@ -60,12 +60,7 @@ def _make_input(
     return inp
 
 
-_FAKE_LS_REMOTE_OUTPUT = (
-    "abc123def456abc123def456abc123def456abc1\trefs/heads/main\n"
-    "def789abc012def789abc012def789abc012def7\trefs/heads/feature-x\n"
-    "111222333444555666777888999000aaabbbccc\trefs/tags/v1.0\n"
-    "222333444555666777888999000aaabbbcccddd\trefs/tags/v1.0^{}\n"
-)
+_FAKE_LS_REMOTE_OUTPUT = "abc123def456abc123def456abc123def456abc1\trefs/heads/main\ndef789abc012def789abc012def789abc012def7\trefs/heads/feature-x\n111222333444555666777888999000aaabbbccc\trefs/tags/v1.0\n222333444555666777888999000aaabbbcccddd\trefs/tags/v1.0^{}\n"
 
 # FAR-1409: _resolve_credential_scripts_for_input converts org_id to
 # uuid.UUID before calling set_rls_org, so any test that REACHES the
@@ -1406,7 +1401,7 @@ async def test_credential_resolves_from_secrets_backend_under_rls_context(
     raises CredentialResolutionError → ProvisioningError — this test then fails.
     """
     ci = _vault_connector()
-    monkeypatch.setenv("MODULO_SECRETS_BACKEND", "fernet")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_SECRETS_BACKEND", "fernet")
     settings = MagicMock()
     settings.fernet_key = _VAULT_FERNET_KEY
 

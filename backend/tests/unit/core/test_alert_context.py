@@ -42,7 +42,7 @@ def _make_settings(**overrides: Any) -> Settings:
         "modulo_admin_password": "test",
         "redis_url": "redis://localhost:6379/0",
         # Pin both FAR-1495 fields so no ambient env var can flip an assertion.
-        "MODULO_ENV": "staging",
+        "FARNA_CONTROL_MODULO_ENV": "staging",
         "ALERT_CONTEXT": None,
     }
     base.update(overrides)
@@ -80,9 +80,7 @@ def test_multi_line_context_rendered_in_order() -> None:
         "page the on-call",
         "escalation: FAR-1495",
     ]
-    assert alert_context_text(settings) == (
-        "Environment: staging\nrunbook: https://example.com/runbook\npage the on-call\nescalation: FAR-1495"
-    )
+    assert alert_context_text(settings) == ("Environment: staging\nrunbook: https://example.com/runbook\npage the on-call\nescalation: FAR-1495")
 
 
 def test_blank_lines_dropped_and_lines_stripped() -> None:

@@ -82,17 +82,17 @@ def test_resolve_passphrase_from_arg():
 
 
 def test_resolve_passphrase_from_env(monkeypatch):
-    monkeypatch.setenv("MODULO_BACKUP_PASSPHRASE", "env-pass")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", "env-pass")
     assert resolve_passphrase(None) == "env-pass"
 
 
 def test_resolve_passphrase_prefers_arg_over_env(monkeypatch):
-    monkeypatch.setenv("MODULO_BACKUP_PASSPHRASE", "env-pass")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", "env-pass")
     assert resolve_passphrase("arg-pass") == "arg-pass"
 
 
 def test_resolve_passphrase_prompts_when_no_arg_or_env(monkeypatch):
-    monkeypatch.delenv("MODULO_BACKUP_PASSPHRASE", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", raising=False)
     with patch("scripts.restore.getpass.getpass", return_value="typed-pass") as mock_prompt:
         assert resolve_passphrase(None) == "typed-pass"
     mock_prompt.assert_called_once_with("Restore passphrase: ")
@@ -146,7 +146,7 @@ def test_decrypt_archive_calls_openssl_with_expected_args(tmp_dir, capsys):
 
 @pytest.mark.skipif(not openssl_available, reason="openssl not installed")
 def test_decrypt_archive_missing_input(tmp_dir, monkeypatch):
-    monkeypatch.setenv("MODULO_BACKUP_PASSPHRASE", "test")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_BACKUP_PASSPHRASE", "test")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     from scripts.restore import decrypt_archive as da
     from scripts.restore import resolve_passphrase as rp

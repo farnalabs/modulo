@@ -651,18 +651,10 @@ SCHEMAS: list[dict[str, object]] = [
     },
     {
         "name": "pr-review-decision",
-        "description": (
-            "Output schema for PR-review inline-prompt agents: an APPROVE or"
-            " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
-            " per-finding details"
-        ),
+        "description": ("Output schema for PR-review inline-prompt agents: an APPROVE or REQUEST_CHANGES verdict, a one-paragraph summary, and optional per-finding details"),
         "definition": {
             "title": "PR Review Decision",
-            "description": (
-                "Output schema for PR-review inline-prompt agents: an APPROVE or"
-                " REQUEST_CHANGES verdict, a one-paragraph summary, and optional"
-                " per-finding details"
-            ),
+            "description": ("Output schema for PR-review inline-prompt agents: an APPROVE or REQUEST_CHANGES verdict, a one-paragraph summary, and optional per-finding details"),
             "type": "object",
             "additionalProperties": False,
             "properties": {

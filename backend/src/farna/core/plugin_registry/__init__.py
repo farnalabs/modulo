@@ -141,9 +141,7 @@ class PluginRegistry:
         """
         discovered: list[PluginManifest] = []
         try:
-            entries: list[tuple[str, importlib.metadata.EntryPoint]] = [
-                (group, ep) for group in _ENTRY_POINT_GROUPS for ep in importlib.metadata.entry_points(group=group)
-            ]
+            entries: list[tuple[str, importlib.metadata.EntryPoint]] = [(group, ep) for group in _ENTRY_POINT_GROUPS for ep in importlib.metadata.entry_points(group=group)]
         except asyncio.CancelledError:
             raise
         except StopIteration:
@@ -289,9 +287,7 @@ class PluginRegistry:
             self._plugins[plugin_id] = existing
             self._health[plugin_id] = PluginHealth(ok=False, detail=detail)
 
-    def _read_distribution_metadata(
-        self, dist: importlib.metadata.Distribution, entry_point_name: str
-    ) -> tuple[str, str, str, str] | None:
+    def _read_distribution_metadata(self, dist: importlib.metadata.Distribution, entry_point_name: str) -> tuple[str, str, str, str] | None:
         """Read a distribution's identity/display fields, failing soft.
 
         ``dist.name`` / ``dist.metadata`` read and parse the distribution's
@@ -361,9 +357,7 @@ class PluginRegistry:
             logger.exception("Connector builder %s for type %s raised an error", callable_label(builder), type_id)
             raise RuntimeError(f"Connector builder for type {type_id!r} failed") from exc
 
-    def build_model_backend(
-        self, provider: str, model_id: str, api_key: str, **default_params: Any
-    ) -> ModelBackendBase:
+    def build_model_backend(self, provider: str, model_id: str, api_key: str, **default_params: Any) -> ModelBackendBase:
         """Build a model backend from a plugin-registered builder.
 
         Raises ``PluginNotFoundError`` if no plugin provides this provider.
@@ -383,14 +377,10 @@ class PluginRegistry:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.exception(
-                "Model backend builder %s for provider %s raised an error", callable_label(builder), provider
-            )
+            logger.exception("Model backend builder %s for provider %s raised an error", callable_label(builder), provider)
             raise RuntimeError(f"Model backend builder for provider {provider!r} failed") from exc
 
-    def register_connector_type(
-        self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest
-    ) -> None:
+    def register_connector_type(self, type_id: str, builder: Callable[..., ConnectorBase], manifest: PluginManifest) -> None:
         """Explicitly register a connector type builder (e.g. from an in-tree module)."""
         if not isinstance(type_id, str):
             raise TypeError("type_id must be a string")
@@ -404,9 +394,7 @@ class PluginRegistry:
             self._connector_builders[type_id] = builder
             self._finalize_registration(manifest, _CAP_CONNECTOR)
 
-    def register_model_backend(
-        self, provider: str, builder: Callable[..., ModelBackendBase], manifest: PluginManifest
-    ) -> None:
+    def register_model_backend(self, provider: str, builder: Callable[..., ModelBackendBase], manifest: PluginManifest) -> None:
         """Explicitly register a model backend builder (e.g. from an in-tree module)."""
         if not isinstance(provider, str):
             raise TypeError("provider must be a string")
@@ -485,10 +473,7 @@ class PluginRegistry:
                 manifests = list(self._plugins.values())
                 cached_errors = {m.PLUGIN_ID: self._entry_point_errors.get(m.PLUGIN_ID) for m in manifests}
 
-        results = {
-            manifest.PLUGIN_ID: self._check_single(manifest, cached_errors.get(manifest.PLUGIN_ID))
-            for manifest in manifests
-        }
+        results = {manifest.PLUGIN_ID: self._check_single(manifest, cached_errors.get(manifest.PLUGIN_ID)) for manifest in manifests}
 
         with self._lock:
             self._health.update(results)

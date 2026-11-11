@@ -64,18 +64,13 @@ def upgrade() -> None:
     # as VALIDATE (not a no-op), otherwise the constraint would stay NOT
     # VALID forever, never enforcing on ~real writes.
     existing = bind.execute(
-        text(
-            "SELECT convalidated FROM pg_constraint "
-            "WHERE conname = :name AND conrelid = 'public.deleted_defaults'::regclass"
-        ),
+        text("SELECT convalidated FROM pg_constraint WHERE conname = :name AND conrelid = 'public.deleted_defaults'::regclass"),
         {"name": _CHECK_NAME},
     ).scalar_one_or_none()
     if existing is True:
         return
     if existing is None:
-        op.execute(
-            text(f'ALTER TABLE public."{_TABLE}" ADD CONSTRAINT {_CHECK_NAME} CHECK ({_CHECK_EXPRESSION}) NOT VALID')
-        )
+        op.execute(text(f'ALTER TABLE public."{_TABLE}" ADD CONSTRAINT {_CHECK_NAME} CHECK ({_CHECK_EXPRESSION}) NOT VALID'))
     op.execute(text(f'ALTER TABLE public."{_TABLE}" VALIDATE CONSTRAINT {_CHECK_NAME}'))
 
 

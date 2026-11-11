@@ -110,12 +110,7 @@ _RUNTIME_INSTRUMENT_GLOBALS: dict[str, str] = {
 
 def _runtime_metrics_registered() -> bool:
     """True once every run-runtime instrument handle has been initialised."""
-    return (
-        _runs_running_gauge is not None
-        and _runs_oldest_running_gauge is not None
-        and _runs_stall_reason_total is not None
-        and _runs_claim_count_histogram is not None
-    )
+    return _runs_running_gauge is not None and _runs_oldest_running_gauge is not None and _runs_stall_reason_total is not None and _runs_claim_count_histogram is not None
 
 
 def _create_runtime_instrument(meter: Any, kind: str, name: str, description: str) -> Any | None:
@@ -197,13 +192,7 @@ async def sample_error_group_metrics(factory: Any) -> None:
         from farna.db.models.error_group import ErrorGroup
 
         async with factory() as session:
-            rows = (
-                await session.execute(
-                    select(ErrorGroup.level_peak, func.count(ErrorGroup.id))
-                    .where(ErrorGroup.status.in_(("new", "acknowledged")))
-                    .group_by(ErrorGroup.level_peak)
-                )
-            ).all()
+            rows = (await session.execute(select(ErrorGroup.level_peak, func.count(ErrorGroup.id)).where(ErrorGroup.status.in_(("new", "acknowledged"))).group_by(ErrorGroup.level_peak))).all()
 
         counts: dict[str, int] = {level: int(count) for level, count in rows}
         for level in ("warning", "error", "critical"):
@@ -264,13 +253,7 @@ async def sample_run_runtime_metrics(factory: Any) -> None:
             # value on Postgres and a naive value on SQLite, matching
             # ``started_at`` on each dialect, so the subtraction never mixes
             # aware/naive datetimes (see backend AGENTS.md lesson).
-            now_and_max = (
-                await session.execute(
-                    select(func.current_timestamp(), func.max(Run.started_at)).where(
-                        Run.status == "running", Run.started_at.isnot(None)
-                    )
-                )
-            ).one()
+            now_and_max = (await session.execute(select(func.current_timestamp(), func.max(Run.started_at)).where(Run.status == "running", Run.started_at.isnot(None)))).one()
             now_value, max_started = now_and_max
             oldest_age: float | None = None
             if now_value is not None and max_started is not None:
@@ -371,10 +354,7 @@ def _init_connector_unknown_counter() -> None:
             return
         _connector_unknown_total = meter.create_counter(
             name="modulo_connector_unknown_total",
-            description=(
-                "Total connector write-timeouts cancelled mid-send with unknown "
-                "upstream side-effect state (UNKNOWN rate)"
-            ),
+            description=("Total connector write-timeouts cancelled mid-send with unknown upstream side-effect state (UNKNOWN rate)"),
             unit="1",
         )
     except Exception:

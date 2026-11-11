@@ -188,11 +188,7 @@ async def seed_org_guardrail_rows_for_pipeline(
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                "The applied guardrail snapshot is unreadable; an admin must "
-                "re-apply the config (POST /api/v1/guardrails/config/apply) "
-                "before pipelines can be created or cloned."
-            ),
+            detail=("The applied guardrail snapshot is unreadable; an admin must re-apply the config (POST /api/v1/guardrails/config/apply) before pipelines can be created or cloned."),
         ) from exc
     if not config_set.guardrails:
         return 0

@@ -34,9 +34,7 @@ async def get_membership(session: AsyncSession, membership_id: uuid.UUID) -> Tea
     return result.scalar_one_or_none()
 
 
-async def get_membership_by_team_and_account(
-    session: AsyncSession, team_id: uuid.UUID, account_id: uuid.UUID
-) -> TeamMembership | None:
+async def get_membership_by_team_and_account(session: AsyncSession, team_id: uuid.UUID, account_id: uuid.UUID) -> TeamMembership | None:
     result = await session.execute(
         select(TeamMembership).where(
             TeamMembership.team_id == team_id,
@@ -62,13 +60,7 @@ async def list_team_members(
 
     offset = (page - 1) * page_size
     try:
-        query = (
-            select(TeamMembership)
-            .where(TeamMembership.team_id == team_id)
-            .order_by(TeamMembership.created_at)
-            .offset(offset)
-            .limit(page_size)
-        )
+        query = select(TeamMembership).where(TeamMembership.team_id == team_id).order_by(TeamMembership.created_at).offset(offset).limit(page_size)
         result = await session.execute(query)
         items = list(result.scalars().all())
     except ProgrammingError:

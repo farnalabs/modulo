@@ -395,13 +395,7 @@ def _inventory_by_id(items: list[SourceInventoryItem], *, side: str) -> dict[str
 
 def _changes_are_empty(changes: SourceInventoryChanges) -> bool:
     """True when no sampled-input difference was observed."""
-    return not (
-        changes.new_sources
-        or changes.missing_sources
-        or changes.newly_available
-        or changes.newly_unavailable
-        or changes.sample_count_changes
-    )
+    return not (changes.new_sources or changes.missing_sources or changes.newly_available or changes.newly_unavailable or changes.sample_count_changes)
 
 
 def _classify_elements(

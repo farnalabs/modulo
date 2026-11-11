@@ -37,9 +37,7 @@ def _make_blocker(model_class: type, table_name: str, mutation: str) -> Callable
         target: object,
     ) -> None:
         eid = getattr(target, "id", "?")
-        raise AppendOnlyViolationError(
-            f"{model_class.__name__} {eid} cannot be {mutation}d: {table_name} are append-only"
-        )
+        raise AppendOnlyViolationError(f"{model_class.__name__} {eid} cannot be {mutation}d: {table_name} are append-only")
 
     return _block
 

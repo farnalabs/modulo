@@ -54,7 +54,7 @@ _NON_SETTINGS_ENV: dict[str, tuple[str, ...]] = {
         "src/farna/db/migrations/env.py",
         "src/farna/api/main.py",
     ),
-    "MODULO_ENV": (
+    "FARNA_CONTROL_MODULO_ENV": (
         "src/farna/core/logging_config.py",
         "src/farna/api/routes/deployment.py",
     ),
@@ -75,7 +75,7 @@ _OPERATOR_VALUES: dict[str, str] = {
     # passes it to the postgres service, so the same value must satisfy all
     # three references - which is exactly what makes a silent `changeme`
     # default dangerous: it reached every one of them (FAR-1509).
-    "MODULO_DB_PASSWORD": "compose-contract-test-db-password-0123456789abcdef",
+    "FARNA_CONTROL_MODULO_DB_PASSWORD": "compose-contract-test-db-password-0123456789abcdef",
     # The SAQ system worker's fail-closed web auth; the username is not a
     # secret, but compose requires both to be non-empty all the same.
     "SAQ_AUTH_USERNAME": "admin",
@@ -121,15 +121,9 @@ def _compose_interpolation_text() -> str:
 def _app_environment(compose: dict) -> dict[str, str]:
     """The raw ``environment`` mapping the compose passes to the app service."""
     services = compose.get("services", {})
-    assert _APP_SERVICE in services, (
-        f"missing service {_APP_SERVICE} in {_PROD_COMPOSE.relative_to(_REPO_ROOT)} - "
-        "the application service was renamed; update this test with it"
-    )
+    assert _APP_SERVICE in services, f"missing service {_APP_SERVICE} in {_PROD_COMPOSE.relative_to(_REPO_ROOT)} - the application service was renamed; update this test with it"
     environment = services[_APP_SERVICE].get("environment", {})
-    assert isinstance(environment, dict), (
-        f"{_APP_SERVICE}.environment must be a mapping (key: value) so its names can be audited; "
-        f"got {type(environment).__name__}"
-    )
+    assert isinstance(environment, dict), f"{_APP_SERVICE}.environment must be a mapping (key: value) so its names can be audited; got {type(environment).__name__}"
     assert environment, f"{_APP_SERVICE}.environment is empty - nothing to audit"
     return {str(key): str(value) for key, value in environment.items()}
 
@@ -164,11 +158,7 @@ def _interpolate(value: str) -> str:
         if operator == ":-":
             return _OPERATOR_VALUES.get(name, "") or rest
         if operator == ":?":
-            assert name in _OPERATOR_VALUES, (
-                f"the compose requires operator variable {name} ({value!r}), which is not one of "
-                f"the documented generated secrets {sorted(_OPERATOR_VALUES)} - either it is a typo "
-                "for a Settings name (see .env.prod.example) or this test's operator map is stale"
-            )
+            assert name in _OPERATOR_VALUES, f"the compose requires operator variable {name} ({value!r}), which is not one of the documented generated secrets {sorted(_OPERATOR_VALUES)} - either it is a typo for a Settings name (see .env.prod.example) or this test's operator map is stale"
             return _OPERATOR_VALUES[name]
         return _OPERATOR_VALUES.get(name, "")
 
@@ -201,10 +191,7 @@ def test_every_non_settings_env_var_has_a_live_read_site():
         for relative in source_files:
             path = _BACKEND_ROOT / relative
             assert path.is_file(), f"_NON_SETTINGS_ENV[{name}] cites a missing file: backend/{relative}"
-            assert name in path.read_text(encoding="utf-8"), (
-                f"backend/{relative} no longer mentions {name} - the read site moved or was deleted, "
-                "so the allowlist entry (and the compose's use of the name) must be revisited"
-            )
+            assert name in path.read_text(encoding="utf-8"), f"backend/{relative} no longer mentions {name} - the read site moved or was deleted, so the allowlist entry (and the compose's use of the name) must be revisited"
 
 
 def test_required_settings_fields_are_satisfied_by_the_compose():
@@ -220,11 +207,7 @@ def test_required_settings_fields_are_satisfied_by_the_compose():
     required = {(field.alias or name).upper() for name, field in Settings.model_fields.items() if field.is_required()}
     missing = sorted(required - provided)
 
-    assert not missing, (
-        f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} does not pass required Settings field(s) {missing} "
-        "to the application - Settings has no default for them, so boot fails with a ValidationError "
-        "and the backend crash-loops (FAR-1506)."
-    )
+    assert not missing, f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} does not pass required Settings field(s) {missing} to the application - Settings has no default for them, so boot fails with a ValidationError and the backend crash-loops (FAR-1506)."
 
 
 def test_compose_environment_constructs_settings(monkeypatch: pytest.MonkeyPatch):
@@ -249,10 +232,7 @@ def test_compose_environment_constructs_settings(monkeypatch: pytest.MonkeyPatch
     # Settings' own validator only checks the length, so an invalid shape
     # boots and then fails on first credential use.
     assert len(base64.urlsafe_b64decode(settings.fernet_key)) == 32
-    assert settings.redis_url == environment.get("REDIS_URL"), (
-        "REDIS_URL did not reach Settings.redis_url - the compose is passing a name Settings does "
-        "not read, so the backend would silently use the localhost default (FAR-1506)"
-    )
+    assert settings.redis_url == environment.get("REDIS_URL"), "REDIS_URL did not reach Settings.redis_url - the compose is passing a name Settings does not read, so the backend would silently use the localhost default (FAR-1506)"
 
 
 def test_env_example_documents_the_required_secrets():
@@ -260,22 +240,12 @@ def test_env_example_documents_the_required_secrets():
     if not _ENV_EXAMPLE.exists():
         pytest.skip(".env.prod.example not present (running outside repo checkout)")
     example = _ENV_EXAMPLE.read_text(encoding="utf-8")
-    active = {
-        line.split("=", 1)[0].strip()
-        for line in example.splitlines()
-        if "=" in line and not line.lstrip().startswith("#")
-    }
+    active = {line.split("=", 1)[0].strip() for line in example.splitlines() if "=" in line and not line.lstrip().startswith("#")}
 
     for name in ("SECRET_KEY", "FERNET_KEY"):
-        assert name in active, (
-            f".env.prod.example must document {name} as a settable variable - it is required by "
-            "Settings and has no default"
-        )
-    for stale in ("MODULO_SECRET_KEY", "MODULO_REDIS_URL", "MODULO_FERNET_KEY"):
-        assert stale not in active, (
-            f".env.prod.example still documents {stale}, which Settings does not read - an operator "
-            "setting it gets a crash-looping backend (FAR-1506)"
-        )
+        assert name in active, f".env.prod.example must document {name} as a settable variable - it is required by Settings and has no default"
+    for stale in ("FARNA_CONTROL_MODULO_SECRET_KEY", "FARNA_CONTROL_MODULO_REDIS_URL", "FARNA_CONTROL_MODULO_FERNET_KEY"):
+        assert stale not in active, f".env.prod.example still documents {stale}, which Settings does not read - an operator setting it gets a crash-looping backend (FAR-1506)"
 
 
 def test_no_compose_variable_has_a_silent_default():
@@ -291,16 +261,8 @@ def test_no_compose_variable_has_a_silent_default():
     defaulted = re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*):-", compose)
     secrets = sorted(name for name in defaulted if name in _OPERATOR_VALUES)
 
-    assert not secrets, (
-        f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} interpolates required variable(s) {secrets} with a "
-        "`:-` default - compose would start a production stack without them, silently. Use "
-        "`${VAR:?...}` naming the variable and how to set it (see SECRET_KEY / FERNET_KEY)."
-    )
-    assert compose.count("${MODULO_DB_PASSWORD:?") >= 3, (
-        "MODULO_DB_PASSWORD must be required at every reference (POSTGRES_PASSWORD, DATABASE_URL, "
-        "DATABASE_ADMIN_URL) - one defaulting reference is enough to reintroduce the silent "
-        "`changeme` password"
-    )
+    assert not secrets, f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} interpolates required variable(s) {secrets} with a `:-` default - compose would start a production stack without them, silently. Use `${{VAR:?...}}` naming the variable and how to set it (see SECRET_KEY / FERNET_KEY)."
+    assert compose.count("${MODULO_DB_PASSWORD:?") >= 3, "MODULO_DB_PASSWORD must be required at every reference (POSTGRES_PASSWORD, DATABASE_URL, DATABASE_ADMIN_URL) - one defaulting reference is enough to reintroduce the silent `changeme` password"
 
 
 def test_required_compose_variables_are_documented_in_the_env_example():
@@ -318,15 +280,7 @@ def test_required_compose_variables_are_documented_in_the_env_example():
     if not _ENV_EXAMPLE.exists():
         pytest.skip(".env.prod.example not present (running outside repo checkout)")
     example = _ENV_EXAMPLE.read_text(encoding="utf-8")
-    active = {
-        line.split("=", 1)[0].strip()
-        for line in example.splitlines()
-        if "=" in line and not line.lstrip().startswith("#")
-    }
+    active = {line.split("=", 1)[0].strip() for line in example.splitlines() if "=" in line and not line.lstrip().startswith("#")}
 
     undocumented = [name for name in required if name not in active]
-    assert not undocumented, (
-        f"the compose requires {undocumented}, but .env.prod.example does not set them - an operator "
-        "following the quickstart (cp .env.prod.example deploy/compose/.env) would hit a fail-fast "
-        "error naming a variable the example never mentions"
-    )
+    assert not undocumented, f"the compose requires {undocumented}, but .env.prod.example does not set them - an operator following the quickstart (cp .env.prod.example deploy/compose/.env) would hit a fail-fast error naming a variable the example never mentions"

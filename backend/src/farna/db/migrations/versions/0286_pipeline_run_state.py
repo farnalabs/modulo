@@ -77,12 +77,7 @@ _ADD_REASON_CHECK = (
 # gets a real timestamp). A row somehow already disabled keeps its existing
 # cause (first cause owns the reason). The target is schema-qualified to match
 # the DDL above — never rely on search_path inside a migration.
-_BACKFILL = (
-    "UPDATE public.pipelines SET run_enabled = false, "
-    "run_disabled_reason = 'circuit_breaker', "
-    "run_disabled_at = COALESCE(circuit_breaker_tripped_at, CURRENT_TIMESTAMP) "
-    "WHERE circuit_breaker_tripped = true AND run_enabled = true"
-)
+_BACKFILL = "UPDATE public.pipelines SET run_enabled = false, run_disabled_reason = 'circuit_breaker', run_disabled_at = COALESCE(circuit_breaker_tripped_at, CURRENT_TIMESTAMP) WHERE circuit_breaker_tripped = true AND run_enabled = true"
 
 
 def upgrade() -> None:

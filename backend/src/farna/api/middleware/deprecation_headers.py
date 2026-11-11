@@ -77,9 +77,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=410,
                     content={
-                        "detail": "This endpoint is no longer available. "
-                        "It was deprecated and the sunset date has passed. "
-                        f"See {rule.get('migration_url', 'the migration guide')} for details.",
+                        "detail": f"This endpoint is no longer available. It was deprecated and the sunset date has passed. See {rule.get('migration_url', 'the migration guide')} for details.",
                     },
                     headers={
                         "Deprecation": "true",

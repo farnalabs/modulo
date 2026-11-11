@@ -35,11 +35,11 @@ _AGENT_ID = str(uuid.uuid4())
 @pytest.fixture(autouse=True)
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as the bindings tests)."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-e2b-key")
     # FAR-802: these tests exercise the managed-workspace-inputs path, which is
     # gated behind the MODULO_WORKSPACE_INPUTS_ENABLED kill-switch (OFF by
     # default). Enable it so the happy/failure paths actually run.
-    monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "true")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_INPUTS_ENABLED", "true")
     from farna.settings import get_settings
 
     get_settings.cache_clear()
@@ -291,7 +291,7 @@ async def test_killswitch_disabled_blocks_workspace_inputs_before_sandbox(
     proceed to host-side resolution and sandbox creation).
     """
     # Override the autouse fixture's enabled state.
-    monkeypatch.setenv("MODULO_WORKSPACE_INPUTS_ENABLED", "false")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_INPUTS_ENABLED", "false")
     from farna.settings import get_settings
 
     get_settings.cache_clear()

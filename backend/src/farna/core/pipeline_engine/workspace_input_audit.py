@@ -89,10 +89,7 @@ class WorkspaceInputAuditRecord:
     def __post_init__(self) -> None:
         # Validate status at construction time (frozen dataclass = no __init__).
         if self.status not in _VALID_STATUSES:
-            raise ValueError(
-                f"WorkspaceInputAuditRecord.status {self.status!r} "
-                f"is not valid — expected one of {sorted(_VALID_STATUSES)}"
-            )
+            raise ValueError(f"WorkspaceInputAuditRecord.status {self.status!r} is not valid — expected one of {sorted(_VALID_STATUSES)}")
 
     def to_audit_dict(self) -> dict[str, Any]:
         """Serialise for persistence — NEVER contains credentials/secrets.
@@ -216,8 +213,7 @@ async def record_resolved_inputs(
         await session.execute(stmt, [values])
     except Exception:
         _log.exception(
-            "workspace_input_audit: record_resolved_inputs failed "
-            "(run_id=%s, node_id=%s, attempt_key=%s) — swallowed (best-effort)",
+            "workspace_input_audit: record_resolved_inputs failed (run_id=%s, node_id=%s, attempt_key=%s) — swallowed (best-effort)",
             run_id,
             node_id,
             attempt_key,
@@ -265,8 +261,7 @@ async def record_drift(
         ).scalar_one_or_none()
         if row is None or not isinstance(row.outputs_json, dict):
             _log.warning(
-                "workspace_input_audit: record_drift — no audit record found "
-                "(run_id=%s, node_id=%s, attempt_key=%s) — no-op",
+                "workspace_input_audit: record_drift — no audit record found (run_id=%s, node_id=%s, attempt_key=%s) — no-op",
                 run_id,
                 node_id,
                 attempt_key,
@@ -323,8 +318,7 @@ async def record_drift(
         await session.execute(update(Run).where(Run.id == run_id).values(workspace_inputs_drift_detected=any_drift))
     except Exception:
         _log.exception(
-            "workspace_input_audit: record_drift failed "
-            "(run_id=%s, node_id=%s, attempt_key=%s) — swallowed (best-effort)",
+            "workspace_input_audit: record_drift failed (run_id=%s, node_id=%s, attempt_key=%s) — swallowed (best-effort)",
             run_id,
             node_id,
             attempt_key,

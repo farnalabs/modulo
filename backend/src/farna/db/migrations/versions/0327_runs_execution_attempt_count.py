@@ -82,10 +82,7 @@ _EXECUTION_ATTEMPT_COUNT = sa.Column(
     sa.Integer(),
     nullable=False,
     server_default="0",
-    comment=(
-        "execution attempts of the graph (execute_run only - never resume_run, never a "
-        "capacity-demoted claim); a pre-node death counts (FAR-2076)"
-    ),
+    comment=("execution attempts of the graph (execute_run only - never resume_run, never a capacity-demoted claim); a pre-node death counts (FAR-2076)"),
 )
 
 # Literal SQL only (no f-string / format-built SQL - migration-fstring-sql
@@ -96,10 +93,7 @@ _EXECUTION_ATTEMPT_COUNT = sa.Column(
 # ``hitl_parked`` and ``claimed`` so a guardrail-override resume flip is
 # covered. A lower bound on executions; under-counting is the safe direction
 # (see the module docstring).
-_BACKFILL_EXECUTION_ATTEMPT_COUNT = (
-    "UPDATE runs SET execution_attempt_count = COALESCE(node_attempt_count, 0) "
-    "WHERE status IN ('pending','running','awaiting_human','claimed','hitl_parked')"
-)
+_BACKFILL_EXECUTION_ATTEMPT_COUNT = "UPDATE runs SET execution_attempt_count = COALESCE(node_attempt_count, 0) WHERE status IN ('pending','running','awaiting_human','claimed','hitl_parked')"
 
 
 def upgrade() -> None:

@@ -76,7 +76,7 @@ def _widen_check_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     (``--timeout=600`` bounds the test itself).
     The 1s default and its timeout path are covered by unit tests.
     """
-    monkeypatch.setenv("MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", "30")
 
 
 async def _dispose_shared_engines() -> None:
@@ -260,7 +260,7 @@ class TestDatabaseHygieneCheckAgainstRealPostgres:
         """
         await _seed_bloated_table(clean_hygiene_db)
         await _create_zero_tuple_table(clean_hygiene_db)
-        monkeypatch.setenv("MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES", "0")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES", "0")
         get_settings.cache_clear()
 
         result = await _check_db_hygiene()

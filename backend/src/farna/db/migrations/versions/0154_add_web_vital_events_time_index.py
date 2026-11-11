@@ -32,12 +32,7 @@ depends_on: tuple[str, ...] | None = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    bind.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_web_vital_events_org_recorded "
-            "ON public.web_vital_events (organisation_id, recorded_at);"
-        )
-    )
+    bind.execute(text("CREATE INDEX IF NOT EXISTS ix_web_vital_events_org_recorded ON public.web_vital_events (organisation_id, recorded_at);"))
 
 
 def downgrade() -> None:

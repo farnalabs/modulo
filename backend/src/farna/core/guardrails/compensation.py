@@ -88,9 +88,7 @@ async def _normalise_executed_nodes(
 async def _load_graph_nodes(session: AsyncSession, run: Run) -> list[dict[str, Any]]:
     """Load the snapshot's graph nodes (best-effort; never raises)."""
     try:
-        result = await session.execute(
-            select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
-        )
+        result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id))
         graph = result.scalar_one_or_none()
     except asyncio.CancelledError:
         raise
@@ -174,10 +172,7 @@ async def _append_summary_audit(
             resource_id=run_id,
             payload_json={
                 "actor": SYSTEM_ACTOR,
-                "summary": (
-                    f"Compensation summary written for run {short_id(run_id) or 'unknown'}: "
-                    f'{len(executed)} executed node(s), blocking eval "{blocking_eval_name}"'
-                ),
+                "summary": (f'Compensation summary written for run {short_id(run_id) or "unknown"}: {len(executed)} executed node(s), blocking eval "{blocking_eval_name}"'),
                 "blocking_eval_name": blocking_eval_name or None,
                 "executed_node_count": len(executed),
             },

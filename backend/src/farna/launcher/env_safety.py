@@ -56,7 +56,7 @@ SCRUB_EXACT_NAMES: frozenset[str] = frozenset(
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
-        "MODULO_TEST_PAUSE_AT",
+        "FARNA_CONTROL_MODULO_TEST_PAUSE_AT",
     }
 )
 

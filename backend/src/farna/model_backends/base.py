@@ -330,9 +330,7 @@ class ModelBackendBase(ABC):
         detail = getattr(exc, "message", None) or str(exc)
         status_desc = f"HTTP {status}" if status else "connection failure"
         return ProviderUnavailableError(  # NOSONAR python:S112 — explicit typed outage classification
-            f"{self.backend_id} provider gateway{self._gateway_error_context()} "
-            f"returned {status_desc} on the model endpoint — upstream outage, "
-            f"not an auth failure. Detail: {detail}"
+            f"{self.backend_id} provider gateway{self._gateway_error_context()} returned {status_desc} on the model endpoint — upstream outage, not an auth failure. Detail: {detail}"
         )
 
     async def health_check(self) -> HealthResult:

@@ -99,10 +99,7 @@ async def resolve_trigger_secret_scoped(
     if is_encrypted_secret(stored_raw, fernet_key) or _is_complete_fernet_token(stored_raw):
         return await decode_stored_secret_scoped(session, stored_raw, fernet_key, org_id=org_id)
     _log.warning(
-        "trigger_secret.legacy_plaintext trigger=%s secret=%s context=%s since=%s — "
-        "stored trigger secret is not a Fernet token; expected only for rows written "
-        "before migration 0306 (FAR-1732). A value here after that deploy means a "
-        "write bypassed the encrypting write path.",
+        "trigger_secret.legacy_plaintext trigger=%s secret=%s context=%s since=%s — stored trigger secret is not a Fernet token; expected only for rows written before migration 0306 (FAR-1732). A value here after that deploy means a write bypassed the encrypting write path.",
         trigger_id,
         config_key,
         context,

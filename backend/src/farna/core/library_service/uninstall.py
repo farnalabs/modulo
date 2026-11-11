@@ -300,10 +300,6 @@ def _record_integrity_block(
             "entity_type": entity_row.entity_type,
             "entity_id": str(entity_row.entity_id),
             "blocked_by": "policy_gate_decisions",
-            "error": (
-                f"Cannot delete {entity_row.entity_type} {entity_row.entity_id}: "
-                "governance decision records present — "
-                "archive or purge policy_gate_decisions first"
-            ),
+            "error": (f"Cannot delete {entity_row.entity_type} {entity_row.entity_id}: governance decision records present — archive or purge policy_gate_decisions first"),
         }
     )

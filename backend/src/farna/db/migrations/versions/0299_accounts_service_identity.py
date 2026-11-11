@@ -43,18 +43,9 @@ _IDENTITY_PREDICATE = "kind = 'human' OR (email IS NULL AND password_hash IS NUL
 
 def upgrade() -> None:
     bind = op.get_bind()
-    offending = bind.execute(
-        sa.text(
-            "SELECT COUNT(*) FROM accounts "
-            "WHERE kind = 'service' AND (email IS NOT NULL OR password_hash IS NOT NULL OR sso_subject IS NOT NULL)"
-        )
-    ).scalar()
+    offending = bind.execute(sa.text("SELECT COUNT(*) FROM accounts WHERE kind = 'service' AND (email IS NOT NULL OR password_hash IS NOT NULL OR sso_subject IS NOT NULL)")).scalar()
     if offending:
-        raise RuntimeError(
-            f"Refusing to apply 0299: {offending} service account row(s) still carry an email, "
-            "password_hash or sso_subject. The identity CHECK cannot be satisfied for those rows; "
-            "null the human-shaped identity first, then retry."
-        )
+        raise RuntimeError(f"Refusing to apply 0299: {offending} service account row(s) still carry an email, password_hash or sso_subject. The identity CHECK cannot be satisfied for those rows; null the human-shaped identity first, then retry.")
     op.create_check_constraint(_IDENTITY_CHECK, _TABLE, _IDENTITY_PREDICATE)
 
 

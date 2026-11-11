@@ -50,9 +50,4 @@ class NodeMissingModelBackendError(Exception):
     def __init__(self, node_id: str, agent_id: str) -> None:
         self.node_id = node_id
         self.agent_id = agent_id
-        super().__init__(
-            f"Agent node {node_id!r} references agent {agent_id!r} "
-            f"which has no model_backend_id configured. "
-            f"Assign a model backend to the agent, or use a "
-            f"connector/manual node type if no model call is intended."
-        )
+        super().__init__(f"Agent node {node_id!r} references agent {agent_id!r} which has no model_backend_id configured. Assign a model backend to the agent, or use a connector/manual node type if no model call is intended.")

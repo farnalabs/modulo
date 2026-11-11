@@ -207,8 +207,7 @@ def _validate_edge_topology(
         srcs = sorted(_edge_source(e) for e in es)
         result.error(
             PORT_FAN_IN_ERROR,
-            f"Target port '{tp}' on node '{tgt}' accepts at most one incoming edge "
-            f"but receives {len(es)} (from {srcs}). Use a 'join' node to fan in.",
+            f"Target port '{tp}' on node '{tgt}' accepts at most one incoming edge but receives {len(es)} (from {srcs}). Use a 'join' node to fan in.",
             node_id=tgt,
         )
 

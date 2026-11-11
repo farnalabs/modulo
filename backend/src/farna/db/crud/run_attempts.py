@@ -135,11 +135,7 @@ async def start_attempt(
     organisation_id = await _run_organisation_id(session, run_id)
     await _acquire_attempt_lock(session, run_id)
 
-    next_index = (
-        await session.execute(
-            select(func.coalesce(func.max(RunAttempt.attempt_index), -1) + 1).where(RunAttempt.run_id == run_id)
-        )
-    ).scalar_one()
+    next_index = (await session.execute(select(func.coalesce(func.max(RunAttempt.attempt_index), -1) + 1).where(RunAttempt.run_id == run_id))).scalar_one()
 
     session.add(
         RunAttempt(
@@ -178,18 +174,9 @@ async def close_attempt(
     concurrent closers cannot close two different rows for the same run.
     """
     if terminal_reason not in ATTEMPT_TERMINAL_REASON_VALUES:
-        raise ValueError(
-            f"unknown attempt terminal_reason {terminal_reason!r}; "
-            f"expected one of {sorted(ATTEMPT_TERMINAL_REASON_VALUES)}"
-        )
+        raise ValueError(f"unknown attempt terminal_reason {terminal_reason!r}; expected one of {sorted(ATTEMPT_TERMINAL_REASON_VALUES)}")
 
-    latest_open_attempt_id = (
-        select(RunAttempt.id)
-        .where(RunAttempt.run_id == run_id, RunAttempt.ended_at.is_(None))
-        .order_by(RunAttempt.attempt_index.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
+    latest_open_attempt_id = select(RunAttempt.id).where(RunAttempt.run_id == run_id, RunAttempt.ended_at.is_(None)).order_by(RunAttempt.attempt_index.desc()).limit(1).scalar_subquery()
     stmt = (
         update(RunAttempt)
         .where(RunAttempt.id == latest_open_attempt_id)
@@ -214,7 +201,5 @@ async def list_attempts(session: AsyncSession, run_id: uuid.UUID) -> Sequence[Ru
     ``run_id`` + the ordering column), which is why the table needs no second
     index on the pair.
     """
-    result = await session.execute(
-        select(RunAttempt).where(RunAttempt.run_id == run_id).order_by(RunAttempt.attempt_index.asc())
-    )
+    result = await session.execute(select(RunAttempt).where(RunAttempt.run_id == run_id).order_by(RunAttempt.attempt_index.asc()))
     return result.scalars().all()

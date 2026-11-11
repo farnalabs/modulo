@@ -55,9 +55,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
     def __init__(self) -> None:
         if not _MODULE_AVAILABLE:
-            raise RuntimeError(
-                "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
-            )
+            raise RuntimeError("The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3")
 
         self._region: str = (os.environ.get("AWS_REGION") or _DEFAULT_REGION).strip()
         self._profile: str | None = (os.environ.get("AWS_PROFILE") or "").strip() or None
@@ -69,9 +67,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
     async def _ensure_client(self) -> Any:
         if not _MODULE_AVAILABLE:
-            raise RuntimeError(
-                "The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3"
-            )
+            raise RuntimeError("The 'boto3' package is required for AWSSecretsManagerBackend. Install it with: pip install boto3")
         if self._client is not None:
             return self._client
 

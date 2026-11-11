@@ -862,8 +862,7 @@ async def _validate_fallback_ids(
                 {
                     "type": "value_error",
                     "loc": ["body", "fallback_backend_ids"],
-                    "msg": "Unknown model backend id(s) referenced as fallbacks: "
-                    + ", ".join(str(fid) for fid in missing),
+                    "msg": "Unknown model backend id(s) referenced as fallbacks: " + ", ".join(str(fid) for fid in missing),
                 }
             ],
         )
@@ -969,11 +968,7 @@ def _validate_provider(provider: str) -> None:
 def _resolve_create_base_url(req: ModelBackendCreate) -> str | None:
     """Validate an optional custom endpoint on a create request (FAR-2046)."""
     requested_base_url = _requested_base_url(req.base_url, req.default_params)
-    base_url = (
-        _validate_base_url(requested_base_url, allow_insecure_http=bool(req.allow_insecure_http))
-        if requested_base_url
-        else None
-    )
+    base_url = _validate_base_url(requested_base_url, allow_insecure_http=bool(req.allow_insecure_http)) if requested_base_url else None
     if base_url is not None and not supports_custom_base_url(req.provider):
         raise _base_url_error(
             f"Provider {req.provider!r} does not support a custom base_url",
@@ -1381,12 +1376,7 @@ def _is_legacy_echo(
     provider, including ones that cannot apply it (e.g. azure_openai). Treating
     that echo as a newly-supplied endpoint would reject a harmless edit.
     """
-    return (
-        legacy_supplied
-        and ctx.existing_legacy is not None
-        and _legacy_base_url(req.default_params) == ctx.existing_legacy
-        and not supports_custom_base_url(ctx.existing.provider)
-    )
+    return legacy_supplied and ctx.existing_legacy is not None and _legacy_base_url(req.default_params) == ctx.existing_legacy and not supports_custom_base_url(ctx.existing.provider)
 
 
 def _should_preserve_legacy(
@@ -1402,14 +1392,7 @@ def _should_preserve_legacy(
     silently reset a stored endpoint (FAR-2046). The legacy value is only the
     effective endpoint when the credential JSON has none of its own.
     """
-    return (
-        ctx.existing_legacy is not None
-        and ctx.credential_base_url is None
-        and req.default_params is not None
-        and not base_url_supplied
-        and not legacy_supplied
-        and supports_custom_base_url(ctx.existing.provider)
-    )
+    return ctx.existing_legacy is not None and ctx.credential_base_url is None and req.default_params is not None and not base_url_supplied and not legacy_supplied and supports_custom_base_url(ctx.existing.provider)
 
 
 def _direct_update_base_url(req: ModelBackendUpdate, legacy: str | None) -> str | None:
@@ -1665,9 +1648,7 @@ async def _update_and_post_process(
     its exact PRD name when an API key is supplied; the generic edit event
     carries only the non-credential fields that actually changed.
     """
-    mb, response, health_api_key, endpoint_audit = await _update_backend_tx(
-        session, backend_id, principal, req, settings, updates
-    )
+    mb, response, health_api_key, endpoint_audit = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
     if health_api_key is not None:
         await _run_health_check_on_save_and_persist(
             session,
@@ -1707,9 +1688,7 @@ async def _update_and_post_process(
                 "name": mb.name,
                 "provider": mb.provider,
                 "model_id": mb.model_id,
-                "credential_kind": (
-                    "vault_reference" if req.api_key is not None and _is_vault_reference(req.api_key) else "literal"
-                ),
+                "credential_kind": ("vault_reference" if req.api_key is not None and _is_vault_reference(req.api_key) else "literal"),
             },
             log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
@@ -1778,11 +1757,7 @@ async def update_model_backend_endpoint(
 
 @router.post(
     "/{backend_id}/health-check",
-    dependencies=[
-        Depends(
-            audited("model_backend_health_checked", "model_backend", principal_dep=get_current_tenant_user_or_api_key)
-        )
-    ],
+    dependencies=[Depends(audited("model_backend_health_checked", "model_backend", principal_dep=get_current_tenant_user_or_api_key))],
 )
 @handle_db_errors(_CODE_MODEL_BACKENDS_RECHECK_MODEL)
 async def recheck_model_backend_health_endpoint(
@@ -1814,9 +1789,7 @@ async def recheck_model_backend_health_endpoint(
             payload = await _read_secret_payload(secrets_backend, backend_id)
             base_url = _effective_base_url(payload, mb.default_params, mb.provider)
             try:
-                api_key = await decode_stored_secret_scoped(
-                    session, mb.credentials_ciphertext, settings.fernet_key, org_id=principal.organisation_id
-                )
+                api_key = await decode_stored_secret_scoped(session, mb.credentials_ciphertext, settings.fernet_key, org_id=principal.organisation_id)
             except Exception:
                 logger.warning("Failed to decrypt credentials for model backend %s; health check skipped", backend_id)
                 api_key = None
@@ -1868,9 +1841,7 @@ async def recheck_model_backend_health_endpoint(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(deny_break_glass_mint),
-        Depends(
-            audited("model_backend_deleted", "model_backend", principal_dep=get_current_tenant_user, fail_closed=True)
-        ),
+        Depends(audited("model_backend_deleted", "model_backend", principal_dep=get_current_tenant_user, fail_closed=True)),
     ],
 )
 @handle_db_errors(_CODE_MODEL_BACKENDS_DELETE_MODEL)
@@ -1884,9 +1855,7 @@ async def delete_model_backend_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            referencing = await list_backends_referencing_fallback(
-                session, org_id=principal.organisation_id, backend_id=backend_id
-            )
+            referencing = await list_backends_referencing_fallback(session, org_id=principal.organisation_id, backend_id=backend_id)
             if referencing:
                 names = ", ".join(sorted(mb.name for mb in referencing))
                 raise HTTPException(
@@ -1897,18 +1866,12 @@ async def delete_model_backend_endpoint(
             # associated with a non-terminal run cannot be hard-deleted — the
             # in-flight run may still resolve the pinned backend (e.g. after a
             # HITL pause/resume). Terminal-run snapshots impose no constraint.
-            non_terminal = await _list_snapshots_referencing_backend(
-                session, org_id=principal.organisation_id, backend_id=backend_id
-            )
+            non_terminal = await _list_snapshots_referencing_backend(session, org_id=principal.organisation_id, backend_id=backend_id)
             if non_terminal:
                 snapshot_ids = ", ".join(sorted(str(r["snapshot_id"]) for r in non_terminal))
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "Cannot delete model backend: it is pinned by a PipelineSnapshot associated with a "
-                        f"non-terminal run (snapshot(s): {snapshot_ids}). Wait for the runs to finish before "
-                        "hard-deleting the backend."
-                    ),
+                    detail=(f"Cannot delete model backend: it is pinned by a PipelineSnapshot associated with a non-terminal run (snapshot(s): {snapshot_ids}). Wait for the runs to finish before hard-deleting the backend."),
                 )
             # Capture the entity details BEFORE the delete so the audit event can
             # survive the row (a post-delete read would return nothing).

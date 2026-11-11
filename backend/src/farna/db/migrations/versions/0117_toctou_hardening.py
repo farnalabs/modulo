@@ -42,18 +42,12 @@ def upgrade() -> None:
         "error_notification_rules",
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.execute(
-        "CREATE UNIQUE INDEX uq_enr_org_active ON error_notification_rules (organisation_id, signal) WHERE deleted_at IS NULL"
-    )
+    op.execute("CREATE UNIQUE INDEX uq_enr_org_active ON error_notification_rules (organisation_id, signal) WHERE deleted_at IS NULL")
 
     # ── #1105: per-pipeline trigger rate limit ──────────────────────────
     # Drop the plain index before creating the unique partial index.
     op.execute("DROP INDEX IF EXISTS ix_runs_rate_limit_key")
-    op.execute(
-        "CREATE UNIQUE INDEX uq_runs_pipeline_rate_limit_key "
-        "ON runs (pipeline_id, rate_limit_key) "
-        "WHERE rate_limit_key IS NOT NULL"
-    )
+    op.execute("CREATE UNIQUE INDEX uq_runs_pipeline_rate_limit_key ON runs (pipeline_id, rate_limit_key) WHERE rate_limit_key IS NOT NULL")
 
 
 def downgrade() -> None:

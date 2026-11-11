@@ -118,9 +118,7 @@ async def list_connector_instances(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
     try:
-        items_stmt = (
-            select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
-        )
+        items_stmt = select(ConnectorInstance).order_by(ConnectorInstance.created_at.desc()).offset(offset).limit(page_size)
         if org_filter is not None:
             items_stmt = items_stmt.where(org_filter)
         if excluded_tiers:
@@ -169,16 +167,9 @@ async def mark_instances_degraded(session: AsyncSession, skipped: dict[uuid.UUID
     if not skipped:
         return
     summary_by_id = case(
-        *[
-            (ConnectorInstance.id == instance_id, _sanitize_skip_summary(summary))
-            for instance_id, summary in skipped.items()
-        ],
+        *[(ConnectorInstance.id == instance_id, _sanitize_skip_summary(summary)) for instance_id, summary in skipped.items()],
     )
-    stmt = (
-        update(ConnectorInstance)
-        .where(ConnectorInstance.id.in_(skipped))
-        .values(degraded_at=func.now(), last_skip_error=summary_by_id)
-    )
+    stmt = update(ConnectorInstance).where(ConnectorInstance.id.in_(skipped)).values(degraded_at=func.now(), last_skip_error=summary_by_id)
     await session.execute(stmt)
     await session.flush()
 
@@ -197,11 +188,7 @@ async def clear_degraded_markers(session: AsyncSession, instance_ids: Collection
     """
     if not instance_ids:
         return
-    stmt = (
-        update(ConnectorInstance)
-        .where(ConnectorInstance.id.in_(instance_ids))
-        .values(degraded_at=None, last_skip_error=None)
-    )
+    stmt = update(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids)).values(degraded_at=None, last_skip_error=None)
     await session.execute(stmt)
     await session.flush()
 

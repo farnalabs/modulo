@@ -28,12 +28,7 @@ from typing import Any
 
 COMPLEXITY_REVIEWER: dict[str, Any] = {
     "name": "Complexity Reviewer",
-    "description": (
-        "Analyses the most recent artifact in run_context and writes "
-        "model_tier/estimated_tokens/complexity_reason to run_context. "
-        "Use as a context-setter before the main processing agent to "
-        "inform model selection and cost estimation."
-    ),
+    "description": ("Analyses the most recent artifact in run_context and writes model_tier/estimated_tokens/complexity_reason to run_context. Use as a context-setter before the main processing agent to inform model selection and cost estimation."),
     "node_type": "agent",
     "role": "context_setter",
     "input_schema": {

@@ -54,9 +54,7 @@ class PolicyGateBindingViolationError(ValueError):
 def _coerce_uuid(value: Any, field_name: str) -> uuid.UUID:
     """Validate that *value* is a UUID instance, not a string (C10)."""
     if isinstance(value, str):
-        raise TypeError(
-            f"{field_name} must be a uuid.UUID, not str — callers must normalise before constructing the snapshot"
-        )
+        raise TypeError(f"{field_name} must be a uuid.UUID, not str — callers must normalise before constructing the snapshot")
     if not isinstance(value, uuid.UUID):
         raise TypeError(f"{field_name} must be a uuid.UUID, got {type(value).__name__}")
     return value
@@ -290,9 +288,7 @@ def build_decision_row(
 
     pg_org = snapshot.policy_gate.organisation_id
     ev_org = snapshot.eval.organisation_id
-    assert pg_org == ev_org, (
-        f"cross-tenancy sanity check failed: policy_gate.organisation_id={pg_org} != eval.organisation_id={ev_org}"
-    )
+    assert pg_org == ev_org, f"cross-tenancy sanity check failed: policy_gate.organisation_id={pg_org} != eval.organisation_id={ev_org}"
 
     return PolicyGateDecision(
         organisation_id=pg_org,

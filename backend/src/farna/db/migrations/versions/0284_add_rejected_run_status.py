@@ -62,11 +62,7 @@ _ADD_NEW = (
     "'compensation_failed'::character varying, 'rejected'::character varying])::text[]))) NOT VALID; "
     "END IF; END $$;"
 )
-_VALIDATE_NEW = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_status' "
-    "AND pg_get_constraintdef(oid) LIKE '%NOT VALID') "
-    "THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_status; END IF; END $$;"
-)
+_VALIDATE_NEW = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_status' AND pg_get_constraintdef(oid) LIKE '%NOT VALID') THEN ALTER TABLE public.runs VALIDATE CONSTRAINT ck_runs_status; END IF; END $$;"
 # Downgrade: restore the 0180 15-status list.
 _DROP_OLD = (
     "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_runs_status' AND "
@@ -99,30 +95,14 @@ _ADD_OLD = (
 # index whose predicate the query implies) - re-create it with the widened
 # list. Must equal the model's ``Index("ix_runs_workspace_drift_sweep")``.
 _DRIFT_INDEX = "ix_runs_workspace_drift_sweep"
-_DRIFT_PREDICATE_NEW = (
-    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
-    "AND workspace_inputs_drift_detected IS NULL"
-)
-_DRIFT_PREDICATE_OLD = (
-    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
-    "AND workspace_inputs_drift_detected IS NULL"
-)
+_DRIFT_PREDICATE_NEW = "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') AND workspace_inputs_drift_detected IS NULL"
+_DRIFT_PREDICATE_OLD = "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') AND workspace_inputs_drift_detected IS NULL"
 
 
 # run_daily_facts.status CHECK (0165 ``_RUN_STATUS``: the 14 pre-hitl_parked
 # statuses - facts only ever hold TERMINAL runs). Widened with ``rejected``.
-_FACTS_STATUS_OLD = (
-    "status IN ('pending','running','awaiting_human','claimed','unknown','complete',"
-    "'failed','cancelled','eval_failed','stalled','budget_exceeded',"
-    "'router_no_match','compensation_failed','cost_ceiling_exceeded')"
-)
-_FACTS_STATUS_NEW = (
-    "status IN ('pending','running','awaiting_human','claimed','unknown','complete',"
-    "'failed','cancelled','eval_failed','stalled','budget_exceeded',"
-    "'router_no_match','compensation_failed','cost_ceiling_exceeded','rejected')"
-)
+_FACTS_STATUS_OLD = "status IN ('pending','running','awaiting_human','claimed','unknown','complete','failed','cancelled','eval_failed','stalled','budget_exceeded','router_no_match','compensation_failed','cost_ceiling_exceeded')"
+_FACTS_STATUS_NEW = "status IN ('pending','running','awaiting_human','claimed','unknown','complete','failed','cancelled','eval_failed','stalled','budget_exceeded','router_no_match','compensation_failed','cost_ceiling_exceeded','rejected')"
 # Whole-literal DDL (no interpolation): op.execute cannot bind parameters.
 _FACTS_DROP = "ALTER TABLE run_daily_facts DROP CONSTRAINT IF EXISTS ck_run_daily_facts_status"
 _FACTS_ADD_NEW = (
@@ -132,10 +112,7 @@ _FACTS_ADD_NEW = (
     "'router_no_match','compensation_failed','cost_ceiling_exceeded','rejected')) NOT VALID"
 )
 _FACTS_ADD_OLD = (
-    "ALTER TABLE run_daily_facts ADD CONSTRAINT ck_run_daily_facts_status CHECK ("
-    "status IN ('pending','running','awaiting_human','claimed','unknown','complete',"
-    "'failed','cancelled','eval_failed','stalled','budget_exceeded',"
-    "'router_no_match','compensation_failed','cost_ceiling_exceeded')) NOT VALID"
+    "ALTER TABLE run_daily_facts ADD CONSTRAINT ck_run_daily_facts_status CHECK (status IN ('pending','running','awaiting_human','claimed','unknown','complete','failed','cancelled','eval_failed','stalled','budget_exceeded','router_no_match','compensation_failed','cost_ceiling_exceeded')) NOT VALID"
 )
 _FACTS_VALIDATE = "ALTER TABLE run_daily_facts VALIDATE CONSTRAINT ck_run_daily_facts_status"
 

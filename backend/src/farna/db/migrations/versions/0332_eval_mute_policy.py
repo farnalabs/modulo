@@ -35,22 +35,14 @@ def upgrade() -> None:
 
     # Add CHECK constraints
     op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_threshold' "
-        "AND conrelid = 'public.evals'::regclass) THEN "
-        "ALTER TABLE public.evals ADD CONSTRAINT ck_evals_mute_threshold "
-        "CHECK (mute_threshold IS NULL OR mute_threshold BETWEEN 0 AND 1); END IF; END $$;"
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_threshold' AND conrelid = 'public.evals'::regclass) THEN ALTER TABLE public.evals ADD CONSTRAINT ck_evals_mute_threshold CHECK (mute_threshold IS NULL OR mute_threshold BETWEEN 0 AND 1); END IF; END $$;"
     )
     op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_min_outcomes' "
-        "AND conrelid = 'public.evals'::regclass) THEN "
-        "ALTER TABLE public.evals ADD CONSTRAINT ck_evals_mute_min_outcomes "
-        "CHECK (mute_min_outcomes IS NULL OR mute_min_outcomes > 0); END IF; END $$;"
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_min_outcomes' AND conrelid = 'public.evals'::regclass) THEN ALTER TABLE public.evals ADD CONSTRAINT ck_evals_mute_min_outcomes CHECK (mute_min_outcomes IS NULL OR mute_min_outcomes > 0); END IF; END $$;"
     )
 
     # Index for muted evals lookup
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_evals_org_is_muted ON evals (organisation_id, is_muted) WHERE deleted_at IS NULL"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_evals_org_is_muted ON evals (organisation_id, is_muted) WHERE deleted_at IS NULL")
 
 
 def downgrade() -> None:
@@ -58,16 +50,8 @@ def downgrade() -> None:
         return
 
     op.execute("DROP INDEX IF EXISTS ix_evals_org_is_muted")
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_min_outcomes' "
-        "AND conrelid = 'public.evals'::regclass) THEN "
-        "ALTER TABLE public.evals DROP CONSTRAINT ck_evals_mute_min_outcomes; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_threshold' "
-        "AND conrelid = 'public.evals'::regclass) THEN "
-        "ALTER TABLE public.evals DROP CONSTRAINT ck_evals_mute_threshold; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_min_outcomes' AND conrelid = 'public.evals'::regclass) THEN ALTER TABLE public.evals DROP CONSTRAINT ck_evals_mute_min_outcomes; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_evals_mute_threshold' AND conrelid = 'public.evals'::regclass) THEN ALTER TABLE public.evals DROP CONSTRAINT ck_evals_mute_threshold; END IF; END $$;")
     op.execute("ALTER TABLE evals DROP COLUMN IF EXISTS mute_min_outcomes")
     op.execute("ALTER TABLE evals DROP COLUMN IF EXISTS mute_threshold")
     op.execute("ALTER TABLE evals DROP COLUMN IF EXISTS muted_by")

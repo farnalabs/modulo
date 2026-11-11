@@ -52,13 +52,7 @@ def upgrade() -> None:
     for name, table, cols, ref_table, ref_cols, ondelete in _FKS:
         col_list = ", ".join(cols)
         ref_list = ", ".join(ref_cols)
-        op.execute(
-            text(
-                f"ALTER TABLE {table} ADD CONSTRAINT {name} "
-                f"FOREIGN KEY ({col_list}) REFERENCES {ref_table} ({ref_list}) "
-                f"ON DELETE {ondelete} NOT VALID"
-            )
-        )
+        op.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT {name} FOREIGN KEY ({col_list}) REFERENCES {ref_table} ({ref_list}) ON DELETE {ondelete} NOT VALID"))
         op.execute(text(f"ALTER TABLE {table} VALIDATE CONSTRAINT {name}"))
 
 

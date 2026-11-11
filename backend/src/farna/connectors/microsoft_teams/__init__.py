@@ -61,9 +61,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Microsoft Graph API token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Microsoft Graph API token")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as exc:

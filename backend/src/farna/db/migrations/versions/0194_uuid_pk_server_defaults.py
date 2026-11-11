@@ -246,12 +246,7 @@ def _existing_tables(bind: object) -> set[str]:
     # Pinning to ``information_schema`` makes the guard view identical to the
     # test's ``information_schema.columns WHERE table_schema = 'public'`` snapshot,
     # so the round-trip is idempotent and count-preserving.
-    rows = bind.execute(
-        text(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
-        )
-    ).fetchall()
+    rows = bind.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")).fetchall()
     return {row[0] for row in rows}
 
 

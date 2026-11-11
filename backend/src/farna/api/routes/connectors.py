@@ -99,16 +99,8 @@ def _github_missing_scope_detail(token: str, missing: set[str]) -> str:
     fine-grained token would be wrong — GitHub never issues those scopes to it.
     """
     if is_fine_grained_pat(token):
-        return (
-            f"GitHub token is missing required fine-grained permissions: "
-            f"{', '.join(sorted(missing))}. "
-            f"Required: {', '.join(sorted(GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS))}"
-        )
-    return (
-        f"GitHub token is missing required OAuth scopes: "
-        f"{', '.join(sorted(missing))}. "
-        f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
-    )
+        return f"GitHub token is missing required fine-grained permissions: {', '.join(sorted(missing))}. Required: {', '.join(sorted(GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS))}"
+    return f"GitHub token is missing required OAuth scopes: {', '.join(sorted(missing))}. Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
 
 
 def _encrypt(credentials: str, fernet_key: str) -> bytes:
@@ -417,9 +409,7 @@ async def list_connector_types() -> ConnectorTypeListResponse:
     buildable = buildable_connector_type_ids()
     ordered: list[str] = [t.value for t in ConnectorType if t.value in buildable]
     ordered += sorted(buildable - set(ordered))
-    return ConnectorTypeListResponse(
-        items=[ConnectorTypeItem(id=type_id, display_name=type_id.replace("_", " ").title()) for type_id in ordered]
-    )
+    return ConnectorTypeListResponse(items=[ConnectorTypeItem(id=type_id, display_name=type_id.replace("_", " ").title()) for type_id in ordered])
 
 
 def _to_response(ci: Any) -> ConnectorResponse:
@@ -583,9 +573,7 @@ async def _verify_github_credentials(credentials: str, base_url: str | None = No
     try:
         missing = await temp.verify_scopes()
     except (GitHubNetworkError, RequestError) as exc:
-        warning = (
-            f"GitHub instance {target} could not be reached; the token was NOT verified ({type(exc).__name__}: {exc})"
-        )
+        warning = f"GitHub instance {target} could not be reached; the token was NOT verified ({type(exc).__name__}: {exc})"
         logger.warning(
             "connectors.github.verification_unreachable base_url=%s error=%s",
             sanitise_log_value(target),
@@ -723,10 +711,7 @@ async def _create_connector(
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Connector cannot be created — a constraint violation occurred "
-                "(e.g. duplicate name or invalid reference)."
-            ),
+            detail=("Connector cannot be created — a constraint violation occurred (e.g. duplicate name or invalid reference)."),
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
@@ -776,9 +761,7 @@ async def create_connector_endpoint(
     if req.connector_type_id == "github":
         # FAR-1762: verify against the connector's configured instance (GHES),
         # not the github.com default.
-        verification_warning = await _verify_github_credentials(
-            resolved_credentials, base_url=_github_base_url(req.config_json)
-        )
+        verification_warning = await _verify_github_credentials(resolved_credentials, base_url=_github_base_url(req.config_json))
 
     if req.connector_type_id == "rest":
         _validate_rest_connector_payload(resolved_credentials, req.config_json)
@@ -1175,9 +1158,7 @@ async def _apply_connector_update(
         # constructed).
         new_credentials = await _resolve_secretref_credential(new_credentials, settings=settings, session=session)
         _merge_config_update(existing, updates)
-        credentials_updated = _apply_credential_rotation(
-            existing, updates, credentials_updated, new_credentials, settings
-        )
+        credentials_updated = _apply_credential_rotation(existing, updates, credentials_updated, new_credentials, settings)
         effective_config = updates.get("config_json")
         if not isinstance(effective_config, dict):
             effective_config = existing.config_json or {}
@@ -1230,10 +1211,7 @@ async def update_connector_endpoint(
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Connector cannot be updated — a constraint violation occurred "
-                "(e.g. duplicate name or invalid reference)."
-            ),
+            detail=("Connector cannot be updated — a constraint violation occurred (e.g. duplicate name or invalid reference)."),
         ) from None
     except ProgrammingError:
         logger.exception(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)

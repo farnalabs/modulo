@@ -72,22 +72,14 @@ def _is_postgres(bind) -> bool:
 
 def _role_exists(bind, role: str) -> bool:
     """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _assert_owner_is_migrate(bind) -> None:
     """POST-ADD ownership assertion — the 0066 ceremony (after column/FK add)."""
-    owner = bind.execute(
-        sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.dismissals')")
-    ).scalar_one_or_none()
+    owner = bind.execute(sa.text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.dismissals')")).scalar_one_or_none()
     if owner != _MIGRATE_ROLE:
-        raise RuntimeError(
-            f"{_TABLE} owner is {owner!r}, expected '{_MIGRATE_ROLE}' "
-            "(the app role must NOT own dismissals — owner bypasses RLS)"
-        )
+        raise RuntimeError(f"{_TABLE} owner is {owner!r}, expected '{_MIGRATE_ROLE}' (the app role must NOT own dismissals — owner bypasses RLS)")
 
 
 def _table_owner(bind, table: str) -> str | None:
@@ -147,14 +139,7 @@ def upgrade() -> None:
             _assert_owner_is_migrate(bind)
 
         # Backfill from the parent notification's organisation_id.
-        op.execute(
-            sa.text(
-                "UPDATE dismissals d "
-                "SET organisation_id = n.organisation_id "
-                "FROM notifications n "
-                "WHERE d.notification_id = n.id AND d.organisation_id IS NULL"
-            )
-        )
+        op.execute(sa.text("UPDATE dismissals d SET organisation_id = n.organisation_id FROM notifications n WHERE d.notification_id = n.id AND d.organisation_id IS NULL"))
         # Make the column NOT NULL now that every row has an org.
         op.execute(sa.text("ALTER TABLE dismissals ALTER COLUMN organisation_id SET NOT NULL"))
 

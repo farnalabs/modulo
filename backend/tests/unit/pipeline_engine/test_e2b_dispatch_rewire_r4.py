@@ -193,7 +193,7 @@ def test_require_dispatch_provider_fails_closed_with_typed_error() -> None:
 async def test_build_dispatch_provider_returns_none_without_a_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     monkeypatch.setattr("farna.core.runtime_config.key_bridge.override_or", lambda *_a, **_k: None)
     assert await _build_dispatch_provider() is None
@@ -209,7 +209,7 @@ async def test_build_dispatch_provider_returns_none_when_hub_build_fails(
 async def test_build_dispatch_provider_returns_the_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     from farna.core.runtime_provider.e2b import E2BRuntimeProvider
 
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
     provider = await _build_dispatch_provider()
     assert isinstance(provider, E2BRuntimeProvider)
 
@@ -232,9 +232,7 @@ async def test_provider_full_dispatch_runs_the_abc_call_sequence(monkeypatch: py
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-r4-seq", exit_code=0)
     _spy_dispatch_marker(monkeypatch, dispatch.events)
 
-    legacy_create = AsyncMock(
-        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
-    )
+    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider"))
     fn = make_sandbox_agent_fn(_base_node_def())
     with patch("e2b.AsyncSandbox.create", new=legacy_create):
         result = await fn(_run_state())
@@ -249,7 +247,7 @@ async def test_provider_full_dispatch_runs_the_abc_call_sequence(monkeypatch: py
     assert dispatch.last_command is not None
     assert dispatch.last_command[0] == "bash"
     assert dispatch.last_environment is not None
-    assert dispatch.last_environment["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
+    assert dispatch.last_environment["FARNA_CONTROL_MODULO_SCHEMA_DIR"] == "/home/user/schemas"
 
     assert result["telemetry"]["status"] == "completed"
     assert result["telemetry"]["exit_code"] == 0
@@ -296,9 +294,7 @@ async def test_provider_cancelled_stream_start_propagates(monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 
 
-async def test_provider_stream_error_never_fabricates_a_zero_exit(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_stream_error_never_fabricates_a_zero_exit(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A proxy drop surfaces as ``exit_code = -1`` + failed status, never 0."""
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
@@ -317,9 +313,7 @@ async def test_provider_stream_error_never_fabricates_a_zero_exit(
     assert dispatch.events == ["create", "command", "destroy_by_ref", "close"], dispatch.events
 
 
-async def test_provider_healthy_non_zero_exit_is_a_result_not_a_stream_error(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_healthy_non_zero_exit_is_a_result_not_a_stream_error(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A command that exits non-zero on a HEALTHY stream keeps its real code."""
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
@@ -519,9 +513,7 @@ def test_translated_classes_resolve_to_the_existing_retryable_codes() -> None:
     assert "SandboxQueueTimeoutError" not in _NEVER_RETRYABLE_NAMES
 
 
-async def test_provider_rate_limit_enters_the_existing_backoff_then_queue_timeout(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_rate_limit_enters_the_existing_backoff_then_queue_timeout(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The provider's typed rate limit drives the SAME bounded backoff loop."""
     _install_log_tail(monkeypatch)
     dispatch = install_fake_dispatch(
@@ -562,9 +554,7 @@ async def test_provider_wrapped_sdk_rate_limit_still_backs_off(monkeypatch: pyte
     assert dispatch.events.count("create") == nr._SANDBOX_RATE_LIMIT_MAX_RETRIES + 1
 
 
-async def test_provider_typed_rate_limit_escaping_a_provider_call_is_retryable(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_typed_rate_limit_escaping_a_provider_call_is_retryable(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A ``RateLimitedError`` from ANY provider call (here: a file write) is
     re-raised as the pre-existing retryable class — never swallowed into a
     synthetic ``harness.unknown`` envelope."""
@@ -576,9 +566,7 @@ async def test_provider_typed_rate_limit_escaping_a_provider_call_is_retryable(
         await make_sandbox_agent_fn(_base_node_def())(_run_state())
 
 
-async def test_provider_provision_timeout_escaping_a_provider_call_is_retryable(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_provision_timeout_escaping_a_provider_call_is_retryable(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     _install_log_tail(monkeypatch)
     install_fake_dispatch(monkeypatch, ref="sbx-provision-timeout-outside")
     fake_file_io.write_error = ProvisionTimeoutError("workspace never became ready")
@@ -592,9 +580,7 @@ async def test_provider_provision_timeout_escaping_a_provider_call_is_retryable(
 # ---------------------------------------------------------------------------
 
 
-async def test_provider_restrictive_egress_reaches_the_provider_create(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_restrictive_egress_reaches_the_provider_create(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """FAR-1050 R5: the stopgap refusal is GONE — a resolved ``deny_all`` is
     carried into ``create_workspace(spec)`` (and from there into the SDK's
     ``allow_internet_access``) instead of refusing the dispatch.
@@ -604,9 +590,7 @@ async def test_provider_restrictive_egress_reaches_the_provider_create(
     """
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
-    legacy_create = AsyncMock(
-        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
-    )
+    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider"))
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress", exit_code=0)
 
     fn = make_sandbox_agent_fn(_base_node_def(egress_policy="deny_all"))
@@ -622,17 +606,13 @@ async def test_provider_restrictive_egress_reaches_the_provider_create(
     assert dispatch.created_spec.egress_policy == "deny_all"
 
 
-async def test_provider_selected_allowlist_rides_the_spec_metadata(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_selected_allowlist_rides_the_spec_metadata(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """FAR-1050 R5: the selected-mode allowlist reaches the provider spec's
     ``workspace_metadata`` under the LEGACY create's key (``egress_allowlist``),
     and the dispatch is no longer refused for a resolved policy."""
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
-    legacy_create = AsyncMock(
-        side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider")
-    )
+    legacy_create = AsyncMock(side_effect=AssertionError("AsyncSandbox.create must not run when routed via the provider"))
     dispatch = install_fake_dispatch(monkeypatch, ref="sbx-egress-selected", exit_code=0)
     # Keep the unit offline: allowlist pre-resolution is a DNS lookup on both
     # paths, and the legacy resolution helper is unchanged by this slice.
@@ -663,9 +643,7 @@ async def test_provider_selected_allowlist_rides_the_spec_metadata(
 # ---------------------------------------------------------------------------
 
 
-async def test_cost_estimate_stamps_through_the_sanctioned_helper(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_cost_estimate_stamps_through_the_sanctioned_helper(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """Fixed elapsed + fixed output => pinned ``cost_estimate_usd``.
 
     The elapsed component is pinned by wrapping ``_compute_sandbox_cost`` so
@@ -705,9 +683,7 @@ async def test_cost_estimate_stamps_through_the_sanctioned_helper(
 # ---------------------------------------------------------------------------
 
 
-async def test_dispatch_marker_and_telemetry_carry_provider_attribution(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_dispatch_marker_and_telemetry_carry_provider_attribution(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The marker rewrite AND the node telemetry stamp ``provider`` +
     ``via_provider`` so a run is attributable to provider execution."""
     stamped = _capture_marker_store(monkeypatch)
@@ -797,9 +773,7 @@ def _patch_workspace_inputs(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return seen
 
 
-async def test_provider_workspace_inputs_receive_the_abc_mediated_handle(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_workspace_inputs_receive_the_abc_mediated_handle(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The helper gets the ABC-mediated handle and its four commands
     (setup + clone + teardown + drift probe) round-trip the fake provider."""
     _install_log_tail(monkeypatch)
@@ -843,7 +817,7 @@ def test_s2_s3_s4_kill_sites_never_read_the_flag() -> None:
     on ``MODULO_E2B_VIA_PROVIDER`` — they stay direct by ADR 040 decision."""
     for rel in _S2_S3_S4_SOURCES:
         source = _repo_src(rel)
-        assert "MODULO_E2B_VIA_PROVIDER" not in source, rel
+        assert "FARNA_CONTROL_MODULO_E2B_VIA_PROVIDER" not in source, rel
         assert "via_provider" not in source, rel
         assert "_dispatch_via_provider_enabled" not in source, rel
 
@@ -1131,9 +1105,7 @@ async def test_watchdog_missing_metrics_surface_fails_open_loudly(
     logger = "farna.core.pipeline_engine.node_runner"
     with caplog.at_level(logging.WARNING, logger=logger):
         assert await watchdog.enforce_resource_limits() is False
-    gap_records = [
-        r for r in caplog.records if r.getMessage() == "sandbox_agent.resource_caps_not_enforced_via_provider"
-    ]
+    gap_records = [r for r in caplog.records if r.getMessage() == "sandbox_agent.resource_caps_not_enforced_via_provider"]
     assert len(gap_records) == 1
     assert "no get_metrics primitive" in gap_records[0].reason
     assert "NOT enforced" in gap_records[0].reason
@@ -1288,9 +1260,7 @@ async def test_exec_process_watchdog_propagates_a_cancelled_pump_after_done() ->
         )
 
 
-async def test_provider_empty_provider_ref_after_create_is_refused(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_empty_provider_ref_after_create_is_refused(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A provider that returns an empty ref must fail closed, never build a
     handle addressed by the empty string."""
     _install_log_tail(monkeypatch)
@@ -1302,9 +1272,7 @@ async def test_provider_empty_provider_ref_after_create_is_refused(
     assert result["telemetry"]["error_type"] == "RuntimeProviderError"
 
 
-async def test_provider_dispatch_provider_close_failure_is_swallowed(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_dispatch_provider_close_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A provider ``close()`` failure is best-effort: the dispatch still returns
     its real outcome."""
     _install_log_tail(monkeypatch)
@@ -1319,9 +1287,7 @@ async def test_provider_dispatch_provider_close_failure_is_swallowed(
     close.assert_awaited_once()
 
 
-async def test_provider_dispatch_provider_close_cancellation_propagates(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_dispatch_provider_close_cancellation_propagates(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A cancellation during ``close()`` re-raises — it is never swallowed."""
     _install_log_tail(monkeypatch)
     fake_file_io.files["/home/user/output.json"] = _COMPLETED_OUTPUT.encode()
@@ -1406,9 +1372,7 @@ class _FileCapableDispatchProvider(FakeDispatchProvider):
         return b"route-tail"
 
 
-async def test_route_resolved_provider_is_reused_and_its_hub_is_aclosed(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_route_resolved_provider_is_reused_and_its_hub_is_aclosed(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """FAR-1051: a hub-resolved route's provider is reused directly — the
     dispatch never builds a second hub — and the route's hub is aclosed in the
     dispatch finally."""
@@ -1520,9 +1484,7 @@ async def test_dispatch_drops_empty_attribution_values(monkeypatch: pytest.Monke
 # ---------------------------------------------------------------------------
 
 
-async def test_provider_bridge_escalation_surfaces_a_summary_only_failure_detail(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_bridge_escalation_surfaces_a_summary_only_failure_detail(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """A stopped loop (dedicated exit code + ``MODULO_BRIDGE_ESCALATED`` marker)
     is surfaced as a summary-only failure detail, and the node still FAILS
     (fail-closed) — no behaviour change until S3 wires the suspension.

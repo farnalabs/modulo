@@ -279,15 +279,10 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     if attempt + 1 < attempts:
                         await asyncio.sleep(_LATEST_RUN_LOOKUP_RETRY_SECONDS)
                 raise ValueError(
-                    f"GitHub accepted the dispatch for {owner_repo} but no run id could be resolved "
-                    f"(looked up the latest run {attempts} times, bounded to created>="
-                    f"{dispatched_after:%Y-%m-%dT%H:%M:%SZ}) — refusing to return an unusable run id; "
-                    f"check https://github.com/{owner_repo}/actions",
+                    f"GitHub accepted the dispatch for {owner_repo} but no run id could be resolved (looked up the latest run {attempts} times, bounded to created>={dispatched_after:%Y-%m-%dT%H:%M:%SZ}) — refusing to return an unusable run id; check https://github.com/{owner_repo}/actions",
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -304,9 +299,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 return self._parse_run(r.json(), owner_repo=owner_repo)
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -332,9 +325,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     # different host; follow it through a fresh pinned client so
                     # the redirect target is validated+pinned too (never a bare
                     # unpinned egress), matching the primary client's SSRF gate.
-                    async with pinned_async_client_sync(
-                        location, timeout=30, verify=egress_ssl_context(self)
-                    ) as follow_client:
+                    async with pinned_async_client_sync(location, timeout=30, verify=egress_ssl_context(self)) as follow_client:
                         r = await follow_client.get(location)
                     redirects += 1
                 if r.status_code == 202:
@@ -349,9 +340,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     next_cursor=str(start_line + len(lines)) if cursor is not None else None,
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -395,9 +384,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 raw_runs = _safe_records(r.json(), "workflow_runs")
                 return [self._parse_run(run, owner_repo=owner_repo) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
-            raise ValueError(
-                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
-            ) from exc
+            raise ValueError(self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 

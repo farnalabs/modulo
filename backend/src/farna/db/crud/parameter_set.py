@@ -107,23 +107,13 @@ async def update_set(
 
 
 async def soft_delete_set(session: AsyncSession, set_id: uuid.UUID) -> ParameterSet | None:
-    result = await session.execute(
-        update(ParameterSet)
-        .where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_(None))
-        .values(deleted_at=func.now())
-        .returning(ParameterSet)
-    )
+    result = await session.execute(update(ParameterSet).where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_(None)).values(deleted_at=func.now()).returning(ParameterSet))
     await session.flush()
     return result.scalar_one_or_none()
 
 
 async def restore_set(session: AsyncSession, set_id: uuid.UUID) -> ParameterSet | None:
-    result = await session.execute(
-        update(ParameterSet)
-        .where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_not(None))
-        .values(deleted_at=None)
-        .returning(ParameterSet)
-    )
+    result = await session.execute(update(ParameterSet).where(ParameterSet.id == set_id, ParameterSet.deleted_at.is_not(None)).values(deleted_at=None).returning(ParameterSet))
     await session.flush()
     return result.scalar_one_or_none()
 
@@ -176,11 +166,7 @@ async def get_set_references(
     pipeline_nodes: list[uuid.UUID] = []
     snapshots: list[uuid.UUID] = []
 
-    rows = (
-        (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.parameter_bindings_json.isnot(None))))
-        .scalars()
-        .all()
-    )
+    rows = (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.parameter_bindings_json.isnot(None)))).scalars().all()
 
     for snap in rows:
         _collect_binding_refs(snap, set_id_str, snapshots, pipeline_nodes)

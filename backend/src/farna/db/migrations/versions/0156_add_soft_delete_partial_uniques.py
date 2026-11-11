@@ -40,13 +40,7 @@ _PARTIAL_UNIQUES = [
 def upgrade() -> None:
     bind = op.get_bind()
     for name, table in _PARTIAL_UNIQUES:
-        bind.execute(
-            text(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS {name} "
-                f'ON public."{table}" (organisation_id, name) '
-                f"WHERE deleted_at IS NULL;"
-            )
-        )
+        bind.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {name} ON public."{table}" (organisation_id, name) WHERE deleted_at IS NULL;'))
 
 
 def downgrade() -> None:

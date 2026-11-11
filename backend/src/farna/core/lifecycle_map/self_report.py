@@ -106,9 +106,7 @@ def _walk_node(node: Any, collected: list[Any], seen_ids: set[int]) -> None:
         _walk_list(node, collected, seen_ids)
 
 
-def validate_and_normalise_reported_refs(
-    entries: list[dict[str, Any]], max_refs: int | None = None
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def validate_and_normalise_reported_refs(entries: list[dict[str, Any]], max_refs: int | None = None) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Validate + normalise raw reported refs into canonical reported entries.
 
     For each raw entry:

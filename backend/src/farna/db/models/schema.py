@@ -18,20 +18,12 @@ class SchemaFolder(OrgScoped):
     __tablename__ = "schema_folders"
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("schema_folders.id", ondelete="CASCADE"), index=True
-    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("schema_folders.id", ondelete="CASCADE"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True)
 
-    parent: Mapped["SchemaFolder | None"] = relationship(
-        "SchemaFolder", remote_side="SchemaFolder.id", back_populates="children"
-    )
-    children: Mapped[list["SchemaFolder"]] = relationship(
-        "SchemaFolder", remote_side="SchemaFolder.parent_id", back_populates="parent"
-    )
+    parent: Mapped["SchemaFolder | None"] = relationship("SchemaFolder", remote_side="SchemaFolder.id", back_populates="children")
+    children: Mapped[list["SchemaFolder"]] = relationship("SchemaFolder", remote_side="SchemaFolder.parent_id", back_populates="parent")
     creator: Mapped["Account"] = relationship()
 
 
@@ -43,12 +35,8 @@ class Schema(OrgScoped):
     description: Mapped[str | None] = mapped_column(String(2000))
     abstract_name: Mapped[str | None] = mapped_column(String(255))
     collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
-    )
-    folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("schema_folders.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True)
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("schema_folders.id", ondelete="SET NULL"), nullable=True, index=True)
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     system: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
@@ -67,14 +55,10 @@ class SchemaVersion(OrgScoped):
         ),
     )
 
-    schema_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("schemas.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("schemas.id", ondelete="CASCADE"), nullable=False, index=True)
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     definition_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False)
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True)

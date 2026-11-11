@@ -19,11 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _run_bash(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    bash = (
-        r"C:\Program Files\Git\bin\bash.exe"
-        if Path(r"C:\Program Files\Git\bin\bash.exe").is_file()
-        else shutil.which("bash")
-    )
+    bash = r"C:\Program Files\Git\bin\bash.exe" if Path(r"C:\Program Files\Git\bin\bash.exe").is_file() else shutil.which("bash")
     if bash is None:
         pytest.skip("bash is required to execute workflow scripts")
     return subprocess.run(  # noqa: S603 - fixed bash executable and repository-owned workflow text
@@ -151,9 +147,7 @@ def test_macos_dmg_contract_structurally_verifies_staging_and_post_mount_gates()
     for check in hard_staging_checks.values():
         check_index = next(index for index, line in enumerate(lines) if line.strip() == check)
         assert staging_start < check_index < dmg_create
-    alias_create = next(
-        index for index, line in enumerate(lines) if line.strip() == 'ln -s /Applications "$DMG_STAGING/Applications"'
-    )
+    alias_create = next(index for index, line in enumerate(lines) if line.strip() == 'ln -s /Applications "$DMG_STAGING/Applications"')
     alias_check = next(index for index, line in enumerate(lines) if line.strip() == hard_staging_checks["alias"])
     assert alias_create < alias_check
 
@@ -228,11 +222,7 @@ def _run_install_sh(bogus_dmg_path: Path) -> subprocess.CompletedProcess[str]:
     """Run install.sh with a bogus DMG path and return the result."""
     script = _install_sh_script()
 
-    bash = (
-        r"C:\Program Files\Git\bin\bash.exe"
-        if Path(r"C:\Program Files\Git\bin\bash.exe").is_file()
-        else shutil.which("bash")
-    )
+    bash = r"C:\Program Files\Git\bin\bash.exe" if Path(r"C:\Program Files\Git\bin\bash.exe").is_file() else shutil.which("bash")
     if bash is None:
         pytest.skip("bash is required to execute install.sh")
 
@@ -373,9 +363,9 @@ exit "$status"
         [],
         cwd=tmp_path,
         env={
-            "MODULO_TEST_DATA_DIR": data_dir.as_posix(),
-            "MODULO_TEST_PIDFILE": (tmp_path / "owned-pids").as_posix(),
-            "MODULO_TEST_HOLDER": holder.as_posix(),
+            "FARNA_CONTROL_MODULO_TEST_DATA_DIR": data_dir.as_posix(),
+            "FARNA_CONTROL_MODULO_TEST_PIDFILE": (tmp_path / "owned-pids").as_posix(),
+            "FARNA_CONTROL_MODULO_TEST_HOLDER": holder.as_posix(),
         },
     )
 
@@ -691,9 +681,7 @@ exit "$status"
     return driver
 
 
-def _serve_status_sequence(
-    statuses: list[int], body: bytes = b"verified-asset"
-) -> tuple[http.server.HTTPServer, threading.Thread, str, dict[str, int]]:
+def _serve_status_sequence(statuses: list[int], body: bytes = b"verified-asset") -> tuple[http.server.HTTPServer, threading.Thread, str, dict[str, int]]:
     """Serve the given status codes in order (the last repeats) and count requests."""
     lock = threading.Lock()
     counter = {"requests": 0}

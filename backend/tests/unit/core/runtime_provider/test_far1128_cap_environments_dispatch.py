@@ -28,10 +28,10 @@ from farna.core.runtime_provider.local import LocalRuntimeProvider
 
 
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_DOCKER_HOST", raising=False)
 
 
 def _local_profile() -> SimpleNamespace:

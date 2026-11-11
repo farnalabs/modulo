@@ -167,11 +167,9 @@ async def test_legacy_inert_local_docker_provider_is_dispatch_unbound() -> None:
 
 async def test_runner_docker_route_resolves_hub_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """With the registration signal set, the hub resolves the Docker provider."""
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
-    route = await resolve_sandbox_dispatch_route(
-        _session_factory_returning(_profile("runner_docker")), _ORG, _PROFILE_ID
-    )
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", "tcp://localhost:2375")
+    route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("runner_docker")), _ORG, _PROFILE_ID)
     try:
         assert route.provider_type == "runner_docker"
         assert route.profile is not None
@@ -189,9 +187,9 @@ async def test_runner_docker_without_endpoint_env_is_dispatch_unbound(monkeypatc
     """Registration matrix (ADR 029): with NO MODULO_RUNNER_* and no Docker
     endpoint env, `runner_docker` is not registered — the typed config error
     carries remediation copy instead of a silent fallback."""
-    for var in ("MODULO_RUNNER_MACHINE_ID", "MODULO_DOCKER_HOST", "DOCKER_HOST"):
+    for var in ("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST"):
         monkeypatch.delenv(var, raising=False)
-    with pytest.raises(SandboxDispatchUnboundError, match="MODULO_DOCKER_HOST"):
+    with pytest.raises(SandboxDispatchUnboundError, match="FARNA_CONTROL_MODULO_DOCKER_HOST"):
         await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("runner_docker")), _ORG, _PROFILE_ID)
 
 
@@ -209,7 +207,7 @@ async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.Monk
     """A kubernetes profile resolves through the hub, mirroring runner_docker:
     provider + hub ride the route so node_runner reuses that ONE instance as
     the dispatch provider (and disposes the hub)."""
-    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", "1")
     route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID)
     try:
         assert route.provider_type == "kubernetes"
@@ -233,23 +231,21 @@ async def test_kubernetes_without_image_ref_is_dispatch_unbound(monkeypatch: pyt
     through to the node's E2B ``template_id`` as the pod image and fail at
     provision time (ImagePullBackOff). Route resolution fails LOUD instead,
     naming the missing image_ref, before the hub is even built."""
-    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", "1")
 
     with pytest.raises(SandboxDispatchUnboundError, match="image_ref"):
-        await resolve_sandbox_dispatch_route(
-            _session_factory_returning(_profile("kubernetes", image_ref=None)), _ORG, _PROFILE_ID
-        )
+        await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes", image_ref=None)), _ORG, _PROFILE_ID)
 
 
 async def test_kubernetes_without_opt_in_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
     """No silent fallback: without ``MODULO_KUBERNETES_ENABLED`` the typed
     config error carries the remediation env var — never E2B, never local,
     even with an E2B key sitting in the environment."""
-    monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", raising=False)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
     monkeypatch.setenv("E2B_API_KEY", "test-key")
 
-    with pytest.raises(SandboxDispatchUnboundError, match="MODULO_KUBERNETES_ENABLED"):
+    with pytest.raises(SandboxDispatchUnboundError, match="FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"):
         await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID)
 
 
@@ -267,9 +263,7 @@ async def test_kubernetes_route_new_family_error_propagates_unwrapped() -> None:
         patch.object(runner_dispatch, "build_hub", side_effect=_boom_hub),
         pytest.raises(RateLimitedError, match="rate limit"),
     ):
-        await runner_dispatch.resolve_sandbox_dispatch_route(
-            _session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID
-        )
+        await runner_dispatch.resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID)
 
 
 def test_placeholder_digest_detection() -> None:
@@ -282,7 +276,7 @@ def test_placeholder_digest_detection() -> None:
 async def test_runner_docker_placeholder_digest_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail-loud (don't silently break at container-create) when the profile still
     carries the release-advanced placeholder digest — a known GA follow-up."""
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "unit-test-machine")
     placeholder_profile = _profile(
         "runner_docker",
         image_ref="modulo-runner:opencode@sha256:" + "0" * 64,
@@ -309,9 +303,7 @@ async def test_runner_docker_cache_persistence_rejected_at_dispatch() -> None:
 
 
 async def test_e2b_profile_keeps_non_ephemeral_persistence() -> None:
-    route = await resolve_sandbox_dispatch_route(
-        _session_factory_returning(_profile("e2b", persistence_policy="cache")), _ORG, _PROFILE_ID
-    )
+    route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("e2b", persistence_policy="cache")), _ORG, _PROFILE_ID)
     assert route.provider_type == "e2b"
 
 
@@ -445,7 +437,7 @@ def test_workspace_spec_kubernetes_deny_all_accepted_when_chart_policy_deployed(
     """FAR-2068: with the chart's workspace NetworkPolicy deployed (the chart
     injects the signal), a kubernetes deny_all profile maps to the spec's
     'none' egress and records the DECLARED posture metadata."""
-    monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
     profile = _profile("kubernetes", network_policy="none")
     spec = _workspace_spec_for_dispatch(
         profile,
@@ -464,7 +456,7 @@ def test_workspace_spec_kubernetes_deny_all_refused_without_chart_policy(
     """FAR-2068 fail-closed default: with no workspace NetworkPolicy deployed,
     the chart injects no signal and a deny_all profile is refused at dispatch
     instead of certifying an enforcement nothing performs."""
-    monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
     profile = _profile("kubernetes", network_policy="none")
     with pytest.raises(SandboxTierRefusedError, match="workspace NetworkPolicy"):
         _workspace_spec_for_dispatch(
@@ -528,9 +520,7 @@ def test_workspace_spec_selected_maps_losslessly_when_resolution_succeeds(
         lambda **_kwargs: selected_with_allowlist,
     )
 
-    spec = _workspace_spec_for_dispatch(
-        _profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4()
-    )
+    spec = _workspace_spec_for_dispatch(_profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4())
 
     assert spec.egress_policy == "selected"
     # FAR-1050 review follow-up: the selected-mode allowlist must ride the
@@ -551,17 +541,13 @@ def test_workspace_spec_unknown_canonical_policy_fails_closed(
         lambda **_kwargs: EgressResolution(policy="bogus_policy", allowlist=None, refusal=None),
     )
 
-    spec = _workspace_spec_for_dispatch(
-        _profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4()
-    )
+    spec = _workspace_spec_for_dispatch(_profile("runner_docker"), org_id=_ORG, run_id="run-123", node_id="node-9", run_uuid=uuid.uuid4())
 
     assert spec.egress_policy == "none"
 
 
 def test_workspace_spec_blank_metadata_values_dropped() -> None:
-    spec = _workspace_spec_for_dispatch(
-        _profile("runner_docker"), org_id=None, run_id="", node_id="node-9", run_uuid=None
-    )
+    spec = _workspace_spec_for_dispatch(_profile("runner_docker"), org_id=None, run_id="", node_id="node-9", run_uuid=None)
     # Empty run/org values are dropped; the FAR-1690 typed egress posture
     # ("none" for the default posture) is always present.
     assert spec.workspace_metadata == {"modulo.node.id": "node-9", "modulo.egress.posture": "none"}
@@ -809,11 +795,7 @@ class _TeamScopeSessionCM:
             return SimpleNamespace(scalar_one_or_none=lambda: found)
         if "pipelines" in sql:
             self.owner_team_queries += 1
-            found = (
-                self._pipeline_owner_team
-                if self._expected_pipeline_id is not None and str(self._expected_pipeline_id) in params
-                else None
-            )
+            found = self._pipeline_owner_team if self._expected_pipeline_id is not None and str(self._expected_pipeline_id) in params else None
             return SimpleNamespace(scalar_one_or_none=lambda: found)
         return SimpleNamespace(scalar_one_or_none=lambda: None)
 
@@ -940,9 +922,7 @@ async def test_run_dispatch_refuses_a_drifted_team_mismatched_binding() -> None:
     team_a = uuid.uuid4()
     team_b = uuid.uuid4()
 
-    snapshot = await _freeze_snapshot_with_bound_profile(
-        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
-    )
+    snapshot = await _freeze_snapshot_with_bound_profile(org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id)
 
     # DRIFT: the profile is now team-private and owned by team_b while the
     # pipeline belongs to team_a — a binding no REST writer would accept
@@ -992,9 +972,7 @@ async def test_run_dispatch_same_team_binding_resolves_through_the_real_chain() 
     bound_profile_id = uuid.uuid4()
     team_a = uuid.uuid4()
 
-    snapshot = await _freeze_snapshot_with_bound_profile(
-        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
-    )
+    snapshot = await _freeze_snapshot_with_bound_profile(org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id)
     profile = _profile("e2b", id=bound_profile_id, visibility="team", owner_team_id=team_a)
     cm = _TeamScopeSessionCM(
         profile,
@@ -1030,9 +1008,7 @@ async def test_sandbox_impl_runner_docker_validates_profile_timeout_cap(monkeypa
     bound_profile_id = uuid.uuid4()
     team_a = uuid.uuid4()
 
-    snapshot = await _freeze_snapshot_with_bound_profile(
-        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
-    )
+    snapshot = await _freeze_snapshot_with_bound_profile(org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id)
     profile = _profile(
         "runner_docker",
         id=bound_profile_id,

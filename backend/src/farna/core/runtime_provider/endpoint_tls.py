@@ -38,7 +38,7 @@ TLS_ENV_VARS = ("DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
 # Operator escape hatch: set to a non-empty, non-false value to allow a
 # deliberately-insecure remote TCP endpoint without TLS.  Logged prominently
 # at provider construction.
-ALLOW_INSECURE_ENDPOINT_ENV = "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT"
+ALLOW_INSECURE_ENDPOINT_ENV = "FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT"
 
 
 def is_loopback_hostname(hostname: str) -> bool:
@@ -133,9 +133,7 @@ def validate_docker_endpoint_tls(endpoint: str | None) -> None:
         return
     if is_insecure_endpoint_allowed():
         _log.warning(
-            "INSECURE: Docker endpoint '%s' accepted without TLS "
-            "(MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) — "
-            "credentials will be transmitted in cleartext",
+            "INSECURE: Docker endpoint '%s' accepted without TLS (MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT is set) — credentials will be transmitted in cleartext",
             endpoint,
         )
         return

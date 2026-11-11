@@ -264,7 +264,7 @@ def _patch_sources(
 ):
     """Patch both DB seams and return the transparency ``AsyncMock``."""
     if monkeypatch is not None:
-        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
     return patch.object(
         pat_module,
         "get_config",
@@ -356,7 +356,7 @@ class TestRealInstanceSwitch:
     def test_env_fallback_when_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client()
         sources = _patch_sources(monkeypatch=monkeypatch)
-        monkeypatch.setenv("MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
         with sources[0], sources[1]:
             body = _request(client)
         assert body["instance_enabled"] is True

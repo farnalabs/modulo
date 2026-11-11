@@ -123,26 +123,16 @@ class ProposalComparisonSide(BaseModel):
     @model_validator(mode="after")
     def draft_topology_is_unambiguous(self) -> ProposalComparisonSide:
         """Refuse a draft graph whose identity or references are ambiguous."""
-        duplicate_nodes = sorted(
-            node_id for node_id, count in Counter(node.id for node in self.nodes).items() if count > 1
-        )
+        duplicate_nodes = sorted(node_id for node_id, count in Counter(node.id for node in self.nodes).items() if count > 1)
         if duplicate_nodes:
             raise ValueError(f"duplicate node ids on one side: {', '.join(duplicate_nodes)}")
 
-        duplicate_edges = sorted(
-            _edge_id(source, target)
-            for (source, target), count in Counter((edge.source, edge.target) for edge in self.edges).items()
-            if count > 1
-        )
+        duplicate_edges = sorted(_edge_id(source, target) for (source, target), count in Counter((edge.source, edge.target) for edge in self.edges).items() if count > 1)
         if duplicate_edges:
             raise ValueError(f"duplicate edges on one side: {', '.join(duplicate_edges)}")
 
         known_node_ids = {node.id for node in self.nodes}
-        dangling_edges = sorted(
-            _edge_id(edge.source, edge.target)
-            for edge in self.edges
-            if edge.source not in known_node_ids or edge.target not in known_node_ids
-        )
+        dangling_edges = sorted(_edge_id(edge.source, edge.target) for edge in self.edges if edge.source not in known_node_ids or edge.target not in known_node_ids)
         if dangling_edges:
             raise ValueError(f"edges reference nodes absent from this side: {', '.join(dangling_edges)}")
 
@@ -365,10 +355,7 @@ def _added_nodes(
     target_nodes: dict[str, ComparisonNode],
     target_provenance: ProvenanceBundle,
 ) -> list[NodePresence]:
-    return [
-        NodePresence(id=node_id, side="target", node=target_nodes[node_id], provenance=target_provenance)
-        for node_id in sorted(set(target_nodes) - set(base_nodes))
-    ]
+    return [NodePresence(id=node_id, side="target", node=target_nodes[node_id], provenance=target_provenance) for node_id in sorted(set(target_nodes) - set(base_nodes))]
 
 
 def _removed_nodes(
@@ -376,10 +363,7 @@ def _removed_nodes(
     target_nodes: dict[str, ComparisonNode],
     base_provenance: ProvenanceBundle,
 ) -> list[NodePresence]:
-    return [
-        NodePresence(id=node_id, side="base", node=base_nodes[node_id], provenance=base_provenance)
-        for node_id in sorted(set(base_nodes) - set(target_nodes))
-    ]
+    return [NodePresence(id=node_id, side="base", node=base_nodes[node_id], provenance=base_provenance) for node_id in sorted(set(base_nodes) - set(target_nodes))]
 
 
 def _changed_nodes(
@@ -411,10 +395,7 @@ def _added_edges(
     target_edges: dict[str, ComparisonEdge],
     target_provenance: ProvenanceBundle,
 ) -> list[EdgePresence]:
-    return [
-        EdgePresence(id=edge_id, side="target", edge=target_edges[edge_id], provenance=target_provenance)
-        for edge_id in sorted(set(target_edges) - set(base_edges))
-    ]
+    return [EdgePresence(id=edge_id, side="target", edge=target_edges[edge_id], provenance=target_provenance) for edge_id in sorted(set(target_edges) - set(base_edges))]
 
 
 def _removed_edges(
@@ -422,10 +403,7 @@ def _removed_edges(
     target_edges: dict[str, ComparisonEdge],
     base_provenance: ProvenanceBundle,
 ) -> list[EdgePresence]:
-    return [
-        EdgePresence(id=edge_id, side="base", edge=base_edges[edge_id], provenance=base_provenance)
-        for edge_id in sorted(set(base_edges) - set(target_edges))
-    ]
+    return [EdgePresence(id=edge_id, side="base", edge=base_edges[edge_id], provenance=base_provenance) for edge_id in sorted(set(base_edges) - set(target_edges))]
 
 
 def _changed_edges(
@@ -467,11 +445,7 @@ def _property_changes(
     target_properties: dict[str, PropertyValue],
 ) -> list[PropertyChange]:
     """Name every property whose value differs, with both values."""
-    return [
-        PropertyChange(property=name, base_value=value, target_value=target_properties[name])
-        for name, value in base_properties.items()
-        if target_properties[name] != value
-    ]
+    return [PropertyChange(property=name, base_value=value, target_value=target_properties[name]) for name, value in base_properties.items() if target_properties[name] != value]
 
 
 def _behaviour_changes(
@@ -497,21 +471,13 @@ def _edge_gate_changes(
     edges_changed: list[EdgeModification],
 ) -> list[BehaviourChange]:
     """Approval gates gained, lost, or removed with their whole edge."""
-    changes: list[BehaviourChange] = [
-        _gate_change("approval_gate_added", added.id, None, True) for added in edges_added if added.edge.hitl_review
-    ]
-    changes.extend(
-        _gate_change("approval_gate_removed", removed.id, True, None)
-        for removed in edges_removed
-        if removed.edge.hitl_review
-    )
+    changes: list[BehaviourChange] = [_gate_change("approval_gate_added", added.id, None, True) for added in edges_added if added.edge.hitl_review]
+    changes.extend(_gate_change("approval_gate_removed", removed.id, True, None) for removed in edges_removed if removed.edge.hitl_review)
     for modified in edges_changed:
         hitl_change = next((change for change in modified.changes if change.property == "hitl_review"), None)
         if hitl_change is None:
             continue
-        kind: BehaviourChangeKind = (
-            "approval_gate_added" if hitl_change.target_value is True else "approval_gate_removed"
-        )
+        kind: BehaviourChangeKind = "approval_gate_added" if hitl_change.target_value is True else "approval_gate_removed"
         changes.append(_gate_change(kind, modified.id, hitl_change.base_value, hitl_change.target_value))
     return changes
 
@@ -538,16 +504,8 @@ def _node_automation_changes(
     nodes_changed: list[NodeModification],
 ) -> list[BehaviourChange]:
     """Manual steps gained or lost, and steps moving between manual and agent."""
-    changes: list[BehaviourChange] = [
-        _automation_change("manual_step_added", added.id, None, added.node.node_type)
-        for added in nodes_added
-        if added.node.node_type == _DRAFT_MANUAL_NODE_TYPE
-    ]
-    changes.extend(
-        _automation_change("manual_step_removed", removed.id, removed.node.node_type, None)
-        for removed in nodes_removed
-        if removed.node.node_type == _DRAFT_MANUAL_NODE_TYPE
-    )
+    changes: list[BehaviourChange] = [_automation_change("manual_step_added", added.id, None, added.node.node_type) for added in nodes_added if added.node.node_type == _DRAFT_MANUAL_NODE_TYPE]
+    changes.extend(_automation_change("manual_step_removed", removed.id, removed.node.node_type, None) for removed in nodes_removed if removed.node.node_type == _DRAFT_MANUAL_NODE_TYPE)
     for modified in nodes_changed:
         node_type_change = next((change for change in modified.changes if change.property == "node_type"), None)
         if node_type_change is None:

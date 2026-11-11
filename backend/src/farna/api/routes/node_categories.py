@@ -92,9 +92,7 @@ async def list_node_categories_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_node_categories(
-                session, org_id=principal.organisation_id, page=page, page_size=page_size
-            )
+            result = await list_node_categories(session, org_id=principal.organisation_id, page=page, page_size=page_size)
     except ProgrammingError:
         logger.exception(_CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT)
         logger.warning("node_categories.list.programming_error — missing DB table?")
@@ -333,8 +331,7 @@ async def delete_node_category_endpoint(
         logger.warning("node_categories.delete.referenced_by_nodes", exc_info=False)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot delete: the category is referenced by {len(e.pipelines)} "
-            f"pipeline(s): {', '.join(str(p.get('name')) for p in e.pipelines)}",
+            detail=f"Cannot delete: the category is referenced by {len(e.pipelines)} pipeline(s): {', '.join(str(p.get('name')) for p in e.pipelines)}",
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT)

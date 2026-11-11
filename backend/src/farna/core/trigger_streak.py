@@ -206,10 +206,7 @@ _STREAK_DELIVERED_VALUE = RunClassificationValue.delivered.value
 # auto-deactivates, and an idle run between real failures does not hide them.
 # Every other no_delivery reason (and a NULL reason) still counts.
 _STREAK_NEUTRAL_REASON = REASON_NO_WORK
-_STREAK_STOP_VALUES_SQL = ",".join(
-    f"'{v.value}'"
-    for v in (RunClassificationValue.delivered, RunClassificationValue.excluded, RunClassificationValue.unclassified)
-)
+_STREAK_STOP_VALUES_SQL = ",".join(f"'{v.value}'" for v in (RunClassificationValue.delivered, RunClassificationValue.excluded, RunClassificationValue.unclassified))
 
 # The streak boundary: GREATEST(last delivered run's completed_at, streak_epoch).
 # ``last_delivery_at`` is derived from the classification log (single source of
@@ -382,11 +379,7 @@ async def anchor_trigger_streak_epoch(
 
     from farna.db.models.trigger import Trigger
 
-    await session.execute(
-        update(Trigger)
-        .where(Trigger.id == trigger_id, Trigger.active.is_(True), Trigger.deleted_at.is_(None))
-        .values(streak_epoch=now or datetime.now(UTC))
-    )
+    await session.execute(update(Trigger).where(Trigger.id == trigger_id, Trigger.active.is_(True), Trigger.deleted_at.is_(None)).values(streak_epoch=now or datetime.now(UTC)))
 
 
 async def clear_trigger_streak_after_reenable(trigger_id: uuid.UUID) -> None:
@@ -424,7 +417,7 @@ def _streak_deactivate_enabled() -> bool:
     the ``MODULO_STREAK_DEACTIVATE_KILL_SWITCH`` env var ('0'/'false'/'off'/'no'
     disables).
     """
-    raw = os.environ.get("MODULO_STREAK_DEACTIVATE_KILL_SWITCH")
+    raw = os.environ.get("FARNA_CONTROL_MODULO_STREAK_DEACTIVATE_KILL_SWITCH")
     if raw is None:
         return STREAK_DEACTIVATE_ENABLED_DEFAULT
     return raw.strip().lower() not in ("0", "false", "off", "no")
@@ -446,24 +439,14 @@ def _streak_min_window_hours_default(trigger_type: str = "ongoing") -> int:
 
     Per-trigger ``no_delivery_min_window_hours`` config overrides both.
     """
-    env_name = (
-        "MODULO_CRON_STREAK_MIN_WINDOW_HOURS" if trigger_type == "cron" else "MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS"
-    )
+    env_name = "FARNA_CONTROL_MODULO_CRON_STREAK_MIN_WINDOW_HOURS" if trigger_type == "cron" else "FARNA_CONTROL_MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS"
     raw = os.environ.get(env_name)
     if raw is None:
-        return (
-            CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
-            if trigger_type == "cron"
-            else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
-        )
+        return CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT if trigger_type == "cron" else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
-        return (
-            CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
-            if trigger_type == "cron"
-            else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
-        )
+        return CRON_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT if trigger_type == "cron" else ONGOING_MIN_NO_DELIVERY_WINDOW_HOURS_DEFAULT
 
 
 def _streak_config(config: dict[str, Any] | None, *, trigger_type: str = "ongoing") -> tuple[int, int]:
@@ -488,9 +471,7 @@ def _streak_config(config: dict[str, Any] | None, *, trigger_type: str = "ongoin
         parsed: int | None = None
     else:
         parsed = raw_threshold
-    default_threshold = (
-        CRON_MAX_NO_DELIVERY_STREAK_DEFAULT if trigger_type == "cron" else ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT
-    )
+    default_threshold = CRON_MAX_NO_DELIVERY_STREAK_DEFAULT if trigger_type == "cron" else ONGOING_MAX_NO_DELIVERY_STREAK_DEFAULT
     threshold = (
         # A missing, non-int, zero, or negative threshold is invalid — fall
         # back to the default (never fire instantly on a mis-typed config).
@@ -539,9 +520,7 @@ async def _read_streak_count(session: AsyncSession, org_id: uuid.UUID, trigger_i
     return int(result.scalar_one() or 0)
 
 
-async def _read_streak_outcomes(
-    session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID
-) -> list[dict[str, Any]]:
+async def _read_streak_outcomes(session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID) -> list[dict[str, Any]]:
     """Read the trigger's last terminal-classified runs (newest first, <=5)."""
     from farna.db.models.run import Run
 
@@ -594,9 +573,7 @@ async def _read_streak_deactivation_reason(
     from farna.db.models.audit_event import AuditEvent
 
     trigger_type = getattr(trigger, "trigger_type", "ongoing")
-    deactivation_event_type = (
-        CRON_STREAK_DEACTIVATION_EVENT_TYPE if trigger_type == "cron" else STREAK_DEACTIVATION_EVENT_TYPE
-    )
+    deactivation_event_type = CRON_STREAK_DEACTIVATION_EVENT_TYPE if trigger_type == "cron" else STREAK_DEACTIVATION_EVENT_TYPE
     streak_epoch = getattr(trigger, "streak_epoch", None)
     epoch_cutoff = streak_epoch if streak_epoch is not None else datetime.now(UTC)
     audit_row = (
@@ -617,11 +594,7 @@ async def _read_streak_deactivation_reason(
         return None
     payload = audit_row[0] or {}
     deactivated_by = payload.get("deactivated_by") if isinstance(payload, dict) else None
-    return (
-        STREAK_DEACTIVATED_BY_CONFIG_FAILURE
-        if deactivated_by == STREAK_DEACTIVATED_BY_CONFIG_FAILURE
-        else STREAK_DEACTIVATED_BY_STREAK
-    )
+    return STREAK_DEACTIVATED_BY_CONFIG_FAILURE if deactivated_by == STREAK_DEACTIVATED_BY_CONFIG_FAILURE else STREAK_DEACTIVATED_BY_STREAK
 
 
 async def get_trigger_streak_status(
@@ -761,9 +734,7 @@ def _resolve_streak_status_threshold(trigger: Any, config_threshold: int | None)
         return 0, base
 
 
-async def _read_streak_status_count(
-    session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID
-) -> tuple[int, bool]:
+async def _read_streak_status_count(session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID) -> tuple[int, bool]:
     """Read the current streak; ``(streak, ok)`` — ``False`` means degrade."""
     try:
         return await _read_streak_count(session, org_id, trigger_id), True
@@ -772,9 +743,7 @@ async def _read_streak_status_count(
         return 0, False
 
 
-async def _read_streak_status_outcomes(
-    session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID
-) -> list[dict[str, Any]]:
+async def _read_streak_status_outcomes(session: AsyncSession, org_id: uuid.UUID, trigger_id: uuid.UUID) -> list[dict[str, Any]]:
     """Read the last-N outcome summary; ``[]`` on failure (keeps streak+threshold)."""
     try:
         return await _read_streak_outcomes(session, org_id, trigger_id)
@@ -931,10 +900,7 @@ async def _record_cron_streak_alert(
         resource_id=data["id"],
         payload_json={
             "actor": SYSTEM_ACTOR,
-            "summary": (
-                f"Cron trigger {short_id(data['id']) or 'unknown'} reached a no-delivery streak of "
-                f"{streak} (threshold {int(threshold)}) — notified; not auto-deactivated"
-            ),
+            "summary": (f"Cron trigger {short_id(data['id']) or 'unknown'} reached a no-delivery streak of {streak} (threshold {int(threshold)}) — notified; not auto-deactivated"),
             "trigger_id": str(data["id"]),
             "pipeline_id": str(data.get("pipeline_id") or ""),
             "streak": streak,
@@ -1315,11 +1281,7 @@ async def _record_streak_notify_failed(
                 resource_id=data["id"],
                 payload_json={
                     "actor": SYSTEM_ACTOR,
-                    "summary": (
-                        f"{'Deactivation' if auto_deactivated else 'No-delivery streak'} notifier failed "
-                        f"on first attempt for trigger {short_id(data['id']) or 'unknown'} "
-                        f"(streak {int(data.get('streak') or 0)})"
-                    ),
+                    "summary": (f"{'Deactivation' if auto_deactivated else 'No-delivery streak'} notifier failed on first attempt for trigger {short_id(data['id']) or 'unknown'} (streak {int(data.get('streak') or 0)})"),
                     "trigger_id": str(data["id"]),
                     "pipeline_id": str(data.get("pipeline_id") or ""),
                     "streak": int(data.get("streak") or 0),
@@ -1434,9 +1396,7 @@ async def _notify_streak_deactivation(
         # no_delivery_auto_deactivate) dispatches trigger_deactivated. Legacy
         # pending-retry members predate the flag and default to True, keeping
         # their original deactivation meaning.
-        event_type = (
-            EVENT_TRIGGER_DEACTIVATED if bool(data.get("auto_deactivated", True)) else EVENT_TRIGGER_STREAK_ALERT
-        )
+        event_type = EVENT_TRIGGER_DEACTIVATED if bool(data.get("auto_deactivated", True)) else EVENT_TRIGGER_STREAK_ALERT
         notifier = Notifier(ch._get_engine(), ch.get_settings().fernet_key)
         results = await asyncio.wait_for(
             notifier.dispatch_event(org_id, event_type, payload),
@@ -1511,9 +1471,7 @@ async def _trigger_active_state(org_id: uuid.UUID, trigger_id: uuid.UUID) -> boo
     try:
         async with ch._open_factory()() as session, session.begin():
             await ch._set_rls_org(session, org_id)
-            result = await session.execute(
-                select(Trigger.active).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
-            )
+            result = await session.execute(select(Trigger.active).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id))
             val = result.scalar_one_or_none()
             if val is None:
                 return False
@@ -1807,11 +1765,7 @@ async def _record_streak_mass_cascade(org_id: uuid.UUID, count: int, *, trigger_
                 resource_id=org_id,
                 payload_json={
                     "actor": SYSTEM_ACTOR,
-                    "summary": (
-                        f"Mass cascade: {int(count)} {'cron' if is_cron else 'ongoing'} triggers auto-deactivated "
-                        f"within {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h "
-                        f"(org {short_id(org_id) or 'unknown'})"
-                    ),
+                    "summary": (f"Mass cascade: {int(count)} {'cron' if is_cron else 'ongoing'} triggers auto-deactivated within {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h (org {short_id(org_id) or 'unknown'})"),
                     "deactivated_count": int(count),
                     "window_hours": ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS,
                     "threshold": ONGOING_STREAK_MASS_CASCADE_ALERT_THRESHOLD,
@@ -1840,9 +1794,7 @@ async def _streak_mass_cascade_alerted_this_window(
     from farna.db.models.audit_event import AuditEvent
 
     ch = _ch()
-    cascade_event_type = (
-        CRON_STREAK_MASS_CASCADE_EVENT_TYPE if trigger_type == "cron" else STREAK_MASS_CASCADE_EVENT_TYPE
-    )
+    cascade_event_type = CRON_STREAK_MASS_CASCADE_EVENT_TYPE if trigger_type == "cron" else STREAK_MASS_CASCADE_EVENT_TYPE
     cutoff = datetime.now(UTC) - timedelta(hours=ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS)
     try:
         async with factory() as session, session.begin():
@@ -1905,10 +1857,7 @@ async def _maybe_alert_mass_cascade(
             cast(AsyncSession, None),  # session param is vestigial (the helper opens its own)
             org_id,
             function="enforce_no_delivery_streaks",
-            message=(
-                f"streak engine mass cascade: {count} {'cron' if is_cron else 'ongoing'} triggers "
-                f"auto-deactivated in the last {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h"
-            ),
+            message=(f"streak engine mass cascade: {count} {'cron' if is_cron else 'ongoing'} triggers auto-deactivated in the last {ONGOING_STREAK_MASS_CASCADE_ALERT_WINDOW_HOURS}h"),
             context={"org_id": str(org_id), "deactivated_24h": count, "trigger_type": trigger_type},
         )
         return True

@@ -376,9 +376,7 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
     """
     from farna.db.models.organisation import Organisation
 
-    result = await session.execute(
-        select(Organisation.id, Organisation.settings_json).where(Organisation.status == "active")
-    )
+    result = await session.execute(select(Organisation.id, Organisation.settings_json).where(Organisation.status == "active"))
     orgs: list[dict[str, Any]] = []
     for row in result:
         if not is_org_consenting(row.settings_json):
@@ -433,11 +431,7 @@ async def _count_entities(session: AsyncSession, org_ids: list[uuid.UUID]) -> di
 
     counts: dict[str, int] = {}
 
-    result = await session.execute(
-        select(func.count())
-        .select_from(Pipeline)
-        .where(Pipeline.organisation_id.in_(org_ids), Pipeline.deleted_at.is_(None))
-    )
+    result = await session.execute(select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id.in_(org_ids), Pipeline.deleted_at.is_(None)))
     counts["pipelines"] = result.scalar_one() or 0
 
     result = await session.execute(select(func.count()).select_from(Agent).where(Agent.organisation_id.in_(org_ids)))
@@ -449,33 +443,23 @@ async def _count_entities(session: AsyncSession, org_ids: list[uuid.UUID]) -> di
     result = await session.execute(select(func.count()).select_from(Team).where(Team.organisation_id.in_(org_ids)))
     counts["teams"] = result.scalar_one() or 0
 
-    result = await session.execute(
-        select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id.in_(org_ids))
-    )
+    result = await session.execute(select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id.in_(org_ids)))
     counts["model_backends"] = result.scalar_one() or 0
 
-    result = await session.execute(
-        select(func.count()).select_from(ConnectorInstance).where(ConnectorInstance.organisation_id.in_(org_ids))
-    )
+    result = await session.execute(select(func.count()).select_from(ConnectorInstance).where(ConnectorInstance.organisation_id.in_(org_ids)))
     counts["connector_instances"] = result.scalar_one() or 0
 
-    result = await session.execute(
-        select(func.count()).select_from(Trigger).where(Trigger.organisation_id.in_(org_ids))
-    )
+    result = await session.execute(select(func.count()).select_from(Trigger).where(Trigger.organisation_id.in_(org_ids)))
     counts["triggers"] = result.scalar_one() or 0
 
     # FAR-1729: count the live ``evals`` table — the frozen ``eval_definitions``
     # snapshot stops at the cutover, so counting it under-reports every
     # post-cutover definition. The ``eval_definitions`` KEY is retained as the
     # analytics contract name for this metric.
-    result = await session.execute(
-        select(func.count()).select_from(Eval).where(Eval.organisation_id.in_(org_ids), Eval.deleted_at.is_(None))
-    )
+    result = await session.execute(select(func.count()).select_from(Eval).where(Eval.organisation_id.in_(org_ids), Eval.deleted_at.is_(None)))
     counts["eval_definitions"] = result.scalar_one() or 0
 
-    result = await session.execute(
-        select(func.count()).select_from(EnvironmentProfile).where(EnvironmentProfile.organisation_id.in_(org_ids))
-    )
+    result = await session.execute(select(func.count()).select_from(EnvironmentProfile).where(EnvironmentProfile.organisation_id.in_(org_ids)))
     counts["environment_profiles"] = result.scalar_one() or 0
 
     counts["orgs"] = len(org_ids)
@@ -585,25 +569,13 @@ async def _build_integration_inventory(session: AsyncSession, org_ids: list[uuid
     from farna.db.models.model_backend import ModelBackend
     from farna.db.models.trigger import Trigger
 
-    result = await session.execute(
-        select(ModelBackend.provider, func.count().label("count"))
-        .where(ModelBackend.organisation_id.in_(org_ids))
-        .group_by(ModelBackend.provider)
-    )
+    result = await session.execute(select(ModelBackend.provider, func.count().label("count")).where(ModelBackend.organisation_id.in_(org_ids)).group_by(ModelBackend.provider))
     model_providers: dict[str, int] = {row.provider: int(row._mapping["count"] or 0) for row in result}
 
-    result = await session.execute(
-        select(ConnectorInstance.connector_type_id, func.count().label("count"))
-        .where(ConnectorInstance.organisation_id.in_(org_ids))
-        .group_by(ConnectorInstance.connector_type_id)
-    )
+    result = await session.execute(select(ConnectorInstance.connector_type_id, func.count().label("count")).where(ConnectorInstance.organisation_id.in_(org_ids)).group_by(ConnectorInstance.connector_type_id))
     connector_types: dict[str, int] = {str(row.connector_type_id): int(row._mapping["count"] or 0) for row in result}
 
-    result = await session.execute(
-        select(Trigger.trigger_type, func.count().label("count"))
-        .where(Trigger.organisation_id.in_(org_ids))
-        .group_by(Trigger.trigger_type)
-    )
+    result = await session.execute(select(Trigger.trigger_type, func.count().label("count")).where(Trigger.organisation_id.in_(org_ids)).group_by(Trigger.trigger_type))
     trigger_types: dict[str, int] = {row.trigger_type: int(row._mapping["count"] or 0) for row in result}
 
     return {
@@ -630,6 +602,6 @@ def _build_instance_metadata(_factory: Any) -> dict[str, Any]:
     return {
         "version": get_version(),
         "git_sha": os.environ.get("GIT_SHA", ""),
-        "deployment_mode": os.environ.get("MODULO_DEPLOYMENT_MODE", "self-hosted"),
+        "deployment_mode": os.environ.get("FARNA_CONTROL_MODULO_DEPLOYMENT_MODE", "self-hosted"),
         "schema_version": SCHEMA_VERSION,
     }

@@ -97,7 +97,7 @@ _MASKED_SECRET_GRAPH = {
             "agent_id": "00000000-0000-0000-0000-0000000000ff",
             "label": "Do work",
             "position": {"x": 0, "y": 0},
-            "env_vars": {"MODULO_USERS": "••••••", "LOG_LEVEL": "debug"},
+            "env_vars": {"FARNA_CONTROL_MODULO_USERS": "••••••", "LOG_LEVEL": "debug"},
             "context_files": {"runbook.md": "token ••••••"},
             "parameter_overrides": {"nested": {"api_key": "••••••"}},
         }
@@ -160,24 +160,14 @@ def _mock_current_with_pipelines(
     """List/create mocks for pipeline tests; returns the mutation routes."""
     _mock_current([], [])
     routes: dict[str, respx.Route] = {}
-    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=_LIST_PARAMS).respond(
-        json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": 100}
-    )
-    routes["agents_get"] = respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(
-        json={"items": [{"id": agent_id, "name": "worker"}], "total": 1, "page": 1, "page_size": 100}
-    )
-    respx.get("https://api.test/api/v1/triggers", params=_LIST_PARAMS).respond(
-        json={"items": [], "total": 0, "page": 1, "page_size": 100}
-    )
+    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=_LIST_PARAMS).respond(json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": 100})
+    routes["agents_get"] = respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(json={"items": [{"id": agent_id, "name": "worker"}], "total": 1, "page": 1, "page_size": 100})
+    respx.get("https://api.test/api/v1/triggers", params=_LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
     for name, graph in (graphs or {}).items():
         row = next(item for item in pipelines if item["name"] == name)
         respx.get(f"https://api.test/api/v1/pipelines/{row['id']}/graph").respond(json=dict(graph))
-    routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(
-        return_value=httpx.Response(201, json=_pipeline_item("sample", str(uuid.uuid4())))
-    )
-    routes["pipeline_patch"] = respx.patch(re.compile(r"https://api\.test/api/v1/pipelines/[^/]+$")).mock(
-        return_value=httpx.Response(200, json=_pipeline_item("sample", str(uuid.uuid4())))
-    )
+    routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(return_value=httpx.Response(201, json=_pipeline_item("sample", str(uuid.uuid4()))))
+    routes["pipeline_patch"] = respx.patch(re.compile(r"https://api\.test/api/v1/pipelines/[^/]+$")).mock(return_value=httpx.Response(200, json=_pipeline_item("sample", str(uuid.uuid4()))))
     return routes
 
 
@@ -185,9 +175,7 @@ class TestPlanDecisions:
     @respx.mock
     def test_missing_agent_ref_blocks_entity(self) -> None:
         _mock_current_with_pipelines([])
-        respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         config = parse_apply_documents(CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -304,9 +292,7 @@ class TestPlanDecisions:
         broken = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         plain = dict(_pipeline_item("plain", "00000000-0000-0000-0000-0000000000ab", description="Plain"))
         routes = _mock_current_with_pipelines([broken, plain])
-        routes["graph_get_broken"] = respx.get(
-            "https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph"
-        ).respond(status_code=500, json={"detail": "corrupt graph"})
+        routes["graph_get_broken"] = respx.get("https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph").respond(status_code=500, json={"detail": "corrupt graph"})
         config = parse_apply_documents(
             """
 api_version: modulo.dev/v1
@@ -364,9 +350,7 @@ entities:
         that references it (the executor cannot pick an id)."""
         first = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         _mock_current_with_pipelines([first])
-        respx.get("https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph").respond(
-            json=_graph_payload("00000000-0000-0000-0000-0000000000f1", "00000000-0000-0000-0000-0000000000a1")
-        )
+        respx.get("https://api.test/api/v1/pipelines/00000000-0000-0000-0000-0000000000aa/graph").respond(json=_graph_payload("00000000-0000-0000-0000-0000000000f1", "00000000-0000-0000-0000-0000000000a1"))
         respx.get("https://api.test/api/v1/agents", params=_AGENT_LIST_PARAMS).respond(
             json={
                 "items": [
@@ -499,7 +483,7 @@ class TestGraphRefreshSecrets:
         assert update.graph_json is not None
         agent_nodes = [n for n in update.graph_json.nodes if n.node_type == "agent"]
         # The TRUE declared values (not the masked sentinel) write through.
-        assert agent_nodes[0].env_vars["MODULO_USERS"] == "admin:pw123"
+        assert agent_nodes[0].env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
         assert agent_nodes[0].env_vars["LOG_LEVEL"] == "debug"
 
     @respx.mock
@@ -567,7 +551,7 @@ class TestGraphRefreshSecrets:
         assert update.graph_json is not None
         node = update.graph_json.nodes[0]
         assert node.env_vars is not None
-        assert node.env_vars["MODULO_USERS"] == "admin:pw123"
+        assert node.env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
         assert node.context_files is not None
         assert node.context_files["runbook.md"] == "token ghp_00112233445566778899aabbccddeeff00112233"
         assert node.parameter_overrides is not None
@@ -1023,9 +1007,7 @@ class TestHitlReviewWindowPayloads:
         from farna.cli.apply.models import PipelineEntity
         from farna.cli.apply.plan import plan_entity
 
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3})
         current_row = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         current_row["hitl_review_window_seconds"] = 7200
         first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
@@ -1155,9 +1137,7 @@ class TestQueueTimeoutPayloads:
         from farna.cli.apply.models import PipelineEntity
         from farna.cli.apply.plan import plan_entity
 
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3})
         current_row = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         current_row["queue_timeout_seconds"] = 7200
         first = plan_entity("pipeline", "sample", entity.managed_view(), current_row)
@@ -1415,7 +1395,7 @@ class TestGraphSecretEnvVarConvergence:
         existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         drifted = dict(_MASKED_SECRET_GRAPH)
         drifted_node = dict(drifted["nodes"][0])
-        drifted_node["env_vars"] = {"MODULO_USERS": "••••••", "LOG_LEVEL": "info"}
+        drifted_node["env_vars"] = {"FARNA_CONTROL_MODULO_USERS": "••••••", "LOG_LEVEL": "info"}
         drifted["nodes"] = [drifted_node]
         routes = _mock_current_with_pipelines([existing], graphs={"sample": drifted})
         config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
@@ -1444,22 +1424,14 @@ class TestGraphSecretEnvVarConvergence:
         assert update.graph_json is not None
         env_vars = update.graph_json.nodes[0].env_vars
         assert env_vars is not None
-        assert env_vars["MODULO_USERS"] == "admin:pw123"
+        assert env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
 
 
 class TestFailureIsolation:
     """Failure-injection: one pipeline failing must not abort the others."""
 
     def _two_pipeline_config_text(self) -> str:
-        return (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  pipelines:\n"
-            "    - name: first\n"
-            "      description: First\n"
-            "    - name: second\n"
-            "      description: Second\n"
-        )
+        return "api_version: modulo.dev/v1\nentities:\n  pipelines:\n    - name: first\n      description: First\n    - name: second\n      description: Second\n"
 
     @respx.mock
     def test_post_400_isolates_entity(self) -> None:
@@ -1531,15 +1503,7 @@ class TestFailureIsolation:
             return httpx.Response(200, json=second)
 
         routes["pipeline_patch"].mock(side_effect=_patch_by_id)
-        config = parse_apply_documents(
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  pipelines:\n"
-            "    - name: first\n"
-            "      description: Updated first\n"
-            "    - name: second\n"
-            "      description: Updated second\n"
-        )
+        config = parse_apply_documents("api_version: modulo.dev/v1\nentities:\n  pipelines:\n    - name: first\n      description: Updated first\n    - name: second\n      description: Updated second\n")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
@@ -1575,8 +1539,8 @@ class TestFailureIsolation:
 
         from farna.cli.apply import register_apply
 
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         routes = _mock_current_with_pipelines([])
         routes["pipelines_post"].mock(
             side_effect=[
@@ -1620,17 +1584,9 @@ class TestMixedKindsPhaseOrder:
         """The report keeps phase order: schemas -> model_backends -> pipelines."""
         monkeypatch.setenv("SK", "resolved-secret")
         _mock_current_with_pipelines([])
-        respx.post("https://api.test/api/v1/model-backends").mock(
-            return_value=httpx.Response(201, json=_backend_item("openai", "openai"))
-        )
-        respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[0-9a-f-]+/health-check")).mock(
-            return_value=httpx.Response(
-                200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}
-            )
-        )
-        respx.post("https://api.test/api/v1/schemas").mock(
-            return_value=httpx.Response(201, json=_schema_item("alpha", None))
-        )
+        respx.post("https://api.test/api/v1/model-backends").mock(return_value=httpx.Response(201, json=_backend_item("openai", "openai")))
+        respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[0-9a-f-]+/health-check")).mock(return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}))
+        respx.post("https://api.test/api/v1/schemas").mock(return_value=httpx.Response(201, json=_schema_item("alpha", None)))
         config = parse_apply_documents(
             """
 api_version: modulo.dev/v1

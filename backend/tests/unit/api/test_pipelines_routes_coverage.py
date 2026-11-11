@@ -156,9 +156,7 @@ def _make_session() -> AsyncMock:
 
 
 def _install_auth(role: str = "admin") -> None:
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role)
 
 
 def _install_any_credential_default() -> None:
@@ -250,9 +248,7 @@ def operator_client() -> Generator[TestClient, AsyncMock, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="operator@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="operator@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator")
     _install_any_credential_default()
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
@@ -532,7 +528,7 @@ def test_graph_node_validator_matrix() -> None:
             "template_id": "opencode",
             "agent_prompt": "Analyse the repo",
             "agent_commands": ["run analysis"],
-            "env_vars": {"MODULO_SECRET": "x"},
+            "env_vars": {"FARNA_CONTROL_MODULO_SECRET": "x"},
         },
         "reserved prefix",
     )
@@ -565,9 +561,7 @@ def test_graph_node_sandbox_command_exclusivity_and_missing_template() -> None:
     assert node.agent_commands == ["a", "b"]
 
     with pytest.raises(ValidationError) as excinfo:
-        PipelineGraphNode.model_validate(
-            {**base, "agent_prompt": "Analyse the repo", "agent_commands": ["run analysis"]}
-        )
+        PipelineGraphNode.model_validate({**base, "agent_prompt": "Analyse the repo", "agent_commands": ["run analysis"]})
     assert "template_id" in str(excinfo.value)
 
 

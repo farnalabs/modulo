@@ -148,13 +148,7 @@ def _build_consent_response(
 
 @router.post(
     "/consent",
-    dependencies=[
-        Depends(
-            audited(
-                "product_analytics_consent_posted", "product_analytics_consent", principal_dep=get_current_tenant_user
-            )
-        )
-    ],
+    dependencies=[Depends(audited("product_analytics_consent_posted", "product_analytics_consent", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("product_analytics.consent")
 async def post_consent(
@@ -276,13 +270,7 @@ async def get_product_analytics(
 
 @router.put(
     "",
-    dependencies=[
-        Depends(
-            audited(
-                "product_analytics_level_updated", "product_analytics_settings", principal_dep=get_current_tenant_user
-            )
-        )
-    ],
+    dependencies=[Depends(audited("product_analytics_level_updated", "product_analytics_settings", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("product_analytics.update_level")
 async def update_product_analytics_level(

@@ -161,14 +161,8 @@ def _cron_row(
     )
 
 
-def _polling_row(
-    trigger_id: uuid.UUID, *, has_connector: bool = True, config_overrides: dict[str, Any] | None = None
-) -> SimpleNamespace:
-    config_json = (
-        {"connector_instance_id": str(uuid.uuid4()), "poll_query": "SELECT 1", "poll_interval_seconds": 60}
-        if has_connector
-        else {}
-    )
+def _polling_row(trigger_id: uuid.UUID, *, has_connector: bool = True, config_overrides: dict[str, Any] | None = None) -> SimpleNamespace:
+    config_json = {"connector_instance_id": str(uuid.uuid4()), "poll_query": "SELECT 1", "poll_interval_seconds": 60} if has_connector else {}
     if config_overrides:
         config_json.update(config_overrides)
     return SimpleNamespace(
@@ -440,9 +434,7 @@ class TestFireDueTriggers:
                     _org_result([ORG]),
                     _pause_result(ORG),
                     _rows_result([_cron_row(TRIGGER_A)]),
-                    _rows_result(
-                        [_polling_row(TRIGGER_POLL, config_overrides={"poll_interval_seconds": "not-an-int"})]
-                    ),
+                    _rows_result([_polling_row(TRIGGER_POLL, config_overrides={"poll_interval_seconds": "not-an-int"})]),
                     _rows_result([_report_row(REPORT)]),
                 ],
             ) as (_session, _redis_client),
@@ -696,9 +688,7 @@ class TestFireDueTriggers:
                     _rows_result([]),
                     _rows_result([]),
                     _rows_result([]),
-                    _rows_result(
-                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                    ),
+                    _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]),
                     _mock_result(fetchone=("advanced-id",)),
                 ],
             ) as (session, redis_client),
@@ -738,9 +728,7 @@ class TestFireDueTriggers:
                     _rows_result([]),
                     _rows_result([]),
                     _rows_result([]),
-                    _rows_result(
-                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=fresh)]
-                    ),
+                    _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=fresh)]),
                 ],
             ) as (_session, _redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
@@ -765,9 +753,7 @@ class TestFireDueTriggers:
                     _rows_result([]),
                     _rows_result([]),
                     _rows_result([]),
-                    _rows_result(
-                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=ancient)]
-                    ),
+                    _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=ancient)]),
                 ],
             ) as (_session, _redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
@@ -793,9 +779,7 @@ class TestFireDueTriggers:
                     _rows_result([_cron_row(TRIGGER_A, next_fire_at=past)]),
                     _rows_result([]),
                     _rows_result([]),
-                    _rows_result(
-                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                    ),
+                    _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]),
                 ],
             ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
@@ -822,9 +806,7 @@ class TestFireDueTriggers:
                     _rows_result([]),
                     _rows_result([]),
                     _rows_result([]),
-                    _rows_result(
-                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                    ),
+                    _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]),
                 ],
             ) as (_session, redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
@@ -891,9 +873,7 @@ class TestFireReportTrigger:
         # test name claims); assert on the recorded UPDATE statement itself.
         # Pin the VALUE to a recency bound, not merely its type, so a wrong-but-
         # datetime stamp (e.g. a stale or mis-set clock) fails.
-        sent_stmts = [
-            s for s, _ in session.executed if "UPDATE scheduled_reports" in str(s) and "last_sent_at" in str(s)
-        ]
+        sent_stmts = [s for s, _ in session.executed if "UPDATE scheduled_reports" in str(s) and "last_sent_at" in str(s)]
         assert sent_stmts, "a successful send must stamp last_sent_at"
         stamped = sent_stmts[0].compile().params.get("last_sent_at")
         assert isinstance(stamped, datetime)
@@ -1332,9 +1312,7 @@ class TestSuiteRunDispatchRouting:
         summary: dict[str, int] = {"polling_enqueued": 0, "enqueue_failures": 0}
 
         with patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1") as enqueue:
-            ok = await ch._enqueue_polling_fire(
-                q, now, org_id, suite_row, suite_row.config_json, connector_instance_id=None, summary=summary
-            )
+            ok = await ch._enqueue_polling_fire(q, now, org_id, suite_row, suite_row.config_json, connector_instance_id=None, summary=summary)
 
         assert ok is True
         assert summary["polling_enqueued"] == 1
@@ -2958,9 +2936,7 @@ class TestGetSystemEngine:
             ch._SYSTEM_ENGINE = None
 
     def test_translates_sslmode_require_for_the_system_engine(self) -> None:
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2980,9 +2956,7 @@ class TestGetSystemEngine:
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require'
         (TLS required, fail-closed), never silently downgraded to ssl=False."""
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2999,9 +2973,7 @@ class TestGetSystemEngine:
 
     def test_fails_closed_on_downgrading_sslmode(self) -> None:
         """sslmode=prefer/allow refuse loudly — no silent plaintext downgrade."""
-        mock_settings = _settings(
-            modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer"
-        )
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -3038,7 +3010,7 @@ class TestGetSystemEngine:
             with (
                 patch.object(ch, "get_settings", return_value=mock_settings),
                 patch.object(ch, "_get_engine"),
-                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+                pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
             ):
                 ch._get_system_engine()
 
@@ -3055,7 +3027,7 @@ class TestGetSystemEngine:
             with (
                 patch.object(ch, "get_settings", return_value=mock_settings),
                 patch.object(ch._log, "error", lambda msg, extra=None: errors.append((msg, extra))),
-                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+                pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
             ):
                 ch._get_system_engine()
 
@@ -3791,9 +3763,7 @@ class TestOrgStatementBound:
         assert updates, "the batch terminalizers never ran an UPDATE runs"
         assert stmt_at < updates[0], "the statement bound must precede every runs write"
 
-    async def test_statement_timeout_expiry_is_not_mislabelled_read_failed(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_statement_timeout_expiry_is_not_mislabelled_read_failed(self, caplog: pytest.LogCaptureFixture) -> None:
         """A 57014 raised during the batch terminalizers propagates OUT of
         ``_reconcile_org`` (rolling the org transaction back) so the reconcile
         body can apply its dedicated skip — never swallowed as ``read
@@ -3812,9 +3782,7 @@ class TestOrgStatementBound:
         assert sqlstate_of(excinfo.value) == "57014"
         assert not any("read failed" in message for message in caplog.messages)
 
-    async def test_statement_timeout_is_still_a_lock_timeouts_own_skip_not_this_one(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_statement_timeout_is_still_a_lock_timeouts_own_skip_not_this_one(self, caplog: pytest.LogCaptureFixture) -> None:
         """Scope guard: a 55P03 keeps its existing path and is never counted
         as a statement timeout (the two bounded waits are distinct classes).
 
@@ -3961,9 +3929,7 @@ class TestReadFailureUnwind:
     never terminalized (rollback + no unwind) or commits terminalizations it
     has just disowned (the pre-M3 bug: unwind + commit)."""
 
-    async def test_read_failure_unwinds_the_counts_the_rolled_back_transaction_recorded(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_read_failure_unwinds_the_counts_the_rolled_back_transaction_recorded(self, caplog: pytest.LogCaptureFixture) -> None:
         terminalized = [uuid.uuid4(), uuid.uuid4()]
 
         async def fake_terminalizer(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
@@ -4202,9 +4168,7 @@ class TestOrgBoundedFailureCounters:
         assert str(pool_org) in message
         assert "session-acquire" in message
 
-    async def test_org_timeout_last_error_and_warning_name_the_blocking_stage(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_org_timeout_last_error_and_warning_name_the_blocking_stage(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """THE proposal-1 pin: when the per-org bound fires, the persisted
         ``last_error`` AND the WARNING both carry the finest-grained stage the
         pass reached — not just the org — so the next prod occurrence names the
@@ -4290,9 +4254,7 @@ class TestOrgBoundedFailureCounters:
         assert records, f"no per-org bound WARNING emitted; log={caplog.text}"
         assert blocking_stage in records[0].getMessage()
 
-    async def test_connect_stage_timeout_is_never_reported_as_the_per_org_cut(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_connect_stage_timeout_is_never_reported_as_the_per_org_cut(self, caplog: pytest.LogCaptureFixture) -> None:
         """qa F2: asyncpg's connect bound (``connect_args={"timeout": 10}``)
         raises the SAME builtin ``TimeoutError`` as the per-org asyncio cut,
         ~10s into a 30s slice. Reported as "per-org bound after ~10.1s
@@ -4354,9 +4316,7 @@ class TestOrgBoundedFailureCounters:
         assert "NOT the per-org time bound" in message
         assert records[0].exc_info is not None
 
-    async def test_connect_timeout_inside_a_clamped_slice_is_still_a_connect_timeout(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_connect_timeout_inside_a_clamped_slice_is_still_a_connect_timeout(self, caplog: pytest.LogCaptureFixture) -> None:
         """FAR-1644 (M2): a connect bound firing at ~10s inside a CLAMPED org
         slice barely above it — the shape a nearly-exhausted tick produces
         (``slice = min(org_budget, remaining tick budget - reserve)``), or a
@@ -4424,9 +4384,7 @@ class TestOrgBoundedFailureCounters:
         assert "session-acquired" in records[0].getMessage()
         assert "NOT the per-org time bound" in records[0].getMessage()
 
-    async def test_an_early_in_pass_timeout_is_not_reported_as_the_per_org_cut(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_an_early_in_pass_timeout_is_not_reported_as_the_per_org_cut(self, caplog: pytest.LogCaptureFixture) -> None:
         """The other half of qa F2: a ``TimeoutError`` raised from INSIDE the
         pass, well before the slice deadline, is still a bounded per-org
         failure (counted, status ``timeout``, tick continues) — but
@@ -4599,9 +4557,7 @@ class TestSystemEnginePoolKnobs:
         assert kwargs["pool_timeout"] == ch._SYSTEM_POOL_TIMEOUT_SECONDS
         assert kwargs["pool_timeout"] < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS
 
-    async def test_starved_pool_checkout_raises_the_catchable_timeout_and_is_counted(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_starved_pool_checkout_raises_the_catchable_timeout_and_is_counted(self, caplog: pytest.LogCaptureFixture) -> None:
         """qa F1 — the REACHABILITY CHAIN, end to end, with an honest scope.
 
         Part 1 (real SQLAlchemy, no doubles): starving a REAL QueuePool raises

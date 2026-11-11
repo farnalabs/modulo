@@ -149,14 +149,4 @@ def build_input_clone_script(*, url: str, dest: str, resolved_sha: str) -> str: 
     quoted_url = shlex.quote(url)
     quoted_dest = shlex.quote(dest)
     quoted_sha = shlex.quote(resolved_sha)
-    return (
-        "#!/bin/sh\n"
-        "set -e\n"
-        f"git clone {quoted_url} {quoted_dest}\n"
-        f"git -C {quoted_dest} checkout {quoted_sha}\n"
-        f"ACTUAL=$(git -C {quoted_dest} rev-parse HEAD)\n"
-        f'if [ "$ACTUAL" != {quoted_sha} ]; then\n'
-        f'  echo "SHA mismatch: expected {quoted_sha}, got $ACTUAL" >&2\n'
-        "  exit 1\n"
-        "fi\n"
-    )
+    return f'#!/bin/sh\nset -e\ngit clone {quoted_url} {quoted_dest}\ngit -C {quoted_dest} checkout {quoted_sha}\nACTUAL=$(git -C {quoted_dest} rev-parse HEAD)\nif [ "$ACTUAL" != {quoted_sha} ]; then\n  echo "SHA mismatch: expected {quoted_sha}, got $ACTUAL" >&2\n  exit 1\nfi\n'

@@ -29,10 +29,7 @@ _PRUNED_COMPONENT_NAMES = ("HTTPValidationError", "ValidationError")
 PROBLEM_DETAIL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "title": PROBLEM_DETAIL_NAME,
-    "description": (
-        "RFC 9457 Problem Details. ``detail`` is human-readable prose; clients "
-        "discriminate on ``type``/``code`` rather than parsing it."
-    ),
+    "description": ("RFC 9457 Problem Details. ``detail`` is human-readable prose; clients discriminate on ``type``/``code`` rather than parsing it."),
     "required": ["type", "title", "status", "detail"],
     "properties": {
         "type": {"type": "string", "description": "Problem type URN, e.g. urn:problem:modulo:validation_error"},
@@ -87,14 +84,7 @@ def apply_error_response_schemas(openapi: dict[str, Any]) -> dict[str, Any]:
     Idempotent: an already-corrected document yields 0 swaps and is returned
     unchanged apart from re-asserting the ``ProblemDetail`` component.
     """
-    operations = (
-        operation
-        for container in (openapi.get("paths"), openapi.get("webhooks"))
-        if isinstance(container, dict)
-        for path in container.values()
-        if isinstance(path, dict)
-        for operation in path.values()
-    )
+    operations = (operation for container in (openapi.get("paths"), openapi.get("webhooks")) if isinstance(container, dict) for path in container.values() if isinstance(path, dict) for operation in path.values())
     swaps = sum(_rewrite_validation_error_refs(operation) for operation in operations)
 
     schemas = openapi.setdefault("components", {}).setdefault("schemas", {})

@@ -234,10 +234,7 @@ _RISK_THRESHOLD = "0.5"
 # ``hitl_config`` the graph model requires for node_type="hitl".
 _GOVERNANCE_PIPELINE = _PipelineSpec(
     name=DEMO_PIPELINE_NAME,
-    description=(
-        "Implements a ready ticket, scores the PR's risk, routes risky changes (risk > 0.50) "
-        "to a human reviewer and opens the PR. Read-only demo data."
-    ),
+    description=("Implements a ready ticket, scores the PR's risk, routes risky changes (risk > 0.50) to a human reviewer and opens the PR. Read-only demo data."),
     duration_minutes=3,
     nodes=(
         _NodeSpec(
@@ -268,10 +265,7 @@ _GOVERNANCE_PIPELINE = _PipelineSpec(
             node_type="hitl",
             hitl_config={
                 "label": _HUMAN_REVIEW_LABEL,
-                "description": (
-                    "The PR risk level scored above 0.50: a human must review and approve the change "
-                    "before the PR is opened."
-                ),
+                "description": ("The PR risk level scored above 0.50: a human must review and approve the change before the PR is opened."),
                 "claim_expiry_minutes": 60,
                 "human_only": True,
             },
@@ -509,9 +503,7 @@ _DEMO_SCHEMA_SPECS: list[dict[str, object]] = [
 _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
     {
         "name": AI_CODE_REVIEWER_AGENT_NAME,
-        "description": (
-            "Analyses code changes for correctness, security, and style, then posts a review with inline comments."
-        ),
+        "description": ("Analyses code changes for correctness, security, and style, then posts a review with inline comments."),
         "prompt_template": (
             "You are a code reviewer for a software engineering team.\n"
             "Analyse the provided code diff for:\n"
@@ -525,11 +517,7 @@ _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
         "name": RELEASE_NOTES_WRITER_AGENT_NAME,
         "description": "Generates formatted, user-facing release notes from a list of merged PRs.",
         "prompt_template": (
-            "You are a technical writer generating release notes.\n"
-            "Given a list of merged pull requests grouped by type, produce\n"
-            "a concise, user-friendly release notes document in markdown.\n"
-            "Use clear headings for Features, Bug Fixes, and Breaking Changes.\n"
-            "Link to the original PRs where possible."
+            "You are a technical writer generating release notes.\nGiven a list of merged pull requests grouped by type, produce\na concise, user-friendly release notes document in markdown.\nUse clear headings for Features, Bug Fixes, and Breaking Changes.\nLink to the original PRs where possible."
         ),
     },
     # FAR-1248: the governance pipeline's agents + the Docs Sync agent, so
@@ -538,39 +526,22 @@ _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
     {
         "name": "Implementer",
         "description": "Implements a groomed ticket on a feature branch: code, tests and a short change summary.",
-        "prompt_template": (
-            "You are a software engineer implementing a ready ticket.\n"
-            "Read the ticket and the relevant code, implement the change on a\n"
-            "feature branch, add or update tests, and summarise what changed."
-        ),
+        "prompt_template": ("You are a software engineer implementing a ready ticket.\nRead the ticket and the relevant code, implement the change on a\nfeature branch, add or update tests, and summarise what changed."),
     },
     {
         "name": "PR Risk Scorer",
         "description": "Scores a change's risk from 0.00 to 1.00 so risky PRs are routed to a human reviewer.",
-        "prompt_template": (
-            "You assess the risk of a code change.\n"
-            "Consider blast radius, test coverage, touched sensitive paths\n"
-            "(auth, billing, migrations) and diff size. Return risk_score\n"
-            "between 0 and 1 with a one-line rationale."
-        ),
+        "prompt_template": ("You assess the risk of a code change.\nConsider blast radius, test coverage, touched sensitive paths\n(auth, billing, migrations) and diff size. Return risk_score\nbetween 0 and 1 with a one-line rationale."),
     },
     {
         "name": "PR Opener",
         "description": "Opens the pull request with a structured description linked to the ticket.",
-        "prompt_template": (
-            "You open pull requests.\n"
-            "Write a clear title and a structured description (summary,\n"
-            "testing, risk) that links the originating ticket, then open the PR."
-        ),
+        "prompt_template": ("You open pull requests.\nWrite a clear title and a structured description (summary,\ntesting, risk) that links the originating ticket, then open the PR."),
     },
     {
         "name": DOCS_MAINTAINER_AGENT_NAME,
         "description": "Keeps user-facing documentation in sync with code changes.",
-        "prompt_template": (
-            "You maintain product documentation.\n"
-            "For each user-facing code change, update the matching docs page\n"
-            "and verify every internal link still resolves."
-        ),
+        "prompt_template": ("You maintain product documentation.\nFor each user-facing code change, update the matching docs page\nand verify every internal link still resolves."),
     },
 ]
 
@@ -936,9 +907,7 @@ def _build_run_trace(
 
 def _run_window(spec: _PipelineSpec, run_number: int, days_ago: int, hours_into_day: int) -> tuple[datetime, datetime]:
     """(started_at, completed_at) for a seeded run, relative to today (UTC)."""
-    started = _demo_fixture_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
-        days=days_ago, hours=-hours_into_day
-    )
+    started = _demo_fixture_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_ago, hours=-hours_into_day)
     minutes = spec.duration_minutes
     if spec.name == DEMO_PIPELINE_NAME and _governance_path(run_number).human_review:
         minutes += _HUMAN_REVIEW_MINUTES
@@ -989,9 +958,7 @@ async def _get_or_create_pipeline(
                 session.add(pipeline)
                 await session.flush()
         except IntegrityError:
-            result = await session.execute(
-                select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == name)
-            )
+            result = await session.execute(select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == name))
             pipeline = result.scalar_one_or_none()
             if pipeline is None:
                 raise
@@ -1094,9 +1061,7 @@ async def _converge_pipeline_edges(
     """
     from farna.db.crud.pipeline import GraphWriteActor, GraphWriteRecording, replace_pipeline_graph
 
-    existing = list(
-        (await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline.id))).scalars()
-    )
+    existing = list((await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline.id))).scalars())
     current = sorted(
         _edge_signature(
             {
@@ -1139,9 +1104,7 @@ async def _converge_pipeline_edges(
     # depending on the demo user's role — and on the SQLite unit suite the
     # same re-read crashes outright in the character-based Uuid bind processor
     # (``'str' object has no attribute 'hex'``), failing every seed test.
-    has_version_history = (
-        await session.execute(select(PipelineSnapshot.id).where(PipelineSnapshot.pipeline_id == pipeline.id).limit(1))
-    ).scalar_one_or_none() is not None
+    has_version_history = (await session.execute(select(PipelineSnapshot.id).where(PipelineSnapshot.pipeline_id == pipeline.id).limit(1))).scalar_one_or_none() is not None
     await replace_pipeline_graph(
         session,
         pipeline_id=pipeline.id,
@@ -1297,9 +1260,7 @@ async def _create_demo_run(
             session.add(run)
             await session.flush()
     except IntegrityError:
-        recovered = await session.execute(
-            select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number)
-        )
+        recovered = await session.execute(select(Run.id).where(Run.organisation_id == org.id, Run.run_number == run_number))
         if recovered.scalar_one_or_none() is None:
             raise
         _log.info("demo_seed.run_recovered_after_conflict", extra={"run_number": run_number})
@@ -1560,12 +1521,7 @@ async def _find_demo_eval(
     name)`` natural tuple, so a concurrent boot can leave more than one match;
     take a deterministic first row instead of raising ``MultipleResultsFound``.
     """
-    result = await session.execute(
-        select(Eval)
-        .where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
-        .order_by(Eval.id)
-        .limit(1)
-    )
+    result = await session.execute(select(Eval).where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label).order_by(Eval.id).limit(1))
     return result.scalars().first()
 
 
@@ -1654,11 +1610,7 @@ async def _ensure_demo_eval_result(
     existing = await _find_demo_eval_result(session, org, evaluation, run)
     if existing is not None:
         desired_evaluated_at = run.completed_at or run.started_at or datetime.now(UTC)
-        if (
-            existing.judge_result_json
-            and existing.judge_result_json.get("source") == "demo_seed"
-            and not _values_match(existing.evaluated_at, desired_evaluated_at)
-        ):
+        if existing.judge_result_json and existing.judge_result_json.get("source") == "demo_seed" and not _values_match(existing.evaluated_at, desired_evaluated_at):
             existing.evaluated_at = desired_evaluated_at
             _log.info(
                 "demo_seed.eval_result_converged",
@@ -2053,9 +2005,7 @@ async def _seed_demo_connectors(
         ("Demo Linear (read-only)", "linear"),
     )
     for name, connector_type_id in connector_specs:
-        recover_stmt = select(ConnectorInstance).where(
-            ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name
-        )
+        recover_stmt = select(ConnectorInstance).where(ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name)
         existing = (await session.execute(recover_stmt)).scalar_one_or_none()
         values = {
             "connector_type_id": connector_type_id,
@@ -2099,9 +2049,7 @@ async def _seed_demo_notifications(
         ("run_failed", "Run failed", "A demo sample run failed without performing real work.", "error"),
     )
     for category, title, body, level in notifications:
-        recover_stmt = select(Notification).where(
-            Notification.organisation_id == org.id, Notification.category == category
-        )
+        recover_stmt = select(Notification).where(Notification.organisation_id == org.id, Notification.category == category)
         existing = (await session.execute(recover_stmt)).scalar_one_or_none()
         values = {
             "scope": "org",
@@ -2177,28 +2125,9 @@ async def _seed_demo_trigger_events(
     only feeds the deterministic ``raw_hash``/``received_at`` fixture
     values, never the event's identity.
     """
-    triggers = list(
-        (
-            await session.execute(
-                select(Trigger)
-                .where(Trigger.organisation_id == org.id)
-                .order_by(Trigger.pipeline_id, Trigger.name.asc().nulls_last(), Trigger.trigger_type, Trigger.id)
-            )
-        ).scalars()
-    )
+    triggers = list((await session.execute(select(Trigger).where(Trigger.organisation_id == org.id).order_by(Trigger.pipeline_id, Trigger.name.asc().nulls_last(), Trigger.trigger_type, Trigger.id))).scalars())
     for index, trigger in enumerate(triggers[:4]):
-        existing = (
-            (
-                await session.execute(
-                    select(TriggerEvent)
-                    .where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id)
-                    .order_by(TriggerEvent.received_at, TriggerEvent.id)
-                    .limit(1)
-                )
-            )
-            .scalars()
-            .first()
-        )
+        existing = (await session.execute(select(TriggerEvent).where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id).order_by(TriggerEvent.received_at, TriggerEvent.id).limit(1))).scalars().first()
         if existing is not None:
             # Existing event rows are historical demo evidence. Do not rewrite
             # their trigger association, timestamp, payload identity, or
@@ -2215,16 +2144,7 @@ async def _seed_demo_readonly_surfaces(
 ) -> None:
     """Seed non-sensitive records used by the viewer-facing demo read surfaces."""
     pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
-    runs = list(
-        (
-            await session.execute(
-                select(Run)
-                .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
-                .order_by(Run.run_number.desc())
-                .limit(3)
-            )
-        ).scalars()
-    )
+    runs = list((await session.execute(select(Run).where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id).order_by(Run.run_number.desc()).limit(3))).scalars())
     variant_name = "Demo review strategies"
     variant_values = {
         "pipeline_id": pipeline.id,
@@ -2325,11 +2245,7 @@ async def _seed_demo_readonly_surfaces(
         Evidence.organisation_id == org.id,
         or_(
             Evidence.id == demo_fixture_id(org.id, "evidence:risk.demo_review_score"),
-            (
-                (Evidence.key == evidence_key)
-                & (Evidence.subject_type == "run")
-                & (Evidence.subject_id == str(runs[0].id))
-            ),
+            ((Evidence.key == evidence_key) & (Evidence.subject_type == "run") & (Evidence.subject_id == str(runs[0].id))),
         ),
     )
     evidence = (await session.execute(evidence_recover_stmt)).scalar_one_or_none()
@@ -2859,12 +2775,7 @@ async def _seed_demo_lifecycle_map(  # vulture: ignore - retained internal dogfo
     try:
         content = _lifecycle_map_content(pipeline_lookup)
         async with session.begin_nested():
-            result = await session.execute(
-                select(LifecycleMap)
-                .where(LifecycleMap.organisation_id == org.id, LifecycleMap.name == _DEMO_LIFECYCLE_MAP_NAME)
-                .order_by(LifecycleMap.created_at)
-                .limit(1)
-            )
+            result = await session.execute(select(LifecycleMap).where(LifecycleMap.organisation_id == org.id, LifecycleMap.name == _DEMO_LIFECYCLE_MAP_NAME).order_by(LifecycleMap.created_at).limit(1))
             lifecycle_map = result.scalars().first()
             if lifecycle_map is None:
                 lifecycle_map = LifecycleMap(
@@ -2903,14 +2814,7 @@ async def _select_demo_org(session: AsyncSession) -> Organisation | None:
     one. (Organisation carries no ``updated_at``, so ``created_at`` is the
     recency tiebreaker.)
     """
-    result = await session.execute(
-        include_soft_deleted(
-            select(Organisation)
-            .where(Organisation.slug == DEMO_ORG_SLUG)
-            .order_by(Organisation.deleted_at.is_not(None), Organisation.created_at.desc())
-            .limit(1)
-        )
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG).order_by(Organisation.deleted_at.is_not(None), Organisation.created_at.desc()).limit(1)))
     return result.scalars().first()
 
 
@@ -3125,9 +3029,7 @@ async def _ensure_demo_team_membership(
     role: str,
 ) -> None:
     """Ensure the demo user is a member of *team* with *role*."""
-    member_result = await session.execute(
-        select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id)
-    )
+    member_result = await session.execute(select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id))
     membership = member_result.scalar_one_or_none()
     if membership is None:
         try:

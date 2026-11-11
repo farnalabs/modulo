@@ -66,11 +66,7 @@ async def get_run_evals(
     instead (item 11). ``outcome='error'`` rows are the failed instrument, not
     a verdict, so they are excluded here too (ADR 066 D18).
     """
-    result = await session.execute(
-        select(EvalResult)
-        .where(EvalResult.run_id == run_id, non_guardrail_eval_results_clause())
-        .order_by(EvalResult.evaluated_at.desc())
-    )
+    result = await session.execute(select(EvalResult).where(EvalResult.run_id == run_id, non_guardrail_eval_results_clause()).order_by(EvalResult.evaluated_at.desc()))
     return list(result.scalars().all())
 
 

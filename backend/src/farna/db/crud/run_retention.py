@@ -134,25 +134,15 @@ _CHECKPOINT_TABLES: tuple[tuple[str, str], ...] = (
 _GROUP_BY_THREAD_ID = " GROUP BY thread_id"
 _CHECKPOINT_SIZE_SQL: dict[str, tuple[str, str]] = {
     "checkpoints": (
-        (
-            "SELECT thread_id, COALESCE(SUM(octet_length(checkpoint::text) + "
-            "octet_length(metadata::text)), 0) AS bytes, COUNT(*) AS cnt "
-            "FROM checkpoints WHERE thread_id IN :tids"
-        ),
+        ("SELECT thread_id, COALESCE(SUM(octet_length(checkpoint::text) + octet_length(metadata::text)), 0) AS bytes, COUNT(*) AS cnt FROM checkpoints WHERE thread_id IN :tids"),
         _GROUP_BY_THREAD_ID,
     ),
     "checkpoint_blobs": (
-        (
-            "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
-            "COUNT(*) AS cnt FROM checkpoint_blobs WHERE thread_id IN :tids"
-        ),
+        ("SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, COUNT(*) AS cnt FROM checkpoint_blobs WHERE thread_id IN :tids"),
         _GROUP_BY_THREAD_ID,
     ),
     "checkpoint_writes": (
-        (
-            "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
-            "COUNT(*) AS cnt FROM checkpoint_writes WHERE thread_id IN :tids"
-        ),
+        ("SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, COUNT(*) AS cnt FROM checkpoint_writes WHERE thread_id IN :tids"),
         _GROUP_BY_THREAD_ID,
     ),
 }
@@ -293,22 +283,15 @@ def _json_col_bytes(col: Any) -> Any:
 # per-column COALESCE keeps an SQL-NULL (absent) column at 0 so a single NULL
 # never voids the row's whole contribution, and the NULLIF keeps an explicit
 # JSON null at 0 to match the Python estimator (see _json_col_bytes).
-_RUN_PAYLOAD_BYTES = (
-    _json_col_bytes(Run.cost_breakdown) + _json_col_bytes(Run.input_payload) + _json_col_bytes(Run.run_classification)
-)
+_RUN_PAYLOAD_BYTES = _json_col_bytes(Run.cost_breakdown) + _json_col_bytes(Run.input_payload) + _json_col_bytes(Run.run_classification)
 
-_NODE_OUTPUT_BYTES = (
-    _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["outputs_json"])
-    + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["node_telemetry_json"])
-    + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["raw_output_markers"])
-)
+_NODE_OUTPUT_BYTES = _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["outputs_json"]) + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["node_telemetry_json"]) + _json_col_bytes(_RUN_NODE_OUTPUTS_AGG.c["raw_output_markers"])
 
 # (table, size expression) pairs for the three checkpoint aggregates.
 _CHECKPOINT_AGG_SOURCES: tuple[tuple[Table, Any], ...] = (
     (
         _CHECKPOINTS_AGG,
-        func.octet_length(cast(_CHECKPOINTS_AGG.c["checkpoint"], Text))
-        + func.octet_length(cast(_CHECKPOINTS_AGG.c["metadata"], Text)),
+        func.octet_length(cast(_CHECKPOINTS_AGG.c["checkpoint"], Text)) + func.octet_length(cast(_CHECKPOINTS_AGG.c["metadata"], Text)),
     ),
     (_CHECKPOINT_BLOBS_AGG, func.octet_length(_CHECKPOINT_BLOBS_AGG.c.blob)),
     (_CHECKPOINT_WRITES_AGG, func.octet_length(_CHECKPOINT_WRITES_AGG.c.blob)),
@@ -331,12 +314,7 @@ def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
     ``_RUN_PAYLOAD_BYTES`` comment for the documented asymmetry; the values
     agree only for simple ASCII payloads.
     """
-    return (
-        node_output_bytes
-        + _json_bytes(run.cost_breakdown)
-        + _json_bytes(run.input_payload)
-        + _json_bytes(run.run_classification)
-    )
+    return node_output_bytes + _json_bytes(run.cost_breakdown) + _json_bytes(run.input_payload) + _json_bytes(run.run_classification)
 
 
 def _retention_conditions(
@@ -571,9 +549,7 @@ async def list_retention_candidates(
 
     runs_out: list[dict[str, Any]] = []
     for run in page:
-        est = _run_row_bytes(run, node_bytes_by_run.get(run.id, 0)) + int(
-            bytes_by_thread.get(run.langgraph_thread_id, 0)
-        )
+        est = _run_row_bytes(run, node_bytes_by_run.get(run.id, 0)) + int(bytes_by_thread.get(run.langgraph_thread_id, 0))
         runs_out.append(
             {
                 "id": str(run.id),
@@ -642,13 +618,7 @@ def _node_output_stmt(conditions: list[Any]) -> Any:
     matching runs. Metadata rows (``__run_meta__``) are excluded — parity with
     ``read_node_output_blob_bytes`` (the flags payload overhead would skew the
     accounting)."""
-    return (
-        select(Run.status, func.coalesce(func.sum(_NODE_OUTPUT_BYTES), 0))
-        .select_from(_RUN_NODE_OUTPUTS_AGG)
-        .join(Run, Run.id == _RUN_NODE_OUTPUTS_AGG.c.run_id)
-        .where(*conditions, _RUN_NODE_OUTPUTS_AGG.c["node_id"] != META_NODE_ID)
-        .group_by(Run.status)
-    )
+    return select(Run.status, func.coalesce(func.sum(_NODE_OUTPUT_BYTES), 0)).select_from(_RUN_NODE_OUTPUTS_AGG).join(Run, Run.id == _RUN_NODE_OUTPUTS_AGG.c.run_id).where(*conditions, _RUN_NODE_OUTPUTS_AGG.c["node_id"] != META_NODE_ID).group_by(Run.status)
 
 
 def _checkpoint_agg_stmt(cp_table: Table, size_expr: Any, conditions: list[Any], org_id: uuid.UUID | None) -> Any:
@@ -664,13 +634,7 @@ def _checkpoint_agg_stmt(cp_table: Table, size_expr: Any, conditions: list[Any],
     wheres = list(conditions)
     if org_id is not None:
         wheres.append(cp_table.c.organisation_id == org_id)
-    return (
-        select(Run.status, func.coalesce(func.sum(size_expr), 0))
-        .select_from(cp_table)
-        .join(Run, Run.langgraph_thread_id == cp_table.c.thread_id)
-        .where(*wheres)
-        .group_by(Run.status)
-    )
+    return select(Run.status, func.coalesce(func.sum(size_expr), 0)).select_from(cp_table).join(Run, Run.langgraph_thread_id == cp_table.c.thread_id).where(*wheres).group_by(Run.status)
 
 
 async def _run_grouped_estimate(
@@ -791,10 +755,7 @@ async def _estimate_bytes_by_status(
         (_runs_payload_stmt(conditions), "runs_payload"),
         (_node_output_stmt(conditions), "run_node_outputs"),
     ]
-    components.extend(
-        (_checkpoint_agg_stmt(cp_table, size_expr, conditions, org_id), f"checkpoint:{cp_table.name}")
-        for cp_table, size_expr in _CHECKPOINT_AGG_SOURCES
-    )
+    components.extend((_checkpoint_agg_stmt(cp_table, size_expr, conditions, org_id), f"checkpoint:{cp_table.name}") for cp_table, size_expr in _CHECKPOINT_AGG_SOURCES)
     for stmt, label in components:
         contributed = await _run_grouped_estimate(
             session,
@@ -844,9 +805,7 @@ async def iter_run_export(
         )
         if not page:
             break
-        bytes_by_thread, count_by_thread = await _checkpoint_detail(
-            session, [r.langgraph_thread_id for r in page], org_id
-        )
+        bytes_by_thread, count_by_thread = await _checkpoint_detail(session, [r.langgraph_thread_id for r in page], org_id)
         for run in page:
             blobs = await read_run_blobs(session, run_id=run.id, organisation_id=org_id)
             yield (
@@ -931,9 +890,7 @@ async def purge_terminal_runs(
         thread_ids = [r.langgraph_thread_id for r in batch]
         checkpoint_bytes, checkpoint_counts = await _checkpoint_detail(session, thread_ids, org_id)
         node_bytes_by_run = await read_node_output_blob_bytes(session, ids)
-        batch_freed = sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in batch) + sum(
-            checkpoint_bytes.values()
-        )
+        batch_freed = sum(_run_row_bytes(r, node_bytes_by_run.get(r.id, 0)) for r in batch) + sum(checkpoint_bytes.values())
 
         try:
             async with session.begin_nested():

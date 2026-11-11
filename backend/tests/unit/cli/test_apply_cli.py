@@ -58,29 +58,23 @@ class TestApplyCommandRegistration:
 
 class TestEnvRequired:
     def test_missing_env_errors(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_URL", raising=False)
-        monkeypatch.delenv("MODULO_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_URL", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_API_KEY", raising=False)
         group = click.Group("test")
         register_apply(group)
         result = runner.invoke(group, ["apply", "-f", str(_config_file(tmp_path))])
         assert result.exception is not None or result.exit_code != 0
-        assert "MODULO_URL" in result.output or "MODULO_API_KEY" in result.output
+        assert "FARNA_CONTROL_MODULO_URL" in result.output or "FARNA_CONTROL_MODULO_API_KEY" in result.output
 
 
 class TestDryRun:
     @respx.mock
-    def test_dry_run_exits_zero_and_outputs_json(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+    def test_dry_run_exits_zero_and_outputs_json(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         monkeypatch.setenv("SK", "v")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         group = click.Group("test")
         register_apply(group)
         path = _config_file(tmp_path)
@@ -93,15 +87,11 @@ class TestDryRun:
 
     @respx.mock
     def test_plan_alias_flag(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         monkeypatch.setenv("SK", "v")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         group = click.Group("test")
         register_apply(group)
         path = _config_file(tmp_path)
@@ -112,15 +102,11 @@ class TestDryRun:
 
 class TestBlockedExitCode:
     @respx.mock
-    def test_real_apply_blocked_exits_1(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_real_apply_blocked_exits_1(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SK", raising=False)
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         respx.get(
             "https://api.test/api/v1/model-backends",
             params={"page": "1", "page_size": "100", "include_in_dev": "true"},
@@ -142,12 +128,10 @@ class TestOutputFormats:
     @respx.mock
     def test_json_alias_flag(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """--json is an alias for --output json."""
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         monkeypatch.setenv("SK", "v")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         respx.get(
             "https://api.test/api/v1/model-backends",
             params={"page": "1", "page_size": "100", "include_in_dev": "true"},
@@ -160,12 +144,10 @@ class TestOutputFormats:
         parsed = json.loads(result.output)
         assert parsed["dry_run"] is True
 
-    def test_empty_entities_end_to_end(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_entities_end_to_end(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """An empty-entities config applies cleanly with just the summary line."""
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         group = click.Group("test")
         register_apply(group)
         path = tmp_path / "config.yaml"
@@ -180,14 +162,10 @@ class TestExecutorPhaseErrors:
     """Fetch/executor-phase HTTP failures surface as ClickExceptions, not tracebacks."""
 
     @respx.mock
-    def test_401_becomes_click_exception_with_rejected_message(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "wrong-key")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            status_code=401, json={"detail": "Not authenticated"}
-        )
+    def test_401_becomes_click_exception_with_rejected_message(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "wrong-key")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(status_code=401, json={"detail": "Not authenticated"})
         group = click.Group("test")
         register_apply(group)
         path = _config_file(tmp_path)
@@ -196,18 +174,14 @@ class TestExecutorPhaseErrors:
         assert "API key rejected" in result.output
 
     @respx.mock
-    def test_404_becomes_older_version_message(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
+    def test_404_becomes_older_version_message(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
         respx.get(
             "https://api.test/api/v1/model-backends",
             params={"page": "1", "page_size": "100", "include_in_dev": "true"},
         ).respond(json={"items": [], "total": 0})
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            status_code=404, json={"detail": "Not Found"}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(status_code=404, json={"detail": "Not Found"})
         group = click.Group("test")
         register_apply(group)
         path = _config_file(tmp_path)
@@ -217,14 +191,10 @@ class TestExecutorPhaseErrors:
         assert "older version" in result.output
 
     @respx.mock
-    def test_network_error_becomes_click_exception(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MODULO_URL", "https://api.test")
-        monkeypatch.setenv("MODULO_API_KEY", "key")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).mock(
-            side_effect=httpx.ConnectError("connection refused")
-        )
+    def test_network_error_becomes_click_exception(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_URL", "https://api.test")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_API_KEY", "key")
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).mock(side_effect=httpx.ConnectError("connection refused"))
         group = click.Group("test")
         register_apply(group)
         path = _config_file(tmp_path)

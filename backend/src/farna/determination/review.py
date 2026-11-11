@@ -154,9 +154,7 @@ def review_proposal(
             )
 
     review_state = _DECISION_REVIEW_STATE[review_request.decision]
-    reviewed_contract = ProposalContract.model_validate(
-        corrected.model_copy(update={"review_state": review_state, "activation_status": "not_activated"}).model_dump()
-    )
+    reviewed_contract = ProposalContract.model_validate(corrected.model_copy(update={"review_state": review_state, "activation_status": "not_activated"}).model_dump())
 
     return ReviewedProposal(
         proposal=reviewed_contract,
@@ -184,11 +182,7 @@ def _blocking_assumption_ids(
     acknowledged_ids: set[uuid.UUID],
 ) -> list[uuid.UUID]:
     """Assumption ids that must be acknowledged before approval."""
-    return [
-        assumption.id
-        for assumption in assumptions
-        if assumption.confidence in _UNSETTLED_CONFIDENCE and assumption.id not in acknowledged_ids
-    ]
+    return [assumption.id for assumption in assumptions if assumption.confidence in _UNSETTLED_CONFIDENCE and assumption.id not in acknowledged_ids]
 
 
 def _validated_acknowledgements(

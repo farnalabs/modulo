@@ -150,11 +150,7 @@ async def list_agents(
         total = (await session.execute(select(func.count()).select_from(Agent))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
-    items = list(
-        (
-            await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))
-        ).scalars()
-    )
+    items = list((await session.execute(select(Agent).order_by(Agent.created_at.desc()).offset(offset).limit(page_size))).scalars())
     has_more = (offset + len(items)) < total
     return PageResult(items=items, total=total, page=page, page_size=page_size, has_more=has_more)
 
@@ -377,9 +373,7 @@ async def get_eval_results_with_defs(
     # filtered OUT of the prompt-optimizer feed. Their passed semantics are
     # inverted (regex passed=True = pattern MATCHED = a violation), so a
     # guardrail row would corrupt the optimizer's failure context.
-    non_guardrail: list[EvalResult] = [
-        er for er in eval_results if definitions.get(str(er.eval_id), {}).get("eval_type") != "guardrail"
-    ]
+    non_guardrail: list[EvalResult] = [er for er in eval_results if definitions.get(str(er.eval_id), {}).get("eval_type") != "guardrail"]
     eval_results = non_guardrail
 
     results_list = [

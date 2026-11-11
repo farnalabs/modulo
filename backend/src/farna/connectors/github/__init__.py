@@ -451,8 +451,7 @@ class GitHubConnector(ConnectorBase):
         if time.monotonic() < self._circuit_open_until:
             remaining = self._circuit_open_until - time.monotonic()
             raise GitHubCircuitOpenError(
-                f"GitHub circuit is open after {self._consecutive_failures} consecutive failures; "
-                f"retry after circuit cooldown ({remaining:.1f}s remaining)",
+                f"GitHub circuit is open after {self._consecutive_failures} consecutive failures; retry after circuit cooldown ({remaining:.1f}s remaining)",
                 retry_after_seconds=remaining,
             )
         if self._circuit_half_open:
@@ -900,10 +899,7 @@ class GitHubConnector(ConnectorBase):
         missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing))
         return HealthResult(
             ok=False,
-            detail=(
-                f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
-                f"Required: {', '.join(sorted(required))}"
-            ),
+            detail=(f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). Required: {', '.join(sorted(required))}"),
         )
 
     async def compensate(
@@ -1479,9 +1475,7 @@ class GitHubConnector(ConnectorBase):
         pull_number = self._require_write_filter(payload.data, "pull_number", "pr_review")
         event = self._require_write_filter(payload.data, "event", "pr_review")
         if event not in _REVIEW_EVENTS:
-            raise ValueError(
-                f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}"
-            )
+            raise ValueError(f"GitHub pr_review 'event' must be one of APPROVE, REQUEST_CHANGES, COMMENT; got {event!r}")
         review_body = self._write_body(payload.data, {}, ("comments",))
         review_body["event"] = event
         review_body["body"] = payload.data.get("body", "")

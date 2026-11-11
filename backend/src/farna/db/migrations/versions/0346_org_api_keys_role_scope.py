@@ -48,30 +48,10 @@ _CHECK = "ck_org_api_keys_role"
 _ROLE_SCOPE_WIDENED = "role IN ('operator', 'runner') OR (role = 'admin' AND scope = 'user')"
 _ROLE_SCOPE_ORIGINAL = "role IN ('operator', 'runner')"
 
-_DROP_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_org_api_keys_role' "
-    "AND conrelid = 'public.org_api_keys'::regclass) "
-    "THEN ALTER TABLE public.org_api_keys DROP CONSTRAINT ck_org_api_keys_role; "
-    "END IF; END $$;"
-)
-_ADD_CHECK_NOT_VALID = (
-    "ALTER TABLE public.org_api_keys ADD CONSTRAINT ck_org_api_keys_role "
-    "CHECK (role IN ('operator', 'runner') OR (role = 'admin' AND scope = 'user')) "
-    "NOT VALID;"
-)
-_ADD_CHECK_NOT_VALID_ORIGINAL = (
-    "ALTER TABLE public.org_api_keys ADD CONSTRAINT ck_org_api_keys_role "
-    "CHECK (role IN ('operator', 'runner')) NOT VALID;"
-)
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_org_api_keys_role' "
-    "AND conrelid = 'public.org_api_keys'::regclass "
-    "AND NOT convalidated) "
-    "THEN ALTER TABLE public.org_api_keys VALIDATE CONSTRAINT ck_org_api_keys_role; "
-    "END IF; END $$;"
-)
+_DROP_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_org_api_keys_role' AND conrelid = 'public.org_api_keys'::regclass) THEN ALTER TABLE public.org_api_keys DROP CONSTRAINT ck_org_api_keys_role; END IF; END $$;"
+_ADD_CHECK_NOT_VALID = "ALTER TABLE public.org_api_keys ADD CONSTRAINT ck_org_api_keys_role CHECK (role IN ('operator', 'runner') OR (role = 'admin' AND scope = 'user')) NOT VALID;"
+_ADD_CHECK_NOT_VALID_ORIGINAL = "ALTER TABLE public.org_api_keys ADD CONSTRAINT ck_org_api_keys_role CHECK (role IN ('operator', 'runner')) NOT VALID;"
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_org_api_keys_role' AND conrelid = 'public.org_api_keys'::regclass AND NOT convalidated) THEN ALTER TABLE public.org_api_keys VALIDATE CONSTRAINT ck_org_api_keys_role; END IF; END $$;"
 
 
 def _is_postgres() -> bool:

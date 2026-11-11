@@ -351,10 +351,7 @@ def resolve_backoff_schedule(policy: Any) -> tuple[bool, float, float, str | Non
     # NaN/Infinity fail the range comparison (not <= bound / not < bound), so
     # they land in the same fail-open bucket as any other out-of-bounds value.
     if not RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= RETRY_SCHEDULE_MAX_DELAY_SECONDS:
-        return _fail_open(
-            f"backoff_schedule 'delay_seconds' out of bounds "
-            f"[{RETRY_SCHEDULE_MIN_DELAY_SECONDS}, {RETRY_SCHEDULE_MAX_DELAY_SECONDS}]"
-        )
+        return _fail_open(f"backoff_schedule 'delay_seconds' out of bounds [{RETRY_SCHEDULE_MIN_DELAY_SECONDS}, {RETRY_SCHEDULE_MAX_DELAY_SECONDS}]")
     # Aligned with the write-site validator (FAR-525 qa gate): a non-integral
     # in-range delay (e.g. 2.5) is rejected there, so the resolver must not
     # silently truncate it — fail open to the default schedule instead.
@@ -368,10 +365,7 @@ def resolve_backoff_schedule(policy: Any) -> tuple[bool, float, float, str | Non
     if multiplier is None:
         return _fail_open("'multiplier' is out of representable range")
     if not RETRY_SCHEDULE_MIN_MULTIPLIER <= multiplier <= RETRY_SCHEDULE_MAX_MULTIPLIER:
-        return _fail_open(
-            f"backoff_schedule 'multiplier' out of bounds "
-            f"[{RETRY_SCHEDULE_MIN_MULTIPLIER}, {RETRY_SCHEDULE_MAX_MULTIPLIER}]"
-        )
+        return _fail_open(f"backoff_schedule 'multiplier' out of bounds [{RETRY_SCHEDULE_MIN_MULTIPLIER}, {RETRY_SCHEDULE_MAX_MULTIPLIER}]")
     return (True, float(int(delay_f)), multiplier, None)
 
 
@@ -404,10 +398,7 @@ def canonicalise_backoff_schedule(schedule: Any) -> dict[str, Any] | None:
         try:
             delay_f = float(delay)
         except OverflowError as exc:
-            raise ValueError(
-                "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
-                f"{RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {RETRY_SCHEDULE_MAX_DELAY_SECONDS}"
-            ) from exc
+            raise ValueError(f"retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between {RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {RETRY_SCHEDULE_MAX_DELAY_SECONDS}") from exc
         if not isinstance(delay, int) and delay_f.is_integer():
             canonical["delay_seconds"] = int(delay_f)
     mult = canonical.get("multiplier")
@@ -415,10 +406,7 @@ def canonicalise_backoff_schedule(schedule: Any) -> dict[str, Any] | None:
         try:
             canonical["multiplier"] = float(mult)
         except OverflowError as exc:
-            raise ValueError(
-                "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
-                f"{RETRY_SCHEDULE_MIN_MULTIPLIER} and {RETRY_SCHEDULE_MAX_MULTIPLIER}"
-            ) from exc
+            raise ValueError(f"retry_policy 'backoff_schedule' 'multiplier' must be a number between {RETRY_SCHEDULE_MIN_MULTIPLIER} and {RETRY_SCHEDULE_MAX_MULTIPLIER}") from exc
     return canonical
 
 
@@ -592,8 +580,7 @@ def validate_edge_mutual_exclusion(edge: dict[str, Any], result: Any) -> None:
     if edge_retry_and_compensation_conflict(edge):
         result.error(
             "EDGE_RETRY_COMPENSATION_EXCLUSIVE",
-            f"Edge from '{_string_or_default(source)}': a failure is either edge-retried OR routed to an "
-            "'on_failure_target', never both ('retry' and 'on_failure_target' are mutually exclusive).",
+            f"Edge from '{_string_or_default(source)}': a failure is either edge-retried OR routed to an 'on_failure_target', never both ('retry' and 'on_failure_target' are mutually exclusive).",
             node_id=_string_or_default(source),
         )
 
@@ -707,8 +694,7 @@ def validate_compensation_acyclic(graph_json: dict[str, Any], result: Any) -> No
     if cycles:
         result.error(
             "COMPENSATION_CYCLE",
-            f"Compensation graph must be ACYCLIC; found cycle(s): {cycle_desc}. "
-            "A compensation node's failure cannot route back to an upstream compensation node.",
+            f"Compensation graph must be ACYCLIC; found cycle(s): {cycle_desc}. A compensation node's failure cannot route back to an upstream compensation node.",
         )
 
 

@@ -210,12 +210,7 @@ def is_split_envelope(value: Any) -> bool:
     telemetry entry exists the idempotent ``stored_telemetry is not None``
     branch fires first and never shape-sniffs.
     """
-    return (
-        isinstance(value, dict)
-        and "output" in value
-        and isinstance(value.get("telemetry"), dict)
-        and "artifacts" in value
-    )
+    return isinstance(value, dict) and "output" in value and isinstance(value.get("telemetry"), dict) and "artifacts" in value
 
 
 def resolve_node_contract_output(

@@ -75,9 +75,7 @@ class McpServer(SoftDeleteMixin, OrgScoped):
     endpoint: Mapped[str | None] = mapped_column(String(2000))
     command: Mapped[str | None] = mapped_column(String(2000))
     declared_scopes: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
-    owner_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), index=True
-    )
+    owner_account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), index=True)
     # Optional Fernet ciphertext for a server-side credential (a remote MCP
     # server's bearer token, say). NEVER exposed in a response — only
     # ``has_credentials``. Same at-rest crypto as ``connector_instances``.
@@ -87,14 +85,10 @@ class McpServer(SoftDeleteMixin, OrgScoped):
     tools_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONB_COL, nullable=False, default=list)
     tools_hash: Mapped[str | None] = mapped_column(String(64))
     approval_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default=APPROVAL_STATUS_UNAPPROVED)
-    approved_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL)
-    )
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_hash: Mapped[str | None] = mapped_column(String(64))
     last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="SET NULL"), index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="SET NULL"), index=True)

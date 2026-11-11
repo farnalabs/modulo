@@ -185,9 +185,7 @@ def authenticate_operator(secret: str | None, settings: Settings) -> str:
         return _OPERATOR_PRIMARY_ACTOR
     if standby and hmac.compare_digest(provided, standby):
         return _OPERATOR_STANDBY_ACTOR
-    raise PreconditionError(
-        "operator secret does not match MODULO_BREAK_GLASS_SECRET or MODULO_BREAK_GLASS_STANDBY_SECRET"
-    )
+    raise PreconditionError("operator secret does not match MODULO_BREAK_GLASS_SECRET or MODULO_BREAK_GLASS_STANDBY_SECRET")
 
 
 # ── Shared async helpers ─────────────────────────────────────────────────────
@@ -227,12 +225,7 @@ async def _db_now(session: AsyncSession) -> datetime:
 
 
 def _is_live(row: Account, now: datetime) -> bool:
-    return (
-        row.is_break_glass
-        and row.break_glass_deactivated_at is None
-        and row.break_glass_expires_at is not None
-        and row.break_glass_expires_at > now
-    )
+    return row.is_break_glass and row.break_glass_deactivated_at is None and row.break_glass_expires_at is not None and row.break_glass_expires_at > now
 
 
 def _row_state(row: Account, now: datetime) -> str:
@@ -255,11 +248,7 @@ async def _bg_accounts_for_org(
     *,
     only_undeactivated: bool,
 ) -> list[Account]:
-    stmt = (
-        select(Account)
-        .join(OrgMembership, OrgMembership.account_id == Account.id)
-        .where(OrgMembership.organisation_id == org_id, Account.is_break_glass.is_(True))
-    )
+    stmt = select(Account).join(OrgMembership, OrgMembership.account_id == Account.id).where(OrgMembership.organisation_id == org_id, Account.is_break_glass.is_(True))
     if only_undeactivated:
         stmt = stmt.where(Account.break_glass_deactivated_at.is_(None))
     result = await session.execute(stmt)
@@ -307,16 +296,12 @@ async def activate(
         email: str | None = None
         for _ in range(_ACTIVATION_EMAIL_TRIES):
             candidate = f"break-glass-{secrets.token_hex(8)}@modulo.run"
-            existing = (
-                await session.execute(select(Account.id).where(Account.email == candidate))
-            ).scalar_one_or_none()
+            existing = (await session.execute(select(Account.id).where(Account.email == candidate))).scalar_one_or_none()
             if existing is None:
                 email = candidate
                 break
         if email is None:
-            raise ActivationTxnError(
-                f"could not synthesize a unique break-glass email after {_ACTIVATION_EMAIL_TRIES} attempts"
-            )
+            raise ActivationTxnError(f"could not synthesize a unique break-glass email after {_ACTIVATION_EMAIL_TRIES} attempts")
 
         account = Account(
             email=email,
@@ -388,10 +373,7 @@ async def deactivate(
                 suffix = f" / account {account_id}" if account_id is not None else ""
                 raise OrgNotFoundError(f"no break-glass target for org {org_id}{suffix}")
             if not force and any(_is_live(row, now) for row in rows):
-                raise DeactivateRefusedError(
-                    "a live break-glass activation exists for this org; pass --force to proceed "
-                    "or --account-id to target one specific row"
-                )
+                raise DeactivateRefusedError("a live break-glass activation exists for this org; pass --force to proceed or --account-id to target one specific row")
             for row in rows:
                 await session.execute(
                     text("SELECT public.deactivate_break_glass(:caller, :target, false)"),
@@ -441,21 +423,12 @@ async def force_last_admin(
         async with session.begin():
             admins = await _live_non_bg_admins(session, org_id)
             if not admins:
-                bg_live = [
-                    row
-                    for row in await _bg_accounts_for_org(session, org_id, only_undeactivated=True)
-                    if _is_live(row, now)
-                ]
+                bg_live = [row for row in await _bg_accounts_for_org(session, org_id, only_undeactivated=True) if _is_live(row, now)]
                 if bg_live:
-                    raise PreconditionError(
-                        "org has no live non-break-glass admin and its only live admins are break-glass "
-                        "accounts — refusing to remove a live break-glass account"
-                    )
+                    raise PreconditionError("org has no live non-break-glass admin and its only live admins are break-glass accounts — refusing to remove a live break-glass account")
                 raise PreconditionError("org has no live non-break-glass admins to remove")
             if len(admins) > 1:
-                raise PreconditionError(
-                    f"org has {len(admins)} live non-break-glass admins — force-last-admin requires exactly one"
-                )
+                raise PreconditionError(f"org has {len(admins)} live non-break-glass admins — force-last-admin requires exactly one")
             target = admins[0]
             removed_account_id = str(target.id)
             await session.execute(
@@ -470,8 +443,7 @@ async def force_last_admin(
                 payload_json={
                     "operator": actor,
                     "actor": actor,
-                    "summary": f"Last non-break-glass admin {removed_account_id or 'unknown'} forcibly "
-                    f'removed from org {short_id(org_id) or "unknown"} by operator "{actor}"',
+                    "summary": f'Last non-break-glass admin {removed_account_id or "unknown"} forcibly removed from org {short_id(org_id) or "unknown"} by operator "{actor}"',
                     "reason": reason,
                 },
             )
@@ -524,12 +496,7 @@ async def status_rows(
     now: datetime,
 ) -> list[dict[str, Any]]:
     """List break-glass rows with org identity + state (+ actor/reason best-effort)."""
-    stmt = (
-        select(Account, Organisation)
-        .join(OrgMembership, OrgMembership.account_id == Account.id)
-        .join(Organisation, Organisation.id == OrgMembership.organisation_id)
-        .where(Account.is_break_glass.is_(True))
-    )
+    stmt = select(Account, Organisation).join(OrgMembership, OrgMembership.account_id == Account.id).join(Organisation, Organisation.id == OrgMembership.organisation_id).where(Account.is_break_glass.is_(True))
     if org_id is not None:
         stmt = stmt.where(OrgMembership.organisation_id == org_id)
     if not all_rows:
@@ -575,9 +542,7 @@ async def smoke(session: AsyncSession) -> dict[str, Any]:
         role: str = (await session.execute(text("SELECT session_user"))).scalar_one()
         if role != "modulo_breakglass":
             raise SmokeFailureError(f"session_user is {role!r}, expected 'modulo_breakglass'")
-        function: str | None = (
-            await session.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)')"))
-        ).scalar_one()
+        function: str | None = (await session.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)')"))).scalar_one()
         if not function:
             raise SmokeFailureError("deactivate_break_glass SECURITY DEFINER not found")
     except SmokeFailureError:
@@ -627,10 +592,7 @@ def _confirm_interactive(org: Organisation) -> bool:
 def _print_dry_run(org: Organisation, ttl_minutes: int, reason: str, actor: str) -> None:
     click.echo(f"[dry-run] would activate break-glass for org {org.name} (id={org.id}, slug={org.slug})")
     click.echo(f"[dry-run] ttl_minutes={ttl_minutes}, reason={reason!r}, operator={actor}")
-    click.echo(
-        "[dry-run] would create a fresh break-glass-<16-hex>@modulo.run org admin, "
-        "write the break_glass_activated audit, and print a single-use credential once"
-    )
+    click.echo("[dry-run] would create a fresh break-glass-<16-hex>@modulo.run org admin, write the break_glass_activated audit, and print a single-use credential once")
 
 
 def _deliver_credential(credential: str, *, yes: bool) -> None:
@@ -652,16 +614,13 @@ def _render_status(rows: list[dict[str, Any]], *, as_json: bool) -> None:
         click.echo("no break-glass rows")
         return
     for row in rows:
-        click.echo(
-            f"{row['org_slug']:24s} {row['state']:10s} account={row['account_id']} "
-            f"expires={row['expires_at']} reason={row['reason'] or ''} actor={row['actor'] or ''}"
-        )
+        click.echo(f"{row['org_slug']:24s} {row['state']:10s} account={row['account_id']} expires={row['expires_at']} reason={row['reason'] or ''} actor={row['actor'] or ''}")
 
 
 @click.group()
 @click.option(
     "--secret",
-    envvar="MODULO_BREAK_GLASS_OPERATOR_SECRET",
+    envvar="FARNA_CONTROL_MODULO_BREAK_GLASS_OPERATOR_SECRET",
     default=None,
     help="Operator secret (or MODULO_BREAK_GLASS_OPERATOR_SECRET)",
 )
@@ -705,8 +664,7 @@ def activate_cmd(
         ttl_minutes = settings.modulo_break_glass_ttl_minutes
     if ttl_minutes < 1 or ttl_minutes > settings.modulo_break_glass_max_ttl_minutes:
         click.echo(
-            f"error: --ttl-minutes must be within [1, {settings.modulo_break_glass_max_ttl_minutes}]; "
-            f"got {ttl_minutes}",
+            f"error: --ttl-minutes must be within [1, {settings.modulo_break_glass_max_ttl_minutes}]; got {ttl_minutes}",
             err=True,
         )
         ctx.exit(EXIT_PRECONDITIONS)
@@ -740,10 +698,7 @@ async def _async_activate(
             _print_dry_run(org, ttl_minutes, reason, actor)
             return
         if any(_is_live(row, now) for row in live):
-            click.echo(
-                f"warning: a live break-glass activation already exists for org {org.slug} — "
-                "this creates a fresh account"
-            )
+            click.echo(f"warning: a live break-glass activation already exists for org {org.slug} — this creates a fresh account")
         credential = await activate(
             session,
             now=now,
@@ -822,10 +777,7 @@ async def _async_deactivate(
             force=force,
             now=now,
         )
-        click.echo(
-            f"deactivated {result['deactivated']} break-glass account(s) for org {org.slug}: "
-            f"{', '.join(result['account_ids'])}"
-        )
+        click.echo(f"deactivated {result['deactivated']} break-glass account(s) for org {org.slug}: {', '.join(result['account_ids'])}")
     except asyncio.CancelledError:
         raise
     except BreakGlassError as exc:

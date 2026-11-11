@@ -74,9 +74,7 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
     # Cron-specific fields (nullable for non-cron trigger types)
     cron_expression: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cron_timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -93,15 +91,11 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     # epoch can never be deactivated until the row is re-anchored. server_default
     # mirrors the migration backfill so no insert path can leave an unanchored
     # row.
-    streak_epoch: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=True
-    )
+    streak_epoch: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=True)
     # FAR-377 run-kind discriminator. 'run' (DEFAULT) fires a pipeline Run;
     # 'suite_run' fires a SuiteRun execution. Additive — existing rows are 'run'.
     run_kind: Mapped[str] = mapped_column(String(20), nullable=False, server_default="run")
     # FAR-377: the eval suite a 'suite_run' trigger executes. The eval dataset +
     # schedule config + model backend + scenario inputs live in ``config_json``;
     # ``pipeline_id`` remains NOT NULL as the suite's owning/placeholder pipeline.
-    eval_suite_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("eval_suites.id", ondelete="RESTRICT"), nullable=True, index=True
-    )
+    eval_suite_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("eval_suites.id", ondelete="RESTRICT"), nullable=True, index=True)

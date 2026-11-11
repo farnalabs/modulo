@@ -62,10 +62,7 @@ class SecretsFileError(RuntimeError):
 def assert_supported_platform() -> None:
     """Require a validated owner-only secret-file implementation."""
     if is_windows():
-        raise SecretsFileError(
-            "The Windows launcher secrets file requires installer-host ACL validation (FAR-2229); "
-            "refusing to write credentials without an explicit ACL implementation"
-        )
+        raise SecretsFileError("The Windows launcher secrets file requires installer-host ACL validation (FAR-2229); refusing to write credentials without an explicit ACL implementation")
 
 
 @dataclass(frozen=True)
@@ -107,9 +104,7 @@ def _parse(data: bytes) -> LauncherSecrets:
     except ValueError as exc:
         raise SecretsFileError("secrets file state_hmac_key is not valid hex") from exc
     if len(hmac_key) != _HMAC_KEY_BYTES:
-        raise SecretsFileError(
-            f"secrets file state_hmac_key must decode to {_HMAC_KEY_BYTES} bytes; got {len(hmac_key)}"
-        )
+        raise SecretsFileError(f"secrets file state_hmac_key must decode to {_HMAC_KEY_BYTES} bytes; got {len(hmac_key)}")
     return LauncherSecrets(
         postgres_password=payload["postgres_password"],
         redis_password=payload["redis_password"],
@@ -140,9 +135,7 @@ def _adopt_existing(path: Path) -> LauncherSecrets:
             last_error = exc
             time.sleep(_ADOPT_RETRY_DELAY_SECONDS)
     assert last_error is not None
-    raise SecretsFileError(
-        f"could not adopt existing secrets file after {_ADOPT_ATTEMPTS} attempts: {last_error}"
-    ) from last_error
+    raise SecretsFileError(f"could not adopt existing secrets file after {_ADOPT_ATTEMPTS} attempts: {last_error}") from last_error
 
 
 def load_or_create(path: Path) -> LauncherSecrets:

@@ -59,12 +59,7 @@ depends_on: str | None = None
 def upgrade() -> None:
     # 1. Widen the CHECK vocabulary with 'runner_docker'.
     op.execute("ALTER TABLE public.environment_profiles DROP CONSTRAINT IF EXISTS ck_env_profiles_provider_type;")
-    op.execute(
-        "ALTER TABLE public.environment_profiles ADD CONSTRAINT ck_env_profiles_provider_type "
-        "CHECK (((provider_type)::text = ANY "
-        "((ARRAY['local_docker'::character varying, 'e2b'::character varying, "
-        "'local'::character varying, 'runner_docker'::character varying])::text[])))"
-    )
+    op.execute("ALTER TABLE public.environment_profiles ADD CONSTRAINT ck_env_profiles_provider_type CHECK (((provider_type)::text = ANY ((ARRAY['local_docker'::character varying, 'e2b'::character varying, 'local'::character varying, 'runner_docker'::character varying])::text[])))")
 
     # 2. Drop the server default (guarded: only when it is the legacy value).
     op.execute(
@@ -90,9 +85,7 @@ def downgrade() -> None:
     # Re-point runner_docker rows to the legacy alias before narrowing the
     # vocabulary (semantics-preserving: the application layer aliases
     # local_docker onto the same provider).
-    op.execute(
-        "UPDATE public.environment_profiles SET provider_type = 'local_docker' WHERE provider_type = 'runner_docker';"
-    )
+    op.execute("UPDATE public.environment_profiles SET provider_type = 'local_docker' WHERE provider_type = 'runner_docker';")
     op.execute("ALTER TABLE public.environment_profiles DROP CONSTRAINT IF EXISTS ck_env_profiles_provider_type;")
     op.execute(
         r"""

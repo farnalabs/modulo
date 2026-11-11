@@ -577,8 +577,7 @@ def _pass_threshold(pass_rule: dict[str, Any] | None) -> float:
     if isinstance(raw_threshold, bool) or not isinstance(raw_threshold, (int, float)):
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_CONFIGURATION,
-            "pass_rule.threshold is required and must be a number in [0, 1]; "
-            "a missing threshold would make every aggregate pass",
+            "pass_rule.threshold is required and must be a number in [0, 1]; a missing threshold would make every aggregate pass",
         )
     threshold = float(raw_threshold)
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
@@ -693,8 +692,7 @@ def _validated_distribution(
     if missing:
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-            f"question {qid!r} probabilities omit declared answer(s) {missing}; "
-            "a partial distribution cannot be renormalised into a verdict",
+            f"question {qid!r} probabilities omit declared answer(s) {missing}; a partial distribution cannot be renormalised into a verdict",
         )
     return _scaled_distribution(values, qid)
 
@@ -894,22 +892,14 @@ def _prompt_question_spec(question: dict[str, Any]) -> dict[str, Any]:
     if question_type == "choice":
         options = question.get("options")
         if isinstance(options, list):
-            spec["options"] = [
-                {"key": option.get("key"), "description": option.get("description", "")}
-                for option in options
-                if isinstance(option, dict)
-            ]
+            spec["options"] = [{"key": option.get("key"), "description": option.get("description", "")} for option in options if isinstance(option, dict)]
         passing_keys = question.get("passing_keys")
         if isinstance(passing_keys, list):
             spec["passing_keys"] = passing_keys
     elif question_type == "score":
         levels = question.get("levels")
         if isinstance(levels, list):
-            spec["levels"] = [
-                {"score": level.get("score"), "description": level.get("description", "")}
-                for level in levels
-                if isinstance(level, dict)
-            ]
+            spec["levels"] = [{"score": level.get("score"), "description": level.get("description", "")} for level in levels if isinstance(level, dict)]
         spec["pass_from"] = question.get("pass_from")
     return spec
 
@@ -995,11 +985,7 @@ def derived_pass_confidence(
     """
     by_id = {verdict.question_id: verdict for verdict in verdicts}
     question_map = {str(question.get("id", "")): question for question in questions}
-    required_values = [
-        verdict.pass_confidence
-        for qid, verdict in by_id.items()
-        if verdict.pass_confidence is not None and bool(question_map.get(qid, {}).get("required", False))
-    ]
+    required_values = [verdict.pass_confidence for qid, verdict in by_id.items() if verdict.pass_confidence is not None and bool(question_map.get(qid, {}).get("required", False))]
     if required_values:
         return min(required_values)
     weighted_total = 0.0

@@ -87,10 +87,7 @@ def main() -> None:
     if admin_url != original:
         # FAR-1441: sslmode is no longer silently stripped — it is extracted
         # from the pre-fix URL and honoured on the admin connect below.
-        msg = (
-            "Fixed DATABASE_ADMIN_URL for the async driver "
-            "(scheme rewrite; sslmode, when present, is honoured via the ssl connect arg)"
-        )
+        msg = "Fixed DATABASE_ADMIN_URL for the async driver (scheme rewrite; sslmode, when present, is honoured via the ssl connect arg)"
         print(msg)  # noqa: T201
 
     # Also fix DATABASE_URL (the runtime URL) for backwards compat
@@ -109,9 +106,7 @@ def main() -> None:
             connect_kwargs["ssl"] = ssl_arg
         conn = await asyncpg.connect(pg_url, **connect_kwargs)
         try:
-            await conn.execute(
-                "CREATE TABLE IF NOT EXISTS alembic_version (  version_num VARCHAR(255) NOT NULL PRIMARY KEY)"
-            )
+            await conn.execute("CREATE TABLE IF NOT EXISTS alembic_version (  version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
             print("alembic_version table ready (VARCHAR(255))")  # noqa: T201
         finally:
             await conn.close()
@@ -155,21 +150,19 @@ def main() -> None:
     # If set, fix it like the others. If not, derive it from the fixed DATABASE_URL
     # by swapping the username to modulo_system -- the password stays the same, and
     # bootstrap_role.py reads it from the URL to create the role.
-    system_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL", "")
+    system_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
     if system_url:
         system_url = fix_database_url(system_url)
     elif runtime_url:
         system_url = derive_system_database_url(runtime_url)
         if not system_url:
             print(  # noqa: T201
-                "WARNING: cannot derive MODULO_SYSTEM_DATABASE_URL "
-                "(DATABASE_URL has no usable password/userinfo) "
-                "- system crons will fall back to modulo_app",
+                "WARNING: cannot derive MODULO_SYSTEM_DATABASE_URL (DATABASE_URL has no usable password/userinfo) - system crons will fall back to modulo_app",
                 file=sys.stderr,
             )
 
     if system_url:
-        os.environ["MODULO_SYSTEM_DATABASE_URL"] = system_url
+        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] = system_url
         # Short-lived container bootstrap env file, consistent with the
         # /tmp/database_url.env and /tmp/database_admin_url.env files written above.
         _write_env_file("/tmp/system_database_url.env", system_url)  # nosec B108  # noqa: S108  # NOSONAR S5443

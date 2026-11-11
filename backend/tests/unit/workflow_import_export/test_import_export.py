@@ -379,9 +379,7 @@ def test_sanitize_retry_policy_canonicalise_valueerror_degrades_to_schedule_faul
     assert fault == "schedule"
 
 
-def test_sanitize_retry_policy_containment_logs_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_sanitize_retry_policy_containment_logs_warning(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-525 iteration 2 observability: an unexpected exception inside the
     containment try logs a distinguishable warning (exc_info attached) so a
     genuine validator defect is separable from malformed bundled data."""
@@ -595,9 +593,7 @@ async def test_resolve_schema_matches_by_definition() -> None:
     versions_result = MagicMock()
     versions_result.scalars.return_value.all.return_value = [sv1, sv2]
     session.execute = AsyncMock(side_effect=[name_result, schemas_result, versions_result])
-    resolved = await resolve_schema(
-        session, _ORG_ID, {"name": "S", "abstract_name": "abs", "definition_json": {"type": "object"}}
-    )
+    resolved = await resolve_schema(session, _ORG_ID, {"name": "S", "abstract_name": "abs", "definition_json": {"type": "object"}})
     assert resolved == {"schema_id": str(s1.id), "version": "1.0", "warning": None}
 
 
@@ -651,9 +647,7 @@ async def test_resolve_schema_definition_match_with_duplicate_versions() -> None
     versions_result.scalars.return_value.all.return_value = [sv1, sv1b, sv2]
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=[schemas_result, versions_result])
-    resolved = await resolve_schema(
-        session, _ORG_ID, {"name": "S", "abstract_name": "", "definition_json": {"missing": True}}
-    )
+    resolved = await resolve_schema(session, _ORG_ID, {"name": "S", "abstract_name": "", "definition_json": {"missing": True}})
     assert resolved["schema_id"] is None
     assert "not found locally" in resolved["warning"]
 
@@ -830,9 +824,7 @@ def _export_session(fakes: dict[str, Any]) -> AsyncMock:
     backends_result.scalars.return_value = [fakes["backend"]]
     edges_result = MagicMock()
     edges_result.scalars.return_value = [fakes["edge"]]
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result])
     session.get = AsyncMock(return_value=None)
     return session
 
@@ -886,9 +878,7 @@ async def test_export_pipeline_bundle_builds_portable_zip(monkeypatch: pytest.Mo
             "definition_json": {"type": "object"},
         }
     ]
-    assert bundle["model_backends"] == [
-        {"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}
-    ]
+    assert bundle["model_backends"] == [{"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}]
     assert bundle["edges"] == [
         {
             "id": str(fakes["edge"].id),
@@ -1054,21 +1044,15 @@ async def test_export_pipeline_bundle_carries_name_based_runner_bindings(monkeyp
     backends_result.scalars.return_value = [fakes["backend"]]
     edges_result = MagicMock()
     edges_result.scalars.return_value = [fakes["edge"]]
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result])
     session.get = AsyncMock(return_value=fakes["backend"])
 
     data = await export_pipeline_bundle(session, fakes["pipeline"].id)
     bundle = extract_bundle_json_from_zip(data)
 
     # Name-based spec (no org ids, no credentials) + the bound backend rides along.
-    assert bundle["agents"][0]["model_backend_bindings"] == [
-        {"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
-    ]
-    assert bundle["model_backends"] == [
-        {"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}
-    ]
+    assert bundle["agents"][0]["model_backend_bindings"] == [{"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}]
+    assert bundle["model_backends"] == [{"id": str(fakes["backend"].id), "name": "MB", "provider": "openai", "model_id": "gpt-4o"}]
 
 
 async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
@@ -1098,9 +1082,7 @@ async def test_export_pipeline_bundle_omits_binding_with_invisible_backend(
     backends_result.scalars.return_value = []
     edges_result = MagicMock()
     edges_result.scalars.return_value = [fakes["edge"]]
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, bindings_result, schemas_result, backends_result, edges_result])
     session.get = AsyncMock(return_value=None)
 
     data = await export_pipeline_bundle(session, fakes["pipeline"].id)
@@ -1140,11 +1122,7 @@ async def test_apply_agent_bindings_rebinds_by_name(monkeypatch: pytest.MonkeyPa
     ctx = _bindings_ctx()
     backend = SimpleNamespace(id=uuid.uuid4(), name="MB", provider="openai")
     agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
-    ad = {
-        "model_backend_bindings": [
-            {"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
-        ]
-    }
+    ad = {"model_backend_bindings": [{"model_backend_name": "MB", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}]}
 
     await mod._apply_agent_bindings(ctx, agent, ad, {"MB": backend}, ctx.warnings)
 
@@ -1168,11 +1146,7 @@ async def test_apply_agent_bindings_unknown_backend_name_warns(monkeypatch: pyte
     monkeypatch.setattr(mod, "replace_agent_bindings", replace_mock)
     ctx = _bindings_ctx()
     agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
-    ad = {
-        "model_backend_bindings": [
-            {"model_backend_name": "Ghost", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
-        ]
-    }
+    ad = {"model_backend_bindings": [{"model_backend_name": "Ghost", "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}]}
 
     await mod._apply_agent_bindings(ctx, agent, ad, {}, ctx.warnings)
 
@@ -1187,11 +1161,7 @@ async def test_apply_agent_bindings_invalid_pair_warns(monkeypatch: pytest.Monke
     ctx = _bindings_ctx()
     backend = SimpleNamespace(id=uuid.uuid4(), name="MB", provider="openai")
     agent = SimpleNamespace(id=uuid.uuid4(), name="Agent A")
-    ad = {
-        "model_backend_bindings": [
-            {"model_backend_name": "MB", "target_env_var": "MODULO_API_KEY", "source_field": "api_key"}
-        ]
-    }
+    ad = {"model_backend_bindings": [{"model_backend_name": "MB", "target_env_var": "FARNA_CONTROL_MODULO_API_KEY", "source_field": "api_key"}]}
 
     await mod._apply_agent_bindings(ctx, agent, ad, {"MB": backend}, ctx.warnings)
 
@@ -1274,9 +1244,7 @@ async def test_export_pipeline_bundle_v2_yaml_shape(monkeypatch: pytest.MonkeyPa
     assert workflow["partial"] is False
     assert workflow["requires"]["connector_types"] == ["github"]
     assert workflow["requires"]["abstract_schemas"] == ["abs"]
-    assert workflow["triggers"] == [
-        {"name": "Nightly sync", "trigger_type": "cron", "config": {"schedule": "* * * * *"}, "active": True}
-    ]
+    assert workflow["triggers"] == [{"name": "Nightly sync", "trigger_type": "cron", "config": {"schedule": "* * * * *"}, "active": True}]
     assert workflow["agents"][0]["name"] == "Agent A"
     assert workflow["edges"][0]["edge_type"] == "normal"
 
@@ -1348,9 +1316,7 @@ async def test_export_pipeline_bundle_v2_skips_invalid_node_refs(monkeypatch: py
     team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
     account_result = MagicMock()
     account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result])
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
     assert not doc["modulo_workflow"]["agents"]
@@ -1416,9 +1382,7 @@ async def test_export_pipeline_bundle_v2_without_graph_nodes(monkeypatch: pytest
     team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
     account_result = MagicMock()
     account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result])
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
     assert not doc["modulo_workflow"]["agents"]
@@ -1470,9 +1434,7 @@ async def test_export_pipeline_bundle_v2_agent_without_refs(monkeypatch: pytest.
     team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
     account_result = MagicMock()
     account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, edges_result, triggers_result, team_result, account_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, edges_result, triggers_result, team_result, account_result])
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
     assert doc["modulo_workflow"]["agents"][0]["name"] == "Bare"
@@ -1496,9 +1458,7 @@ async def test_export_pipeline_bundle_v2_without_owner_team(monkeypatch: pytest.
     triggers_result.scalars.return_value.all.return_value = []
     account_result = MagicMock()
     account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
-    session.execute = AsyncMock(
-        side_effect=[pipeline_result, agents_result, schemas_result, edges_result, triggers_result, account_result]
-    )
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, schemas_result, edges_result, triggers_result, account_result])
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
     assert doc["modulo_workflow"]["owner_team"] is None
@@ -1867,11 +1827,7 @@ def test_strip_malformed_node_agent_commands_ignores_non_dict_nodes() -> None:
     assert clean_node["agent_commands"] == ["opencode run -- ok"]
     # The malformed value is stripped, and disclosed exactly once.
     assert "agent_commands" not in malformed_node
-    assert warnings == [
-        "Node 'malformed' in imported pipeline 'Imported' declares malformed "
-        "agent_commands (expected a list of strings with at least one non-empty string). "
-        "The node commands will be omitted."
-    ]
+    assert warnings == ["Node 'malformed' in imported pipeline 'Imported' declares malformed agent_commands (expected a list of strings with at least one non-empty string). The node commands will be omitted."]
     # Trust boundary: a node bound to a pre-existing Agent is never rewritten.
     assert foreign_node["agent_commands"] == ["ok", 3]
 
@@ -2059,9 +2015,7 @@ async def test_materialize_keeps_gate_free_graph_without_policy_gate_warning(
     """FAR-1666: a graph with no declared gates imports without the strip warning."""
     _patch_crud(monkeypatch)
     bundle = _make_bundle()
-    bundle["pipeline"]["graph_nodes_json"] = [
-        {"id": str(uuid.uuid4()), "node_type": "agent", "label": "Plain", "position": {"x": 0, "y": 0}}
-    ]
+    bundle["pipeline"]["graph_nodes_json"] = [{"id": str(uuid.uuid4()), "node_type": "agent", "label": "Plain", "position": {"x": 0, "y": 0}}]
 
     result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
 
@@ -2644,9 +2598,7 @@ async def test_apply_agent_bindings_resolution_chain(case: str):
     ctx = _make_ctx(overrides, rows)
     agent = SimpleNamespace(name="agent-x", id=uuid.uuid4())
 
-    ad = {
-        "model_backend_bindings": [_binding("mb-export", stamped_id=str(stamped_uuid) if case == "stamped" else None)]
-    }
+    ad = {"model_backend_bindings": [_binding("mb-export", stamped_id=str(stamped_uuid) if case == "stamped" else None)]}
 
     with pytest.MonkeyPatch().context() as mp:
         replace_mock = AsyncMock(return_value=None)

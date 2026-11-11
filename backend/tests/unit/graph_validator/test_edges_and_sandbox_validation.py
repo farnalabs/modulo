@@ -469,7 +469,7 @@ def test_sandbox_relative_context_file_warns():
 
 
 def test_sandbox_reserved_env_var_warns():
-    graph = {"nodes": [_sandbox_node(env_vars={"MODULO_SECRET": "x"})], "edges": []}
+    graph = {"nodes": [_sandbox_node(env_vars={"FARNA_CONTROL_MODULO_SECRET": "x"})], "edges": []}
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_RESERVED_ENV_VAR" in _codes(result)
@@ -819,7 +819,7 @@ def test_sandbox_multiple_issues_collected():
                 template_id=None,
                 timeout_seconds=5,
                 context_files={"rel.txt": None},
-                env_vars={"MODULO_X": "y"},
+                env_vars={"FARNA_CONTROL_MODULO_X": "y"},
             )
         ],
         "edges": [],

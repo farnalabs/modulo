@@ -202,11 +202,7 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
         fix_id="sandbox_timeout_exceeds_e2b_cap",
         signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
         title="Sandbox node timeout exceeds the E2B 1-hour cap",
-        body=(
-            "The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, "
-            "so provisioning fails. Set `timeout_seconds` to 3300 or less to keep "
-            "provisioning headroom (FAR-511)."
-        ),
+        body=("The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, so provisioning fails. Set `timeout_seconds` to 3300 or less to keep provisioning headroom (FAR-511)."),
         link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
     ),
     KnownFix(
@@ -320,8 +316,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="script",
         retryable=False,
         alert_severity="critical",
-        guidance="Script-mode sandbox exceeded its resource limits and was killed by "
-        "the platform-side runtime killer (post-claim, terminal).",
+        guidance="Script-mode sandbox exceeded its resource limits and was killed by the platform-side runtime killer (post-claim, terminal).",
     ),
     # --- harness (machinery) codes ---------------------------------------
     # ``harness.unknown`` is the fallback for unmapped legacy codes — any code
@@ -393,10 +388,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="harness",
         retryable=True,
         alert_severity="warning",
-        guidance=(
-            "Worker executing the run was shut down (deploy or restart); "
-            "claim released and run handed back for re-dispatch."
-        ),
+        guidance=("Worker executing the run was shut down (deploy or restart); claim released and run handed back for re-dispatch."),
     ),
     # FAR-2076: the reconcile re-enqueue backstop found a pending run whose
     # retry budget was already consumed, so it terminal-failed the row instead
@@ -408,11 +400,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="harness",
         retryable=False,
         alert_severity="warning",
-        guidance=(
-            "Run was not re-dispatched: its retry budget was already consumed, so "
-            "reconciliation terminal-failed it instead of granting another execution. "
-            "Raise the pipeline's retry_policy max_retries if more attempts are expected."
-        ),
+        guidance=("Run was not re-dispatched: its retry budget was already consumed, so reconciliation terminal-failed it instead of granting another execution. Raise the pipeline's retry_policy max_retries if more attempts are expected."),
     ),
     "harness.worker_failed": ErrorCodeSpec(
         error_class="harness",
@@ -453,10 +441,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="connector",
         retryable=False,
         alert_severity="critical",
-        guidance=(
-            "Connector write was cancelled mid-send or raised an error; upstream side-effect state unknown. "
-            "Re-run with the same idempotency key or confirm manually."
-        ),
+        guidance=("Connector write was cancelled mid-send or raised an error; upstream side-effect state unknown. Re-run with the same idempotency key or confirm manually."),
     ),
     # --- sandbox codes ---------------------------------------------------
     _CODE_SANDBOX_NO_OUTPUT_JSON: ErrorCodeSpec(
@@ -481,21 +466,13 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
-        guidance=(
-            "E2B provisioner rate-limited sandbox creation (429) and the retry budget"
-            " is exhausted; this run failed terminally. Re-run once the provisioner"
-            " quota recovers."
-        ),
+        guidance=("E2B provisioner rate-limited sandbox creation (429) and the retry budget is exhausted; this run failed terminally. Re-run once the provisioner quota recovers."),
     ),
     _CODE_SANDBOX_QUEUE_TIMEOUT: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
-        guidance=(
-            "Sandbox provisioning did not complete: either the rate-limit retry"
-            " budget was exhausted (repeated 429s), or the provisioning watchdog"
-            " fired because sandbox creation never returned within its bound."
-        ),
+        guidance=("Sandbox provisioning did not complete: either the rate-limit retry budget was exhausted (repeated 429s), or the provisioning watchdog fired because sandbox creation never returned within its bound."),
     ),
     # FAR-510: a sandbox_agent node whose synthetic failure path (generic
     # exception, schema validation) RETURNED the stamped failure envelope
@@ -525,10 +502,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="config",
         retryable=False,
         alert_severity="warning",
-        guidance=(
-            "Local provider tier refused runner bindings; opt in via the profile's "
-            "allow_runner_env_bindings flag or switch tiers."
-        ),
+        guidance=("Local provider tier refused runner bindings; opt in via the profile's allow_runner_env_bindings flag or switch tiers."),
     ),
     # FAR-802: managed workspace input error codes. These surface when a
     # managed input fails at runtime (credential, checkout, host-mismatch,
@@ -577,10 +551,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="config",
         retryable=False,
         alert_severity="warning",
-        guidance=(
-            "Environment profile is not dispatch-relevant (inert provider or missing "
-            "dispatch binding); re-bind the pipeline to a dispatch-capable profile."
-        ),
+        guidance=("Environment profile is not dispatch-relevant (inert provider or missing dispatch binding); re-bind the pipeline to a dispatch-capable profile."),
     ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
@@ -630,10 +601,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="node",
         retryable=False,
         alert_severity="warning",
-        guidance=(
-            "Dispatched substrate run did not reach a terminal status within the node's "
-            "wait_timeout; never retried (a retry would fire a second external job)."
-        ),
+        guidance=("Dispatched substrate run did not reach a terminal status within the node's wait_timeout; never retried (a retry would fire a second external job)."),
     ),
     # --- run-level codes -------------------------------------------------
     "run.superseded": ErrorCodeSpec(
@@ -655,9 +623,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="run",
         retryable=False,
         alert_severity=None,
-        guidance=(
-            "Waited in the capacity queue past this pipeline's queue_timeout; the run was superseded before it started."
-        ),
+        guidance=("Waited in the capacity queue past this pipeline's queue_timeout; the run was superseded before it started."),
     ),
     # FAR-1329: the dispatcher_reconcile AGE gate (``_terminalize_mid_graph_wedges``)
     # writes the raw ``no_progress`` spelling — registered (and aliased below) in
@@ -675,10 +641,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="run",
         retryable=False,
         alert_severity="warning",
-        guidance=(
-            "No node progress within the reconcile age bound (~135 min); the run was "
-            "terminal-failed by dispatcher_reconcile's age gate."
-        ),
+        guidance=("No node progress within the reconcile age bound (~135 min); the run was terminal-failed by dispatcher_reconcile's age gate."),
     ),
     # --- connector codes -------------------------------------------------
     _CODE_CONNECTOR_FAILED: ErrorCodeSpec(
@@ -746,10 +709,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="provider",
         retryable=False,
         alert_severity="critical",
-        guidance=(
-            "The model provider refused the request for billing reasons (402 — insufficient funds, "
-            "quota exhausted, or payment required)."
-        ),
+        guidance=("The model provider refused the request for billing reasons (402 — insufficient funds, quota exhausted, or payment required)."),
     ),
     "provider.rate_limited": ErrorCodeSpec(
         error_class="provider",
@@ -805,20 +765,14 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="model",
         retryable=False,
         alert_severity="critical",
-        guidance=(
-            "The model provider refused the request for lack of funds (HTTP 402) — "
-            "top up the provider account balance, then re-run; retrying cannot succeed."
-        ),
+        guidance=("The model provider refused the request for lack of funds (HTTP 402) — top up the provider account balance, then re-run; retrying cannot succeed."),
     ),
     # --- capacity codes --------------------------------------------------
     _CODE_CAPACITY_ORG: ErrorCodeSpec(
         error_class="capacity",
         retryable=True,
         alert_severity=None,
-        guidance=(
-            "Org capacity exhausted: the run is queued waiting for org capacity, or"
-            " failed terminally because its retries ran out while the org cap stayed full."
-        ),
+        guidance=("Org capacity exhausted: the run is queued waiting for org capacity, or failed terminally because its retries ran out while the org cap stayed full."),
     ),
     "capacity.pipeline": ErrorCodeSpec(
         error_class="capacity",
@@ -856,9 +810,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="hitl",
         retryable=False,
         alert_severity=None,
-        guidance=(
-            "HITL review expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot."
-        ),
+        guidance=("HITL review expired unclaimed; run terminalized by dispatcher_reconcile to free its concurrency slot."),
     ),
     # FAR-721: the zero-claim awaiting_human zombie terminalizer
     # (``_terminalize_hitl_review_missing``) writes the raw
@@ -872,10 +824,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="hitl",
         retryable=False,
         alert_severity=None,
-        guidance=(
-            "HITL gate was never created for an awaiting_human run; run terminalized "
-            "by dispatcher_reconcile to free its concurrency slot."
-        ),
+        guidance=("HITL gate was never created for an awaiting_human run; run terminalized by dispatcher_reconcile to free its concurrency slot."),
     ),
     # FAR-1487: a HITL rejection with no reject route ENDS the run with the
     # terminal ``rejected`` status. Not a failure (nothing broke) - no alert,
@@ -941,9 +890,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         error_class="judge",
         retryable=False,
         alert_severity="critical",
-        guidance=(
-            "The judge definition is misconfigured (missing/unresolvable field or backend); no verdict was produced."
-        ),
+        guidance=("The judge definition is misconfigured (missing/unresolvable field or backend); no verdict was produced."),
     ),
     # --- config codes ----------------------------------------------------
     "config.error": ErrorCodeSpec(
@@ -1200,16 +1147,8 @@ def error_code_map_conflicts() -> list[str]:
     map — a guard test, not a runtime raise (an import-time raise would turn
     a map edit into a fleet-wide import failure).
     """
-    conflicts = [
-        f"key {key!r} exists in both ERROR_CODE_REGISTRY and LEGACY_ALIASES "
-        f"(registry passthrough vs alias target {LEGACY_ALIASES[key]!r})"
-        for key in sorted(set(ERROR_CODE_REGISTRY) & set(LEGACY_ALIASES))
-    ]
-    conflicts.extend(
-        f"alias {alias!r} -> {target!r} is not a registry key"
-        for alias, target in sorted(LEGACY_ALIASES.items())
-        if target not in ERROR_CODE_REGISTRY
-    )
+    conflicts = [f"key {key!r} exists in both ERROR_CODE_REGISTRY and LEGACY_ALIASES (registry passthrough vs alias target {LEGACY_ALIASES[key]!r})" for key in sorted(set(ERROR_CODE_REGISTRY) & set(LEGACY_ALIASES))]
+    conflicts.extend(f"alias {alias!r} -> {target!r} is not a registry key" for alias, target in sorted(LEGACY_ALIASES.items()) if target not in ERROR_CODE_REGISTRY)
     return conflicts
 
 

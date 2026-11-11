@@ -295,9 +295,7 @@ async def _fetch_sso_provider_value(
     if provider.client_secret is None:
         return ""
     try:
-        return await decode_stored_secret_scoped(
-            session, provider.client_secret, settings.fernet_key, org_id=principal.organisation_id
-        )
+        return await decode_stored_secret_scoped(session, provider.client_secret, settings.fernet_key, org_id=principal.organisation_id)
     except SecretStorageError:
         _log.exception("middleware.sensitive_mask.invalid_sso_secret")
         raise HTTPException(
@@ -314,9 +312,7 @@ async def _fetch_observability_value(
     """Reveal the current org's observability (OTel) config field or whole config."""
     from farna.db.models.organisation import Organisation
 
-    config_result = await session.execute(
-        select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id)
-    )
+    config_result = await session.execute(select(Organisation.otel_config_json).where(Organisation.id == principal.organisation_id))
     row = config_result.scalar_one_or_none()
     config: dict[str, Any] = row or {}
     if field:
@@ -384,10 +380,7 @@ async def reveal_sensitive_value(
         redis = Redis.from_url(settings.redis_url, decode_responses=True)
     except Exception:
         _log.warning(
-            "middleware.sensitive_mask.reveal_no_redis: Redis unavailable; "
-            "reveal token cannot be persisted. Returning value without "
-            "server-side expiry — caller must not cache beyond the displayed "
-            "value.",
+            "middleware.sensitive_mask.reveal_no_redis: Redis unavailable; reveal token cannot be persisted. Returning value without server-side expiry — caller must not cache beyond the displayed value.",
         )
         # Empty-string token signals "no server-side expiry exists" to the
         # client.  expires_in_seconds=0 makes the absence explicit so callers
@@ -415,19 +408,12 @@ _GRAPH_NODE_SECRET_FIELDS: tuple[str, ...] = GRAPH_NODE_SECRET_FIELDS
 
 def _mask_env_vars(env: dict[str, Any]) -> dict[str, Any]:
     """Mask one node's ``env_vars``: whole-value for sensitive keys, else value-scan."""
-    return {
-        key: (mask_sensitive_value(value) if is_sensitive_env_key(key) else mask_secret_values_in_text(value))
-        if isinstance(value, str)
-        else value
-        for key, value in env.items()
-    }
+    return {key: (mask_sensitive_value(value) if is_sensitive_env_key(key) else mask_secret_values_in_text(value)) if isinstance(value, str) else value for key, value in env.items()}
 
 
 def _mask_context_files(contexts: dict[str, Any]) -> dict[str, Any]:
     """Value-scan one node's ``context_files`` entries for embedded secrets."""
-    return {
-        key: mask_secret_values_in_text(value) if isinstance(value, str) else value for key, value in contexts.items()
-    }
+    return {key: mask_secret_values_in_text(value) if isinstance(value, str) else value for key, value in contexts.items()}
 
 
 def _masked_node_fields(node: dict[str, Any]) -> dict[str, Any]:
@@ -614,11 +600,6 @@ def resolve_and_reject_mask_sentinels(
     if findings:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(
-                f"Masked credential placeholder rejected ({MASK_SENTINEL_ISSUE_CODE}): "
-                f"{format_mask_sentinel_detail(findings)}. The mask sentinel is a read-side "
-                "rendering only and is never stored — re-enter the real credential value "
-                "before saving."
-            ),
+            detail=(f"Masked credential placeholder rejected ({MASK_SENTINEL_ISSUE_CODE}): {format_mask_sentinel_detail(findings)}. The mask sentinel is a read-side rendering only and is never stored — re-enter the real credential value before saving."),
         )
     return resolved

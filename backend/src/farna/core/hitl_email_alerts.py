@@ -79,11 +79,7 @@ _EMAIL_BODY_BUDGET_CHARS = 1500
 # roles that satisfy it (role level >= the permission's minimum role, per the
 # same registry/hierarchy the REST ``require_permission`` gate consults).
 _CLAIM_PERMISSION = "hitl.claim"
-_CLAIM_ROLES: frozenset[str] = frozenset(
-    role
-    for role, level in ORG_ROLE_HIERARCHY.items()
-    if level >= ORG_ROLE_HIERARCHY[resolve_required(_CLAIM_PERMISSION)]
-)
+_CLAIM_ROLES: frozenset[str] = frozenset(role for role, level in ORG_ROLE_HIERARCHY.items() if level >= ORG_ROLE_HIERARCHY[resolve_required(_CLAIM_PERMISSION)])
 
 # Strong references to the in-flight dispatch tasks (asyncio tasks without a
 # retained reference can be garbage-collected mid-flight). Entries are removed
@@ -105,11 +101,7 @@ def normalize_hitl_email_prefs(preferences: Any) -> tuple[bool, dict[str, bool]]
     if not isinstance(hitl_prefs, dict):
         return False, {}
     raw_overrides = hitl_prefs.get("pipeline_overrides")
-    overrides = (
-        {str(key): value for key, value in raw_overrides.items() if isinstance(value, bool)}
-        if isinstance(raw_overrides, dict)
-        else {}
-    )
+    overrides = {str(key): value for key, value in raw_overrides.items() if isinstance(value, bool)} if isinstance(raw_overrides, dict) else {}
     return hitl_prefs.get("default") is True, overrides
 
 
@@ -247,15 +239,7 @@ def _render_briefing_body(
     # into label and value, then escape individually so no HTML
     # entity can be split by truncation.
     briefing_html_block = _render_briefing_sections(bounded_text)
-    body_html = (
-        "<html><body>"
-        "<p>A HITL gate is awaiting review.</p>"
-        f"<p><strong>Gate:</strong> {html.escape(gate_label)}</p>"
-        f"{briefing_html_block}"
-        f"<p><strong>Review:</strong> "
-        f'<a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
-        "</body></html>"
-    )
+    body_html = f'<html><body><p>A HITL gate is awaiting review.</p><p><strong>Gate:</strong> {html.escape(gate_label)}</p>{briefing_html_block}<p><strong>Review:</strong> <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p></body></html>'
     return body_html, body_text
 
 
@@ -273,13 +257,7 @@ def _render_briefing_sections(bounded_text: str) -> str:
 def _render_plain_body(gate_label: str, run_url: str) -> tuple[str, str]:
     """Render the legacy label-only body as ``(body_html, body_text)``."""
     body_text = f"A HITL gate is awaiting review.\n\nGate: {gate_label}\nRun: {run_url}"
-    body_html = (
-        "<html><body>"
-        "<p>A HITL gate is awaiting review.</p>"
-        f"<p>Gate: {html.escape(gate_label)}<br>"
-        f'Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p>'
-        "</body></html>"
-    )
+    body_html = f'<html><body><p>A HITL gate is awaiting review.</p><p>Gate: {html.escape(gate_label)}<br>Run: <a href="{html.escape(run_url, quote=True)}">{html.escape(run_url)}</a></p></body></html>'
     return body_html, body_text
 
 
@@ -332,13 +310,7 @@ def _build_deadline_email(
     """
     subject = _DEADLINE_SUBJECT_TEMPLATE.format(gate_label=gate_label)
     body_text = (
-        "A HITL gate is approaching its review deadline.\n\n"
-        f"Gate: {gate_label}\n"
-        f"Pipeline: {pipeline_name}\n"
-        f"Time left: about {minutes_remaining} minute(s)\n"
-        "If nobody reviews it before the deadline, the run is cancelled "
-        "(hitl_review_expired) to release its concurrency slot.\n\n"
-        f"Review: {run_url}"
+        f"A HITL gate is approaching its review deadline.\n\nGate: {gate_label}\nPipeline: {pipeline_name}\nTime left: about {minutes_remaining} minute(s)\nIf nobody reviews it before the deadline, the run is cancelled (hitl_review_expired) to release its concurrency slot.\n\nReview: {run_url}"
     )
     body_html = (
         "<html><body>"
@@ -380,9 +352,7 @@ async def send_hitl_deadline_alerts(
     }
     try:
         settings = get_settings()
-        subject, body_html, body_text = _build_deadline_email(
-            gate_label, _run_link(settings, run_id), pipeline_name, minutes_remaining
-        )
+        subject, body_html, body_text = _build_deadline_email(gate_label, _run_link(settings, run_id), pipeline_name, minutes_remaining)
         for recipient in recipients:
             try:
                 await asyncio.to_thread(send_email, settings, [recipient], subject, body_html, body_text)

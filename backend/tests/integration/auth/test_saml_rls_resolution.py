@@ -97,10 +97,7 @@ async def _create_org(
     created_at = datetime.now(UTC) - timedelta(seconds=created_at_offset_seconds)
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, created_at) "
-                "VALUES (:id, :name, :slug, '{}'::json, :created_at)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, created_at) VALUES (:id, :name, :slug, '{}'::json, :created_at)"),
             {"id": str(org_id), "name": f"Org {label}", "slug": slug, "created_at": created_at},
         )
     return org_id, slug
@@ -179,7 +176,7 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
     ``MODULO_SYSTEM_DATABASE_URL`` exactly like production settings do.
     """
     engine = create_async_engine(
-        os.environ["MODULO_SYSTEM_DATABASE_URL"],
+        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"],
         echo=False,
         poolclass=NullPool,
     )

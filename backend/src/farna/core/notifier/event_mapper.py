@@ -405,87 +405,33 @@ _TITLE_TEMPLATES: dict[str, str] = {
 _BODY_TEMPLATES: dict[str, str] = {
     EVENT_HITL_AWAITING: 'Pipeline "{pipeline_name}" is waiting for human review.',
     EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
-    EVENT_RUN_STALLED: (
-        'Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'
-    ),
-    EVENT_PROVIDER_FAILURE: (
-        'Pipeline "{pipeline_name}" was refused by the model provider with {error_code}. '
-        "This failure is NOT retried — re-dispatching cannot succeed. Check the provider account: "
-        "the API key may be invalid, expired or revoked, or the account balance/quota may be exhausted."
-    ),
+    EVENT_RUN_STALLED: ('Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'),
+    EVENT_PROVIDER_FAILURE: ('Pipeline "{pipeline_name}" was refused by the model provider with {error_code}. This failure is NOT retried — re-dispatching cannot succeed. Check the provider account: the API key may be invalid, expired or revoked, or the account balance/quota may be exhausted.'),
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
-    EVENT_HITL_DEADLINE_WARNING: (
-        'HITL gate "{gate_label}" on "{pipeline_name}" is due in {minutes_remaining} minutes. '
-        "Unreviewed, the run is cancelled at the deadline."
-    ),
-    EVENT_HITL_APPROVE_SWEEP: (
-        "{approve_count} HITL reviews across {distinct_pipeline_count} pipelines were approved by "
-        "actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."
-    ),
+    EVENT_HITL_DEADLINE_WARNING: ('HITL gate "{gate_label}" on "{pipeline_name}" is due in {minutes_remaining} minutes. Unreviewed, the run is cancelled at the deadline.'),
+    EVENT_HITL_APPROVE_SWEEP: ("{approve_count} HITL reviews across {distinct_pipeline_count} pipelines were approved by actor {actor} within {window_seconds} seconds — possible bulk-approve sweep."),
     EVENT_HITL_REVIEW_REMOVED: 'A HITL review on "{pipeline_name}" was weakened or removed.',
     EVENT_HITL_REVIEW_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL review was denied.",
     EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
     EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
-    EVENT_TRIGGER_DEACTIVATED: (
-        'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
-        "(threshold {threshold})."
-    ),
-    EVENT_TRIGGER_STREAK_ALERT: (
-        'Cron trigger "{pipeline_name}" reached {streak} consecutive no-delivery runs (threshold {threshold}). '
-        "No action was taken — the trigger was not deactivated. Auto-deactivation for a cron trigger is opt-in "
-        "via no_delivery_auto_deactivate."
-    ),
-    EVENT_ORG_TRIGGERS_AUTO_PAUSED: (
-        "All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD "
-        "(limit {limit_usd} USD). In-flight runs are finishing; resume triggers from the admin org settings."
-    ),
-    EVENT_CIRCUIT_BREAKER_TRIPPED: (
-        'The monthly spend circuit breaker for "{pipeline_name}" tripped: its triggers are paused, so no '
-        "new trigger-initiated runs start. An admin reset re-enables them."
-    ),
-    EVENT_GUARDRAIL_ENFORCEMENT_GAP: (
-        'Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'
-    ),
-    EVENT_GUARDRAIL_KILL_SWITCH: (
-        "The org-wide guardrails kill-switch was enabled: every bound guardrail is now "
-        "observe-only (shadow mode). Guardrails are computed and logged but never block or redact."
-    ),
-    EVENT_GUARDRAIL_UNEXPECTED_SKIP: (
-        'Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by '
-        "a soft-deleted pinned guardrail. See the run for details."
-    ),
+    EVENT_TRIGGER_DEACTIVATED: ('Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs (threshold {threshold}).'),
+    EVENT_TRIGGER_STREAK_ALERT: ('Cron trigger "{pipeline_name}" reached {streak} consecutive no-delivery runs (threshold {threshold}). No action was taken — the trigger was not deactivated. Auto-deactivation for a cron trigger is opt-in via no_delivery_auto_deactivate.'),
+    EVENT_ORG_TRIGGERS_AUTO_PAUSED: ("All pipeline triggers were auto-paused because {reason_label}: spend reached {spend_usd} USD (limit {limit_usd} USD). In-flight runs are finishing; resume triggers from the admin org settings."),
+    EVENT_CIRCUIT_BREAKER_TRIPPED: ('The monthly spend circuit breaker for "{pipeline_name}" tripped: its triggers are paused, so no new trigger-initiated runs start. An admin reset re-enables them.'),
+    EVENT_GUARDRAIL_ENFORCEMENT_GAP: ('Guardrail "{guardrail}" could not be evaluated ({reason}) and is not enforcing. See the run for details.'),
+    EVENT_GUARDRAIL_KILL_SWITCH: ("The org-wide guardrails kill-switch was enabled: every bound guardrail is now observe-only (shadow mode). Guardrails are computed and logged but never block or redact."),
+    EVENT_GUARDRAIL_UNEXPECTED_SKIP: ('Guardrail "{guardrail}" was skipped for an unexpected reason ({reason}) — not explained by a soft-deleted pinned guardrail. See the run for details.'),
     # FAR-1344 — capacity alert bodies. Every placeholder here is always present
     # in the payload the sweep builds (it fills safe defaults), so a capacity
     # alert never renders "[unknown]".
-    EVENT_QUEUE_PRESSURE_NOTICE: (
-        'Pipeline "{pipeline_name}" has {pending_depth} queued run(s), oldest waiting '
-        "{oldest_pending_age_minutes} min — the queue is growing. Binding limit: {limit_label} "
-        "({current_value}/{limit_value}). {suggested_action}"
-    ),
-    EVENT_QUEUE_PRESSURE_WARNING: (
-        'Pipeline "{pipeline_name}" queue is not draining: {pending_depth} queued, oldest waiting '
-        "{oldest_pending_age_minutes} min. Binding limit: {limit_label} ({current_value}/{limit_value}). "
-        "{suggested_action}"
-    ),
-    EVENT_QUEUE_PRESSURE_CRITICAL: (
-        'Pipeline "{pipeline_name}" queue is stalled: {pending_depth} queued and still climbing with no '
-        "drain, oldest waiting {oldest_pending_age_minutes} min. Binding limit: {limit_label} "
-        "({current_value}/{limit_value}). {suggested_action}"
-    ),
-    EVENT_CAPACITY_BACKPRESSURE: (
-        'New runs for "{pipeline_name}" are being refused by backpressure ({reason_label}) — '
-        "{pending_depth} queued locally. {suggested_action}"
-    ),
-    EVENT_CAPACITY_SATURATION: (
-        "{limit_label} has been fully held at {limit_value} for over {sustained_minutes} min with "
-        "{pending_depth} run(s) queued org-wide. {suggested_action}"
-    ),
-    EVENT_CAPACITY_RECOVERED: (
-        "Capacity has recovered for {subject_label}: the queue is draining again and the "
-        "{previous_level} capacity alert is cleared."
-    ),
+    EVENT_QUEUE_PRESSURE_NOTICE: ('Pipeline "{pipeline_name}" has {pending_depth} queued run(s), oldest waiting {oldest_pending_age_minutes} min — the queue is growing. Binding limit: {limit_label} ({current_value}/{limit_value}). {suggested_action}'),
+    EVENT_QUEUE_PRESSURE_WARNING: ('Pipeline "{pipeline_name}" queue is not draining: {pending_depth} queued, oldest waiting {oldest_pending_age_minutes} min. Binding limit: {limit_label} ({current_value}/{limit_value}). {suggested_action}'),
+    EVENT_QUEUE_PRESSURE_CRITICAL: ('Pipeline "{pipeline_name}" queue is stalled: {pending_depth} queued and still climbing with no drain, oldest waiting {oldest_pending_age_minutes} min. Binding limit: {limit_label} ({current_value}/{limit_value}). {suggested_action}'),
+    EVENT_CAPACITY_BACKPRESSURE: ('New runs for "{pipeline_name}" are being refused by backpressure ({reason_label}) — {pending_depth} queued locally. {suggested_action}'),
+    EVENT_CAPACITY_SATURATION: ("{limit_label} has been fully held at {limit_value} for over {sustained_minutes} min with {pending_depth} run(s) queued org-wide. {suggested_action}"),
+    EVENT_CAPACITY_RECOVERED: ("Capacity has recovered for {subject_label}: the queue is draining again and the {previous_level} capacity alert is cleared."),
     EVENT_CAPACITY_REDIS_PRESSURE: (
         "The Redis store backing the SAQ queue is using {used_memory_label} of its "
         "{maxmemory_label} maxmemory bound ({used_percent}%; policy {policy}). Queued job "
@@ -496,16 +442,8 @@ _BODY_TEMPLATES: dict[str, str] = {
     # sweep's payload (it fills "n/a" defaults), so the render never falls back
     # to "[unknown]". The body names the failing measure, its figure, the
     # threshold and the window so the alert is actionable without a lookup.
-    EVENT_PIPELINE_DECAY: (
-        'Webhook-triggered pipeline "{pipeline_name}" is degraded: {reason_label}. '
-        "Window: last {window_minutes} minutes. Success rate {success_rate_percent}% "
-        "({runs_complete} of {runs_total} terminal runs completed); node-deadline watchdog "
-        "fired {watchdog_firings} time(s)."
-    ),
-    EVENT_PIPELINE_DECAY_RECOVERED: (
-        'Webhook-triggered pipeline "{pipeline_name}" has recovered: {reason_label} '
-        "(window: last {window_minutes} minutes). The degradation alert is cleared."
-    ),
+    EVENT_PIPELINE_DECAY: ('Webhook-triggered pipeline "{pipeline_name}" is degraded: {reason_label}. Window: last {window_minutes} minutes. Success rate {success_rate_percent}% ({runs_complete} of {runs_total} terminal runs completed); node-deadline watchdog fired {watchdog_firings} time(s).'),
+    EVENT_PIPELINE_DECAY_RECOVERED: ('Webhook-triggered pipeline "{pipeline_name}" has recovered: {reason_label} (window: last {window_minutes} minutes). The degradation alert is cleared.'),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -558,11 +496,7 @@ _TRIGGER_TYPE_TEMPLATE_OVERRIDES: dict[str, dict[str, dict[str, str]]] = {
     EVENT_TRIGGER_DEACTIVATED: {
         "cron": {
             "title": "Cron trigger auto-deactivated — {pipeline_name}",
-            "body": (
-                'Cron trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery '
-                "runs (threshold {threshold}). Auto-deactivation was enabled for this trigger via "
-                "no_delivery_auto_deactivate."
-            ),
+            "body": ('Cron trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs (threshold {threshold}). Auto-deactivation was enabled for this trigger via no_delivery_auto_deactivate.'),
         },
     },
 }

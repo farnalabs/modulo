@@ -296,9 +296,7 @@ def mask_engine_config(config: dict[str, Any]) -> dict[str, Any]:
         _mask_detection(envelope)
     redaction = masked.get("redaction")
     if isinstance(redaction, list):
-        masked["redaction"] = [
-            {**rule, "path": REDACTED_MASK} if isinstance(rule, dict) else rule for rule in redaction
-        ]
+        masked["redaction"] = [{**rule, "path": REDACTED_MASK} if isinstance(rule, dict) else rule for rule in redaction]
     return masked
 
 
@@ -319,15 +317,9 @@ def _validate_config_item(item: GuardrailConfigItem) -> None:
     """
     if item.detection.type == "regex":
         if not item.detection.pattern or not item.detection.field:
-            raise GuardrailConfigError(
-                f"Guardrail {item.id!r} regex detection requires non-empty 'pattern' and 'field' "
-                f"(got pattern={item.detection.pattern!r}, field={item.detection.field!r})."
-            )
+            raise GuardrailConfigError(f"Guardrail {item.id!r} regex detection requires non-empty 'pattern' and 'field' (got pattern={item.detection.pattern!r}, field={item.detection.field!r}).")
     elif not isinstance(item.detection.schema_data, dict):
-        raise GuardrailConfigError(
-            f"Guardrail {item.id!r} json_schema detection requires a 'schema' dict "
-            f"(got {item.detection.schema_data!r})."
-        )
+        raise GuardrailConfigError(f"Guardrail {item.id!r} json_schema detection requires a 'schema' dict (got {item.detection.schema_data!r}).")
     for rule in item.redaction:
         if not rule.path.strip():
             raise GuardrailConfigError(f"Guardrail {item.id!r} has an empty redaction path.")
@@ -336,10 +328,7 @@ def _validate_config_item(item: GuardrailConfigItem) -> None:
             # without the deployment pepper. Authoring it without one must
             # fail here — never at the runtime edge, and never as a silent
             # masks-only downgrade.
-            raise GuardrailConfigError(
-                f"Guardrail {item.id!r} uses destroy redaction mode, which requires the "
-                "guardrail_destroy_pepper setting to be configured."
-            )
+            raise GuardrailConfigError(f"Guardrail {item.id!r} uses destroy redaction mode, which requires the guardrail_destroy_pepper setting to be configured.")
 
 
 def validate_config_set(config_set: GuardrailConfigSet) -> None:
@@ -372,10 +361,7 @@ def _canonical_dict(config_set: GuardrailConfigSet) -> dict[str, Any]:
     cannot carry.
     """
     guardrails = sorted(
-        (
-            item.model_dump(mode="json", exclude_none=True, by_alias=True, exclude={"name"})
-            for item in config_set.guardrails
-        ),
+        (item.model_dump(mode="json", exclude_none=True, by_alias=True, exclude={"name"}) for item in config_set.guardrails),
         key=lambda g: g["id"],
     )
     return {
@@ -529,9 +515,7 @@ def _resolve_db_action(config: dict[str, Any]) -> GuardrailAction:
         # Fail closed like the detection-type path: an unknown/mutated action
         # must never be silently rebuilt as OBSERVE, which would mask a drifted
         # action in the rebuild hash and hide the drift from the operator.
-        raise GuardrailConfigError(
-            f"Guardrail has unknown action {raw!r}; valid actions are {[a.value for a in GuardrailAction]}"
-        ) from None
+        raise GuardrailConfigError(f"Guardrail has unknown action {raw!r}; valid actions are {[a.value for a in GuardrailAction]}") from None
 
 
 def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailConfigItem:
@@ -550,9 +534,7 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
     if detection_type not in GUARDRAIL_DETECTION_TYPES:
         # Fail closed, mirroring the engine's own validation error — an unknown
         # declared detection type must never be silently rebuilt as regex.
-        raise GuardrailConfigError(
-            f"Guardrail {engine_def.name!r} must use regex or json_schema detection (got config {config!r})"
-        )
+        raise GuardrailConfigError(f"Guardrail {engine_def.name!r} must use regex or json_schema detection (got config {config!r})")
     if detection_type == str(EvalType.JSON_SCHEMA):
         detection = GuardrailDetection(type="json_schema", schema=effective_config.get("schema"))
     else:
@@ -561,11 +543,7 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
             pattern=effective_config.get("pattern"),
             field=effective_config.get("field"),
         )
-    redaction = [
-        RedactionRule(path=str(raw.get("path") or ""), mode=raw.get("mode", "transform"))
-        for raw in config.get("redaction") or []
-        if isinstance(raw, dict)
-    ]
+    redaction = [RedactionRule(path=str(raw.get("path") or ""), mode=raw.get("mode", "transform")) for raw in config.get("redaction") or [] if isinstance(raw, dict)]
     try:
         return GuardrailConfigItem(
             id=engine_def.name,
@@ -585,9 +563,7 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
         # exist. The read surface must fail closed with a clear message — never
         # a bare pydantic.ValidationError surfacing as a generic 422, and never
         # a silent skip that would corrupt the rebuild hash.
-        raise GuardrailConfigError(
-            f"Guardrail {engine_def.name!r} cannot be represented as config-as-code: {exc}"
-        ) from exc
+        raise GuardrailConfigError(f"Guardrail {engine_def.name!r} cannot be represented as config-as-code: {exc}") from exc
 
 
 def build_config_set_from_definitions(definitions: list[EvalDefinition]) -> GuardrailConfigSet:

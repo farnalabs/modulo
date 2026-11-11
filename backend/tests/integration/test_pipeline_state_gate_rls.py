@@ -44,7 +44,7 @@ from farna.db.crud.run import _enforce_pipeline_state_gate, create_run
 from farna.db.rls import set_rls_execution_context, set_rls_org, set_rls_user_context
 from farna.settings import Settings, get_settings
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -109,17 +109,11 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"User {email}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id), "role": role},
         )
     return account_id
@@ -138,9 +132,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
         return team.id
 
 
-async def _seed_team_membership(
-    db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID
-) -> None:
+async def _seed_team_membership(db_engine: AsyncEngine, org_id: uuid.UUID, team_id: uuid.UUID, account_id: uuid.UUID) -> None:
     from farna.db.crud.team_membership import add_team_member
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)

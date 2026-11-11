@@ -73,9 +73,7 @@ class SuiteRunState(StrEnum):
 # ``partial``, ``failed``, ``cancelled``) have no outgoing transitions.
 _ALLOWED_TRANSITIONS: dict[SuiteRunState, frozenset[SuiteRunState]] = {
     SuiteRunState.PENDING: frozenset({SuiteRunState.RUNNING, SuiteRunState.CANCELLED}),
-    SuiteRunState.RUNNING: frozenset(
-        {SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED}
-    ),
+    SuiteRunState.RUNNING: frozenset({SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED}),
     SuiteRunState.COMPLETED: frozenset(),
     SuiteRunState.PARTIAL: frozenset(),
     SuiteRunState.FAILED: frozenset(),
@@ -148,23 +146,15 @@ class SuiteRun(OrgScoped):
         Index("ix_suite_runs_state_created", "organisation_id", "state", "created_at"),
     )
 
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True
-    )
-    suite_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("eval_suites.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
-    dataset_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("eval_datasets.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True)
+    suite_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("eval_suites.id", ondelete="RESTRICT"), nullable=False, index=True)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("eval_datasets.id", ondelete="RESTRICT"), nullable=False, index=True)
     # SNAPSHOT of dataset membership at creation — immutable.
     dataset_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     # SNAPSHOT of each eval-definition config at creation — immutable.
     definition_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
     # Pinned model backend the run executed under — immutable.
-    model_backend_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    model_backend_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False, index=True)
     # Deterministic canonical hash of the run's scenario inputs; NULL when the
     # suite declares no scenarios (an explicit "scenarios unused" sentinel).
     scenario_signature: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -172,9 +162,7 @@ class SuiteRun(OrgScoped):
     baseline_tuple: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # The same-tuple completed run this run is compared against (resolved at
     # completion). NULL when no completed prior run exists (SKIPPED comparison).
-    baseline_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("suite_runs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    baseline_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("suite_runs.id", ondelete="SET NULL"), nullable=True, index=True)
     # Operator-pinned canonical baseline (survives new same-tuple runs).
     baseline_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     state: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
@@ -243,12 +231,7 @@ def transition_state(
     if new_state in (SuiteRunState.COMPLETED, SuiteRunState.PARTIAL, SuiteRunState.FAILED, SuiteRunState.CANCELLED):
         values["completed_at"] = completed_at or datetime.now(UTC)
 
-    stmt = (
-        update(SuiteRun)
-        .where(SuiteRun.id == run.id, SuiteRun.version == ver)
-        .values(**values)
-        .returning(SuiteRun.version)
-    )
+    stmt = update(SuiteRun).where(SuiteRun.id == run.id, SuiteRun.version == ver).values(**values).returning(SuiteRun.version)
     new_version: int | None = session.execute(stmt).scalar_one_or_none()
     if new_version is None:
         raise OptimisticLockError(run.id, ver)

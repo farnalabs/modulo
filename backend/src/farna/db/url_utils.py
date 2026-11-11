@@ -96,11 +96,7 @@ def _ssl_value_for_mode(raw_value: str) -> str | bool:
         return False
     if mode in _REQUIRE_TLS_SSLMODES:
         return mode
-    raise ValueError(
-        f"Unsupported sslmode={raw_value!r}: use disable, require, "
-        "verify-ca or verify-full (prefer/allow silently downgrade "
-        "to plaintext and are not permitted)"
-    )
+    raise ValueError(f"Unsupported sslmode={raw_value!r}: use disable, require, verify-ca or verify-full (prefer/allow silently downgrade to plaintext and are not permitted)")
 
 
 def _sslmode_value_for_item(raw_item: str) -> str | bool | None:

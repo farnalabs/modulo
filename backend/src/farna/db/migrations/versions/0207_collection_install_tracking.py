@@ -81,10 +81,7 @@ _COLLECTION_INSTALL_ENTITY = "collection_install_entity"
 # carries no organisation_id of its own — access is always via the org-scoped
 # parent's install_id. Plain literal (no interpolation) so the SQL-injection
 # linter does not trip on the constant table name.
-_ENTITY_ORG_SCOPE = (
-    "install_id IN (SELECT install_id FROM collection_install "
-    "WHERE organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)"
-)
+_ENTITY_ORG_SCOPE = "install_id IN (SELECT install_id FROM collection_install WHERE organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid)"
 
 # Read by tests/unit/db/test_rls_coverage.py (style 2: module-level tuple of
 # strings) to confirm the org-scoped table has an RLS-enabling migration.

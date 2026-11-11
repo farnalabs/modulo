@@ -67,11 +67,7 @@ _SLUG_CANDIDATES: tuple[str, ...] = (
     "_modulo_sentinel_10",
 )
 
-_INSERT_SENTINEL_ORG = (
-    "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-    "VALUES (:id, :name, :slug, '{}', '{}') "
-    "ON CONFLICT (id) DO NOTHING"
-)
+_INSERT_SENTINEL_ORG = "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}', '{}') ON CONFLICT (id) DO NOTHING"
 
 
 def upgrade() -> None:
@@ -104,11 +100,7 @@ def upgrade() -> None:
             break
     if chosen_slug is None:
         raise RuntimeError(
-            f"Migration {revision}: every reserved sentinel slug "
-            f"({_SLUG_CANDIDATES[0]}..{_SLUG_CANDIDATES[-1]}) is held by live "
-            "organisations — this indicates a corrupted naming state. Free one "
-            "of the reserved slugs (rename or soft-delete the conflicting org) "
-            "and re-run the migration."
+            f"Migration {revision}: every reserved sentinel slug ({_SLUG_CANDIDATES[0]}..{_SLUG_CANDIDATES[-1]}) is held by live organisations — this indicates a corrupted naming state. Free one of the reserved slugs (rename or soft-delete the conflicting org) and re-run the migration."
         )
 
     bind.execute(
@@ -125,11 +117,7 @@ def upgrade() -> None:
         {"id": _MODULO_ORG_ID},
     ).scalar_one_or_none()
     if seeded is None:
-        raise RuntimeError(
-            f"Migration {revision}: Modulo sentinel organisation {_MODULO_ORG_ID} "
-            "missing after INSERT — collection installs would fail their "
-            "library_primitives FK target lookup."
-        )
+        raise RuntimeError(f"Migration {revision}: Modulo sentinel organisation {_MODULO_ORG_ID} missing after INSERT — collection installs would fail their library_primitives FK target lookup.")
 
 
 def downgrade() -> None:

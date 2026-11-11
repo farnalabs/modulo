@@ -40,9 +40,7 @@ TEMPLATE_PROFILE_NAME = "Bundled Runner (Docker)"
 # The per-minor digest constant (release-advanced). Supports the CURRENT
 # bundled-dessert minor + N-1; a pin advance past N-1 is a release-note item.
 # GHCR publish CI is the GA item (deploy/docker/runner-opencode.Dockerfile).
-BUNDLED_RUNNER_IMAGE_REF = (
-    "modulo-runner:opencode@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-)
+BUNDLED_RUNNER_IMAGE_REF = "modulo-runner:opencode@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 BUNDLED_RUNNER_PROVIDER_TYPE = "runner_docker"
 
@@ -117,11 +115,7 @@ def build_bundled_runner_profile_values() -> dict[str, Any]:
     """Shipped template values for seeding / backfill (org-creation + migration)."""
     return {
         "name": TEMPLATE_PROFILE_NAME,
-        "description": (
-            "The Bundled Runner: first-party modulo-runner:opencode workspace "
-            "executed on this deployment's Docker engine via the filtered "
-            "socket proxy. Persistence is locked to ephemeral."
-        ),
+        "description": ("The Bundled Runner: first-party modulo-runner:opencode workspace executed on this deployment's Docker engine via the filtered socket proxy. Persistence is locked to ephemeral."),
         "provider_type": BUNDLED_RUNNER_PROVIDER_TYPE,
         "image_ref": BUNDLED_RUNNER_IMAGE_REF,
         "capabilities_json": [],

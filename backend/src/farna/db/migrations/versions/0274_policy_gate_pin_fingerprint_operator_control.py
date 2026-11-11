@@ -65,12 +65,7 @@ _ADD_ENABLED_CHECK_NOT_VALID = (
     ") NOT VALID; END IF; END $$;"
 )
 _VALIDATE_ENABLED_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_policy_gates_enabled_timestamps' "
-    "AND conrelid = 'public.policy_gates'::regclass "
-    "AND NOT convalidated) "
-    "THEN ALTER TABLE public.policy_gates "
-    "VALIDATE CONSTRAINT ck_policy_gates_enabled_timestamps; END IF; END $$;"
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_enabled_timestamps' AND conrelid = 'public.policy_gates'::regclass AND NOT convalidated) THEN ALTER TABLE public.policy_gates VALIDATE CONSTRAINT ck_policy_gates_enabled_timestamps; END IF; END $$;"
 )
 
 
@@ -107,16 +102,12 @@ def upgrade() -> None:
         with op.batch_alter_table("policy_gates") as batch_op:
             batch_op.create_check_constraint(
                 "ck_policy_gates_enabled_timestamps",
-                "(enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL) "
-                "OR "
-                "(NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL)",
+                "(enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL) OR (NOT enabled AND disabled_at IS NOT NULL AND enabled_at IS NULL)",
             )
 
     # ── pipeline_snapshots: pin-set integrity fingerprint (§3.3) ──────────
     op.execute(sa.text("ALTER TABLE pipeline_snapshots ADD COLUMN IF NOT EXISTS policy_gate_pins_json JSON"))
-    op.execute(
-        sa.text("ALTER TABLE pipeline_snapshots ADD COLUMN IF NOT EXISTS policy_gate_pins_fingerprint VARCHAR(64)")
-    )
+    op.execute(sa.text("ALTER TABLE pipeline_snapshots ADD COLUMN IF NOT EXISTS policy_gate_pins_fingerprint VARCHAR(64)"))
 
 
 def downgrade() -> None:
@@ -131,15 +122,7 @@ def downgrade() -> None:
 
     # ── policy_gates: remove CHECK + columns ───────────────────────────────
     if _is_postgres():
-        op.execute(
-            sa.text(
-                "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-                "WHERE conname='ck_policy_gates_enabled_timestamps' "
-                "AND conrelid = 'public.policy_gates'::regclass) "
-                "THEN ALTER TABLE public.policy_gates "
-                "DROP CONSTRAINT ck_policy_gates_enabled_timestamps; END IF; END $$;"
-            )
-        )
+        op.execute(sa.text("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_policy_gates_enabled_timestamps' AND conrelid = 'public.policy_gates'::regclass) THEN ALTER TABLE public.policy_gates DROP CONSTRAINT ck_policy_gates_enabled_timestamps; END IF; END $$;"))
     elif _is_sqlite():
         with op.batch_alter_table("policy_gates") as batch_op:
             batch_op.drop_constraint("ck_policy_gates_enabled_timestamps", type_="check")

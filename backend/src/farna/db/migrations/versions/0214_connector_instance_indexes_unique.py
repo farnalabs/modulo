@@ -18,21 +18,11 @@ depends_on: str | None = None
 
 def upgrade() -> None:
     # Composite index: list connectors by org + account (common query pattern)
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_connector_instances_org_account "
-        'ON public."connector_instances" USING btree (organisation_id, account_id);'
-    )
+    op.execute('CREATE INDEX IF NOT EXISTS ix_connector_instances_org_account ON public."connector_instances" USING btree (organisation_id, account_id);')
     # Composite index: list connectors by org + type
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_connector_instances_org_type "
-        'ON public."connector_instances" USING btree (organisation_id, connector_type_id);'
-    )
+    op.execute('CREATE INDEX IF NOT EXISTS ix_connector_instances_org_type ON public."connector_instances" USING btree (organisation_id, connector_type_id);')
     # Unique constraint: prevent duplicate connector names per org (active only)
-    op.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_connector_instances_org_name "
-        'ON public."connector_instances" USING btree (organisation_id, name) '
-        "WHERE (deleted_at IS NULL);"
-    )
+    op.execute('CREATE UNIQUE INDEX IF NOT EXISTS uq_connector_instances_org_name ON public."connector_instances" USING btree (organisation_id, name) WHERE (deleted_at IS NULL);')
 
 
 def downgrade() -> None:

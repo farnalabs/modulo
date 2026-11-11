@@ -214,13 +214,7 @@ async def install_community_entry(
     slug = entry.get("slug")
     version = entry.get("version")
     author = entry.get("author")
-    if (
-        not isinstance(content_sha256, str)
-        or not content_sha256
-        or not isinstance(slug, str)
-        or not isinstance(version, str)
-        or not isinstance(author, str)
-    ):
+    if not isinstance(content_sha256, str) or not content_sha256 or not isinstance(slug, str) or not isinstance(version, str) or not isinstance(author, str):
         raise ValueError(_ERR_ENTRY_NOT_FOUND)
 
     began = await _enter_org_context(session, org_id)

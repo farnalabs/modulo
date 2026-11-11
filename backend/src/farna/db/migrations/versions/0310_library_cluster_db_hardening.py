@@ -89,9 +89,7 @@ _UPGRADE_INDEXES: tuple[str, ...] = (
         # unconstrained leading column - so organisation_id would have made this
         # index dead weight for its only motivating query. Org-scoped reads of
         # this table keep their own ``ix_library_primitives_organisation_id``.
-        "CREATE INDEX IF NOT EXISTS ix_library_primitives_visibility_contribution "
-        "ON library_primitives (visibility, contribution_status) "
-        "WHERE deleted_at IS NULL"
+        "CREATE INDEX IF NOT EXISTS ix_library_primitives_visibility_contribution ON library_primitives (visibility, contribution_status) WHERE deleted_at IS NULL"
     ),
 )
 
@@ -119,27 +117,16 @@ _RESTORE_0165_CHECKS: tuple[str, ...] = (
 # C1: the 0207 UniqueConstraint becomes a partial unique index of the SAME
 # name so a soft-deleted (uninstalled) row no longer blocks a reinstall. The
 # DROP must come after the deleted_at column exists (see upgrade()).
-_DROP_INSTALL_UNIQUE_CONSTRAINT = (
-    "ALTER TABLE collection_install DROP CONSTRAINT IF EXISTS uq_collection_install_org_collection"
-)
-_CREATE_INSTALL_PARTIAL_UNIQUE_INDEX = (
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_collection_install_org_collection "
-    "ON collection_install (organisation_id, collection_id) WHERE deleted_at IS NULL"
-)
+_DROP_INSTALL_UNIQUE_CONSTRAINT = "ALTER TABLE collection_install DROP CONSTRAINT IF EXISTS uq_collection_install_org_collection"
+_CREATE_INSTALL_PARTIAL_UNIQUE_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS uq_collection_install_org_collection ON collection_install (organisation_id, collection_id) WHERE deleted_at IS NULL"
 _RESTORE_INSTALL_UNIQUE_CONSTRAINT = (
     "DROP INDEX IF EXISTS uq_collection_install_org_collection",
-    (
-        "ALTER TABLE collection_install ADD CONSTRAINT uq_collection_install_org_collection "
-        "UNIQUE (organisation_id, collection_id)"
-    ),
+    ("ALTER TABLE collection_install ADD CONSTRAINT uq_collection_install_org_collection UNIQUE (organisation_id, collection_id)"),
 )
 
 # M4: the created_by FK, added by explicit DDL so the constraint carries a
 # deterministic name the downgrade can drop.
-_CREATE_CREATED_BY_FK = (
-    "ALTER TABLE collection_install ADD CONSTRAINT fk_collection_install_created_by "
-    "FOREIGN KEY (created_by) REFERENCES accounts (id) ON DELETE SET NULL"
-)
+_CREATE_CREATED_BY_FK = "ALTER TABLE collection_install ADD CONSTRAINT fk_collection_install_created_by FOREIGN KEY (created_by) REFERENCES accounts (id) ON DELETE SET NULL"
 _DROP_CREATED_BY_FK = "ALTER TABLE collection_install DROP CONSTRAINT IF EXISTS fk_collection_install_created_by"
 
 
@@ -196,9 +183,7 @@ def upgrade() -> None:
     if not _foreign_key_exists("collection_install", "fk_collection_install_created_by"):
         op.execute(sa.text(_CREATE_CREATED_BY_FK))
     if not _index_exists("collection_install", "ix_collection_install_created_by"):
-        op.execute(
-            sa.text("CREATE INDEX IF NOT EXISTS ix_collection_install_created_by ON collection_install (created_by)")
-        )
+        op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_collection_install_created_by ON collection_install (created_by)"))
 
 
 def downgrade() -> None:

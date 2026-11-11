@@ -84,9 +84,7 @@ def test_unknown_backend_raises_value_error() -> None:
 
 
 @pytest.mark.parametrize("fernet_key", [pytest.param(_KEY, id="fernet-key"), pytest.param(None, id="no-fernet-key")])
-def test_external_backend_constructed_regardless_of_fernet_key(
-    external_backend: tuple[str, type], fernet_key: str | None
-) -> None:
+def test_external_backend_constructed_regardless_of_fernet_key(external_backend: tuple[str, type], fernet_key: str | None) -> None:
     """FAR-2059 / FAR-2100: a configured external backend is always constructed.
 
     External backends are available on every tier and there is no fernet
@@ -149,7 +147,7 @@ def test_external_secrets_licence_helper_is_removed() -> None:
 
 
 def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_SECRETS_BACKEND", "fernet")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_SECRETS_BACKEND", "fernet")
     backend = create_secrets_backend(fernet_key=_KEY)
     assert isinstance(backend, FernetSecretsBackend)
 
@@ -167,7 +165,7 @@ def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name: str, sou
     """Both ``backend_name`` and ``MODULO_SECRETS_BACKEND`` are lowercased/stripped before matching."""
     with _stub_external_backend(monkeypatch, "vault") as expected_cls:
         if source == "env":
-            monkeypatch.setenv("MODULO_SECRETS_BACKEND", name)
+            monkeypatch.setenv("FARNA_CONTROL_MODULO_SECRETS_BACKEND", name)
             backend = create_secrets_backend(fernet_key=None)
         else:
             backend = create_secrets_backend(fernet_key=None, backend_name=name)

@@ -75,11 +75,7 @@ class AssistantContextSourceService:
     async def _query_by_user_id(self, org_id: uuid.UUID, user_id: uuid.UUID | None) -> dict[str, str]:
         # ``user_id is None`` reads the ORG-DEFAULT rows (account_id IS NULL);
         # otherwise the rows scoped to that account.
-        account_clause = (
-            AssistantContextSource.account_id.is_(None)
-            if user_id is None
-            else AssistantContextSource.account_id == user_id
-        )
+        account_clause = AssistantContextSource.account_id.is_(None) if user_id is None else AssistantContextSource.account_id == user_id
         stmt = select(AssistantContextSource).where(
             AssistantContextSource.organisation_id == org_id,
             account_clause,
@@ -88,9 +84,7 @@ class AssistantContextSourceService:
         rows = list(result.scalars())
         return {r.source_key: r.source_mode for r in rows}
 
-    def build_effective_items(
-        self, effective: dict[str, str], user_overrides: dict[str, str]
-    ) -> list[ContextSourceResponseItem]:
+    def build_effective_items(self, effective: dict[str, str], user_overrides: dict[str, str]) -> list[ContextSourceResponseItem]:
         return [
             ContextSourceResponseItem(
                 key=key,
@@ -112,9 +106,7 @@ class AssistantContextSourceService:
         config.context_sources = merged
         return config
 
-    async def _upsert_context_source(
-        self, org_id: uuid.UUID, source_key: str, source_mode: str, user_id: uuid.UUID | None
-    ) -> None:
+    async def _upsert_context_source(self, org_id: uuid.UUID, source_key: str, source_mode: str, user_id: uuid.UUID | None) -> None:
         if not source_key:
             raise ValueError("source_key must not be empty")
         if source_mode not in _VALID_SOURCE_MODES:

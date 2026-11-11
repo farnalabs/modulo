@@ -181,11 +181,7 @@ RETIRED_FLAG_ROWS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "eval_maturity",
-        (
-            "Generic eval suite/dataset maturity model (FAR-374). Gates the new "
-            "EvalSuite entity, endpoints, and UI behind a flag so the legacy "
-            "suite_id behaviour is untouched until explicitly enabled."
-        ),
+        ("Generic eval suite/dataset maturity model (FAR-374). Gates the new EvalSuite entity, endpoints, and UI behind a flag so the legacy suite_id behaviour is untouched until explicitly enabled."),
         "community",
     ),
     ("migration_cli", "CLI tool for migrating pipelines across instances", "team"),
@@ -229,28 +225,12 @@ def _catalog_has_name_column(bind: sa.Connection) -> bool:
     A column cannot exist without its table, so this single probe covers both
     the "catalog table absent" and "name column absent" cases.
     """
-    return (
-        bind.execute(
-            sa.text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'feature_flag_catalog' "
-                "AND column_name = 'name'"
-            )
-        ).first()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'feature_flag_catalog' AND column_name = 'name'")).first() is not None
 
 
 def _has_tier_catalog_table(bind: sa.Connection) -> bool:
     """True when ``public.tier_catalog`` exists; the restore needs it for its FK."""
-    return (
-        bind.execute(
-            sa.text(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tier_catalog'"
-            )
-        ).first()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tier_catalog'")).first() is not None
 
 
 def sweep_stale_catalog_rows(bind: sa.Connection) -> int:
@@ -293,12 +273,7 @@ def restore_retired_catalog_rows(bind: sa.Connection) -> int:
         for name, description, tier_id in RETIRED_FLAG_ROWS
     ]
     result = bind.execute(
-        sa.text(
-            'INSERT INTO public."feature_flag_catalog" (name, description, tier_id, depends_on, is_active) '
-            "SELECT :name, :description, :tier_id, NULL, true "
-            "WHERE EXISTS (SELECT 1 FROM public.tier_catalog WHERE tier_id = :tier_check) "
-            "ON CONFLICT (name) DO NOTHING"
-        ),
+        sa.text('INSERT INTO public."feature_flag_catalog" (name, description, tier_id, depends_on, is_active) SELECT :name, :description, :tier_id, NULL, true WHERE EXISTS (SELECT 1 FROM public.tier_catalog WHERE tier_id = :tier_check) ON CONFLICT (name) DO NOTHING'),
         rows,
     )
     return result.rowcount or 0

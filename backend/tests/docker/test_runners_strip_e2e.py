@@ -65,8 +65,8 @@ _VALID_32 = "a" * 32
 _BACKEND_ROOT = Path(__file__).parents[2]
 _STATUS_ENDPOINT = "/api/v1/runners/status"
 
-_HARNESS_PROXY_ENV = "MODULO_RUNNER_HARNESS_PROXY_HOST"
-_HARNESS_DIND_ENV = "MODULO_RUNNER_HARNESS_DIND_HOST"
+_HARNESS_PROXY_ENV = "FARNA_CONTROL_MODULO_RUNNER_HARNESS_PROXY_HOST"
+_HARNESS_DIND_ENV = "FARNA_CONTROL_MODULO_RUNNER_HARNESS_DIND_HOST"
 _DINO_LABEL = "runner-ci-dind"
 
 
@@ -121,20 +121,14 @@ def _dind_host() -> str | None:
 def _require_proxy() -> str:
     host = _proxy_host()
     if not host:
-        pytest.skip(
-            f"runner-ci compose rig not up (set {_HARNESS_PROXY_ENV} to the "
-            "socket-proxy endpoint; see deploy/compose/README-runner-ci.md)"
-        )
+        pytest.skip(f"runner-ci compose rig not up (set {_HARNESS_PROXY_ENV} to the socket-proxy endpoint; see deploy/compose/README-runner-ci.md)")
     return host
 
 
 def _require_dind() -> str:
     host = _dind_host()
     if not host:
-        pytest.skip(
-            f"runner-ci nested dind not up (set {_HARNESS_DIND_ENV} to the "
-            "dind tcp:// endpoint; see deploy/compose/README-runner-ci.md)"
-        )
+        pytest.skip(f"runner-ci nested dind not up (set {_HARNESS_DIND_ENV} to the dind tcp:// endpoint; see deploy/compose/README-runner-ci.md)")
     return host
 
 
@@ -193,15 +187,9 @@ def migrated_db_url(db_url: str) -> str:
                 await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{_APP_ROLE}"'))
                 await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{_APP_ROLE}"'))
                 await conn.execute(text(f'GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO "{_APP_ROLE}"'))
-                await conn.execute(
-                    text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "{_APP_ROLE}"')
-                )
-                await conn.execute(
-                    text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{_APP_ROLE}"')
-                )
-                await conn.execute(
-                    text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "{_APP_ROLE}"')
-                )
+                await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "{_APP_ROLE}"'))
+                await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{_APP_ROLE}"'))
+                await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "{_APP_ROLE}"'))
                 await conn.commit()
         finally:
             await eng.dispose()
@@ -268,10 +256,7 @@ async def test_org(superuser_engine: AsyncEngine) -> uuid.UUID:
     # than the engine's reported cpu_count regardless of the runner size.
     async with superuser_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{\"sandbox_concurrency_limit\": 1}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{\"sandbox_concurrency_limit\": 1}'::json)"),
             {
                 "id": str(org_id),
                 "name": "Runners Strip E2E Org",
@@ -289,10 +274,7 @@ async def test_user(
     account_id = uuid.uuid4()
     async with superuser_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": "runners-strip-e2e@example.com",
@@ -300,9 +282,7 @@ async def test_user(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {
                 "mid": str(uuid.uuid4()),
                 "aid": str(account_id),
@@ -560,7 +540,7 @@ async def test_engine_down_maps_to_unreachable_and_profile_unavailable(
     aggregate ``engine_unreachable``, profile unavailable, and the resource
     preflight reads ``unknown`` (no engine info was recorded).
     """
-    monkeypatch.setenv("MODULO_DOCKER_HOST", f"tcp://127.0.0.1:{_DEAD_PORT}")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", f"tcp://127.0.0.1:{_DEAD_PORT}")
 
     result = await run_runner_health_probe(probe_session_factory, machine_id=_MACHINE_ID)
     assert result["reachable"] is False
@@ -602,7 +582,7 @@ async def test_rig_up_maps_to_healthy_and_profile_offered(
     """
     proxy_host = _require_proxy()
     await _ensure_image_present(None, _IMAGE_REF)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", f"tcp://{proxy_host}")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", f"tcp://{proxy_host}")
 
     result = await run_runner_health_probe(probe_session_factory, machine_id=_MACHINE_ID)
     assert result["reachable"] is True
@@ -652,7 +632,7 @@ async def test_engine_kill_flips_strip_and_emits_notification_and_error_event(
     rows never matter.
     """
     dind_host = _require_dind()
-    monkeypatch.setenv("MODULO_DOCKER_HOST", dind_host)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", dind_host)
     # Distinguish "rig never came up" (environment-dependent: skip with a
     # clear reason) from "kill paused the engine" (the test body's real
     # assertion). A dead dind at test START must not surface as a red
@@ -665,11 +645,7 @@ async def test_engine_kill_flips_strip_and_emits_notification_and_error_event(
             break
         await asyncio.sleep(1.0)
     if not engine_ready:
-        pytest.skip(
-            f"engine-kill scenario skipped: the nested dind engine at {dind_host} "
-            "never became ready within 60s — the rig is not available in this "
-            "environment, so the healthy→unreachable transition cannot be exercised."
-        )
+        pytest.skip(f"engine-kill scenario skipped: the nested dind engine at {dind_host} never became ready within 60s — the rig is not available in this environment, so the healthy→unreachable transition cannot be exercised.")
     await _ensure_image_present(dind_host, _IMAGE_REF)
     dind_network = await _create_dind_workspace_network(dind_host)
 

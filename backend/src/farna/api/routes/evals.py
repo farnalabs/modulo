@@ -145,11 +145,7 @@ _CODE_EVALS_MUTE_POLICY = _CODE_EVAL_DEFINITION_UPDATE
 _MSG_FINDING_NOT_FOUND = "Finding not found"
 _VISIBILITY_PATTERN = "^(org|team)$"
 
-_MSG_POLICY_GATE_CASCADE_CONFLICT = (
-    "Cannot delete this eval: it has policy gate decision records. "
-    "Remove the associated pipeline run(s) or wait for decision retention "
-    "cleanup before deleting."
-)
+_MSG_POLICY_GATE_CASCADE_CONFLICT = "Cannot delete this eval: it has policy gate decision records. Remove the associated pipeline run(s) or wait for decision retention cleanup before deleting."
 _RESOLUTION_PATTERN = r"^(accepted|dismissed|superseded|pending)$"
 _log = logging.getLogger(__name__)
 
@@ -1069,9 +1065,7 @@ async def delete_policy_gate(
 # ---------------------------------------------------------------------------
 
 _CODE_EVALS_POLICY_GATE_TOGGLE = "evals.policy_gate.toggle"
-_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = (
-    "Toggle would violate the enabled/disabled timestamp constraint. This is a server-side bug — please report it."
-)
+_MSG_POLICY_GATE_TOGGLE_CHECK_VIOLATION = "Toggle would violate the enabled/disabled timestamp constraint. This is a server-side bug — please report it."
 
 
 @router.patch(
@@ -1457,13 +1451,7 @@ async def list_eval_definitions(
             total_q = select(sa_func.count(Eval.id)).where(*conditions)
             total = (await session.execute(total_q)).scalar() or 0
 
-            q = (
-                select(Eval)
-                .where(*conditions)
-                .order_by(Eval.created_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
+            q = select(Eval).where(*conditions).order_by(Eval.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
     except HTTPException:
         raise
@@ -1496,10 +1484,7 @@ async def list_eval_definitions(
 
     mask_guardrail_internals = principal.org_role != "admin"
     return EvalDefinitionListResponse(
-        items=[
-            EvalDefinitionResponse(**_eval_def_to_dict(d, mask_guardrail_internals=mask_guardrail_internals))
-            for d in rows
-        ],
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d, mask_guardrail_internals=mask_guardrail_internals)) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -1822,11 +1807,7 @@ async def eval_timeseries(
     since = datetime.now(UTC) - timedelta(days=days)
     buckets = bucket_eval_timeseries(rows, since=since)
     summary = summarise_eval_timeseries(buckets)
-    pipelines = [
-        {"pipeline_id": str(r.pipeline_id), "pipeline_name": r.pipeline_name}
-        for r in pipeline_rows
-        if r.pipeline_id is not None
-    ]
+    pipelines = [{"pipeline_id": str(r.pipeline_id), "pipeline_name": r.pipeline_name} for r in pipeline_rows if r.pipeline_id is not None]
     return {
         "eval_id": str(eval_id),
         "eval_name": eval_def.name,
@@ -2449,13 +2430,7 @@ async def list_eval_suites(
             )
             total = (await session.execute(total_q)).scalar() or 0
 
-            q = (
-                select(EvalSuite)
-                .where(EvalSuite.organisation_id == principal.organisation_id)
-                .order_by(EvalSuite.created_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
+            q = select(EvalSuite).where(EvalSuite.organisation_id == principal.organisation_id).order_by(EvalSuite.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "evals.list_eval_suites")
@@ -2900,9 +2875,7 @@ async def _delete_eval_definition_in_tx(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(
-            audited(
-                "eval_definition_deleted", "eval_definition", principal_dep=get_current_tenant_user, fail_closed=True
-            ),
+            audited("eval_definition_deleted", "eval_definition", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         ),
         Depends(deny_break_glass_mint),
@@ -3020,13 +2993,7 @@ async def list_run_evals(
             total = (await session.execute(total_q)).scalar() or 0
 
             offset = (page - 1) * page_size
-            q = (
-                select(EvalResult)
-                .where(*base_filters)
-                .order_by(EvalResult.evaluated_at.desc())
-                .offset(offset)
-                .limit(page_size)
-            )
+            q = select(EvalResult).where(*base_filters).order_by(EvalResult.evaluated_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
     except HTTPException:
         raise
@@ -3552,10 +3519,7 @@ async def update_mute_policy(
 
         # If unmuting by explicitly setting threshold/min_outcomes to null, also
         # clear mute status. An omitted field must not trigger this branch.
-        if any(
-            field in req.model_fields_set and getattr(req, field) is None
-            for field in ("mute_threshold", "mute_min_outcomes")
-        ):
+        if any(field in req.model_fields_set and getattr(req, field) is None for field in ("mute_threshold", "mute_min_outcomes")):
             eval_def.is_muted = False
             eval_def.muted_at = None
             eval_def.muted_by = None
@@ -3972,9 +3936,7 @@ async def _load_node_sample_output(
     """
     blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     outputs = blobs.outputs or {}
-    node_output = (
-        node_return(outputs, blobs.telemetry, str(node_id)) or node_return(outputs, blobs.telemetry, node_id.hex) or {}
-    )
+    node_output = node_return(outputs, blobs.telemetry, str(node_id)) or node_return(outputs, blobs.telemetry, node_id.hex) or {}
     return node_output if isinstance(node_output, dict) else {"output": str(node_output)}
 
 
@@ -4009,9 +3971,7 @@ async def _eval_from_run_source(
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "evals._eval_from_run_source")
         _log.exception(_CODE_EVALS_CREATE_EVAL_RUN)
-        _log.warning(
-            "evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.warning("evals.create_eval_from_run_first_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -4121,17 +4081,13 @@ async def _insert_eval_definition(
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "evals._insert_eval_definition")
         _log.exception(_CODE_EVALS_CREATE_EVAL_RUN)
-        _log.warning(
-            "evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.warning("evals.create_eval_from_run_second_block_db_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
     except Exception:
-        _log.exception(
-            "evals.create_eval_from_run_second_block_error", extra={"org_id": str(principal.organisation_id)}
-        )
+        _log.exception("evals.create_eval_from_run_second_block_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating an eval from run output.",

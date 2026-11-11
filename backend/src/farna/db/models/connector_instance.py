@@ -32,12 +32,8 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     connector_type_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
-    )
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True)
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True)
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     credentials_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
@@ -51,12 +47,6 @@ class ConnectorInstance(SoftDeleteMixin, OrgScoped):
     tier: Mapped[str] = mapped_column(String(20), nullable=False, server_default="native")
 
     # Audit columns (added by migration 0132)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
-    )
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL)
-    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL))
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_ACCOUNTS_ID, ondelete=_ONDELETE_SET_NULL))

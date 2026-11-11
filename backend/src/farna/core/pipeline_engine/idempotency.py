@@ -123,11 +123,7 @@ def stable_idempotency_key(
     persisted key.
     """
     if not isinstance(run_ref, str) or not _RUN_REF_RE.match(run_ref):
-        raise ValueError(
-            "run_ref must be the stable logical run identity '<pipeline_id>:<run_number>' "
-            "(recomputed on a re-run), NOT the per-replay run_id; got "
-            f"{run_ref!r}"
-        )
+        raise ValueError(f"run_ref must be the stable logical run identity '<pipeline_id>:<run_number>' (recomputed on a re-run), NOT the per-replay run_id; got {run_ref!r}")
     raw = f"{_IDEMPOTENCY_NAMESPACE}:{run_ref}:{node_ref}"
     if index is not None:
         raw = f"{raw}:{index}"
@@ -209,10 +205,7 @@ def read_before_write_suppression(
     except ValueError:
         # A malformed persisted run key must fail open (never silently suppress).
         return False
-    return any(
-        isinstance(marker, dict) and marker.get("delivery_done") is True and marker.get("idempotency_key") == derived
-        for marker in markers.values()
-    )
+    return any(isinstance(marker, dict) and marker.get("delivery_done") is True and marker.get("idempotency_key") == derived for marker in markers.values())
 
 
 def read_before_write_ambiguous(
@@ -274,10 +267,4 @@ def read_before_write_ambiguous(
     except ValueError:
         # A malformed persisted run key must fail open (never treat as ambiguous).
         return False
-    return any(
-        isinstance(marker, dict)
-        and marker.get("idempotency_key") == derived
-        and marker.get("delivery_done") is not True
-        and marker.get("no_delivery_confirmed") is not True
-        for marker in markers.values()
-    )
+    return any(isinstance(marker, dict) and marker.get("idempotency_key") == derived and marker.get("delivery_done") is not True and marker.get("no_delivery_confirmed") is not True for marker in markers.values())

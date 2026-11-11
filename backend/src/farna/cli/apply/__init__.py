@@ -31,8 +31,8 @@ from farna.cli.apply.plan import has_blockers
 
 _log = logging.getLogger(__name__)
 
-_ENV_URL = "MODULO_URL"
-_ENV_API_KEY = "MODULO_API_KEY"
+_ENV_URL = "FARNA_CONTROL_MODULO_URL"
+_ENV_API_KEY = "FARNA_CONTROL_MODULO_API_KEY"
 
 
 def run_apply(
@@ -91,10 +91,7 @@ def _render_policy_gate_changes(entries: Iterable[dict[str, Any]], *, scope: str
     ``pipeline`` (apply-report mode). Keeps ``render_table`` under the
     SonarCloud cognitive-complexity threshold by owning the per-entry loop.
     """
-    return [
-        _render_policy_gate_change(entry, scope=scope if scope is not None else entry.get("pipeline"))
-        for entry in entries
-    ]
+    return [_render_policy_gate_change(entry, scope=scope if scope is not None else entry.get("pipeline")) for entry in entries]
 
 
 def _render_change_lines(report: dict[str, Any], *, drift_mode: bool) -> list[str]:
@@ -139,11 +136,7 @@ def _render_drift_detail(report: dict[str, Any]) -> list[str]:
         lines.append(f"drift detail pipeline {key!r}: graph {_counts(nodes)} nodes, {_counts(edges)} edges")
         # FAR-220: full current -> desired values (the pinned commit SHAs)
         # so the operator sees the actual commit move, not just the node id.
-        lines.extend(
-            f"drift detail git-content {key!r} node {entry['node']} {entry['field']}: "
-            f"{entry['current']!r} -> {entry['desired']!r}"
-            for entry in breakdown.get("git_content") or ()
-        )
+        lines.extend(f"drift detail git-content {key!r} node {entry['node']} {entry['field']}: {entry['current']!r} -> {entry['desired']!r}" for entry in breakdown.get("git_content") or ())
         # FAR-1109: gate changes render as their own drift-detail line (the
         # node-level aggregate above cannot tell a gate change from any other
         # node modification).
@@ -168,10 +161,7 @@ def render_table(report: dict[str, Any]) -> str:
     lines.extend(_render_drift_detail(report))
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
-    lines.append(
-        f"{label}: {counts['created']} created, {counts['updated']} updated, "
-        f"{counts['unchanged']} unchanged, {counts['blocked']} blocked, {counts['failed']} failed"
-    )
+    lines.append(f"{label}: {counts['created']} created, {counts['updated']} updated, {counts['unchanged']} unchanged, {counts['blocked']} blocked, {counts['failed']} failed")
     return "\n".join(lines)
 
 
@@ -214,12 +204,7 @@ def register_apply(group: click.Group) -> None:
         "diff_mode",
         is_flag=True,
         default=False,
-        help=(
-            "Drift mode: read-only comparison of the live org against the config "
-            "(same managed-field hashes as the plan). Writes NOTHING. Exit code 0 "
-            "when the org matches the config, 1 when drift is detected "
-            "(created/updated/blocked) so CI can gate on config drift."
-        ),
+        help=("Drift mode: read-only comparison of the live org against the config (same managed-field hashes as the plan). Writes NOTHING. Exit code 0 when the org matches the config, 1 when drift is detected (created/updated/blocked) so CI can gate on config drift."),
     )
     @click.option(
         "--output",

@@ -60,10 +60,7 @@ def _detect_stages(findings: list[Finding]) -> _StageDetection:
     has_planning = any(f.category == "stage" and "Planning" in f.finding for f in findings)
     has_development = any(f.category == "stage" and "Development" in f.finding for f in findings)
     has_review = any(f.category == "stage" and "Code review" in f.finding for f in findings)
-    has_ci = any(
-        f.category == "automation" and "CI/CD configuration detected in repository metadata" in f.finding
-        for f in findings
-    )
+    has_ci = any(f.category == "automation" and "CI/CD configuration detected in repository metadata" in f.finding for f in findings)
     return _StageDetection(has_planning, has_development, has_review, has_ci)
 
 

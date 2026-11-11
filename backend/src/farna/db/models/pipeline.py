@@ -54,8 +54,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             name="ck_pipelines_autonomy_level",
         ),
         CheckConstraint(
-            "max_autonomy_level IS NULL OR "
-            "max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            "max_autonomy_level IS NULL OR max_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_max_autonomy_level",
         ),
         # 0264: the ordering invariant itself (levels are NOT lexicographically
@@ -64,15 +63,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         # treats as satisfied - matching validate_autonomy_ceiling's
         # "NULL default ranks as manual_approval" fallback.
         CheckConstraint(
-            "max_autonomy_level IS NULL OR "
-            "(CASE default_autonomy_level "
-            "WHEN 'manual_approval' THEN 0 "
-            "WHEN 'notify_on_complete' THEN 1 "
-            "WHEN 'fully_autonomous' THEN 2 END) <= "
-            "(CASE max_autonomy_level "
-            "WHEN 'manual_approval' THEN 0 "
-            "WHEN 'notify_on_complete' THEN 1 "
-            "WHEN 'fully_autonomous' THEN 2 END)",
+            "max_autonomy_level IS NULL OR (CASE default_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END) <= (CASE max_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)",
             name="ck_pipelines_max_autonomy_ge_default",
         ),
         # FAR-1175 (ADR 043 S1): the earned autonomy level — runtime state that
@@ -80,8 +71,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         # at every HITL gate. NULL = never earned (resolution falls back to
         # default_autonomy_level). Migration 0295.
         CheckConstraint(
-            "earned_autonomy_level IS NULL OR "
-            "earned_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            "earned_autonomy_level IS NULL OR earned_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
             name="ck_pipelines_earned_autonomy_level",
         ),
         # FAR-1530: per-pipeline Paused execution state. A disabled row must
@@ -115,24 +105,16 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete=_ONDELETE_SET_NULL), index=True
-    )
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
-    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete=_ONDELETE_SET_NULL), index=True)
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True)
     # FAR-1161: accountability owners — DISTINCT from owner_team_id (the
     # tenancy/visibility boundary). Nullable: assigned per-pipeline by an
     # operator; FK SET NULL so deleting an account clears the reference
     # rather than the pipeline. Assignment is gated by the eligibility
     # invariant (active org member + team member when visibility='team') in
     # ``db.crud.pipeline_owner``.
-    business_owner_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True
-    )
-    reliability_owner_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True
-    )
+    business_owner_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True)
+    reliability_owner_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True)
     # FAR-1558: per-pipeline environment-profile binding — WHICH runtime
     # provider tier (runner_docker / e2b / kubernetes / ...) this pipeline's
     # sandbox_agent nodes dispatch on. Nullable: NULL keeps the historical
@@ -142,9 +124,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # deleting a profile unbinds rather than deletes the pipeline. Same-org
     # tenant trigger ``trg_pipelines_environment_profile_id_tenant`` (migration
     # 0289) plus a route-level eligibility check (org + owner-team visibility).
-    environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("environment_profiles.id", ondelete=_ONDELETE_SET_NULL), index=True
-    )
+    environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("environment_profiles.id", ondelete=_ONDELETE_SET_NULL), index=True)
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
@@ -189,9 +169,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     run_disabled_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
     run_disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(
-        JSONB_COL, nullable=False, default=dict, server_default=text("'{}'")
-    )
+    run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict, server_default=text("'{}'"))
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
     # FAR-1163 S0: hard ceiling on the autonomy level any HITL-gate resolution
     # may reach. NULL = effective ceiling is default_autonomy_level (a
@@ -238,13 +216,9 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         default=dict,
         server_default=text("'{}'"),
     )
-    stale_run_timeout_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=30, server_default=text("'30'")
-    )
+    stale_run_timeout_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30, server_default=text("'30'"))
     collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete="RESTRICT"), nullable=False, index=True)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     organisation: Mapped["Organisation"] = relationship()
     creator: Mapped["Account"] = relationship(foreign_keys=[account_id])

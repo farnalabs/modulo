@@ -99,16 +99,12 @@ def _dashboard_cache_key(org_id: str, days: int | None, analytics_enabled: bool)
     return f"dashboard:summary:{org_id}:{days}:{flag}"
 
 
-async def _get_cached_dashboard(
-    org_id: str, days: int | None = None, analytics_enabled: bool = True
-) -> dict[str, Any] | None:
+async def _get_cached_dashboard(org_id: str, days: int | None = None, analytics_enabled: bool = True) -> dict[str, Any] | None:
     """Read cached dashboard summary from Redis."""
     settings = get_settings()
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         key = _dashboard_cache_key(org_id, days, analytics_enabled)
         cached = await redis.get(key)
         if cached:
@@ -122,16 +118,12 @@ async def _get_cached_dashboard(
     return None
 
 
-async def _set_cached_dashboard(
-    org_id: str, data: dict[str, Any], days: int | None = None, analytics_enabled: bool = True
-) -> None:
+async def _set_cached_dashboard(org_id: str, data: dict[str, Any], days: int | None = None, analytics_enabled: bool = True) -> None:
     """Write dashboard summary to Redis cache."""
     settings = get_settings()
     redis: Redis | None = None
     try:
-        redis = Redis.from_url(
-            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
-        )
+        redis = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0)
         key = _dashboard_cache_key(org_id, days, analytics_enabled)
         await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
     except Exception:
@@ -304,10 +296,7 @@ async def _compute_period_metrics(
     current_eval = await _eval_rate_window(session, org_id, now - timedelta(days=days), now)
     previous_eval = await _eval_rate_window(session, org_id, now - timedelta(days=2 * days), now - timedelta(days=days))
 
-    status_metrics = {
-        run_status: _period_metric(current_status.get(run_status, 0), previous_status.get(run_status, 0))
-        for run_status in _TRACKED_STATUSES
-    }
+    status_metrics = {run_status: _period_metric(current_status.get(run_status, 0), previous_status.get(run_status, 0)) for run_status in _TRACKED_STATUSES}
 
     return {
         "days": days,
@@ -361,9 +350,7 @@ async def _load_status_counts(session: AsyncSession, org_id: uuid.UUID) -> dict[
 
 
 async def _load_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Team]:
-    teams_result = await session.execute(
-        select(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None)).order_by(Team.name)
-    )
+    teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None)).order_by(Team.name))
     return list(teams_result.scalars().all())
 
 
@@ -499,11 +486,7 @@ async def _load_eval_stats(
         team_entry = per_team_eval.setdefault(team_id, {"total_evals": 0, "passed_evals": 0, "pass_rate": 0.0})  # nosec B105 — numeric zero default, not a password
         team_entry["total_evals"] += total
         team_entry["passed_evals"] += passed
-        team_entry["pass_rate"] = (
-            round(team_entry["passed_evals"] / team_entry["total_evals"] * 100, 1)
-            if team_entry["total_evals"] > 0
-            else 0.0
-        )
+        team_entry["pass_rate"] = round(team_entry["passed_evals"] / team_entry["total_evals"] * 100, 1) if team_entry["total_evals"] > 0 else 0.0
         # Derive per-pipeline aggregates
         pipe_entry = per_pipeline.setdefault(
             pipeline_id,
@@ -511,11 +494,7 @@ async def _load_eval_stats(
         )
         pipe_entry["total_evals"] += total
         pipe_entry["passed_evals"] += passed
-        pipe_entry["pass_rate"] = (
-            round(pipe_entry["passed_evals"] / pipe_entry["total_evals"] * 100, 1)
-            if pipe_entry["total_evals"] > 0
-            else 0.0
-        )
+        pipe_entry["pass_rate"] = round(pipe_entry["passed_evals"] / pipe_entry["total_evals"] * 100, 1) if pipe_entry["total_evals"] > 0 else 0.0
 
     eval_pass_rate: dict[str, Any] | None = None
     if eval_total > 0:
@@ -644,9 +623,7 @@ async def _load_config_warnings(session: AsyncSession, org_id: uuid.UUID) -> lis
     config_warnings: list[dict[str, Any]] = []
 
     try:
-        mb_count_result = await session.execute(
-            select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id)
-        )
+        mb_count_result = await session.execute(select(func.count()).select_from(ModelBackend).where(ModelBackend.organisation_id == org_id))
         mb_count = int(mb_count_result.scalar_one())
     except Exception:
         _log.exception("dashboard.dashboard_summary.model_backend_count")
@@ -682,11 +659,7 @@ async def _load_config_warnings(session: AsyncSession, org_id: uuid.UUID) -> lis
                 {
                     "type": "assistant_provider_not_configured",
                     "severity": "low",
-                    "message": (
-                        f"Assistant is configured to use {default_provider} but no API key is set "
-                        "for that provider. Assistant will auto-detect the first configured "
-                        "provider. Change the default in Assistant Config."
-                    ),
+                    "message": (f"Assistant is configured to use {default_provider} but no API key is set for that provider. Assistant will auto-detect the first configured provider. Change the default in Assistant Config."),
                     "action_label": f"Configure {default_provider}",
                     "action_url": "/admin/model-backends",
                 }
@@ -824,9 +797,7 @@ async def _load_trend_eval_rates(session: AsyncSession, org_id: uuid.UUID, start
     return eval_rates
 
 
-async def _load_trend_run_and_spend(
-    session: AsyncSession, org_id: uuid.UUID, start_date: date
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+async def _load_trend_run_and_spend(session: AsyncSession, org_id: uuid.UUID, start_date: date) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     daily_query = (
         select(
             OrgDailyRunCount.run_date,
@@ -844,10 +815,7 @@ async def _load_trend_run_and_spend(
     daily_result = await session.execute(daily_query)
     all_rows = daily_result.all()
     run_counts = [{"date": str(row.run_date), "run_count": int(row.run_count)} for row in all_rows]
-    token_spend = [
-        {"date": str(row.run_date), "total_spend_usd": float(row.total_spend) if row.total_spend else 0.0}
-        for row in all_rows
-    ]
+    token_spend = [{"date": str(row.run_date), "total_spend_usd": float(row.total_spend) if row.total_spend else 0.0} for row in all_rows]
     return run_counts, token_spend
 
 
@@ -865,9 +833,7 @@ async def _load_hitl_series(
             func.count().label("total_decisions"),
             func.sum(case((HitlClaim.decision == "approved", 1), else_=0)).label("approved_count"),
             func.sum(case((HitlClaim.decision == "rejected", 1), else_=0)).label("rejected_count"),
-            func.avg(func.extract("epoch", HitlClaim.decision_at - HitlClaim.created_at) * 1000).label(
-                "avg_time_to_approve_ms"
-            ),
+            func.avg(func.extract("epoch", HitlClaim.decision_at - HitlClaim.created_at) * 1000).label("avg_time_to_approve_ms"),
         )
         .where(
             HitlClaim.organisation_id == org_id,
@@ -891,9 +857,7 @@ async def _load_hitl_series(
             "approved_count": approved,
             "rejected_count": rejected,
             "rejection_rate": round(rejected / total * 100, 1) if total > 0 else 0.0,
-            "avg_time_to_approve_ms": (
-                round(float(row.avg_time_to_approve_ms), 1) if row.avg_time_to_approve_ms else None
-            ),
+            "avg_time_to_approve_ms": (round(float(row.avg_time_to_approve_ms), 1) if row.avg_time_to_approve_ms else None),
         }
 
     hitl_volume: list[dict[str, Any]] = []
@@ -939,9 +903,7 @@ async def _load_hitl_series(
     return hitl_volume, rejection_trend, correlation
 
 
-async def _load_feedback_volume(
-    session: AsyncSession, org_id: uuid.UUID, start_date: date, days: int
-) -> list[dict[str, Any]]:
+async def _load_feedback_volume(session: AsyncSession, org_id: uuid.UUID, start_date: date, days: int) -> list[dict[str, Any]]:
     feedback_volume_query = (
         select(
             cast(FeedbackRecord.created_at, Date).label("feedback_date"),
@@ -1000,9 +962,7 @@ async def dashboard_trends(
 
             eval_rates = await _load_trend_eval_rates(session, org_id, start_date)
             run_counts, token_spend = await _load_trend_run_and_spend(session, org_id, start_date)
-            hitl_volume, rejection_trend, correlation = await _load_hitl_series(
-                session, org_id, start_date, days, eval_rates
-            )
+            hitl_volume, rejection_trend, correlation = await _load_hitl_series(session, org_id, start_date, days, eval_rates)
             feedback_volume = await _load_feedback_volume(session, org_id, start_date, days)
 
         return {

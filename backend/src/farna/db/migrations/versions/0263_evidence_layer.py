@@ -43,15 +43,9 @@ _NOW_SERVER_DEFAULT = "now()"
 # receives ENABLE ROW LEVEL SECURITY below.
 _ORG_SCOPED_TABLES = (_TABLE,)
 
-_OWNER_TRANSFER_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') "
-    "THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
-)
+_OWNER_TRANSFER_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_migrate') THEN ALTER TABLE public.{table} OWNER TO modulo_migrate; END IF; END $$;"
 
-_GRANT_SQL = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') "
-    "THEN GRANT SELECT, INSERT, UPDATE, DELETE ON public.{table} TO modulo_app; END IF; END $$;"
-)
+_GRANT_SQL = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'modulo_app') THEN GRANT SELECT, INSERT, UPDATE, DELETE ON public.{table} TO modulo_app; END IF; END $$;"
 
 
 def _enable_rls() -> None:
@@ -65,9 +59,7 @@ def _enable_rls() -> None:
         op.execute(text(_RLS_ALTER_PREFIX + table + '" FORCE ROW LEVEL SECURITY'))
         # Step 4: org-isolation policy.
         op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + table + '"'))
-        op.execute(
-            text('CREATE POLICY rls_org_isolation ON public."' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")")
-        )
+        op.execute(text('CREATE POLICY rls_org_isolation ON public."' + table + '" USING (' + _ORG_ISOLATION_POLICY + ")"))
 
 
 def _is_postgres() -> bool:
@@ -145,12 +137,7 @@ def upgrade() -> None:
         ["organisation_id", "subject_type", "subject_id", "key"],
     )
     # DESC index via raw SQL — op.create_index doesn't support text() columns.
-    op.execute(
-        text(
-            "CREATE INDEX ix_evidence_created_at ON public.evidence "
-            "(organisation_id, subject_type, subject_id, key, created_at DESC, id DESC)"
-        )
-    )
+    op.execute(text("CREATE INDEX ix_evidence_created_at ON public.evidence (organisation_id, subject_type, subject_id, key, created_at DESC, id DESC)"))
 
     # Four-step RLS pattern (§3.1, mirroring 0250_eval_policy_gate).
     _enable_rls()

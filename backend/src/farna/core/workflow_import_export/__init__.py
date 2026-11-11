@@ -277,9 +277,7 @@ async def _resolve_owner_emails_for_import(
             continue
         account_id = await get_account_by_email(ctx.session, email)
         if account_id is None:
-            ctx.warnings.append(
-                f"Owner email '{email}' ({email_key}) does not resolve to an account; {owner_field} left unassigned."
-            )
+            ctx.warnings.append(f"Owner email '{email}' ({email_key}) does not resolve to an account; {owner_field} left unassigned.")
             resolved.append(None)
             continue
         try:
@@ -292,10 +290,7 @@ async def _resolve_owner_emails_for_import(
                 owner_team_id=ctx.owner_team_id,
             )
         except HTTPException as exc:
-            ctx.warnings.append(
-                f"Owner email '{email}' ({email_key}) is not an eligible owner ({exc.detail}); "
-                f"{owner_field} left unassigned."
-            )
+            ctx.warnings.append(f"Owner email '{email}' ({email_key}) is not an eligible owner ({exc.detail}); {owner_field} left unassigned.")
             resolved.append(None)
             continue
         resolved.append(account_id.id)
@@ -312,9 +307,7 @@ async def _load_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipel
 
 
 async def _fetch_and_project_edges(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
-    edge_result = await session.execute(
-        select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
-    )
+    edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at))
     edges = list(edge_result.scalars())
     return [
         {
@@ -721,8 +714,7 @@ async def _agent_runner_bindings(
         backend_row = await session.get(ModelBackend, binding_row.model_backend_id)
         if backend_row is None:
             logger.warning(
-                "export_pipeline_bundle: agent '%s' binding references an invisible model "
-                "backend '%s'; the binding is omitted from the export",
+                "export_pipeline_bundle: agent '%s' binding references an invisible model backend '%s'; the binding is omitted from the export",
                 _sanitise_log_value(a.name),
                 binding_row.model_backend_id,
             )
@@ -925,9 +917,7 @@ async def _build_v2_agents_list(
 
 async def _fetch_and_project_edges_v2(session: AsyncSession, pipeline_id: uuid.UUID) -> list[dict[str, Any]]:
     """Project a pipeline's edges into the v2 bundle shape (source/target)."""
-    edge_result = await session.execute(
-        select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at)
-    )
+    edge_result = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id).order_by(PipelineEdge.created_at))
     edges = list(edge_result.scalars())
     return [
         {
@@ -1535,11 +1525,7 @@ def _strip_malformed_node_agent_commands(
         if is_clean_agent_commands(node["agent_commands"]):
             continue
         del node["agent_commands"]
-        warnings.append(
-            f"Node '{node.get('id')}' in imported pipeline '{pname}' declares malformed "
-            "agent_commands (expected a list of strings with at least one non-empty string). "
-            "The node commands will be omitted."
-        )
+        warnings.append(f"Node '{node.get('id')}' in imported pipeline '{pname}' declares malformed agent_commands (expected a list of strings with at least one non-empty string). The node commands will be omitted.")
 
 
 async def _materialize_pipeline_and_edges(
@@ -1568,10 +1554,7 @@ async def _materialize_pipeline_and_edges(
     # the module's credential-stripping, and disclose it in the import warnings.
     graph_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_nodes)
     if dropped_policy_gates:
-        warning = (
-            f"{len(dropped_policy_gates)} policy_gate declaration(s) were removed on import "
-            f"(evals and gates are not part of a bundle): {'; '.join(dropped_policy_gates)}."
-        )
+        warning = f"{len(dropped_policy_gates)} policy_gate declaration(s) were removed on import (evals and gates are not part of a bundle): {'; '.join(dropped_policy_gates)}."
         ctx.warnings.append(warning)
         logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
 
@@ -1610,9 +1593,7 @@ async def _materialize_pipeline_and_edges(
     # Strip the malformed value from the imported node and disclose it, rather
     # than persist a graph that claims a command the row cannot hold.
     _strip_malformed_node_agent_commands(graph_nodes, created_agent_ids, pname, ctx.warnings)
-    import_bound_nodes = [
-        node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids
-    ]
+    import_bound_nodes = [node for node in graph_nodes if isinstance(node, dict) and str(node.get("agent_id")) in created_agent_ids]
     synced_agent_ids = await sync_agent_row_commands(
         ctx.session,
         org_id=ctx.org_id,
@@ -1644,10 +1625,7 @@ async def _materialize_pipeline_and_edges(
     try:
         enforce_manual_node_output_schemas(graph_nodes)
     except ManualNodeOutputSchemaError as exc:
-        ctx.warnings.append(
-            f"Imported pipeline contains a manual node without an output schema: {exc}. "
-            "The node has been included but will fail at execution time."
-        )
+        ctx.warnings.append(f"Imported pipeline contains a manual node without an output schema: {exc}. The node has been included but will fail at execution time.")
     _apply_imported_retry_policy(pipeline, sections.pipeline_info, ctx.warnings)
     await ctx.session.flush()
 
@@ -1706,11 +1684,7 @@ def _validate_bundle_format(bundle: dict[str, Any]) -> None:
     fmt_version = bundle.get("format_version")
     if fmt_version == BUNDLE_FORMAT_VERSION:
         return
-    msg = (
-        f"Unsupported bundle format version '{fmt_version}'. "
-        f"Expected '{BUNDLE_FORMAT_VERSION}'. "
-        "This bundle may have been created by a different version of Modulo."
-    )
+    msg = f"Unsupported bundle format version '{fmt_version}'. Expected '{BUNDLE_FORMAT_VERSION}'. This bundle may have been created by a different version of Modulo."
     raise ValueError(msg)
 
 
@@ -1785,10 +1759,7 @@ def _warn_redacted_credentials(bundle: dict[str, Any], warnings: list[str]) -> N
     labels = [_redaction_label(entry) for entry in entries]
     shown = ", ".join(labels[:_MAX_LISTED_REDACTIONS])
     remainder = f" (and {len(labels) - _MAX_LISTED_REDACTIONS} more)" if len(labels) > _MAX_LISTED_REDACTIONS else ""
-    warnings.append(
-        f"{len(labels)} credential(s) were not exported with this bundle; "
-        f"re-provision them on this instance: {shown}{remainder}."
-    )
+    warnings.append(f"{len(labels)} credential(s) were not exported with this bundle; re-provision them on this instance: {shown}{remainder}.")
 
 
 def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, Any], warnings: list[str]) -> None:
@@ -1804,10 +1775,7 @@ def _apply_imported_retry_policy(pipeline: Pipeline, pipeline_info: dict[str, An
     if fault_class == "core":
         warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
     elif fault_class == "schedule":
-        warnings.append(
-            "Imported pipeline 'retry_policy' contained a malformed 'backoff_schedule'; "
-            "the schedule was removed but the retry policy (on/max_retries) was kept."
-        )
+        warnings.append("Imported pipeline 'retry_policy' contained a malformed 'backoff_schedule'; the schedule was removed but the retry policy (on/max_retries) was kept.")
     pipeline.retry_policy = sanitized_retry_policy
 
 
@@ -1879,9 +1847,7 @@ async def _reconcile_existing_schema(
             existing_schema_names = await _load_schema_names(ctx)
         sname = suggest_import_name(existing_schema_names, sname, suffix="(imported)")
         existing_schema_names.add(sname)
-        ctx.warnings.append(
-            f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead."
-        )
+        ctx.warnings.append(f"Schema '{existing_schema.name}' exists with different structure. Created as '{sname}' instead.")
         return existing_schema_names, sname, None
 
     if _has_matching_definition(existing_sv, definition):
@@ -1917,10 +1883,7 @@ async def _materialize_schemas(
 
         definition = sd.get("definition_json")
         if not definition:
-            ctx.warnings.append(
-                f"Schema '{sd.get('name', 'unknown')}' has no definition JSON and will be skipped. "
-                "Agents referencing this schema may fail."
-            )
+            ctx.warnings.append(f"Schema '{sd.get('name', 'unknown')}' has no definition JSON and will be skipped. Agents referencing this schema may fail.")
             continue
 
         sname: str = sd.get("name", "Imported Schema")
@@ -1992,9 +1955,7 @@ def _resolve_schema_without_create(
 
 async def _load_schema_names(ctx: _ImportContext) -> set[str]:
     """Load all local schema names for collision-avoiding suggestions."""
-    all_existing = (
-        (await ctx.session.execute(select(Schema).where(Schema.organisation_id == ctx.org_id))).scalars().all()
-    )
+    all_existing = (await ctx.session.execute(select(Schema).where(Schema.organisation_id == ctx.org_id))).scalars().all()
     return {s.name for s in all_existing}
 
 
@@ -2127,14 +2088,9 @@ def _base_agent_args(
         # ``all`` over an empty list is vacuously true (semgrep
         # all-empty-iterable). ``any`` over the negated predicate is False for
         # an empty list, and the separate emptiness check below rejects it.
-        malformed = not isinstance(agent_commands, list) or any(
-            not isinstance(command, str) or not command for command in agent_commands
-        )
+        malformed = not isinstance(agent_commands, list) or any(not isinstance(command, str) or not command for command in agent_commands)
         if malformed or not agent_commands:
-            ctx.warnings.append(
-                f"Agent '{aname}' declares malformed agent_commands (expected a non-empty list of "
-                "non-empty strings). The commands will be omitted."
-            )
+            ctx.warnings.append(f"Agent '{aname}' declares malformed agent_commands (expected a non-empty list of non-empty strings). The commands will be omitted.")
         else:
             resolved_commands = list(agent_commands)
     return {
@@ -2170,31 +2126,18 @@ def _apply_agent_references(
     output_schema_id_str = ad.get("output_schema_id", "")
     resolved_input_id = schema_id_map.get(input_schema_id_str)
     resolved_output_id = schema_id_map.get(output_schema_id_str)
-    resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get(
-        "input_schema_version", DEFAULT_SCHEMA_VERSION
-    )
-    resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get(
-        "output_schema_version", DEFAULT_SCHEMA_VERSION
-    )
+    resolved_input_version = schema_version_map.get(input_schema_id_str) or ad.get("input_schema_version", DEFAULT_SCHEMA_VERSION)
+    resolved_output_version = schema_version_map.get(output_schema_id_str) or ad.get("output_schema_version", DEFAULT_SCHEMA_VERSION)
 
     export_mb_id = ad.get("model_backend_id", "")
     resolved_mb_id = ad.get("_resolved_model_backend_id") or mb_overrides.get(export_mb_id)
 
     if _is_unresolved_ref(input_schema_id_str, resolved_input_id):
-        warnings.append(
-            f"Agent '{aname}' references unresolved input schema '{input_schema_id_str}'. "
-            "The schema reference will be omitted."
-        )
+        warnings.append(f"Agent '{aname}' references unresolved input schema '{input_schema_id_str}'. The schema reference will be omitted.")
     if _is_unresolved_ref(output_schema_id_str, resolved_output_id):
-        warnings.append(
-            f"Agent '{aname}' references unresolved output schema '{output_schema_id_str}'. "
-            "The schema reference will be omitted."
-        )
+        warnings.append(f"Agent '{aname}' references unresolved output schema '{output_schema_id_str}'. The schema reference will be omitted.")
     if _is_unresolved_ref(export_mb_id, resolved_mb_id):
-        warnings.append(
-            f"Agent '{aname}' references unresolved model backend '{export_mb_id}'. "
-            "The model backend reference will be omitted."
-        )
+        warnings.append(f"Agent '{aname}' references unresolved model backend '{export_mb_id}'. The model backend reference will be omitted.")
     if resolved_input_id:
         agent_args["input_schema_id"] = _safe_uuid(resolved_input_id, "agent.input_schema_id")
         agent_args["input_schema_version"] = resolved_input_version
@@ -2285,25 +2228,14 @@ def _resolve_binding_spec(
     try:
         export_id = export_id_by_name.get(bname, "")
         override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
-        backend = (
-            _id_backend(override_id, org_backends_by_id)
-            or _id_backend(binding_payload.get("_resolved_model_backend_id"), org_backends_by_id)
-            or backends_by_name.get(bname)
-        )
+        backend = _id_backend(override_id, org_backends_by_id) or _id_backend(binding_payload.get("_resolved_model_backend_id"), org_backends_by_id) or backends_by_name.get(bname)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        warnings.append(
-            f"Agent '{agent_name}' binding to model backend '{bname}' "
-            f"could not be resolved ({exc}); the binding will be omitted."
-        )
+        warnings.append(f"Agent '{agent_name}' binding to model backend '{bname}' could not be resolved ({exc}); the binding will be omitted.")
         return None
     if backend is None:
-        warnings.append(
-            f"Agent '{agent_name}' binding to model backend "
-            f"'{bname}' did not resolve "
-            "(overrides, stamped id, or name all missed); the binding will be omitted."
-        )
+        warnings.append(f"Agent '{agent_name}' binding to model backend '{bname}' did not resolve (overrides, stamped id, or name all missed); the binding will be omitted.")
         return None
     try:
         target, source = validate_binding_pair(
@@ -2394,14 +2326,10 @@ async def _apply_agent_bindings(
     bundle_model_backends: list[dict[str, Any]] | None = None,
 ) -> None:
     """Rebind the bundle's runner bindings onto the freshly imported agent."""
-    export_id_by_name = {
-        str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)
-    }
+    export_id_by_name = {str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)}
     binding_payloads = list(ad.get("model_backend_bindings", []))
     org_backends_by_id = await _resolve_agent_ids(ctx, binding_payloads, export_id_by_name)
-    specs = _build_binding_specs(
-        ctx, agent.name, binding_payloads, export_id_by_name, backends_by_name, org_backends_by_id, warnings
-    )
+    specs = _build_binding_specs(ctx, agent.name, binding_payloads, export_id_by_name, backends_by_name, org_backends_by_id, warnings)
     await _persist_bindings(ctx, agent.name, agent.id, specs, warnings)
 
 

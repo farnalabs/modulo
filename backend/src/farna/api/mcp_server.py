@@ -505,9 +505,7 @@ _ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("m
 # FAR-436: node-level allowed_tools for a run-scoped sandbox key. Set by
 # ``_authenticate_api_key`` when the caller is a run-scoped key; None (default)
 # means no node-level narrowing (legacy behaviour). Empty list = deny-all.
-_ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
-    "mcp_node_allowed_tools", default=None
-)
+_ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("mcp_node_allowed_tools", default=None)
 # FAR-696: the principal's ``is_system_admin`` flag, lifted by the auth paths
 # so system-admin-only tools (``list_feature_flags`` — REST
 # ``require_system_permission``) can enforce the SAME strict gate MCP-side.
@@ -600,9 +598,7 @@ def _mcp_internal_lifecycle_map_access() -> bool:
     if not getattr(get_settings(), "modulo_dev_mode", True):
         return False
     role = _ctx_role_val()
-    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
-        _ctx_key_grants.get(None), "library.search.in_dev"
-    )
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(_ctx_key_grants.get(None), "library.search.in_dev")
 
 
 def _require_mcp_internal_lifecycle_map_access() -> None:
@@ -624,9 +620,7 @@ def _mcp_internal_system_maps_access() -> bool:
     if not getattr(get_settings(), "modulo_dev_mode", True):
         return False
     role = _ctx_role_val()
-    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
-        _ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION
-    )
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(_ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION)
 
 
 def _require_mcp_internal_system_maps_access() -> None:
@@ -846,10 +840,7 @@ def _team_scope_error(resource_kind: str, resource_id: str) -> dict[str, Any]:
     key_team_id = _ctx_team_id.get(None)
     return {
         "error": "team_boundary_violation",
-        "detail": (
-            f"This credential is scoped to team {key_team_id} and cannot access "
-            f"{resource_kind} {resource_id} owned by another team"
-        ),
+        "detail": (f"This credential is scoped to team {key_team_id} and cannot access {resource_kind} {resource_id} owned by another team"),
     }
 
 
@@ -1215,9 +1206,7 @@ async def _mcp_server_feature_gate(org_id: uuid.UUID) -> Response | None:
     return _mcp_feature_unavailable_response()
 
 
-async def _call_next_if_feature_enabled(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
+async def _call_next_if_feature_enabled(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """Continue an AUTHENTICATED MCP request unless ``mcp_server`` is off.
 
     Single chokepoint for every authenticated credential class (API key, regular
@@ -1554,9 +1543,7 @@ def _extract_node_id_from_key_name(key_name: str | None) -> str | None:
     return node_id or None
 
 
-async def _node_allowed_tools_for_key(
-    *, org_id: uuid.UUID, run_id: uuid.UUID | None, key_name: str
-) -> list[str] | None:
+async def _node_allowed_tools_for_key(*, org_id: uuid.UUID, run_id: uuid.UUID | None, key_name: str) -> list[str] | None:
     """Resolve a run-scoped key's node-level ``capability_scope.allowed_tools`` (FAR-436).
 
     A run-scoped sandbox key (``run_id`` set) is minted per sandbox_agent NODE,
@@ -2183,12 +2170,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
 
 mcp = FastMCP(
     name="Modulo",
-    instructions=(
-        "Modulo is agent governance for your agentic SDLC. "
-        "Use create_pipeline to define new pipelines, trigger_pipeline to fire runs, get_run_status to track them, "
-        "get_run_output to inspect node outputs, "
-        "and review_hitl to handle human-in-the-loop gates."
-    ),
+    instructions=("Modulo is agent governance for your agentic SDLC. Use create_pipeline to define new pipelines, trigger_pipeline to fire runs, get_run_status to track them, get_run_output to inspect node outputs, and review_hitl to handle human-in-the-loop gates."),
     stateless_http=True,
     json_response=True,
     streamable_http_path="/",
@@ -2675,11 +2657,7 @@ async def _load_trigger_row(
         from farna.db.crud.team_scope import account_team_scope_clause
         from farna.db.models.pipeline import Pipeline
 
-        q = (
-            q.join(Pipeline, Trigger.pipeline_id == Pipeline.id)
-            .where(Pipeline.deleted_at.is_(None))
-            .where(account_team_scope_clause(Pipeline.owner_team_id, account_id))
-        )
+        q = q.join(Pipeline, Trigger.pipeline_id == Pipeline.id).where(Pipeline.deleted_at.is_(None)).where(account_team_scope_clause(Pipeline.owner_team_id, account_id))
     return (await s.execute(q)).scalar_one_or_none()
 
 
@@ -2697,10 +2675,7 @@ def _validate_trigger_numbers(
 
 @mcp.tool(
     name="list_pipelines",
-    description=(
-        "List pipelines in the organisation with cursor-based pagination. Returns summaries. "
-        "For raw text output, see the modulo://pipelines resource."
-    ),
+    description=("List pipelines in the organisation with cursor-based pagination. Returns summaries. For raw text output, see the modulo://pipelines resource."),
 )
 @_RETRY_DB
 async def list_pipelines_tool(
@@ -2718,9 +2693,7 @@ async def list_pipelines_tool(
 
         lim = max(1, min(limit, 100))
         async with _session(org_id) as s:
-            result = await list_pipelines(
-                s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val(), organisation_id=org_id
-            )
+            result = await list_pipelines(s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val(), organisation_id=org_id)
         return {
             "data": [
                 {
@@ -2792,9 +2765,7 @@ def _validate_create_pipeline_args(
     if hitl_review_window_seconds is not None and not (60 <= hitl_review_window_seconds <= 604800):
         return {
             "error": "validation_failed",
-            "detail": (
-                f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"
-            ),
+            "detail": (f"hitl_review_window_seconds must be between 60 and 604800 seconds, got {hitl_review_window_seconds}"),
         }
     if queue_timeout_seconds is not None and not (1 <= queue_timeout_seconds <= 604800):
         return {
@@ -3330,9 +3301,7 @@ async def demote_pipeline_autonomy(
     level: str,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    return await _apply_mcp_autonomy_change(
-        pipeline_id, level, reason, promote=False, tool_name="demote_pipeline_autonomy"
-    )
+    return await _apply_mcp_autonomy_change(pipeline_id, level, reason, promote=False, tool_name="demote_pipeline_autonomy")
 
 
 @mcp.tool(
@@ -3349,9 +3318,7 @@ async def promote_pipeline_autonomy(
     level: str,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    return await _apply_mcp_autonomy_change(
-        pipeline_id, level, reason, promote=True, tool_name="promote_pipeline_autonomy"
-    )
+    return await _apply_mcp_autonomy_change(pipeline_id, level, reason, promote=True, tool_name="promote_pipeline_autonomy")
 
 
 @mcp.tool(
@@ -3438,9 +3405,7 @@ class _OwnerTeamScopeDeniedError(Exception):
     """A team-scoped credential tried to move another team's resource (raised before any write)."""
 
 
-async def _apply_owner_team_pipeline(
-    s: AsyncSession, principal: Any, resource_id: uuid.UUID, new_team: uuid.UUID | None, org_id: uuid.UUID
-) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
+async def _apply_owner_team_pipeline(s: AsyncSession, principal: Any, resource_id: uuid.UUID, new_team: uuid.UUID | None, org_id: uuid.UUID) -> tuple[uuid.UUID | None, uuid.UUID | None] | None:
     """Move a pipeline to *new_team* through the REST PATCH gates; None when not found."""
     from farna.api.routes.pipelines import (
         _assert_team_transition_allowed,
@@ -3462,9 +3427,7 @@ async def _apply_owner_team_pipeline(
 
         await validate_owner_team_for_create(s, principal, new_team)
     await _assert_team_transition_allowed(s, principal, locked, updates)
-    await _enforce_stored_bindings_on_team_change(
-        s, principal, locked, updates, ownership_changed=new_team != previous, graph_replaced=False
-    )
+    await _enforce_stored_bindings_on_team_change(s, principal, locked, updates, ownership_changed=new_team != previous, graph_replaced=False)
     pipeline = await update_pipeline_row(s, resource_id, updates, org_id=org_id, account_id=principal.account_id)
     if pipeline is None:
         return None
@@ -3611,9 +3574,7 @@ async def set_resource_owner_team(
     except PipelineHasActiveRunsError as exc:
         return {
             "error": "pipeline_has_active_runs",
-            "detail": (
-                f"{exc.active_run_count} run(s) still in progress; cannot change ownership while any run is active"
-            ),
+            "detail": (f"{exc.active_run_count} run(s) still in progress; cannot change ownership while any run is active"),
         }
     except FastAPIHTTPException as exc:
         return {"error": "validation_failed", "detail": str(exc.detail)}
@@ -4002,9 +3963,7 @@ def _parse_analytics_params(
     pids, fid, id_err = _parse_analytics_ids(pipeline_id, folder_id)
     if id_err:
         return None, id_err
-    params = _build_analytics_params(
-        grp, auto_granularity, tt, st, dim, pids, fid, error_code, date_from, date_to, limit
-    )
+    params = _build_analytics_params(grp, auto_granularity, tt, st, dim, pids, fid, error_code, date_from, date_to, limit)
     return params, None
 
 
@@ -4336,9 +4295,7 @@ async def get_pipeline_graph_tool(
         return _tool_exception_error("Failed to get pipeline graph", exc, "mcp.get_pipeline_graph_tool")
 
 
-async def _append_mcp_hitl_denial_audit(
-    org_id: uuid.UUID, pipeline_id: uuid.UUID, exc: HitlReviewWeakeningDenied
-) -> None:
+async def _append_mcp_hitl_denial_audit(org_id: uuid.UUID, pipeline_id: uuid.UUID, exc: HitlReviewWeakeningDenied) -> None:
     """Append the hitl_review_removal_denied audit event for an MCP denial.
 
     Runs in a fresh ``_session`` after the guarded write's transaction rolled
@@ -4352,9 +4309,7 @@ async def _append_mcp_hitl_denial_audit(
             "caller_type": "mcp",
             "reason_code": exc.reason_code,
             "denied": True,
-            "affected_edges": [
-                {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
-            ],
+            "affected_edges": [{"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys],
             "weakening_types": exc.weakening_types,
         }
         async with _session(org_id) as s:
@@ -4513,10 +4468,7 @@ def _validate_binding_routing(
     return {
         "error": "validation_failed",
         "field": "operation",
-        "detail": (
-            f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so "
-            "operation='dispatch' would never fire — use a dispatch or connector node for the dispatch binding"
-        ),
+        "detail": (f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so operation='dispatch' would never fire — use a dispatch or connector node for the dispatch binding"),
     }
 
 
@@ -4530,15 +4482,13 @@ def _validate_effective_binding(
         return {
             "error": "validation_failed",
             "field": "operation",
-            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
-            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
+            "detail": f"Dispatch nodes require connector_binding.operation='dispatch' (got {effective_operation!r}) — a dispatch node that queries fires no job",
         }
     if effective_operation == "dispatch" and connector_supports_dispatch is False:
         return {
             "error": "validation_failed",
             "field": "connector_type",
-            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
-            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
+            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations (trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
         }
     return None
 
@@ -4612,11 +4562,7 @@ def _dispatch_capability_error(
     return {
         "error": "validation_failed",
         "field": "connector_type",
-        "detail": (
-            f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) has type "
-            f"{type_id!r}, which does not implement the CI-runner operations "
-            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires"
-        ),
+        "detail": (f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) has type {type_id!r}, which does not implement the CI-runner operations (trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires"),
     }
 
 
@@ -4646,10 +4592,7 @@ def _operation_scope_error(
     return {
         "error": "validation_failed",
         "field": "connector_binding",
-        "detail": (
-            f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) does not allow "
-            f"{', '.join(repr(op) for op in denied)} required by the node's {operation!r} operation"
-        ),
+        "detail": (f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) does not allow {', '.join(repr(op) for op in denied)} required by the node's {operation!r} operation"),
     }
 
 
@@ -4834,9 +4777,7 @@ async def _update_pipeline_graph_impl(
     # surface inherits it — no separate call-site check. The admin flag is
     # resolved from the caller's org role; for MCP the service layer uses it
     # as-is (the MCP role is resolved at the tool boundary).
-    _mcp_is_guardrail_admin = _ctx_role_val() == "admin" and grants_permit(
-        _ctx_key_grants.get(None), "guardrail.manage"
-    )
+    _mcp_is_guardrail_admin = _ctx_role_val() == "admin" and grants_permit(_ctx_key_grants.get(None), "guardrail.manage")
 
     # FAR-1471: attribute the MCP graph write to the caller's ACCOUNT id, so
     # ``pipeline.graph_updated`` records a real ``changed_by`` instead of
@@ -4902,9 +4843,7 @@ async def _update_pipeline_graph_impl(
             "error": "hitl_review_removal_denied",
             "detail": str(exc),
             "reason_code": exc.reason_code,
-            "affected_edges": [
-                {"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys
-            ],
+            "affected_edges": [{"source_node_id": k[0], "target_node_id": k[1], "edge_type": k[2]} for k in exc.correlation_keys],
         }
     except GuardrailBindingStripDenied as exc:
         return {
@@ -4935,10 +4874,7 @@ async def _update_pipeline_graph_impl(
             )
             return {
                 "error": "lock_timeout",
-                "detail": (
-                    "Timed out waiting for a lock on this pipeline; another change is in progress. "
-                    "Re-issue the update once the other change completes."
-                ),
+                "detail": ("Timed out waiting for a lock on this pipeline; another change is in progress. Re-issue the update once the other change completes."),
                 "pipeline_id": pipeline_id,
             }
         raise
@@ -4973,10 +4909,7 @@ def _snapshot_lock_busy_error(pipeline_id: str) -> dict[str, Any]:
     return {
         "error": "snapshot_lock_busy",
         "pipeline_id": pipeline_id,
-        "detail": (
-            f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — "
-            "retry the save once the concurrent snapshot completes"
-        ),
+        "detail": (f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the save once the concurrent snapshot completes"),
     }
 
 
@@ -5273,19 +5206,11 @@ def _apply_node_connector_binding(
     )
     if effective_error is not None:
         return effective_error
-    if (
-        str(target.get("node_type") or "") == "connector"
-        and effective_operation != "dispatch"
-        and not str(binding.get("resource") or "").strip()
-    ):
+    if str(target.get("node_type") or "") == "connector" and effective_operation != "dispatch" and not str(binding.get("resource") or "").strip():
         return {
             "error": "validation_failed",
             "field": "resource",
-            "detail": (
-                f"Connector node {node_id} requires a non-empty 'resource' for a "
-                f"{effective_operation!r} operation — without one the connector is called "
-                "with an empty resource at run time"
-            ),
+            "detail": (f"Connector node {node_id} requires a non-empty 'resource' for a {effective_operation!r} operation — without one the connector is called with an empty resource at run time"),
         }
     if connector_visibility is not None:
         # FAR-1395: the write enforces the instance's own ``allowed_operations``
@@ -5301,11 +5226,7 @@ def _apply_node_connector_binding(
             return {
                 "error": "validation_failed",
                 "field": "connector_binding",
-                "detail": (
-                    f"Connector instance {connector_instance_id} does not allow "
-                    f"{', '.join(repr(op) for op in denied)} required by the node's "
-                    f"{effective_operation!r} operation"
-                ),
+                "detail": (f"Connector instance {connector_instance_id} does not allow {', '.join(repr(op) for op in denied)} required by the node's {effective_operation!r} operation"),
             }
     if node_fires_dispatch_job(probe):
         # Parity with the REST model's forced ``idempotent=false``: the binding
@@ -5369,9 +5290,7 @@ async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint dele
 
             from farna.db.models.pipeline import Pipeline
 
-            pipeline = (
-                await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())
-            ).scalar_one_or_none()
+            pipeline = (await s.execute(select(Pipeline).where(Pipeline.id == pid).with_for_update())).scalar_one_or_none()
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
 
@@ -5439,8 +5358,7 @@ async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint dele
                 bind_account_id: uuid.UUID | None = _ctx_user_id_val()
             except McpAuthContextError:
                 _log.warning(
-                    "mcp.bind_connector_to_node.unattributed_write pipeline_id=%s: "
-                    "no authenticated user context for this MCP request",
+                    "mcp.bind_connector_to_node.unattributed_write pipeline_id=%s: no authenticated user context for this MCP request",
                     pipeline_id,
                 )
                 bind_account_id = None
@@ -5480,10 +5398,7 @@ async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint dele
             if not _graph_content_unchanged(previous_nodes, [], list(pipeline.graph_nodes_json or []), []):
                 snapshot = await create_snapshot_edit(s, pipeline_id=pid, account_id=bind_account_id)
                 if snapshot is None:
-                    raise RuntimeError(
-                        f"connector bind on pipeline {pid} could not record its edit snapshot; "
-                        "refusing to commit an unversioned graph write"
-                    )
+                    raise RuntimeError(f"connector bind on pipeline {pid} could not record its edit snapshot; refusing to commit an unversioned graph write")
                 _log.info(
                     "pipeline.connector_bind_snapshot_created pipeline_id=%s snapshot_version=%s",
                     pid,
@@ -5657,9 +5572,7 @@ async def trigger_pipeline(
         )
         return {
             "error": "snapshot_lock_busy",
-            "detail": (
-                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the trigger"
-            ),
+            "detail": (f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the trigger"),
         }
     except OrgDeletedError as exc:
         _log.exception("trigger_pipeline failed — organisation deleted or missing")
@@ -5999,11 +5912,7 @@ def _detect_masked_fields(masked: Any) -> list[str]:
 
 
 @mcp.tool(
-    description=(
-        "Get a specific node's output from a completed pipeline run. "
-        "Sensitive fields (tokens, secrets, API keys, passwords, credentials) "
-        "are masked in the response."
-    ),
+    description=("Get a specific node's output from a completed pipeline run. Sensitive fields (tokens, secrets, API keys, passwords, credentials) are masked in the response."),
 )
 @_RETRY_DB
 async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
@@ -6063,8 +5972,7 @@ async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(
-    description="Get eval results for a given run. Returns structured eval outcomes "
-    "including pass/fail status, scores, and detailed feedback.",
+    description="Get eval results for a given run. Returns structured eval outcomes including pass/fail status, scores, and detailed feedback.",
 )
 @_RETRY_DB
 async def get_run_evals(run_id: str) -> dict[str, Any]:
@@ -6367,10 +6275,7 @@ async def _create_eval_definition_impl(
 
 
 @mcp.tool(
-    description="Create a new eval definition (operator or admin). Persists an "
-    "Eval row scoped to the caller's org and returns its details. "
-    "Requires an operator or admin caller; lower roles receive an "
-    "insufficient_scope error.",
+    description="Create a new eval definition (operator or admin). Persists an Eval row scoped to the caller's org and returns its details. Requires an operator or admin caller; lower roles receive an insufficient_scope error.",
 )
 @mcp_audited("eval_definition_created", "eval_definition", fail_closed=False)
 @_RETRY_DB
@@ -6691,10 +6596,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
             except IntegrityError:
                 return {
                     "error": "delete_blocked_by_decisions",
-                    "detail": (
-                        "Cannot hard-delete eval: existing decision rows prevent"
-                        " removal (RESTRICT on eval_id and/or policy_gate_id)"
-                    ),
+                    "detail": ("Cannot hard-delete eval: existing decision rows prevent removal (RESTRICT on eval_id and/or policy_gate_id)"),
                 }
         if is_guardrail:
             await _audit_eval_def_delete(s, org_id, account_id, eid, hard, soft, eval_name or "")
@@ -6702,10 +6604,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
 
 
 @mcp.tool(
-    description="Delete an eval definition (admin only). Guardrail eval "
-    "definitions are SOFT-deleted (deleted_at stamped) by default; a second, "
-    "admin-only hard purge (hard=True) removes the row outright. Non-admins "
-    "receive an insufficient_scope error.",
+    description="Delete an eval definition (admin only). Guardrail eval definitions are SOFT-deleted (deleted_at stamped) by default; a second, admin-only hard purge (hard=True) removes the row outright. Non-admins receive an insufficient_scope error.",
 )
 @mcp_audited("eval_definition_deleted", "eval_definition", fail_closed=True)
 @_RETRY_DB
@@ -6803,10 +6702,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
                 return {
                     "error": "lock_timeout",
                     "run_id": run_id,
-                    "detail": (
-                        "Timed out waiting for a lock on this run; another change is in progress. "
-                        "Re-issue the cancel once the other change completes."
-                    ),
+                    "detail": ("Timed out waiting for a lock on this run; another change is in progress. Re-issue the cancel once the other change completes."),
                 }
             raise
     if run is None:
@@ -6909,32 +6805,17 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
     }
 
 
-async def _load_pending_hitl_reviews(
-    s: AsyncSession, base_where: list[Any], page: int, page_size: int
-) -> tuple[list[HitlClaim], int]:
+async def _load_pending_hitl_reviews(s: AsyncSession, base_where: list[Any], page: int, page_size: int) -> tuple[list[HitlClaim], int]:
     """Load a page of pending HITL reviews plus the total count (one transaction)."""
     from sqlalchemy import func, select
 
     from farna.db.models.pipeline import Pipeline
 
-    total_result = await s.execute(
-        select(func.count())
-        .select_from(HitlClaim)
-        .join(Run, HitlClaim.run_id == Run.id)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id)
-        .where(*base_where)
-    )
+    total_result = await s.execute(select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*base_where))
     total = total_result.scalar_one()
 
     offset = (page - 1) * page_size
-    result = await s.execute(
-        select(HitlClaim)
-        .join(Run, HitlClaim.run_id == Run.id)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id)
-        .where(*base_where)
-        .offset(offset)
-        .limit(page_size)
-    )
+    result = await s.execute(select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*base_where).offset(offset).limit(page_size))
     return list(result.scalars()), total
 
 
@@ -6947,11 +6828,7 @@ async def _load_pending_hitl_reviews(
 
 
 @mcp.tool(
-    description=(
-        "List the unclaimed, undecided HITL reviews for the organisation "
-        "(their runs are in awaiting_human). Read-only inspection: claim or "
-        "decide via review_hitl."
-    ),
+    description=("List the unclaimed, undecided HITL reviews for the organisation (their runs are in awaiting_human). Read-only inspection: claim or decide via review_hitl."),
 )
 @_RETRY_DB
 async def list_hitl_reviews(limit: int = 20) -> dict[str, Any]:
@@ -6999,14 +6876,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
 
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(account_team_scope_clause(effective_owner, _ctx_user_id_val()))
-        result = await s.execute(
-            select(HitlClaim, Pipeline.name, Run.run_number)
-            .join(Run, HitlClaim.run_id == Run.id)
-            .join(Pipeline, Run.pipeline_id == Pipeline.id)
-            .where(*base_where)
-            .order_by(HitlClaim.created_at.desc())
-            .limit(capped)
-        )
+        result = await s.execute(select(HitlClaim, Pipeline.name, Run.run_number).join(Run, HitlClaim.run_id == Run.id).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*base_where).order_by(HitlClaim.created_at.desc()).limit(capped))
         rows = result.all()
     return {
         "reviews": [
@@ -7029,10 +6899,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
 
 @mcp.tool(
     description=(
-        "Get read-only detail for one HITL review: run status, the review config AS "
-        "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
-        "claim_expiry_minutes, reject_target, on_reject, required_team_id), and the review's "
-        "claim/decision state. Decide via review_hitl or the browser UI."
+        "Get read-only detail for one HITL review: run status, the review config AS CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, claim_expiry_minutes, reject_target, on_reject, required_team_id), and the review's claim/decision state. Decide via review_hitl or the browser UI."
     ),
 )
 @_RETRY_DB
@@ -7106,11 +6973,7 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(
-    description=(
-        "List the hitl_review_config blocks on a pipeline's committed graph edges "
-        "(source/target node ids + full config). Read-only: the graph is "
-        "modified via update_pipeline_graph, never by this tool."
-    ),
+    description=("List the hitl_review_config blocks on a pipeline's committed graph edges (source/target node ids + full config). Read-only: the graph is modified via update_pipeline_graph, never by this tool."),
 )
 @_RETRY_DB
 async def get_pipeline_reviews(pipeline_id: str) -> dict[str, Any]:
@@ -7428,11 +7291,7 @@ async def _check_human_only_gate(
     # it injects the run's output directly (ADR 035) and stays browser-only
     # over MCP even for a human-linked credential. Possession remains out of
     # scope; the flag controls only this persona-based authority.
-    allow_via_linkage = (
-        human_linked_authority
-        and linkage.linkage in {LINKAGE_OAUTH_CONSENT, LINKAGE_USER_SCOPED_KEY}
-        and action != "deliver_manual"
-    )
+    allow_via_linkage = human_linked_authority and linkage.linkage in {LINKAGE_OAUTH_CONSENT, LINKAGE_USER_SCOPED_KEY} and action != "deliver_manual"
     non_browser_credential = not allow_via_linkage
     verdict = human_only_denial(config, non_browser_credential=non_browser_credential, gate_fired=gate_fired)
     if verdict is not None:
@@ -7509,9 +7368,7 @@ async def _dispatch_hitl_claim(
             "error": "no_user_context",
             "detail": "A gate claim requires an authenticated user context; this MCP session has none",
         }
-    gate = await mgr.claim(
-        s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
-    )
+    gate = await mgr.claim(s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type)
     return {
         "status": "claimed",
         "claim_token": gate.claim_token,
@@ -7550,9 +7407,7 @@ async def _dispatch_hitl_approve(
     if answer_error is not None:
         return answer_error
     # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-    approve_payload: dict[str, Any] = (
-        resume_payload if resume_payload is not None else {"action": "approved", "review_id": review_id}
-    )
+    approve_payload: dict[str, Any] = resume_payload if resume_payload is not None else {"action": "approved", "review_id": review_id}
     if validated_answer is not None:
         approve_payload["answer"] = validated_answer
     await mgr.approve(
@@ -7818,20 +7673,14 @@ async def _resume_run_after_mcp_approval(
             "mcp.review_hitl.approve_resume_failed",
             extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
         )
-        recovery_detail = (
-            "The reconciliation sweep will retry the resume."
-            if recoverable
-            else "Automatic recovery could not restore the run for reconciliation; operator intervention is required."
-        )
+        recovery_detail = "The reconciliation sweep will retry the resume." if recoverable else "Automatic recovery could not restore the run for reconciliation; operator intervention is required."
         return {
             "status": "approved",
             "review_id": review_id,
             "run_id": str(run_id),
             "resume_status": "failed",
             "reconcile_status": "queued" if recoverable else "failed",
-            "detail": (
-                f"Approval recorded, but resuming the pipeline failed. The decision is committed; {recovery_detail}"
-            ),
+            "detail": (f"Approval recorded, but resuming the pipeline failed. The decision is committed; {recovery_detail}"),
         }
     return {"status": "approved", "review_id": review_id, "run_id": str(run_id)}
 
@@ -7875,11 +7724,7 @@ async def _resume_missing_claim_token_response(
         "mcp.review_hitl.approve_resume_missing_claim_token",
         extra={"run_id": str(run_id), "reconcile_recoverable": recoverable},
     )
-    recovery_detail = (
-        "The reconciliation sweep will retry the resume."
-        if recoverable
-        else ("Automatic recovery could not restore the run for reconciliation; operator intervention is required.")
-    )
+    recovery_detail = "The reconciliation sweep will retry the resume." if recoverable else ("Automatic recovery could not restore the run for reconciliation; operator intervention is required.")
     return {
         **decision,
         "run_id": str(run_id),
@@ -8102,11 +7947,7 @@ async def review_hitl(
 
 
 @mcp.tool(
-    description=(
-        "Copy a library primitive to the org workspace. "
-        "Community primitives can be copied — this creates an editable copy in your workspace. "
-        "Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."
-    ),
+    description=("Copy a library primitive to the org workspace. Community primitives can be copied — this creates an editable copy in your workspace. Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."),
 )
 @mcp_audited("library_primitive_copied", "library_primitive", fail_closed=False)
 @_RETRY_DB
@@ -8151,12 +7992,7 @@ async def copy_library_primitive(
 
 @mcp.tool(
     name="search_library",
-    description=(
-        "Search the library of primitives (schemas, agents, workflows, "
-        "pipeline templates, test fixtures). Supports filtering by type, "
-        "text search, and cursor-based pagination. "
-        "For text output, see the modulo://library resource."
-    ),
+    description=("Search the library of primitives (schemas, agents, workflows, pipeline templates, test fixtures). Supports filtering by type, text search, and cursor-based pagination. For text output, see the modulo://library resource."),
 )
 @_RETRY_DB
 async def search_library(
@@ -8178,9 +8014,7 @@ async def search_library(
             return {"items": [], "total": 0, "next_cursor": None, "has_more": False}
         visible_primitive_types = None
         if not lifecycle_maps_allowed:
-            visible_primitive_types = [
-                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
-            ]
+            visible_primitive_types = [primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
@@ -8430,11 +8264,7 @@ async def _list_trigger_events_impl(
 
 @mcp.tool(
     name="list_trigger_events",
-    description=(
-        "List recent trigger events with cursor-based pagination. "
-        "Filter by trigger_id and/or pipeline_id. Returns events ordered "
-        "by most recent first."
-    ),
+    description=("List recent trigger events with cursor-based pagination. Filter by trigger_id and/or pipeline_id. Returns events ordered by most recent first."),
 )
 @_RETRY_DB
 async def list_trigger_events(
@@ -8456,9 +8286,7 @@ async def list_trigger_events(
 
 
 @mcp.tool(
-    description="List triggers configured for the organisation with cursor-based pagination. "
-    "Optionally filter by pipeline_id. Returns trigger metadata "
-    "including name, type, active status, and cron schedule.",
+    description="List triggers configured for the organisation with cursor-based pagination. Optionally filter by pipeline_id. Returns trigger metadata including name, type, active status, and cron schedule.",
 )
 @_RETRY_DB
 async def list_triggers(
@@ -8540,11 +8368,7 @@ def _assert_create_model_backend_provider(provider: str) -> dict[str, Any] | Non
         return {
             "error": "validation_error",
             "field": "provider",
-            "detail": (
-                "The 'stub' provider is a test double used by automated tests "
-                "and is not supported via MCP. Choose a real provider, e.g. "
-                "openai, anthropic, gemini, deepseek, groq, opencode."
-            ),
+            "detail": ("The 'stub' provider is a test double used by automated tests and is not supported via MCP. Choose a real provider, e.g. openai, anthropic, gemini, deepseek, groq, opencode."),
         }
     try:
         from farna.api.routes.model_backends import _validate_provider
@@ -8670,10 +8494,7 @@ def _model_backend_item(mb: Any) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_model_backends",
-    description=(
-        "List model backends (LLM provider configurations) in the organisation with cursor-based "
-        "pagination. Returns metadata only — never credential values."
-    ),
+    description=("List model backends (LLM provider configurations) in the organisation with cursor-based pagination. Returns metadata only — never credential values."),
 )
 @_RETRY_DB
 async def list_model_backends(
@@ -8773,10 +8594,7 @@ def _parse_model_backend_update_args(
         return None, {
             "error": "validation_error",
             "field": "default_params.base_url",
-            "detail": (
-                "Changing a model backend endpoint requires the explicit credential-rebinding setup flow; "
-                "base_url cannot be changed through MCP"
-            ),
+            "detail": ("Changing a model backend endpoint requires the explicit credential-rebinding setup flow; base_url cannot be changed through MCP"),
         }
     if any(value is not None and not isinstance(value, str) for value in fallback_backend_ids or []):
         return None, {
@@ -8842,15 +8660,11 @@ async def _apply_model_backend_update(
         # Reuse the HTTP PATCH request contract so MCP cannot bypass the
         # tier enum, the name/model_id bounds, or the team-visibility
         # invariant that the REST route enforces.
-        validation_payload: dict[str, Any] = {
-            key: value for key, value in updates.items() if key != "fallback_backend_ids"
-        }
+        validation_payload: dict[str, Any] = {key: value for key, value in updates.items() if key != "fallback_backend_ids"}
         # owner_team_id is not exposed by this tool: carry the existing
         # owner forward so an already-team backend stays valid, and let the
         # shared validator reject a new team visibility with no owner.
-        validation_payload["owner_team_id"] = (
-            existing.owner_team_id if validation_payload.get("visibility") == "team" else None
-        )
+        validation_payload["owner_team_id"] = existing.owner_team_id if validation_payload.get("visibility") == "team" else None
         try:
             ModelBackendUpdate.model_validate(validation_payload)
         except PydanticValidationError as exc:
@@ -8942,12 +8756,7 @@ async def update_model_backend(
         return _tool_exception_error("Failed to update model backend", exc, "mcp.update_model_backend")
 
 
-@mcp.tool(
-    description="Create a new connector instance (provider configuration). "
-    "Credentials are encrypted at rest. Returns the created connector details. "
-    "Pass a literal credential, or a 'secretref://<key>' token to resolve the "
-    "value from the organisation vault server-side at write time."
-)
+@mcp.tool(description="Create a new connector instance (provider configuration). Credentials are encrypted at rest. Returns the created connector details. Pass a literal credential, or a 'secretref://<key>' token to resolve the value from the organisation vault server-side at write time.")
 @mcp_audited("connector_created", "connector", fail_closed=True)
 @_RETRY_DB
 async def create_connector(
@@ -9188,9 +8997,7 @@ async def _create_trigger_impl(
             from farna.core.team_visibility import CONNECTOR_TEAM_MISMATCH
 
             return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
-        next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
-            s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
-        )
+        next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json)
         if ongoing_err:
             return ongoing_err
         trigger, build_err = _build_trigger_record(
@@ -9229,9 +9036,7 @@ async def _create_trigger_impl(
     }
 
 
-@mcp.tool(
-    description="Create a new trigger for a pipeline. `name` is required (1-255 chars) and must be unique per pipeline."
-)
+@mcp.tool(description="Create a new trigger for a pipeline. `name` is required (1-255 chars) and must be unique per pipeline.")
 @mcp_audited("trigger_created", "trigger", fail_closed=False)
 @_RETRY_DB
 async def create_trigger(
@@ -9321,9 +9126,7 @@ async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
             owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", str(trigger.pipeline_id))
-        in_flight = (
-            await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
-        )
+        in_flight = await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
         # FAR-251 — surface the SAME streak_status shape as the REST
         # trigger detail serializer (shared ``_streak_status_for``), computed
         # INSIDE the RLS transaction (mirrors the FAR-191 fix — never read
@@ -9364,9 +9167,7 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
-async def _load_trigger_for_update(
-    s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID
-) -> tuple[Any | None, uuid.UUID | None, dict[str, Any] | None]:
+async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> tuple[Any | None, uuid.UUID | None, dict[str, Any] | None]:
     """Load the trigger row for update plus its pipeline's team-gate owner and denial.
 
     Returns ``(trigger, owner_team_id, denial)``: ``(None, None, None)`` when
@@ -9406,22 +9207,16 @@ async def _validate_ongoing_config_change(
     from farna.core.trigger_validation import validate_ongoing_config
     from farna.db.models.pipeline import Pipeline
 
-    ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
-        daily_spend_limit is not None
-    )
+    ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (daily_spend_limit is not None)
     if not ongoing_fields_changing:
         return None
     pipeline = await s.get(Pipeline, trigger.pipeline_id)
     pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
-    resolved_daily_spend_limit = (
-        Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else trigger.daily_spend_limit
-    )
+    resolved_daily_spend_limit = Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else trigger.daily_spend_limit
     try:
         validate_ongoing_config(
             trigger.trigger_type,
-            max_concurrent_runs=(
-                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
-            ),
+            max_concurrent_runs=(max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs),
             daily_spend_limit=resolved_daily_spend_limit,
             config_json=(config_json if config_json is not None else trigger.config_json),
             pipeline_max_concurrent_runs=pipeline_cap,
@@ -9448,9 +9243,7 @@ async def _validate_ongoing_trigger_update(
                 "error": "validation",
                 "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
             }
-        cfg_err = await _validate_ongoing_config_change(
-            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active
-        )
+        cfg_err = await _validate_ongoing_config_change(s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active)
         if cfg_err:
             return False, cfg_err
         if config_json is not None:
@@ -9638,9 +9431,7 @@ async def _update_trigger_txn(
         if cron_config_requested and trigger.trigger_type != "cron":
             return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
-        ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
-            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
-        )
+        ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit)
         if ongoing_err:
             return ongoing_err
 
@@ -9679,9 +9470,7 @@ async def _update_trigger_txn(
             prev_active,
         )
 
-        _recompute_ongoing_next_fire(
-            trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
-        )
+        _recompute_ongoing_next_fire(trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed)
         await s.flush()
         from farna.core.cron_helpers import _count_ongoing_runs
 
@@ -9695,9 +9484,7 @@ async def _update_trigger_txn(
 
 
 @mcp.tool(
-    description="Update an existing trigger's configuration. "
-    "Mirrors PUT /api/v1/triggers/{id}. Pass name to rename (unique per pipeline). Setting cron_expression or "
-    "cron_timezone is only valid for cron triggers.",
+    description="Update an existing trigger's configuration. Mirrors PUT /api/v1/triggers/{id}. Pass name to rename (unique per pipeline). Setting cron_expression or cron_timezone is only valid for cron triggers.",
 )
 @mcp_audited("trigger_updated", "trigger", fail_closed=False)
 @_RETRY_DB
@@ -9986,10 +9773,7 @@ def _connector_item(ci: Any) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_connectors",
-    description=(
-        "List connector instances in the organisation with cursor-based pagination. "
-        "Returns connector metadata (type, status, masked config) — never credential values."
-    ),
+    description=("List connector instances in the organisation with cursor-based pagination. Returns connector metadata (type, status, masked config) — never credential values."),
 )
 @_RETRY_DB
 async def list_connectors(
@@ -10087,9 +9871,7 @@ def _connector_type_field_metadata(type_id: str) -> dict[str, Any] | None:
                 continue
             credential_fields = definition.get("credential_fields") or {}
             return {
-                "credential_fields": {
-                    key: {"required": bool(spec.get("required", False))} for key, spec in credential_fields.items()
-                },
+                "credential_fields": {key: {"required": bool(spec.get("required", False))} for key, spec in credential_fields.items()},
                 "config_fields": sorted((definition.get("default_config") or {}).keys()),
             }
     except Exception:
@@ -10099,11 +9881,7 @@ def _connector_type_field_metadata(type_id: str) -> dict[str, Any] | None:
 
 @mcp.tool(
     name="list_connector_types",
-    description=(
-        "List the registered connector type catalogue: id, display name, capabilities, and — for "
-        "types with a canonical definition — the credential/config FIELD metadata each type "
-        "consumes (field names and required flags only, never values)."
-    ),
+    description=("List the registered connector type catalogue: id, display name, capabilities, and — for types with a canonical definition — the credential/config FIELD metadata each type consumes (field names and required flags only, never values)."),
 )
 async def list_connector_types() -> dict[str, Any]:
     try:
@@ -10138,9 +9916,7 @@ async def list_connector_types() -> dict[str, Any]:
                 # Hub-native CI-runner ids (github_actions_ci / gitlab_ci)
                 # implement the CI-runner capability contract; plugin-
                 # registered types are not introspectable here (empty list).
-                capabilities = (
-                    sorted(c.value for c in CI_RUNNER_CAPABILITIES) if connector_type_supports_dispatch(type_id) else []
-                )
+                capabilities = sorted(c.value for c in CI_RUNNER_CAPABILITIES) if connector_type_supports_dispatch(type_id) else []
             item: dict[str, Any] = {
                 "id": type_id,
                 "name": type_id.replace("_", " ").title(),
@@ -10160,11 +9936,7 @@ async def list_connector_types() -> dict[str, Any]:
         return _tool_exception_error("Failed to list connector types", exc, "mcp.list_connector_types")
 
 
-@mcp.tool(
-    description="Create or update a secret in the organisation vault. "
-    "Secrets are encrypted at rest and scoped to the organisation. "
-    "Returns the created secret details."
-)
+@mcp.tool(description="Create or update a secret in the organisation vault. Secrets are encrypted at rest and scoped to the organisation. Returns the created secret details.")
 @mcp_audited("secret_created", "secret", fail_closed=True)
 @_RETRY_DB
 async def create_secret(
@@ -10208,10 +9980,7 @@ async def create_secret(
         return _tool_exception_error("Failed to create secret", exc, "mcp.create_secret")
 
 
-@mcp.tool(
-    description="List all secret keys in the organisation vault. "
-    "Returns secret keys and metadata — never exposes secret values."
-)
+@mcp.tool(description="List all secret keys in the organisation vault. Returns secret keys and metadata — never exposes secret values.")
 @_RETRY_DB
 async def list_secrets(
     limit: int = 100,
@@ -10372,9 +10141,7 @@ async def _enforce_api_key_mint_cap(
             _CODE_PERMISSION_API_KEY_ROLE_CAP,
             extra={"requested_role": requested_role, "live_role": live_role},
         )
-        raise MCPAuthorizationError(
-            f"Cannot use role '{requested_role}' for an API key while your live role is '{live_role}'"
-        )
+        raise MCPAuthorizationError(f"Cannot use role '{requested_role}' for an API key while your live role is '{live_role}'")
 
 
 async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
@@ -10440,9 +10207,7 @@ def _parse_api_key_expires(expires_at: str | None) -> tuple[datetime | None, dic
     return (parsed, None)
 
 
-async def _parse_api_key_team_id(
-    team_id: str | None, org_id: uuid.UUID
-) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+async def _parse_api_key_team_id(team_id: str | None, org_id: uuid.UUID) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
     """Parse and validate the team_id. Returns (team_uuid, error_or_None)."""
     if team_id is None:
         return (None, None)
@@ -10518,12 +10283,7 @@ async def _emit_mcp_api_key_audit(
 
 
 @mcp.tool(
-    description=(
-        "Get the CALLER'S OWN HITL email-alert preference (the caller-scoped "
-        "target is the key owner / logged-in identity — no other user can be "
-        "read). Returns {default, pipeline_overrides {pipeline_id: enabled}}; "
-        "absent preferences resolve to the all-off default."
-    ),
+    description=("Get the CALLER'S OWN HITL email-alert preference (the caller-scoped target is the key owner / logged-in identity — no other user can be read). Returns {default, pipeline_overrides {pipeline_id: enabled}}; absent preferences resolve to the all-off default."),
 )
 @_RETRY_DB
 async def get_hitl_email_alerts() -> dict[str, Any]:
@@ -10834,9 +10594,7 @@ async def create_api_key(
             org_id=org_id,
             resource_id=key.id,
             event_type="api_key_created",
-            payload=_api_key_created_audit_payload(
-                key=key, name=args.name, role=role, team_uuid=args.team_id, grants=grants
-            ),
+            payload=_api_key_created_audit_payload(key=key, name=args.name, role=role, team_uuid=args.team_id, grants=grants),
             log_context="mcp.create_api_key_audit_failed",
         )
 
@@ -10899,10 +10657,7 @@ async def list_api_keys() -> dict[str, Any]:
 
 
 @mcp.tool(
-    description=(
-        "Revoke an API key by ID. The key is immediately invalidated and can "
-        "no longer authenticate. Mirrors DELETE /api/v1/api-keys/{key_id}."
-    ),
+    description=("Revoke an API key by ID. The key is immediately invalidated and can no longer authenticate. Mirrors DELETE /api/v1/api-keys/{key_id}."),
 )
 @_RETRY_DB
 async def revoke_api_key(key_id: str) -> dict[str, Any]:
@@ -11076,10 +10831,7 @@ def _agent_item(a: Any) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_agents",
-    description=(
-        "List agents in the organisation with cursor-based pagination. Returns agent summaries "
-        "(no prompt templates — use get_agent for the full definition)."
-    ),
+    description=("List agents in the organisation with cursor-based pagination. Returns agent summaries (no prompt templates — use get_agent for the full definition)."),
 )
 @_RETRY_DB
 async def list_agents(
@@ -11239,11 +10991,7 @@ async def list_teams(page: int = 1, page_size: int = 20) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_users",
-    description=(
-        "List organisation members (accounts + org roles) with page-based "
-        "pagination and optional search/role filters (mirrors GET "
-        "/api/v1/admin/users — admin-only)."
-    ),
+    description=("List organisation members (accounts + org roles) with page-based pagination and optional search/role filters (mirrors GET /api/v1/admin/users — admin-only)."),
 )
 @_RETRY_DB
 async def list_users(
@@ -11299,11 +11047,7 @@ async def list_users(
 
 @mcp.tool(
     name="list_feature_flags",
-    description=(
-        "List the instance feature-flag registry with the calling org's "
-        "effective tier and per-flag overrides (mirrors GET "
-        "/api/v1/admin/feature-flags — SYSTEM-ADMIN only)."
-    ),
+    description=("List the instance feature-flag registry with the calling org's effective tier and per-flag overrides (mirrors GET /api/v1/admin/feature-flags — SYSTEM-ADMIN only)."),
 )
 @_RETRY_DB
 async def list_feature_flags() -> dict[str, Any]:
@@ -11342,11 +11086,7 @@ async def list_feature_flags() -> dict[str, Any]:
             # key source counts only after canonical verification. It answers
             # "is a valid key configured", where is_valid answers "did the
             # effective ladder resolve one".
-            has_key = (
-                verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
-                or get_license() is not None
-                or verify_license_key(str(org_key)) is not None
-            )
+            has_key = verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None or get_license() is not None or verify_license_key(str(org_key)) is not None
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
             # Best-effort overlay of the org's per-flag overrides (same
@@ -11424,9 +11164,7 @@ _SYSTEM_MAPS_HTTP_ERROR_CODES: dict[int, str] = {
 }
 
 
-_SYSTEM_MAPS_AI_ERROR_CODES = frozenset(
-    {"model_backend_unauthorised", "eval_definition_unauthorised", "eval_gate_failed"}
-)
+_SYSTEM_MAPS_AI_ERROR_CODES = frozenset({"model_backend_unauthorised", "eval_definition_unauthorised", "eval_gate_failed"})
 
 
 def _system_maps_http_error_payload(exc: StarletteHTTPException) -> dict[str, Any]:
@@ -11608,10 +11346,7 @@ async def discover_system_map(
 
 @mcp.tool(
     name="get_audit_log",
-    description=(
-        "Paged read of the organisation's audit trail with cursor pagination "
-        "and filters (mirrors GET /api/v1/admin/audit)."
-    ),
+    description=("Paged read of the organisation's audit trail with cursor pagination and filters (mirrors GET /api/v1/admin/audit)."),
 )
 @_RETRY_DB
 async def get_audit_log(
@@ -11751,11 +11486,7 @@ def _notification_delivery_item(row: Any) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_notification_deliveries",
-    description=(
-        "List notification delivery-log entries (webhook/in-app delivery "
-        "attempts) with cursor pagination and filters (mirrors GET "
-        "/api/v1/admin/notifications/deliveries)."
-    ),
+    description=("List notification delivery-log entries (webhook/in-app delivery attempts) with cursor pagination and filters (mirrors GET /api/v1/admin/notifications/deliveries)."),
 )
 @_RETRY_DB
 async def list_notification_deliveries(
@@ -11860,9 +11591,7 @@ async def list_notification_deliveries(
 
 @mcp.tool(
     name="list_lifecycle_maps",
-    description=(
-        "List lifecycle maps in the organisation with page-based pagination (mirrors GET /api/v1/lifecycle-maps)."
-    ),
+    description=("List lifecycle maps in the organisation with page-based pagination (mirrors GET /api/v1/lifecycle-maps)."),
 )
 @_RETRY_DB
 async def list_lifecycle_maps(
@@ -11930,10 +11659,7 @@ async def list_lifecycle_maps(
 
 @mcp.tool(
     name="get_lifecycle_map",
-    description=(
-        "Get a single lifecycle map by ID including its content_json "
-        "(mirrors GET /api/v1/lifecycle-maps/{lifecycle_map_id})."
-    ),
+    description=("Get a single lifecycle map by ID including its content_json (mirrors GET /api/v1/lifecycle-maps/{lifecycle_map_id})."),
 )
 @_RETRY_DB
 async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
@@ -11989,9 +11715,7 @@ async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
 
 @mcp.tool(
     name="list_plugins",
-    description=(
-        "List installed plugins with health status (mirrors GET /api/v1/plugins). Read-only registry metadata."
-    ),
+    description=("List installed plugins with health status (mirrors GET /api/v1/plugins). Read-only registry metadata."),
 )
 async def list_plugins() -> dict[str, Any]:
     try:
@@ -12025,9 +11749,7 @@ async def list_plugins() -> dict[str, Any]:
                     "capabilities": sorted(manifest.capabilities),
                     "health_ok": health.ok if health is not None else False,
                     "health_detail": health.detail if health is not None else "Unknown",
-                    "health_checked_at": (
-                        health.checked_at.isoformat() if health is not None and health.checked_at else None
-                    ),
+                    "health_checked_at": (health.checked_at.isoformat() if health is not None and health.checked_at else None),
                 }
             )
         return {"data": data, "total": len(data)}
@@ -12040,12 +11762,7 @@ async def list_plugins() -> dict[str, Any]:
 
 @mcp.tool(
     name="list_sso_providers",
-    description=(
-        "List the organisation's SSO provider configurations, metadata only — "
-        "client secrets are never returned (mirrors GET "
-        "/api/v1/admin/sso/providers). Read-only; configuration changes stay "
-        "human-only."
-    ),
+    description=("List the organisation's SSO provider configurations, metadata only — client secrets are never returned (mirrors GET /api/v1/admin/sso/providers). Read-only; configuration changes stay human-only."),
 )
 @_RETRY_DB
 async def list_sso_providers() -> dict[str, Any]:
@@ -12107,9 +11824,7 @@ async def list_sso_providers() -> dict[str, Any]:
 
 @mcp.tool(
     name="list_eval_suites",
-    description=(
-        "List eval suites in the organisation with page-based pagination (mirrors GET /api/v1/evals/eval-suites)."
-    ),
+    description=("List eval suites in the organisation with page-based pagination (mirrors GET /api/v1/evals/eval-suites)."),
 )
 @_RETRY_DB
 async def list_eval_suites(page: int = 1, page_size: int = 20) -> dict[str, Any]:
@@ -12127,16 +11842,8 @@ async def list_eval_suites(page: int = 1, page_size: int = 20) -> dict[str, Any]
         ps = max(1, min(page_size, 100))
 
         async with _session(org_id) as s:
-            total = (
-                await s.execute(select(sa_func.count(EvalSuite.id)).where(EvalSuite.organisation_id == org_id))
-            ).scalar() or 0
-            q = (
-                select(EvalSuite)
-                .where(EvalSuite.organisation_id == org_id)
-                .order_by(EvalSuite.created_at.desc())
-                .offset((pg - 1) * ps)
-                .limit(ps)
-            )
+            total = (await s.execute(select(sa_func.count(EvalSuite.id)).where(EvalSuite.organisation_id == org_id))).scalar() or 0
+            q = select(EvalSuite).where(EvalSuite.organisation_id == org_id).order_by(EvalSuite.created_at.desc()).offset((pg - 1) * ps).limit(ps)
             rows = list((await s.execute(q)).scalars().all())
 
         return {
@@ -12316,11 +12023,7 @@ def _mask_pipeline_diff_payload(result: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool(
     name="get_pipeline_diff",
-    description=(
-        "Diff two snapshots of a pipeline (mirrors POST "
-        "/api/v1/pipelines/{pipeline_id}/snapshots/diff). Node credentials "
-        "in the snapshot graphs are masked, exactly like the REST surface."
-    ),
+    description=("Diff two snapshots of a pipeline (mirrors POST /api/v1/pipelines/{pipeline_id}/snapshots/diff). Node credentials in the snapshot graphs are masked, exactly like the REST surface."),
 )
 @_RETRY_DB
 async def get_pipeline_diff(
@@ -12441,10 +12144,7 @@ def _value_looks_sensitive(val: str) -> bool:
 
 @mcp.tool(
     name="search_documentation",
-    description=(
-        "Search the product surface and navigation for relevant sections. Supports "
-        "free-text keyword search against routes and pages in the product manifest. Returns Markdown-formatted results."
-    ),
+    description=("Search the product surface and navigation for relevant sections. Supports free-text keyword search against routes and pages in the product manifest. Returns Markdown-formatted results."),
 )
 async def search_documentation(query: str, section: str | None = None) -> dict[str, Any]:
     try:
@@ -12467,12 +12167,7 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
 
 
 @mcp.tool(
-    description=(
-        "Get current health status of all connectors, model backends, and triggers. "
-        "Returns a Markdown table plus structured JSON fields. "
-        "For individual connector/model-backend details, see modulo://connectors "
-        "and modulo://model-backends resources."
-    ),
+    description=("Get current health status of all connectors, model backends, and triggers. Returns a Markdown table plus structured JSON fields. For individual connector/model-backend details, see modulo://connectors and modulo://model-backends resources."),
 )
 async def get_integration_status() -> dict[str, Any]:
     try:
@@ -12489,17 +12184,9 @@ async def get_integration_status() -> dict[str, Any]:
 
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
-            connector_rows = (
-                (await s.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))
-                .scalars()
-                .all()
-            )
-            backend_rows = (
-                (await s.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
-            )
-            trigger_count_result = await s.execute(
-                select(func.count()).select_from(Trigger).where(Trigger.organisation_id == org_id)
-            )
+            connector_rows = (await s.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id))).scalars().all()
+            backend_rows = (await s.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
+            trigger_count_result = await s.execute(select(func.count()).select_from(Trigger).where(Trigger.organisation_id == org_id))
             trigger_count = trigger_count_result.scalar_one()
 
         connector_list: list[dict[str, Any]] = []
@@ -12603,10 +12290,7 @@ def _config_table(filtered: list[Any]) -> str:
 
 
 @mcp.tool(
-    description=(
-        "Get org-level configuration. Optionally filter to a specific section "
-        "(assistant, plan, rate_limits). Never exposes secrets."
-    ),
+    description=("Get org-level configuration. Optionally filter to a specific section (assistant, plan, rate_limits). Never exposes secrets."),
 )
 async def get_org_config(section: str | None = None) -> dict[str, Any]:
     try:
@@ -12703,9 +12387,7 @@ async def get_available_features() -> dict[str, Any]:
 
 
 @mcp.tool(
-    description="Create a new schema. Creates the schema record plus a "
-    "'latest' version placeholder so agents can reference the schema "
-    "immediately. Returns the created schema details.",
+    description="Create a new schema. Creates the schema record plus a 'latest' version placeholder so agents can reference the schema immediately. Returns the created schema details.",
 )
 @mcp_audited("schema_created", "schema", fail_closed=False)
 @_RETRY_DB
@@ -12817,11 +12499,7 @@ async def list_schemas(
 
 @mcp.tool(
     name="list_environment_profiles",
-    description=(
-        "List environment profiles (execution environments: local_docker, e2b, etc.) in the "
-        "organisation with cursor-based pagination. Config values under sensitive keys are masked; "
-        "secret_refs are vault key references, never secret values."
-    ),
+    description=("List environment profiles (execution environments: local_docker, e2b, etc.) in the organisation with cursor-based pagination. Config values under sensitive keys are masked; secret_refs are vault key references, never secret values."),
 )
 @_RETRY_DB
 async def list_environment_profiles(
@@ -12886,10 +12564,7 @@ async def list_environment_profiles(
 
 @mcp.tool(
     name="list_parameter_schemas",
-    description=(
-        "List parameter schemas in the organisation with cursor-based pagination. Returns the "
-        "schema metadata and parameter definitions."
-    ),
+    description=("List parameter schemas in the organisation with cursor-based pagination. Returns the schema metadata and parameter definitions."),
 )
 @_RETRY_DB
 async def list_parameter_schemas(
@@ -13285,9 +12960,7 @@ async def get_parameter_schema_references(
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception as exc:
         _log.exception("get_parameter_schema_references failed")
-        return _tool_exception_error(
-            "Failed to get parameter schema references", exc, "mcp.get_parameter_schema_references"
-        )
+        return _tool_exception_error("Failed to get parameter schema references", exc, "mcp.get_parameter_schema_references")
 
 
 @mcp.tool(
@@ -13693,8 +13366,7 @@ async def infer_schema(
         settings = get_settings()
         if not settings.modulo_dev_mode:
             return _tool_error(
-                "Schema inference requires developer mode. "
-                "Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags.",
+                "Schema inference requires developer mode. Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags.",
                 code="feature_required",
             )
         from farna.core.schema_registry import SchemaInferenceError, SchemaInferenceService
@@ -13775,12 +13447,7 @@ async def validate_payload(
 
             from farna.db.models.schema import SchemaVersion
 
-            result = await s.execute(
-                select(SchemaVersion)
-                .where(SchemaVersion.schema_id == sid)
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
+            result = await s.execute(select(SchemaVersion).where(SchemaVersion.schema_id == sid).order_by(SchemaVersion.version_number.desc()).limit(1))
             sv = result.scalar_one_or_none()
             if sv is None:
                 return {"error": "no_version", "detail": f"Schema {schema_id} has no versions"}
@@ -13918,10 +13585,7 @@ async def _delete_housekeeping_group(
                     {
                         "id": eid,
                         "entity_type": entity_type,
-                        "error": (
-                            f"Cannot delete {entity_type} {eid}: governance decision records present"
-                            " — archive or purge policy_gate_decisions first"
-                        ),
+                        "error": (f"Cannot delete {entity_type} {eid}: governance decision records present — archive or purge policy_gate_decisions first"),
                         "blocked_by": "policy_gate_decisions",
                     }
                 )
@@ -14034,12 +13698,7 @@ def _format_run_line(r: Any, child_rollups: dict[Any, tuple[Any, int]], cost_bre
     child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
     aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
-    line = (
-        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
-        f"created={r.created_at.isoformat()} | "
-        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
-        f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
-    )
+    line = f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | created={r.created_at.isoformat()} | tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
     if cost_breakdown is not None:
         breakdown = _sanitize_cost_breakdown(cost_breakdown)
         if breakdown:
@@ -14068,9 +13727,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
             return f"Pipeline {pipeline_id} not found."
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error_str("pipeline", pipeline_id)
-        result = await list_runs(
-            s, organisation_id=org_id, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val()
-        )
+        result = await list_runs(s, organisation_id=org_id, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val())
         # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
         # joined in Python — never a per-row aggregate (avoids N+1).
         run_ids = [r.id for r in result.items]
@@ -14116,19 +13773,13 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
             return _team_scope_error_str("pipeline", pipeline_id)
 
-        edge_result = await s.execute(
-            select(func.count()).select_from(PipelineEdge).where(PipelineEdge.pipeline_id == pid)
-        )
+        edge_result = await s.execute(select(func.count()).select_from(PipelineEdge).where(PipelineEdge.pipeline_id == pid))
         edge_count = edge_result.scalar_one()
 
-        snap_result = await s.execute(
-            select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pid)
-        )
+        snap_result = await s.execute(select(func.count()).select_from(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pid))
         snapshot_count = snap_result.scalar_one()
 
-        run_result = await s.execute(
-            select(Run.created_at).where(Run.pipeline_id == pid).order_by(Run.created_at.desc()).limit(1)
-        )
+        run_result = await s.execute(select(Run.created_at).where(Run.pipeline_id == pid).order_by(Run.created_at.desc()).limit(1))
         last_run_at = run_result.scalar_one_or_none()
 
     parts = [
@@ -14170,10 +13821,7 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
             return _team_scope_error_str("pipeline", pipeline_id)
         snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50, organisation_id=org_id)
 
-    lines = [
-        f"- snapshot {s.snapshot_version} (id={s.id}, tag={s.tag or ''}, created={s.created_at.isoformat()})"
-        for s in snapshots
-    ]
+    lines = [f"- snapshot {s.snapshot_version} (id={s.id}, tag={s.tag or ''}, created={s.created_at.isoformat()})" for s in snapshots]
     return f"Snapshots for pipeline {pipeline_id} ({len(snapshots)}):\n" + "\n".join(lines)
 
 
@@ -14338,9 +13986,7 @@ async def _hitl_review_scope_error(
 ) -> str | None:
     """Return a team-scope error string when the caller's key cannot read this gate."""
     run = await get_run(s, rid, organisation_id=org_id)  # defence-in-depth org predicate (FAR-328)
-    owner_team_id = (
-        await _run_owner_team_id(s, run) if run is not None else await _pipeline_owner_team_id(s, gate.pipeline_id)
-    )
+    owner_team_id = await _run_owner_team_id(s, run) if run is not None else await _pipeline_owner_team_id(s, gate.pipeline_id)
     if _team_scoped_key_mismatch(owner_team_id):
         return _team_scope_error_str("run", str(rid))
     if _ctx_role_val() == "viewer" and not await _viewer_run_scope_visible(s, rid, _ctx_user_id_val()):
@@ -14393,9 +14039,7 @@ async def _resolve_hitl_review_briefing(
 
     description = resolve_review_description(context, None)
     if description is None:
-        description = resolve_review_description(
-            None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
-        )
+        description = resolve_review_description(None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id))
     return context, description
 
 
@@ -14530,12 +14174,7 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
             return f"Schema {schema_id} not found."
 
         if version == "latest":
-            result = await s.execute(
-                select(SchemaVersion)
-                .where(SchemaVersion.schema_id == sid)
-                .order_by(SchemaVersion.version_number.desc())
-                .limit(1)
-            )
+            result = await s.execute(select(SchemaVersion).where(SchemaVersion.schema_id == sid).order_by(SchemaVersion.version_number.desc()).limit(1))
             sv = result.scalar_one_or_none()
         else:
             result = await s.execute(
@@ -14602,11 +14241,7 @@ async def resource_connectors() -> str:
 
     org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
-        result = await s.execute(
-            select(ConnectorInstance)
-            .where(ConnectorInstance.organisation_id == org_id)
-            .order_by(ConnectorInstance.name)
-        )
+        result = await s.execute(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id).order_by(ConnectorInstance.name))
         connectors = list(result.scalars())
     lines = [f"- {c.name} (id={c.id}, type={c.connector_type_id})" for c in connectors]
     return f"Connectors ({len(connectors)}):\n" + "\n".join(lines)
@@ -14626,9 +14261,7 @@ async def resource_model_backends() -> str:
 
     org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
-        result = await s.execute(
-            select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name)
-        )
+        result = await s.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id).order_by(ModelBackend.name))
         backends = list(result.scalars())
     lines = [f"- {b.name} (id={b.id}, {b.provider}/{b.model_id})" for b in backends]
     return f"Model Backends ({len(backends)}):\n" + "\n".join(lines)
@@ -14651,9 +14284,7 @@ async def resource_library() -> str:
         lifecycle_maps_allowed = _mcp_internal_lifecycle_map_access()
         visible_primitive_types = None
         if not lifecycle_maps_allowed:
-            visible_primitive_types = [
-                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
-            ]
+            visible_primitive_types = [primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
@@ -14670,10 +14301,7 @@ async def resource_library() -> str:
             tags_str = ", ".join(p.tags) if p.tags else ""
             rating_str = f"{p.average_rating:.1f}" if p.average_rating is not None else "N/A"
             desc = f" — {p.description}" if p.description else ""
-            lines.append(
-                f"- {p.name} (id={p.id}, type={p.primitive_type}, "
-                f"v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}"
-            )
+            lines.append(f"- {p.name} (id={p.id}, type={p.primitive_type}, v{p.version}, tags=[{tags_str}], rating={rating_str}){desc}")
         header = f"Library ({result.total} primitives):"
         return header + "\n" + "\n".join(lines)
     except Exception:
@@ -14923,13 +14551,7 @@ async def _oauth_authorize(request: Request) -> JSONResponse | RedirectResponse:
             status_code=500,
         )
 
-    consent_url = (
-        f"{_frontend_url(settings)}/oauth/authorize"
-        f"?client_id={quote(client_id)}"
-        f"&redirect_uri={quote(redirect_uri)}"
-        f"&state={quote(state)}"
-        f"&code_challenge={quote(code_challenge)}"
-    )
+    consent_url = f"{_frontend_url(settings)}/oauth/authorize?client_id={quote(client_id)}&redirect_uri={quote(redirect_uri)}&state={quote(state)}&code_challenge={quote(code_challenge)}"
     redirect = RedirectResponse(consent_url, status_code=302)
     redirect.headers["Referrer-Policy"] = "no-referrer"
     return redirect
@@ -14963,9 +14585,7 @@ async def _parse_oauth_form(request: Request) -> tuple[dict[str, str] | None, JS
     )
 
 
-def _extract_oauth_client_credentials(
-    request: Request, params: dict[str, str]
-) -> tuple[dict[str, str], JSONResponse | None]:
+def _extract_oauth_client_credentials(request: Request, params: dict[str, str]) -> tuple[dict[str, str], JSONResponse | None]:
     """Extract and validate the client credentials for an authorization-code grant.
 
     Validates ``grant_type`` is ``authorization_code`` and reads
@@ -15014,9 +14634,7 @@ def _extract_oauth_client_credentials(
     )
 
 
-async def _exchange_authorization_code(
-    creds: dict[str, str], settings: Any
-) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+async def _exchange_authorization_code(creds: dict[str, str], settings: Any) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     """Exchange an authorization code for an access/refresh token pair.
 
     Runs the OAuth token exchange steps inside a DB transaction: validate the
@@ -15218,9 +14836,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         )
 
 
-def _extract_oauth_refresh_credentials(
-    request: Request, params: dict[str, str]
-) -> tuple[dict[str, str], JSONResponse | None]:
+def _extract_oauth_refresh_credentials(request: Request, params: dict[str, str]) -> tuple[dict[str, str], JSONResponse | None]:
     """Extract and validate the client credentials for a refresh-token grant.
 
     Validates ``grant_type`` is ``refresh_token`` and reads
@@ -15263,9 +14879,7 @@ def _extract_oauth_refresh_credentials(
     )
 
 
-async def _exchange_refresh_token(
-    creds: dict[str, str], settings: Any
-) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+async def _exchange_refresh_token(creds: dict[str, str], settings: Any) -> tuple[dict[str, Any] | None, JSONResponse | None]:
     """Rotate a refresh token into a new access/refresh token pair.
 
     Validates the client secret, sets RLS org context, decodes the refresh

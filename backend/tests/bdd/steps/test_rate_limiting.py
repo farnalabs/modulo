@@ -423,7 +423,7 @@ def when_post_with_bypass(
     with TestClient(app) as client:
         resp = client.post(
             path,
-            headers={"MODULO_RATELIMIT_BYPASS_TOKEN": ctx.get("bypass_token", "")},
+            headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": ctx.get("bypass_token", "")},
         )
         _store_response(request, ctx, resp)
 
@@ -458,10 +458,7 @@ def when_put_new_rules(
 
     @app.put("/api/v1/admin/rate-limits")
     async def _admin_put() -> dict[str, Any]:
-        updated_rules = [
-            RateLimitRule(path_prefix=r["path_prefix"], max_requests=r["max_requests"], window_s=r["window_s"])
-            for r in new_rules
-        ]
+        updated_rules = [RateLimitRule(path_prefix=r["path_prefix"], max_requests=r["max_requests"], window_s=r["window_s"]) for r in new_rules]
         RateLimitMiddleware.set_rules(updated_rules)
         return {"rules": new_rules}
 
@@ -605,9 +602,7 @@ def then_in_memory_works(request: pytest.FixtureRequest) -> None:
 
 @then("a startup warning is logged")
 def then_startup_warning_logged(caplog: pytest.LogCaptureFixture) -> None:
-    assert any("ratelimit.in_memory_mode" in (r.message or "") for r in caplog.records), (
-        "Expected a startup warning when Redis is unavailable (in-memory fallback)"
-    )
+    assert any("ratelimit.in_memory_mode" in (r.message or "") for r in caplog.records), "Expected a startup warning when Redis is unavailable (in-memory fallback)"
 
 
 @then("no rate limiting is applied")

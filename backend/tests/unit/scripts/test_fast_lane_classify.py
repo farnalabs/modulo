@@ -283,10 +283,7 @@ class TestMainExitCode:
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout="",
-            stderr=(
-                "could not find pull request diff: HTTP 406: Sorry, the diff "
-                "exceeded the maximum number of lines (20000)"
-            ),
+            stderr=("could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)"),
         )
         rc = classify_main(
             [
@@ -313,10 +310,7 @@ class TestMainExitCode:
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout="",
-            stderr=(
-                "could not find pull request diff: HTTP 406: Sorry, the diff "
-                "exceeded the maximum number of files (300)."
-            ),
+            stderr=("could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300)."),
         )
         rc = classify_main(
             [
@@ -819,14 +813,7 @@ class TestCheckNoTestWeakeningDiff:
         self._mock_runs(
             mock_run,
             "A\tbackend/tests/unit/test_new_module.py\n",
-            (
-                "--- /dev/null\n"
-                "+++ b/backend/tests/unit/test_new_module.py\n"
-                "@@ -0,0 +1,2 @@\n"
-                "+import pytest\n"
-                "+def test_new():\n"
-                "+    assert True\n"
-            ),
+            ("--- /dev/null\n+++ b/backend/tests/unit/test_new_module.py\n@@ -0,0 +1,2 @@\n+import pytest\n+def test_new():\n+    assert True\n"),
         )
         eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
         assert eligible is True
@@ -849,15 +836,7 @@ class TestCheckNoTestWeakeningDiff:
         self._mock_runs(
             mock_run,
             "M\tbackend/tests/unit/test_assert_new.py\n",
-            (
-                "--- a/backend/tests/unit/test_assert_new.py\n"
-                "+++ b/backend/tests/unit/test_assert_new.py\n"
-                "@@ -1,3 +1,2 @@\n"
-                " def test_keep():\n"
-                "-    assert old_a == 1\n"
-                "-    assert old_b == 2\n"
-                "+    assert new_a == 1\n"
-            ),
+            ("--- a/backend/tests/unit/test_assert_new.py\n+++ b/backend/tests/unit/test_assert_new.py\n@@ -1,3 +1,2 @@\n def test_keep():\n-    assert old_a == 1\n-    assert old_b == 2\n+    assert new_a == 1\n"),
         )
         eligible, violations = check_no_test_weakening(Path("/tmp"), "origin/main", "HEAD")
         assert eligible is False
@@ -1157,7 +1136,7 @@ class TestCheckSuspensionPermissionError:
         assert eligible is False
         assert "fail-closed" in detail
         assert "token cannot read repository variables" in detail
-        assert "MODULO_REVIEWBOT_TOKEN" in detail
+        assert "FARNA_CONTROL_MODULO_REVIEWBOT_TOKEN" in detail
 
     @patch("fast_lane_classify.subprocess.run")
     def test_forbidden_403_denies_with_config_cause(self, mock_run: MagicMock) -> None:
@@ -1315,11 +1294,7 @@ class TestInWindowFollowUpIneligible:
         "fast_lane_classify.check_suspension",
         return_value=(
             False,
-            (
-                "fast lane suspended until 2026-09-22T00:00:00"
-                " - reason: critical finding in prior fast-lane merge"
-                " (current time 2026-09-21T12:00:00)"
-            ),
+            ("fast lane suspended until 2026-09-22T00:00:00 - reason: critical finding in prior fast-lane merge (current time 2026-09-21T12:00:00)"),
         ),
     )
     @patch("fast_lane_classify.subprocess.run")
@@ -1352,8 +1327,4 @@ class TestInWindowFollowUpIneligible:
                 "origin/main",
             ]
         )
-        assert rc == 1, (
-            "Follow-up PR during active suspension must exit 1 (ineligible). "
-            "The circuit breaker must prevent the fix from chaining through "
-            "the fast lane."
-        )
+        assert rc == 1, "Follow-up PR during active suspension must exit 1 (ineligible). The circuit breaker must prevent the fix from chaining through the fast lane."

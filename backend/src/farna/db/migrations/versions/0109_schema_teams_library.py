@@ -43,31 +43,19 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "comment" text;')
     op.execute('ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."primitive_ratings" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "primitive_id" uuid;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "rating_id" uuid;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "reporter_account_id" uuid;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "reason" character varying(500);')
-    op.execute(
-        'ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "status" character varying(20) DEFAULT \'pending\'::character varying;'
-    )
-    op.execute(
-        'ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "status" character varying(20) DEFAULT \'pending\'::character varying;')
+    op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "reviewer_account_id" uuid;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."primitive_abuse_reports" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "schema_id" uuid;')
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "version" character varying(50);')
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "version_number" integer;')
@@ -77,40 +65,28 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."schema_versions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."tier_catalog" ADD COLUMN IF NOT EXISTS "tier_id" character varying(255);')
     op.execute('ALTER TABLE public."tier_catalog" ADD COLUMN IF NOT EXISTS "label" character varying(255);')
     op.execute('ALTER TABLE public."tier_catalog" ADD COLUMN IF NOT EXISTS "rank" integer;')
     op.execute('ALTER TABLE public."tier_catalog" ADD COLUMN IF NOT EXISTS "requires_license" boolean DEFAULT false;')
     op.execute('ALTER TABLE public."tier_catalog" ADD COLUMN IF NOT EXISTS "description" character varying(2000);')
     op.execute('ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
-    op.execute(
-        'ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "description" character varying(2000);'
-    )
+    op.execute('ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "description" character varying(2000);')
     op.execute('ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "tier_id" character varying(255);')
     op.execute('ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "depends_on" json;')
     op.execute('ALTER TABLE public."feature_flag_catalog" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "contact_email" character varying(255);')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "public_key_hex" character varying(128);')
-    op.execute(
-        'ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "trust_tier" character varying(10) DEFAULT \'amber\'::character varying;'
-    )
+    op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "trust_tier" character varying(10) DEFAULT \'amber\'::character varying;')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "verified_since" timestamp with time zone;')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "website_url" character varying(2000);')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."publishers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "user_id" uuid;')
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "name" character varying(100);')
@@ -120,25 +96,15 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "active" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "source_mode" character varying(16);')
     op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "id" uuid;')
-    op.execute(
-        'ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."remy_skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "user_id" uuid;')
     op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "source_key" character varying(64);')
-    op.execute(
-        'ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "source_mode" character varying(16) DEFAULT \'always_on\'::character varying;'
-    )
+    op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "source_mode" character varying(16) DEFAULT \'always_on\'::character varying;')
     op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "id" uuid;')
-    op.execute(
-        'ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."remy_context_sources" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "name" character varying(100);')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "description" text;')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "color" character varying(7);')
@@ -147,12 +113,8 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."node_categories" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "description" text;')
@@ -164,30 +126,18 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "parameter_schema_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."composite_templates" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "description" text;')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;')
-    op.execute(
-        'ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "parameters" json DEFAULT \'[]\'::jsonb;'
-    )
-    op.execute(
-        'ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();'
-    )
-    op.execute(
-        'ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();'
-    )
+    op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "parameters" json DEFAULT \'[]\'::jsonb;')
+    op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();')
+    op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."parameter_schemas" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "id" uuid;')
@@ -199,22 +149,14 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "description" text;')
     op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "values" json DEFAULT \'{}\'::jsonb;')
-    op.execute(
-        'ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();'
-    )
-    op.execute(
-        'ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();'
-    )
+    op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();')
+    op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();')
     op.execute('ALTER TABLE public."parameter_sets" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "source" character varying(20);')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "primitive_type" character varying(20);'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "primitive_type" character varying(20);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "slug" character varying(255);')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "description" character varying(2000);'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "description" character varying(2000);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "author" character varying(255);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "version" character varying(50);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "tags" json;')
@@ -222,39 +164,25 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "source_url" character varying(2000);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "forked_from" uuid;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "checksum" character varying(128);')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "ed25519_signature" character varying(256);'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "ed25519_signature" character varying(256);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "verified" boolean;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "category" character varying(50);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "download_count" integer;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "average_rating" numeric(3,2);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "review_count" integer;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "owner_team_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "visibility" character varying(10) DEFAULT \'org\'::character varying;'
-    )
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "contribution_status" character varying(20);'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "visibility" character varying(10) DEFAULT \'org\'::character varying;')
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "contribution_status" character varying(20);')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "auto_update" boolean DEFAULT true;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "version_group_id" uuid;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "update_available_version_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "tier" character varying(20) DEFAULT \'native\'::character varying;'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "tier" character varying(20) DEFAULT \'native\'::character varying;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;'
-    )
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."library_primitives" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "name" character varying(255);')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "description" character varying(2000);')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "abstract_name" character varying(255);')
@@ -263,12 +191,8 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "deprecated_at" timestamp with time zone;')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "id" uuid;')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "organisation_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "system" boolean DEFAULT false;')
     op.execute('ALTER TABLE public."schemas" ADD COLUMN IF NOT EXISTS "folder_id" uuid;')
     op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "id" uuid;')
@@ -277,12 +201,8 @@ def upgrade() -> None:
     op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "parent_id" uuid;')
     op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "sort_order" integer DEFAULT 0;')
     op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "account_id" uuid;')
-    op.execute(
-        'ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
-    op.execute(
-        'ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;'
-    )
+    op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
+    op.execute('ALTER TABLE public."schema_folders" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP;')
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_ratings' AND column_name='primitive_id' AND is_nullable='YES') AND NOT EXISTS (SELECT 1 FROM \"primitive_ratings\" WHERE \"primitive_id\" IS NULL) THEN ALTER TABLE public.\"primitive_ratings\" ALTER COLUMN \"primitive_id\" SET NOT NULL; END IF; END $$;"
     )
@@ -784,12 +704,8 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='average_rating' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"average_rating\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='category' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"category\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='checksum' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"checksum\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='category' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"category\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='checksum' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"checksum\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='contribution_status' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"contribution_status\" DROP NOT NULL; END IF; END $$;"
     )
@@ -820,33 +736,19 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='update_available_version_id' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"update_available_version_id\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='verified' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"verified\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='verified' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"verified\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='library_primitives' AND column_name='version_group_id' AND is_nullable='NO') THEN ALTER TABLE public.\"library_primitives\" ALTER COLUMN \"version_group_id\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='icon' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"icon\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_schemas' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_schemas\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='node_categories' AND column_name='icon' AND is_nullable='NO') THEN ALTER TABLE public.\"node_categories\" ALTER COLUMN \"icon\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_schemas' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_schemas\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_schemas' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_schemas\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_sets' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_sets\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_sets' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_sets\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_sets' AND column_name='deleted_at' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_sets\" ALTER COLUMN \"deleted_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='parameter_sets' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"parameter_sets\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_abuse_reports' AND column_name='rating_id' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_abuse_reports\" ALTER COLUMN \"rating_id\" DROP NOT NULL; END IF; END $$;"
     )
@@ -859,121 +761,47 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_abuse_reports' AND column_name='reviewer_account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_abuse_reports\" ALTER COLUMN \"reviewer_account_id\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_ratings' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_ratings\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_ratings' AND column_name='comment' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_ratings\" ALTER COLUMN \"comment\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='contact_email' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"contact_email\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='verified_since' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"verified_since\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='website_url' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"website_url\" DROP NOT NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_ratings' AND column_name='account_id' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_ratings\" ALTER COLUMN \"account_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='primitive_ratings' AND column_name='comment' AND is_nullable='NO') THEN ALTER TABLE public.\"primitive_ratings\" ALTER COLUMN \"comment\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='contact_email' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"contact_email\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='verified_since' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"verified_since\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='publishers' AND column_name='website_url' AND is_nullable='NO') THEN ALTER TABLE public.\"publishers\" ALTER COLUMN \"website_url\" DROP NOT NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_context_sources' AND column_name='organisation_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_context_sources\" ALTER COLUMN \"organisation_id\" DROP NOT NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_context_sources' AND column_name='user_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_context_sources\" ALTER COLUMN \"user_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='organisation_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"organisation_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='source_mode' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"source_mode\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='triggers' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"triggers\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='user_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"user_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schema_folders' AND column_name='parent_id' AND is_nullable='NO') THEN ALTER TABLE public.\"schema_folders\" ALTER COLUMN \"parent_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='abstract_name' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"abstract_name\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='deprecated_at' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"deprecated_at\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='folder_id' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"folder_id\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tier_catalog' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"tier_catalog\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_composite_templates_organisation_id ON public.composite_templates USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_composite_templates_parameter_schema_id ON public.composite_templates USING btree (parameter_schema_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_library_primitives_organisation_id ON public.library_primitives USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_node_categories_organisation_id ON public.node_categories USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_parameter_schemas_organisation_id ON public.parameter_schemas USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_parameter_sets_organisation_id ON public.parameter_sets USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_parameter_sets_parameter_schema_id ON public.parameter_sets USING btree (parameter_schema_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_primitive_abuse_reports_organisation_id ON public.primitive_abuse_reports USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_primitive_abuse_reports_primitive_id ON public.primitive_abuse_reports USING btree (primitive_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_primitive_ratings_account_id ON public.primitive_ratings USING btree (account_id) WHERE (account_id IS NOT NULL);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_primitive_ratings_organisation_id ON public.primitive_ratings USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_primitive_ratings_primitive_id ON public.primitive_ratings USING btree (primitive_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_publishers_organisation_id ON public.publishers USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_publishers_public_key_hex ON public.publishers USING btree (public_key_hex);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_remy_context_sources_organisation_id ON public.remy_context_sources USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_remy_skills_organisation_id ON public.remy_skills USING btree (organisation_id);"
-    )
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_context_sources' AND column_name='user_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_context_sources\" ALTER COLUMN \"user_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='organisation_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"organisation_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='source_mode' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"source_mode\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='triggers' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"triggers\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='remy_skills' AND column_name='user_id' AND is_nullable='NO') THEN ALTER TABLE public.\"remy_skills\" ALTER COLUMN \"user_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schema_folders' AND column_name='parent_id' AND is_nullable='NO') THEN ALTER TABLE public.\"schema_folders\" ALTER COLUMN \"parent_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='abstract_name' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"abstract_name\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='deprecated_at' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"deprecated_at\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemas' AND column_name='folder_id' AND is_nullable='NO') THEN ALTER TABLE public.\"schemas\" ALTER COLUMN \"folder_id\" DROP NOT NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='tier_catalog' AND column_name='description' AND is_nullable='NO') THEN ALTER TABLE public.\"tier_catalog\" ALTER COLUMN \"description\" DROP NOT NULL; END IF; END $$;")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_composite_templates_organisation_id ON public.composite_templates USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_composite_templates_parameter_schema_id ON public.composite_templates USING btree (parameter_schema_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_library_primitives_organisation_id ON public.library_primitives USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_node_categories_organisation_id ON public.node_categories USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_parameter_schemas_organisation_id ON public.parameter_schemas USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_parameter_sets_organisation_id ON public.parameter_sets USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_parameter_sets_parameter_schema_id ON public.parameter_sets USING btree (parameter_schema_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_primitive_abuse_reports_organisation_id ON public.primitive_abuse_reports USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_primitive_abuse_reports_primitive_id ON public.primitive_abuse_reports USING btree (primitive_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_primitive_ratings_account_id ON public.primitive_ratings USING btree (account_id) WHERE (account_id IS NOT NULL);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_primitive_ratings_organisation_id ON public.primitive_ratings USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_primitive_ratings_primitive_id ON public.primitive_ratings USING btree (primitive_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_publishers_organisation_id ON public.publishers USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_publishers_public_key_hex ON public.publishers USING btree (public_key_hex);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_remy_context_sources_organisation_id ON public.remy_context_sources USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_remy_skills_organisation_id ON public.remy_skills USING btree (organisation_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_remy_skills_user_id ON public.remy_skills USING btree (user_id);")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_schema_folders_organisation_id ON public.schema_folders USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_schema_folders_parent_id ON public.schema_folders USING btree (parent_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_schema_versions_organisation_id ON public.schema_versions USING btree (organisation_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_schema_versions_schema_id ON public.schema_versions USING btree (schema_id);"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_schema_folders_organisation_id ON public.schema_folders USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_schema_folders_parent_id ON public.schema_folders USING btree (parent_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_schema_versions_organisation_id ON public.schema_versions USING btree (organisation_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_schema_versions_schema_id ON public.schema_versions USING btree (schema_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_schemas_folder_id ON public.schemas USING btree (folder_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_schemas_organisation_id ON public.schemas USING btree (organisation_id);")
     op.execute(
@@ -1044,144 +872,64 @@ def upgrade() -> None:
     op.execute("ALTER TABLE public.schema_versions ENABLE ROW LEVEL SECURITY;")
     op.execute("ALTER TABLE public.schemas ENABLE ROW LEVEL SECURITY;")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.composite_templates;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.composite_templates USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.composite_templates USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.library_primitives;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.library_primitives USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.library_primitives USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.node_categories;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.node_categories USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.node_categories USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.parameter_schemas;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.parameter_schemas USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.parameter_schemas USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.parameter_sets;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.parameter_sets USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.parameter_sets USING ((organisation_id = (current_setting('app.organisation_id'::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.primitive_abuse_reports;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.primitive_abuse_reports USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.primitive_abuse_reports USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.primitive_ratings;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.primitive_ratings USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.primitive_ratings USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.publishers;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.publishers USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.publishers USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.remy_context_sources;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.remy_context_sources USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (organisation_id IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.remy_context_sources USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (organisation_id IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.remy_skills;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.remy_skills USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (organisation_id IS NULL)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.remy_skills USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) OR (organisation_id IS NULL)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.schema_folders;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.schema_folders USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.schema_folders USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.schema_versions;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.schema_versions USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.schema_versions USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.schemas;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.schemas USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.schemas USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation_null_context ON public.parameter_schemas;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation_null_context ON public.parameter_schemas USING (((current_setting('app.organisation_id'::text, true) IS NULL) OR (organisation_id = (current_setting('app.organisation_id'::text))::uuid)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation_null_context ON public.parameter_schemas USING (((current_setting('app.organisation_id'::text, true) IS NULL) OR (organisation_id = (current_setting('app.organisation_id'::text))::uuid)));")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation_null_context ON public.parameter_sets;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation_null_context ON public.parameter_sets USING (((current_setting('app.organisation_id'::text, true) IS NULL) OR (organisation_id = (current_setting('app.organisation_id'::text))::uuid)));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation_null_context ON public.parameter_sets USING (((current_setting('app.organisation_id'::text, true) IS NULL) OR (organisation_id = (current_setting('app.organisation_id'::text))::uuid)));")
     op.execute("DROP POLICY IF EXISTS rls_team_isolation ON public.library_primitives;")
     op.execute(
         "CREATE POLICY rls_team_isolation ON public.library_primitives USING (((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid) AND (((visibility)::text = 'org'::text) OR (visibility IS NULL) OR (owner_team_id IS NULL) OR (owner_team_id IN ( SELECT team_memberships.team_id FROM public.team_memberships WHERE (team_memberships.account_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) OR (NULLIF(current_setting('app.org_role'::text, true), ''::text) = 'admin'::text))));"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='composite_templates_pkey') THEN ALTER TABLE public.composite_templates ADD CONSTRAINT composite_templates_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='feature_flag_catalog_pkey') THEN ALTER TABLE public.feature_flag_catalog ADD CONSTRAINT feature_flag_catalog_pkey PRIMARY KEY (name); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='library_primitives_pkey') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT library_primitives_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='node_categories_pkey') THEN ALTER TABLE public.node_categories ADD CONSTRAINT node_categories_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_schemas_pkey') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT parameter_schemas_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_sets_pkey') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT parameter_sets_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_abuse_reports_pkey') THEN ALTER TABLE public.primitive_abuse_reports ADD CONSTRAINT primitive_abuse_reports_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_pkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='publishers_pkey') THEN ALTER TABLE public.publishers ADD CONSTRAINT publishers_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_context_sources_pkey') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT remy_context_sources_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_pkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_pkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_pkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_pkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_pkey PRIMARY KEY (id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='tier_catalog_pkey') THEN ALTER TABLE public.tier_catalog ADD CONSTRAINT tier_catalog_pkey PRIMARY KEY (tier_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_library_primitive_version') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT uq_library_primitive_version UNIQUE (organisation_id, source, slug, version); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_node_categories_org_name') THEN ALTER TABLE public.node_categories ADD CONSTRAINT uq_node_categories_org_name UNIQUE (organisation_id, name); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_parameter_schemas_org_name') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT uq_parameter_schemas_org_name UNIQUE (organisation_id, name); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_parameter_sets_schema_name') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT uq_parameter_sets_schema_name UNIQUE (parameter_schema_id, name); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_ratings_per_user') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT uq_ratings_per_user UNIQUE (organisation_id, primitive_id, account_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publishers_org_key') THEN ALTER TABLE public.publishers ADD CONSTRAINT uq_publishers_org_key UNIQUE (organisation_id, public_key_hex); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publishers_org_name') THEN ALTER TABLE public.publishers ADD CONSTRAINT uq_publishers_org_name UNIQUE (organisation_id, name); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_remy_context_sources_key') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT uq_remy_context_sources_key UNIQUE (organisation_id, user_id, source_key); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_schema_versions_schema_version_organisation') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT uq_schema_versions_schema_version_organisation UNIQUE (schema_id, version, organisation_id); END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_schemas_organisation_name') THEN ALTER TABLE public.schemas ADD CONSTRAINT uq_schemas_organisation_name UNIQUE (organisation_id, name); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='composite_templates_pkey') THEN ALTER TABLE public.composite_templates ADD CONSTRAINT composite_templates_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='feature_flag_catalog_pkey') THEN ALTER TABLE public.feature_flag_catalog ADD CONSTRAINT feature_flag_catalog_pkey PRIMARY KEY (name); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='library_primitives_pkey') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT library_primitives_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='node_categories_pkey') THEN ALTER TABLE public.node_categories ADD CONSTRAINT node_categories_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_schemas_pkey') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT parameter_schemas_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_sets_pkey') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT parameter_sets_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_abuse_reports_pkey') THEN ALTER TABLE public.primitive_abuse_reports ADD CONSTRAINT primitive_abuse_reports_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_pkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='publishers_pkey') THEN ALTER TABLE public.publishers ADD CONSTRAINT publishers_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_context_sources_pkey') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT remy_context_sources_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_pkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_pkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_pkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_pkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_pkey PRIMARY KEY (id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='tier_catalog_pkey') THEN ALTER TABLE public.tier_catalog ADD CONSTRAINT tier_catalog_pkey PRIMARY KEY (tier_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_library_primitive_version') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT uq_library_primitive_version UNIQUE (organisation_id, source, slug, version); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_node_categories_org_name') THEN ALTER TABLE public.node_categories ADD CONSTRAINT uq_node_categories_org_name UNIQUE (organisation_id, name); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_parameter_schemas_org_name') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT uq_parameter_schemas_org_name UNIQUE (organisation_id, name); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_parameter_sets_schema_name') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT uq_parameter_sets_schema_name UNIQUE (parameter_schema_id, name); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_ratings_per_user') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT uq_ratings_per_user UNIQUE (organisation_id, primitive_id, account_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publishers_org_key') THEN ALTER TABLE public.publishers ADD CONSTRAINT uq_publishers_org_key UNIQUE (organisation_id, public_key_hex); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_publishers_org_name') THEN ALTER TABLE public.publishers ADD CONSTRAINT uq_publishers_org_name UNIQUE (organisation_id, name); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_remy_context_sources_key') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT uq_remy_context_sources_key UNIQUE (organisation_id, user_id, source_key); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_schema_versions_schema_version_organisation') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT uq_schema_versions_schema_version_organisation UNIQUE (schema_id, version, organisation_id); END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_schemas_organisation_name') THEN ALTER TABLE public.schemas ADD CONSTRAINT uq_schemas_organisation_name UNIQUE (organisation_id, name); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_library_primitives_contribution_status') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT ck_library_primitives_contribution_status CHECK (((contribution_status)::text = ANY ((ARRAY['draft'::character varying, 'review_queue'::character varying, 'published'::character varying])::text[]))); END IF; END $$;"
     )
@@ -1233,9 +981,7 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_composite_templates_output_schema_id') THEN ALTER TABLE public.composite_templates ADD CONSTRAINT fk_composite_templates_output_schema_id FOREIGN KEY (output_schema_id) REFERENCES schemas(id) ON DELETE SET NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='feature_flag_catalog_tier_id_fkey') THEN ALTER TABLE public.feature_flag_catalog ADD CONSTRAINT feature_flag_catalog_tier_id_fkey FOREIGN KEY (tier_id) REFERENCES tier_catalog(tier_id); END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='feature_flag_catalog_tier_id_fkey') THEN ALTER TABLE public.feature_flag_catalog ADD CONSTRAINT feature_flag_catalog_tier_id_fkey FOREIGN KEY (tier_id) REFERENCES tier_catalog(tier_id); END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='library_primitives_account_id_fkey') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT library_primitives_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
     )
@@ -1251,21 +997,15 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='library_primitives_update_available_version_id_fkey') THEN ALTER TABLE public.library_primitives ADD CONSTRAINT library_primitives_update_available_version_id_fkey FOREIGN KEY (update_available_version_id) REFERENCES library_primitives(id) ON DELETE SET NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='node_categories_account_id_fkey') THEN ALTER TABLE public.node_categories ADD CONSTRAINT node_categories_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='node_categories_account_id_fkey') THEN ALTER TABLE public.node_categories ADD CONSTRAINT node_categories_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='node_categories_organisation_id_fkey') THEN ALTER TABLE public.node_categories ADD CONSTRAINT node_categories_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_schemas_account_id_fkey') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT parameter_schemas_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_schemas_account_id_fkey') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT parameter_schemas_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_schemas_organisation_id_fkey') THEN ALTER TABLE public.parameter_schemas ADD CONSTRAINT parameter_schemas_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_sets_account_id_fkey') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT parameter_sets_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_sets_account_id_fkey') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT parameter_sets_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='parameter_sets_organisation_id_fkey') THEN ALTER TABLE public.parameter_sets ADD CONSTRAINT parameter_sets_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
@@ -1287,57 +1027,33 @@ def upgrade() -> None:
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_abuse_reports_reviewer_account_id_fkey') THEN ALTER TABLE public.primitive_abuse_reports ADD CONSTRAINT primitive_abuse_reports_reviewer_account_id_fkey FOREIGN KEY (reviewer_account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_account_id_fkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_account_id_fkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_organisation_id_fkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='primitive_ratings_primitive_id_fkey') THEN ALTER TABLE public.primitive_ratings ADD CONSTRAINT primitive_ratings_primitive_id_fkey FOREIGN KEY (primitive_id) REFERENCES library_primitives(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='publishers_organisation_id_fkey') THEN ALTER TABLE public.publishers ADD CONSTRAINT publishers_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='publishers_organisation_id_fkey') THEN ALTER TABLE public.publishers ADD CONSTRAINT publishers_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_context_sources_organisation_id_fkey') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT remy_context_sources_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_context_sources_user_id_fkey') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT remy_context_sources_user_id_fkey FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_organisation_id_fkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_user_id_fkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_user_id_fkey FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_account_id_fkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_context_sources_user_id_fkey') THEN ALTER TABLE public.remy_context_sources ADD CONSTRAINT remy_context_sources_user_id_fkey FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_organisation_id_fkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='remy_skills_user_id_fkey') THEN ALTER TABLE public.remy_skills ADD CONSTRAINT remy_skills_user_id_fkey FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_account_id_fkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_organisation_id_fkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_parent_id_fkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES schema_folders(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_account_id_fkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_folders_parent_id_fkey') THEN ALTER TABLE public.schema_folders ADD CONSTRAINT schema_folders_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES schema_folders(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_account_id_fkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_organisation_id_fkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_schema_id_fkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_schema_id_fkey FOREIGN KEY (schema_id) REFERENCES schemas(id) ON DELETE CASCADE; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_schemas_folder_id') THEN ALTER TABLE public.schemas ADD CONSTRAINT fk_schemas_folder_id FOREIGN KEY (folder_id) REFERENCES schema_folders(id) ON DELETE SET NULL; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_account_id_fkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_organisation_id_fkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schema_versions_schema_id_fkey') THEN ALTER TABLE public.schema_versions ADD CONSTRAINT schema_versions_schema_id_fkey FOREIGN KEY (schema_id) REFERENCES schemas(id) ON DELETE CASCADE; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_schemas_folder_id') THEN ALTER TABLE public.schemas ADD CONSTRAINT fk_schemas_folder_id FOREIGN KEY (folder_id) REFERENCES schema_folders(id) ON DELETE SET NULL; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_account_id_fkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_account_id_fkey FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='schemas_organisation_id_fkey') THEN ALTER TABLE public.schemas ADD CONSTRAINT schemas_organisation_id_fkey FOREIGN KEY (organisation_id) REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;")
 
 
 def downgrade() -> None:

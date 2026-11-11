@@ -70,12 +70,12 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             s1 = get_runtime_config_store()
-            s1.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            assert s1.get("MODULO_LOG_LEVEL") == "DEBUG"
+            s1.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+            assert s1.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
             RuntimeConfigStore.reset()
             s2 = get_runtime_config_store()
             assert s2 is not s1
-            assert s2.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert s2.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
 
     # ----------------------------------------------------------------
     # Initial state
@@ -180,8 +180,8 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            assert store.get_override("MODULO_LOG_LEVEL") == "DEBUG"
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+            assert store.get_override("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_get_override_ignores_env_and_default(self) -> None:
         """The raw tier exposes an override only; env/default are not returned."""
@@ -194,7 +194,7 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
             assert store.get_override("") is None
 
     # ----------------------------------------------------------------
@@ -206,32 +206,32 @@ class TestRuntimeConfigStore:
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             store.set_override("", "DEBUG")
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
 
     def test_set_override_rejects_key_with_surrounding_whitespace(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             store.set_override(" MODULO_LOG_LEVEL", "DEBUG")
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
             store.set_override("MODULO_LOG_LEVEL ", "DEBUG")
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
 
     def test_clear_override_rejects_empty_key(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
             store.clear_override("")
-            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_clear_override_rejects_key_with_surrounding_whitespace(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
             store.clear_override("MODULO_LOG_LEVEL ")
-            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_set_override_unknown_key_is_stored_but_hidden_from_get_all(self) -> None:
         self._purge_singleton()
@@ -249,11 +249,7 @@ class TestRuntimeConfigStore:
             store = get_runtime_config_store()
             caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.set_override("UNKNOWN_CONFIG_KEY", "v1")
-        assert any(
-            r.levelno == logging.WARNING
-            and r.getMessage() == "Runtime config override set for unknown key: UNKNOWN_CONFIG_KEY"
-            for r in caplog.records
-        )
+        assert any(r.levelno == logging.WARNING and r.getMessage() == "Runtime config override set for unknown key: UNKNOWN_CONFIG_KEY" for r in caplog.records)
 
     def test_set_override_rejects_invalid_key_and_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         self._purge_singleton()
@@ -262,41 +258,27 @@ class TestRuntimeConfigStore:
             caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.set_override("", "DEBUG")
             store.set_override(" MODULO_LOG_LEVEL", "DEBUG")
-        assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
-        assert (
-            sum(
-                r.levelno == logging.WARNING and "override rejected: invalid key" in r.getMessage()
-                for r in caplog.records
-            )
-            == 2
-        )
+        assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
+        assert sum(r.levelno == logging.WARNING and "override rejected: invalid key" in r.getMessage() for r in caplog.records) == 2
 
     def test_clear_override_invalid_key_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
             caplog.set_level(logging.WARNING, logger="farna.core.runtime_config.store")
             store.clear_override("MODULO_LOG_LEVEL ")
-        assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
-        assert any(
-            r.levelno == logging.WARNING
-            and r.getMessage() == "Runtime config override clear rejected: invalid key 'MODULO_LOG_LEVEL '"
-            for r in caplog.records
-        )
+        assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
+        assert any(r.levelno == logging.WARNING and r.getMessage() == "Runtime config override clear rejected: invalid key 'MODULO_LOG_LEVEL '" for r in caplog.records)
 
     def test_clear_override_missing_key_logs_debug_noop(self, caplog: pytest.LogCaptureFixture) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             caplog.set_level(logging.DEBUG, logger="farna.core.runtime_config.store")
-            store.clear_override("MODULO_LOG_LEVEL")
-        assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
-        assert any(
-            r.levelno == logging.DEBUG
-            and r.getMessage() == "Runtime config override not found (no-op): MODULO_LOG_LEVEL"
-            for r in caplog.records
-        )
+            store.clear_override("FARNA_CONTROL_MODULO_LOG_LEVEL")
+        assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
+        assert any(r.levelno == logging.DEBUG and r.getMessage() == "Runtime config override not found (no-op): MODULO_LOG_LEVEL" for r in caplog.records)
 
     # ----------------------------------------------------------------
     # Golden-value pins
@@ -310,13 +292,13 @@ class TestRuntimeConfigStore:
         subtle production regression.
         """
         assert DEFAULT_VALUES["REDIS_URL"] == "redis://localhost:6379/0"
-        assert DEFAULT_VALUES["MODULO_DB"] == "postgres"
+        assert DEFAULT_VALUES["FARNA_CONTROL_MODULO_DB"] == "postgres"
         assert DEFAULT_VALUES["CORS_ORIGINS"] == "http://localhost:5173"
-        assert DEFAULT_VALUES["MODULO_PUBLIC_URL"] == "http://localhost:8000"
-        assert DEFAULT_VALUES["MODULO_LOG_LEVEL"] == "INFO"
+        assert DEFAULT_VALUES["FARNA_CONTROL_MODULO_PUBLIC_URL"] == "http://localhost:8000"
+        assert DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"] == "INFO"
         assert DEFAULT_VALUES["DEBUG"] == "false"
-        assert not DEFAULT_VALUES["MODULO_RATELIMIT_BYPASS_TOKEN"]
-        assert not DEFAULT_VALUES["MODULO_LICENSE_KEY"]
+        assert not DEFAULT_VALUES["FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN"]
+        assert not DEFAULT_VALUES["FARNA_CONTROL_MODULO_LICENSE_KEY"]
         assert "DATABASE_URL" not in DEFAULT_VALUES
         assert "SECRET_KEY" not in DEFAULT_VALUES
         assert "FERNET_KEY" not in DEFAULT_VALUES
@@ -326,17 +308,17 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            assert store.get("MODULO_DB") == "postgres"
-            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            assert store.get("FARNA_CONTROL_MODULO_DB") == "postgres"
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_DB")
             assert entry.provenance == "default"
-        with patch.dict(os.environ, {"MODULO_DB": "sqlite"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_DB": "sqlite"}, clear=True):
             store.reload()
-            assert store.get("MODULO_DB") == "sqlite"
-            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            assert store.get("FARNA_CONTROL_MODULO_DB") == "sqlite"
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_DB")
             assert entry.provenance == "environment"
-            store.set_override("MODULO_DB", "mariadb")
-            assert store.get("MODULO_DB") == "mariadb"
-            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            store.set_override("FARNA_CONTROL_MODULO_DB", "mariadb")
+            assert store.get("FARNA_CONTROL_MODULO_DB") == "mariadb"
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_DB")
             assert entry.provenance == "override"
 
     # ----------------------------------------------------------------
@@ -347,31 +329,31 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_clear_override(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            store.clear_override("MODULO_LOG_LEVEL")
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+            store.clear_override("FARNA_CONTROL_MODULO_LOG_LEVEL")
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
 
     def test_clear_override_nonexistent_does_not_raise(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
             store.clear_override("NONEXISTENT")
-            assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "DEBUG"
 
     def test_overrides_return_provenance_override(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
-            entry = next(item for item in store.get_all() if item.key == "MODULO_TELEMETRY_ENABLED")
+            store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_TELEMETRY_ENABLED")
             assert entry.provenance == "override"
             assert entry.override_value == "true"
             assert entry.current_value == "true"
@@ -380,11 +362,11 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
-            store.clear_override("MODULO_TELEMETRY_ENABLED")
-            entry = next(item for item in store.get_all() if item.key == "MODULO_TELEMETRY_ENABLED")
+            store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
+            store.clear_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_TELEMETRY_ENABLED")
             assert entry.provenance == "default"
-            assert entry.current_value == DEFAULT_VALUES["MODULO_TELEMETRY_ENABLED"]
+            assert entry.current_value == DEFAULT_VALUES["FARNA_CONTROL_MODULO_TELEMETRY_ENABLED"]
 
     # ----------------------------------------------------------------
     # clear_all_overrides
@@ -394,11 +376,11 @@ class TestRuntimeConfigStore:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
-            store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "DEBUG")
+            store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
             store.clear_all_overrides()
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
-            assert store.get("MODULO_TELEMETRY_ENABLED") == DEFAULT_VALUES["MODULO_TELEMETRY_ENABLED"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_TELEMETRY_ENABLED"]
 
     # ----------------------------------------------------------------
     # reload()
@@ -409,30 +391,30 @@ class TestRuntimeConfigStore:
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
             # Initially no env value
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
         # Now set env var outside the context manager scope
-        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "TRACE"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_LOG_LEVEL": "TRACE"}, clear=True):
             store.reload()
-            assert store.get("MODULO_LOG_LEVEL") == "TRACE"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "TRACE"
 
     def test_reload_detects_removed_env_vars(self) -> None:
         self._purge_singleton()
-        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "TRACE"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_LOG_LEVEL": "TRACE"}, clear=True):
             store = get_runtime_config_store()
-            assert store.get("MODULO_LOG_LEVEL") == "TRACE"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "TRACE"
         # Remove env var
         with patch.dict(os.environ, {}, clear=True):
             store.reload()
-            assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
 
     def test_reload_does_not_clear_overrides(self) -> None:
         self._purge_singleton()
         with patch.dict(os.environ, {}, clear=True):
             store = get_runtime_config_store()
-            store.set_override("MODULO_LOG_LEVEL", "WARN")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "WARN")
             store.reload()
             # Override still wins
-            assert store.get("MODULO_LOG_LEVEL") == "WARN"
+            assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == "WARN"
 
     # ----------------------------------------------------------------
     # get_all() correctness
@@ -458,15 +440,15 @@ class TestRuntimeConfigStore:
     def test_get_all_reports_env_drift_after_reload(self) -> None:
         """Env changes become visible via reload, and overrides survive it."""
         self._purge_singleton()
-        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "ERROR"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_LOG_LEVEL": "ERROR"}, clear=True):
             store = get_runtime_config_store()
-            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_LOG_LEVEL")
             assert entry.current_value == "ERROR"
             assert entry.env_value == "ERROR"
             assert entry.override_value is None
-            store.set_override("MODULO_LOG_LEVEL", "WARN")
+            store.set_override("FARNA_CONTROL_MODULO_LOG_LEVEL", "WARN")
             store.reload()
-            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_LOG_LEVEL")
             assert entry.current_value == "WARN"
             assert entry.env_value == "ERROR"
             assert entry.override_value == "WARN"
@@ -474,9 +456,9 @@ class TestRuntimeConfigStore:
 
     def test_get_all_env_provenance(self) -> None:
         self._purge_singleton()
-        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "ERROR"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_LOG_LEVEL": "ERROR"}, clear=True):
             store = get_runtime_config_store()
-            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_LOG_LEVEL")
             assert entry.provenance == "environment"
             assert entry.env_value == "ERROR"
             assert entry.current_value == "ERROR"
@@ -484,9 +466,9 @@ class TestRuntimeConfigStore:
     def test_get_all_drift_indicator(self) -> None:
         """When env var changes after reload, current_value should reflect the change."""
         self._purge_singleton()
-        with patch.dict(os.environ, {"MODULO_LOG_LEVEL": "ERROR"}, clear=True):
+        with patch.dict(os.environ, {"FARNA_CONTROL_MODULO_LOG_LEVEL": "ERROR"}, clear=True):
             store = get_runtime_config_store()
-            entry = next(item for item in store.get_all() if item.key == "MODULO_LOG_LEVEL")
+            entry = next(item for item in store.get_all() if item.key == "FARNA_CONTROL_MODULO_LOG_LEVEL")
             assert entry.current_value == "ERROR"
             assert entry.provenance == "environment"
 

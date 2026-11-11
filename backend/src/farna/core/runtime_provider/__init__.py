@@ -72,17 +72,9 @@ class ProviderNotConfiguredError(RuntimeError):
         self.provider_type = provider_type
         self.env_var = env_var
         if env_var and env_var in _DOCKER_ENV_VARS:
-            message = (
-                f"No runtime provider registered for provider_type '{provider_type}'. "
-                "Set MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, "
-                "or choose a different provider type for the profile."
-            )
+            message = f"No runtime provider registered for provider_type '{provider_type}'. Set MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, or choose a different provider type for the profile."
         elif env_var:
-            message = (
-                f"No runtime provider registered for provider_type '{provider_type}'. "
-                f"Set the {env_var} environment variable (and restart) to enable it, "
-                f"or choose a different provider type for the profile."
-            )
+            message = f"No runtime provider registered for provider_type '{provider_type}'. Set the {env_var} environment variable (and restart) to enable it, or choose a different provider type for the profile."
         else:
             message = f"No runtime provider registered for provider_type '{provider_type}'."
         super().__init__(message)
@@ -107,11 +99,7 @@ class UnknownProviderTypeError(ProviderNotConfiguredError):
     def __init__(self, provider_type: str, valid_types: frozenset[str]) -> None:
         self.valid_types = valid_types
         sorted_types = ", ".join(sorted(valid_types))
-        message = (
-            f"Unknown provider_type '{provider_type}'. "
-            f"Valid types are: {sorted_types}. "
-            "Update the environment profile to use a valid provider type."
-        )
+        message = f"Unknown provider_type '{provider_type}'. Valid types are: {sorted_types}. Update the environment profile to use a valid provider type."
         # Initialise parent to set self.provider_type and self.env_var,
         # then override the message with the more specific unknown-type copy.
         super().__init__(provider_type, env_var=None)
@@ -208,9 +196,9 @@ class BackendUnreachableError(RuntimeProviderError):
 # derive from these constants so the documented behaviour and the implemented
 # behaviour can never drift apart.
 
-_DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
-_E2B_ENV_VAR = "MODULO_E2B_API_KEY"
-_KUBERNETES_ENV_VAR = "MODULO_KUBERNETES_ENABLED"
+_DOCKER_ENV_VARS: tuple[str, ...] = ("FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST")
+_E2B_ENV_VAR = "FARNA_CONTROL_MODULO_E2B_API_KEY"
+_KUBERNETES_ENV_VAR = "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"
 
 # Falsy spellings that deliberately DO NOT register the provider — any other
 # non-empty value does (presence-style opt-in, consistent with the docker
@@ -509,10 +497,7 @@ class ExecProcess:
 def _file_io_failure(operation: str, path: str, result: ExecResult) -> RuntimeProviderError:
     """Build the typed failure raised by the exec-based file-I/O defaults (FAR-1050 R2a)."""
     detail = (result.stderr or result.stdout or "").strip()
-    return RuntimeProviderError(
-        f"Runtime provider {operation} failed for {path!r} "
-        f"(exit {result.exit_code})" + (f": {detail[:200]}" if detail else "")
-    )
+    return RuntimeProviderError(f"Runtime provider {operation} failed for {path!r} (exit {result.exit_code})" + (f": {detail[:200]}" if detail else ""))
 
 
 class RuntimeProvider(ABC):
@@ -570,9 +555,7 @@ class RuntimeProvider(ABC):
         carve-out from the contract freeze). A dispatch that *requires*
         streaming fails terminally with this error.
         """
-        raise StreamingUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement exec_command_stream"
-        )
+        raise StreamingUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement exec_command_stream")
 
     @abstractmethod
     async def destroy_workspace(self, provider_ref: str) -> None:  # NOSONAR S7503 - async provider ABC contract
@@ -606,9 +589,7 @@ class RuntimeProvider(ABC):
         ``destroy_workspace``'s existing contract is unchanged — the
         never-tracked-but-live case is served by this primitive.
         """
-        raise ProviderCapabilityUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
-        )
+        raise ProviderCapabilityUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref")
 
     async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:  # NOSONAR S7503
         """Read the workspace log tail as raw bytes (ADR 040).
@@ -629,9 +610,7 @@ class RuntimeProvider(ABC):
         terminal named failure; they must never fall back to a
         provider-specific direct call.
         """
-        raise ProviderCapabilityUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
-        )
+        raise ProviderCapabilityUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail")
 
     async def apply_isolation(  # NOSONAR S7503 - async provider ABC contract
         self,
@@ -673,9 +652,7 @@ class RuntimeProvider(ABC):
         never retry-loop); they must never silently downgrade to a
         provider-specific direct call.
         """
-        raise ProviderCapabilityUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement apply_isolation"
-        )
+        raise ProviderCapabilityUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement apply_isolation")
 
     # ------------------------------------------------------------------
     # File-I/O primitives (FAR-1050 R2a)
@@ -725,9 +702,7 @@ class RuntimeProvider(ABC):
         """
         payload = base64.b64encode(data).decode("ascii")
         parent = posixpath.dirname(path) or "."
-        script = (
-            f"mkdir -p {shlex.quote(parent)} && printf '%s' {shlex.quote(payload)} | base64 -d > {shlex.quote(path)}"
-        )
+        script = f"mkdir -p {shlex.quote(parent)} && printf '%s' {shlex.quote(payload)} | base64 -d > {shlex.quote(path)}"
         result = await self.exec_command(
             provider_ref,
             ["sh", "-c", script],
@@ -757,9 +732,7 @@ class RuntimeProvider(ABC):
         if result.exit_code != 0:
             raise _file_io_failure("list_files", path, result)
         base = path.rstrip("/") or "/"
-        return sorted(
-            posixpath.join(base, name) for name in result.stdout.splitlines() if name and name not in {".", ".."}
-        )
+        return sorted(posixpath.join(base, name) for name in result.stdout.splitlines() if name and name not in {".", ".."})
 
     async def get_info(self, provider_ref: str, path: str) -> WorkspaceFileInfo:
         """Stat *path* and return its :class:`WorkspaceFileInfo` (FAR-1050 R2a).
@@ -821,9 +794,7 @@ class RuntimeProvider(ABC):
         redesign", not "never add a primitive" — this primitive is the
         additive close of the metrics gap the R4 dispatch recorded.
         """
-        raise ProviderCapabilityUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement get_metrics"
-        )
+        raise ProviderCapabilityUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement get_metrics")
 
     # ------------------------------------------------------------------
     # Identity-scoped enumeration primitive (FAR-1275 — non-Docker orphan
@@ -867,9 +838,7 @@ class RuntimeProvider(ABC):
           :class:`ProviderCapabilityUnsupportedError` — never a raw
           ``NotImplementedError``.
         """
-        raise ProviderCapabilityUnsupportedError(
-            f"Runtime provider '{self.__class__.__name__}' does not implement list_workspaces_by_identity"
-        )
+        raise ProviderCapabilityUnsupportedError(f"Runtime provider '{self.__class__.__name__}' does not implement list_workspaces_by_identity")
 
     @abstractmethod
     async def get_workspace_status(self, provider_ref: str) -> str:  # NOSONAR S7503 - async provider ABC contract

@@ -54,21 +54,8 @@ _ADD_CHECK_NOT_VALID = (
     "OR (queue_timeout_seconds >= 1 AND queue_timeout_seconds <= 604800)"
     ") NOT VALID; END IF; END $$;"
 )
-_VALIDATE_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_pipelines_queue_timeout' "
-    "AND conrelid = 'public.pipelines'::regclass "
-    "AND NOT convalidated) "
-    "THEN ALTER TABLE public.pipelines "
-    "VALIDATE CONSTRAINT ck_pipelines_queue_timeout; END IF; END $$;"
-)
-_DROP_CHECK = (
-    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint "
-    "WHERE conname='ck_pipelines_queue_timeout' "
-    "AND conrelid = 'public.pipelines'::regclass) "
-    "THEN ALTER TABLE public.pipelines "
-    "DROP CONSTRAINT ck_pipelines_queue_timeout; END IF; END $$;"
-)
+_VALIDATE_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_queue_timeout' AND conrelid = 'public.pipelines'::regclass AND NOT convalidated) THEN ALTER TABLE public.pipelines VALIDATE CONSTRAINT ck_pipelines_queue_timeout; END IF; END $$;"
+_DROP_CHECK = "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_queue_timeout' AND conrelid = 'public.pipelines'::regclass) THEN ALTER TABLE public.pipelines DROP CONSTRAINT ck_pipelines_queue_timeout; END IF; END $$;"
 
 #: SQLite batch-mode predicate - must match the model CheckConstraint EXACTLY
 #: so metadata.create_all() / SQLite-mirror CTAS parity holds.

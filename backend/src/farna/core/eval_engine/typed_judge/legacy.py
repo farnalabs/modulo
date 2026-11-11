@@ -126,8 +126,7 @@ def reject_legacy_judge_write(
         if canonical_json(config_json) != canonical_json(stored_config):
             raise JudgeConfigWriteError(
                 CODE_LEGACY_READ_ONLY,
-                "this model_judge definition still uses the legacy (pre-ADR-066) "
-                "config dialect, which is read-only as legacy",
+                "this model_judge definition still uses the legacy (pre-ADR-066) config dialect, which is read-only as legacy",
             )
         return
     if new_eval_type == "model_judge":

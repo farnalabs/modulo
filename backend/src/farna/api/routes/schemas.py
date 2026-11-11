@@ -240,13 +240,7 @@ async def schema_counts_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            rows = (
-                await session.execute(
-                    select(Schema.folder_id, func.count(Schema.id))
-                    .where(Schema.organisation_id == principal.organisation_id)
-                    .group_by(Schema.folder_id)
-                )
-            ).all()
+            rows = (await session.execute(select(Schema.folder_id, func.count(Schema.id)).where(Schema.organisation_id == principal.organisation_id).group_by(Schema.folder_id))).all()
     except ProgrammingError:
         logger.exception("schemas.counts")
         raise HTTPException(
@@ -321,9 +315,7 @@ async def create_schema_endpoint(
                 schema_id=schema.id,
                 version="latest",
                 version_number=0,
-                definition_json=req.definition_json
-                if req.definition_json is not None
-                else {"type": "object", "properties": {}, "additionalProperties": True},
+                definition_json=req.definition_json if req.definition_json is not None else {"type": "object", "properties": {}, "additionalProperties": True},
                 account_id=principal.account_id,
             )
             session.add(sv)
@@ -550,9 +542,7 @@ async def move_schema_to_folder_endpoint(
 @router.delete(
     _SCHEMA_ID_PATH,
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(audited("schema_deleted", "schema", principal_dep=get_current_tenant_user, fail_closed=True))
-    ],
+    dependencies=[Depends(audited("schema_deleted", "schema", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors("schemas.delete_schema_endpoint")
 async def delete_schema_endpoint(
@@ -1026,9 +1016,7 @@ async def _infer_definition(
     return definition_json, first_backend_id
 
 
-async def _resolve_infer_context(
-    session: AsyncSession, principal: TenantPrincipal, req: SchemaInferRequest
-) -> tuple[Any, Any]:
+async def _resolve_infer_context(session: AsyncSession, principal: TenantPrincipal, req: SchemaInferRequest) -> tuple[Any, Any]:
     """Load and validate the connector + model backends for schema inference."""
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -1050,8 +1038,7 @@ async def _resolve_infer_context(
         if ci.connector_type_id not in supported_inference_types:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. "
-                f"Supported types: {', '.join(sorted(supported_inference_types))}",
+                detail=f"Connector type '{ci.connector_type_id}' does not support schema inference. Supported types: {', '.join(sorted(supported_inference_types))}",
             )
 
         mbs = await list_model_backends(session, org_id=principal.organisation_id, page_size=1)
@@ -1138,9 +1125,7 @@ async def infer_schema_endpoint(
         definition_json=definition_json,
         sample_count=len(records),
         suggestion_name=f"Inferred from {ci.name}",
-        suggestion_description=(
-            f"Auto-inferred schema from {ci.name} ({req.sample_query.resource}, {len(records)} samples)"
-        ),
+        suggestion_description=(f"Auto-inferred schema from {ci.name} ({req.sample_query.resource}, {len(records)} samples)"),
         rare_fields=flag_rare_fields(records),
     )
 

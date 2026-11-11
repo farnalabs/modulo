@@ -2,4 +2,4 @@
 
 import os
 
-os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")

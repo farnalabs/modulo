@@ -175,9 +175,7 @@ def compute_variant_divergence(outputs: Sequence[object]) -> float:
     outputs = list(outputs)
     if len(outputs) < 2:
         return 0.0
-    pairwise = [
-        _output_similarity(outputs[i], outputs[j]) for i in range(len(outputs)) for j in range(i + 1, len(outputs))
-    ]
+    pairwise = [_output_similarity(outputs[i], outputs[j]) for i in range(len(outputs)) for j in range(i + 1, len(outputs))]
     similarity = sum(pairwise) / len(pairwise)
     divergence = 1.0 - similarity
     return round(max(0.0, divergence), 4)
@@ -261,11 +259,7 @@ def _insufficient_data_gap(eval_id: UUID, eval_names: Mapping[UUID, str], varian
         variant_divergence=variant_divergence,
         eval_score_spread=0.0,
         has_gap=False,
-        reason=(
-            "Only one distinct variant has data for this eval; a "
-            "coverage-gap verdict needs at least two. Marked "
-            "insufficient_data."
-        ),
+        reason=("Only one distinct variant has data for this eval; a coverage-gap verdict needs at least two. Marked insufficient_data."),
         recommended_action="ok",
         status="insufficient_data",
     )
@@ -549,9 +543,7 @@ async def compute_coverage_gap(
     # the legacy columns.
     from farna.db.crud.run_node_outputs import read_run_blobs
 
-    outputs_by_run = {
-        run.id: (await read_run_blobs(session, run_id=run.id, organisation_id=org_id)).outputs for run in runs
-    }
+    outputs_by_run = {run.id: (await read_run_blobs(session, run_id=run.id, organisation_id=org_id)).outputs for run in runs}
 
     return evaluate_coverage_gap(
         runs,
@@ -581,11 +573,7 @@ async def _load_runs(
     """
     if batch_id is not None:
         return await get_batch_runs(session, org_id=org_id, batch_id=batch_id)
-    result = await session.execute(
-        select(Run)
-        .where(Run.organisation_id == org_id, Run.variant_group_id == variant_group_id)
-        .order_by(Run.created_at)
-    )
+    result = await session.execute(select(Run).where(Run.organisation_id == org_id, Run.variant_group_id == variant_group_id).order_by(Run.created_at))
     return list(result.scalars().all())
 
 

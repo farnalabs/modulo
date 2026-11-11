@@ -265,10 +265,7 @@ class FeedbackManager:
             raise ValidationError("rejected_output must not exceed 100KB when serialized")
 
         if feedback_handler_type not in _VALID_FEEDBACK_HANDLER_TYPES:
-            raise ValidationError(
-                f"unknown feedback_handler_type '{feedback_handler_type}'. "
-                f"Valid: {sorted(_VALID_FEEDBACK_HANDLER_TYPES)}"
-            )
+            raise ValidationError(f"unknown feedback_handler_type '{feedback_handler_type}'. Valid: {sorted(_VALID_FEEDBACK_HANDLER_TYPES)}")
         return stripped_reason
 
     @_rls
@@ -356,11 +353,7 @@ class FeedbackManager:
         current = await self._get_record_or_raise(record_id)
         allowed = VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
         if new_status not in allowed:
-            raise InvalidTransitionError(
-                f"Cannot transition FeedbackRecord {record_id} from "
-                f"'{current.feedback_status}' to '{new_status}'. "
-                f"Allowed: {sorted(allowed) or '<terminal>'}"
-            )
+            raise InvalidTransitionError(f"Cannot transition FeedbackRecord {record_id} from '{current.feedback_status}' to '{new_status}'. Allowed: {sorted(allowed) or '<terminal>'}")
         result = await self._session.execute(
             update(FeedbackRecord)
             .where(
@@ -373,10 +366,7 @@ class FeedbackManager:
         )
         updated = result.scalar_one_or_none()
         if updated is None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} status changed concurrently. "
-                f"Expected '{current.feedback_status}', retry the transition."
-            )
+            raise ConcurrentModificationError(f"FeedbackRecord {record_id} status changed concurrently. Expected '{current.feedback_status}', retry the transition.")
         logger.info("FeedbackRecord %s status: %s → %s", record_id, current.feedback_status, new_status)
         return updated
 
@@ -385,15 +375,9 @@ class FeedbackManager:
         current = await self._get_record_or_raise(record_id)
         allowed = VALID_STATUS_TRANSITIONS.get(current.feedback_status, set())
         if "correcting" not in allowed:
-            raise InvalidTransitionError(
-                f"Cannot link correction run to FeedbackRecord {record_id} in "
-                f"status '{current.feedback_status}'. "
-                f"Allowed transitions: {sorted(allowed) or '<terminal>'}"
-            )
+            raise InvalidTransitionError(f"Cannot link correction run to FeedbackRecord {record_id} in status '{current.feedback_status}'. Allowed transitions: {sorted(allowed) or '<terminal>'}")
         if current.correction_run_id is not None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} already has a correction run linked: {current.correction_run_id}"
-            )
+            raise ConcurrentModificationError(f"FeedbackRecord {record_id} already has a correction run linked: {current.correction_run_id}")
         result = await self._session.execute(
             update(FeedbackRecord)
             .where(
@@ -407,10 +391,7 @@ class FeedbackManager:
         )
         updated = result.scalar_one_or_none()
         if updated is None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} status changed concurrently. "
-                f"Expected '{current.feedback_status}', retry the link."
-            )
+            raise ConcurrentModificationError(f"FeedbackRecord {record_id} status changed concurrently. Expected '{current.feedback_status}', retry the link.")
         logger.info("Linked correction run %s to FeedbackRecord %s", correction_run_id, record_id)
         return updated
 
@@ -525,8 +506,7 @@ class FeedbackManager:
                 # nothing rather than report a gap the evals never observed
                 # (ADR 066 D18: error is excluded from quality decisions).
                 logger.warning(
-                    "detect_eval_gap: %d of %d eval_defs produced no verdict for FeedbackRecord %s; "
-                    "not asserting an eval gap",
+                    "detect_eval_gap: %d of %d eval_defs produced no verdict for FeedbackRecord %s; not asserting an eval gap",
                     error_count,
                     len(eval_suite),
                     record.id,
@@ -570,15 +550,11 @@ class FeedbackManager:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
 
         if record.correction_run_id is not None:
-            raise ConcurrentModificationError(
-                f"FeedbackRecord {record_id} already has a correction run: {record.correction_run_id}"
-            )
+            raise ConcurrentModificationError(f"FeedbackRecord {record_id} already has a correction run: {record.correction_run_id}")
 
         original_run = await get_run(self._session, record.run_id)
         if original_run is None:
-            raise FeedbackRecordRunNotFoundError(
-                f"Original run {record.run_id} not found for FeedbackRecord {record_id}"
-            )
+            raise FeedbackRecordRunNotFoundError(f"Original run {record.run_id} not found for FeedbackRecord {record_id}")
 
         feedback_correction = self._build_feedback_correction_block(record, run_context_overrides)
         input_payload = dict(original_run.input_payload or {})
@@ -729,9 +705,7 @@ class FeedbackManager:
         if record is None:
             raise FeedbackRecordNotFoundError(f"FeedbackRecord {record_id} not found")
         if record.feedback_status != "correcting":
-            raise InvalidTransitionError(
-                f"FeedbackRecord {record_id} has status '{record.feedback_status}', expected 'correcting'"
-            )
+            raise InvalidTransitionError(f"FeedbackRecord {record_id} has status '{record.feedback_status}', expected 'correcting'")
         if record.correction_run_id is None:
             raise InvalidTransitionError(f"FeedbackRecord {record_id} has no correction run linked")
 
@@ -739,9 +713,7 @@ class FeedbackManager:
         if correction_run is None:
             raise FeedbackRecordNotFoundError(f"Correction run {record.correction_run_id} not found")
         if correction_run.status != "complete":
-            raise InvalidTransitionError(
-                f"Correction run {record.correction_run_id} has status '{correction_run.status}', expected 'complete'"
-            )
+            raise InvalidTransitionError(f"Correction run {record.correction_run_id} has status '{correction_run.status}', expected 'complete'")
 
         engine = eval_engine or EvalEngine()
         # FAR-583 read-switch: the blobs reassemble from run_node_outputs

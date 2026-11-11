@@ -426,9 +426,7 @@ def _validate_router_config(router_config: dict[str, Any], node_id: str) -> None
     rules = router_config.get("rules") or []
     has_default = any(rule.get("default") for rule in rules)
     if not has_default and router_config.get("mode") != "classifier":
-        raise RouterConfigError(
-            f"Router node {node_id!r} has no 'default' rule; every Router node must declare an explicit default target."
-        )
+        raise RouterConfigError(f"Router node {node_id!r} has no 'default' rule; every Router node must declare an explicit default target.")
 
 
 def _make_gate_kickback_router(
@@ -460,12 +458,7 @@ def _make_gate_kickback_router(
 
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
-        if (
-            decision
-            and isinstance(decision, dict)
-            and decision.get("review_id") == review_id
-            and decision.get("action") == "rejected"
-        ):
+        if decision and isinstance(decision, dict) and decision.get("review_id") == review_id and decision.get("action") == "rejected":
             return reject_target_str
         return normal_target
 
@@ -494,12 +487,7 @@ def _make_gate_terminate_router(
 
     def _router(state: dict[str, Any]) -> str:
         decision = state.get("_hitl_decision")
-        if (
-            decision
-            and isinstance(decision, dict)
-            and decision.get("review_id") == review_id
-            and decision.get("action") == "rejected"
-        ):
+        if decision and isinstance(decision, dict) and decision.get("review_id") == review_id and decision.get("action") == "rejected":
             return END
         return normal_target
 
@@ -1009,11 +997,7 @@ def _build_raw_node_fn(
 
 def _build_reject_targets(edges: list[dict[str, Any]]) -> dict[str, str]:
     """Map each source that has a reject edge to that edge's target."""
-    return {
-        _get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id")
-        for edge_def in edges
-        if _get_edge_type(edge_def) == "reject"
-    }
+    return {_get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id") for edge_def in edges if _get_edge_type(edge_def) == "reject"}
 
 
 def _group_forwarding_edges(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -1614,11 +1598,7 @@ def _validate_human_mode_pause_edges(
     """
     if not eval_definitions_by_node:
         return
-    human_nodes = {
-        str(node_id)
-        for node_id, dtos in eval_definitions_by_node.items()
-        if any(getattr(dto, "policy_gate_evaluation_mode", None) == "human" for dto in dtos)
-    }
+    human_nodes = {str(node_id) for node_id, dtos in eval_definitions_by_node.items() if any(getattr(dto, "policy_gate_evaluation_mode", None) == "human" for dto in dtos)}
     if not human_nodes:
         return
 
@@ -1629,11 +1609,7 @@ def _validate_human_mode_pause_edges(
         source_node_def = nodes_by_id.get(node_id, {})
         gate_edges = _effective_gate_edges_for_source(source_edges.get(node_id, []), source_node_def)
         if len(gate_edges) != 1:
-            raise ValueError(
-                f"human-mode policy-gate eval on node {node_id} requires EXACTLY ONE outgoing edge "
-                f"that compiles an HITL review gate; found {len(gate_edges)}. A human-governed eval "
-                "with no pause edge would never be decided (chunk 12 §3.3)."
-            )
+            raise ValueError(f"human-mode policy-gate eval on node {node_id} requires EXACTLY ONE outgoing edge that compiles an HITL review gate; found {len(gate_edges)}. A human-governed eval with no pause edge would never be decided (chunk 12 §3.3).")
         hitl_config = gate_edges[0].get("hitl_review_config")
         if hitl_config is None and source_node_def.get("node_type") == "hitl":
             # The edge-level config is stamped at compile time from the
@@ -1645,11 +1621,7 @@ def _validate_human_mode_pause_edges(
         # the literal ``False``. ``human_only_effective`` is the
         # single source the runtime resolution reads through.
         if isinstance(hitl_config, dict) and human_only_effective(hitl_config) is False:
-            raise ValueError(
-                f"human-mode policy-gate eval on node {node_id}: the HITL review config sets "
-                f"human_only={hitl_config.get('human_only')!r} (falsy) — a human-decided gate is "
-                "definitionally human-only (chunk 12 §3.3)."
-            )
+            raise ValueError(f"human-mode policy-gate eval on node {node_id}: the HITL review config sets human_only={hitl_config.get('human_only')!r} (falsy) — a human-decided gate is definitionally human-only (chunk 12 §3.3).")
 
 
 def build_graph_from_json(

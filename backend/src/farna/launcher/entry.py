@@ -74,7 +74,7 @@ from farna.launcher import env_safety
 
 _log = logging.getLogger(__name__)
 
-BUNDLED_BIN_DIR_ENV = "MODULO_BUNDLED_BIN_DIR"
+BUNDLED_BIN_DIR_ENV = "FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR"
 POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
 
@@ -282,10 +282,7 @@ def _await_detached_handshake(read_fd: int) -> str | None:
         if b"\n" in buffer:
             line = bytes(buffer).split(b"\n", 1)[0].decode(errors="replace")
             return None if line == "ready" else f"detached boot failed: {line.removeprefix('failed: ')}"
-    return (
-        f"detached boot did not signal readiness within {_DETACH_HANDSHAKE_TIMEOUT_SECONDS:.0f}s — "
-        "it may still be booting (initdb is slow on first boot) or stalled; check launcher.log in the data dir"
-    )
+    return f"detached boot did not signal readiness within {_DETACH_HANDSHAKE_TIMEOUT_SECONDS:.0f}s — it may still be booting (initdb is slow on first boot) or stalled; check launcher.log in the data dir"
 
 
 def _redirect_stdio(log_path: Path) -> None:  # pragma: no cover - needs a real tty teardown
@@ -351,11 +348,7 @@ def _serve_until_shutdown(
         serve(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop)
     else:
         _serve_api(POSTGRES_HOST, launcher_state.api_port, run_state.serve_stop, run_state.force_exit)
-    monitor_abnormal = (
-        not supervisor.monitor_thread_alive()
-        and supervisor.degraded_reason is None
-        and not run_state.shutdown_requested.is_set()
-    )
+    monitor_abnormal = not supervisor.monitor_thread_alive() and supervisor.degraded_reason is None and not run_state.shutdown_requested.is_set()
     supervisor.shutdown()
     if run_state.degraded.is_set() or supervisor.degraded_reason is not None or monitor_abnormal:
         reason = supervisor.degraded_reason or "a supervisor failure was detected"
@@ -415,9 +408,7 @@ def _run_foreground(
                 runtime_path=data_dir / "runtime.json",
                 on_degraded=_degraded_callback(run_state),
                 degraded_path=degraded_path,
-                degraded_context=_upgrade_context_provider(
-                    data_dir / UPGRADE_MARKER_FILENAME, time_module.time, policy.UPGRADE_DEGRADED_WINDOW_SECONDS
-                ),
+                degraded_context=_upgrade_context_provider(data_dir / UPGRADE_MARKER_FILENAME, time_module.time, policy.UPGRADE_DEGRADED_WINDOW_SECONDS),
             )
             run_state.bind_supervisor(supervisor)
             composed = _compose_and_pin_config(data_dir, launcher_state, secrets)
@@ -484,10 +475,7 @@ def _verify_bundled_binaries(bin_dir: Path) -> None:
     required = ("initdb", "postgres", "pg_isready", "redis-server", "redis-cli")
     missing = [name for name in required if not Path(_binary(bin_dir, name)).exists()]
     if missing:
-        raise BootError(
-            f"bundled binaries not found at {bin_dir} (missing: {', '.join(missing)}) "
-            "- install the bundled runtime or pass --bin-dir"
-        )
+        raise BootError(f"bundled binaries not found at {bin_dir} (missing: {', '.join(missing)}) - install the bundled runtime or pass --bin-dir")
 
 
 def _degraded_callback(run_state: _RunState) -> Callable[[str], None]:
@@ -553,30 +541,16 @@ def _post_upgrade_guidance(record: dict[str, Any] | None) -> str:
     if not isinstance(record, dict) or not record.get("post_upgrade"):
         return ""
     snapshot = record.get("pre_upgrade_snapshot")
-    lines = [
-        (
-            "This degraded state began within the upgrade watch window "
-            "(an upgrade boot was recently recorded for this data dir)."
-        )
-    ]
+    lines = [("This degraded state began within the upgrade watch window (an upgrade boot was recently recorded for this data dir).")]
     if isinstance(snapshot, str) and snapshot:
-        lines.append(
-            f"A pre-upgrade snapshot was recorded at {snapshot} — restore it manually with "
-            f"`modulo restore {snapshot}` (see `modulo restore --help`), or downgrade the binary "
-            "to the pre-upgrade version."
-        )
+        lines.append(f"A pre-upgrade snapshot was recorded at {snapshot} — restore it manually with `modulo restore {snapshot}` (see `modulo restore --help`), or downgrade the binary to the pre-upgrade version.")
     else:
-        lines.append(
-            "No pre-upgrade snapshot was recorded — restore from your external backups, or "
-            "downgrade the binary to the pre-upgrade version."
-        )
+        lines.append("No pre-upgrade snapshot was recorded — restore from your external backups, or downgrade the binary to the pre-upgrade version.")
     lines.append("The full upgrade/rollback machinery is the upgrade epic (FAR-675).")
     return "\n".join(lines)
 
 
-def _upgrade_context_provider(
-    marker_path: Path, now: Callable[[], float], window_seconds: float
-) -> Callable[[], dict[str, Any]]:
+def _upgrade_context_provider(marker_path: Path, now: Callable[[], float], window_seconds: float) -> Callable[[], dict[str, Any]]:
     """Degrade-context provider: post-upgrade detection (read-only).
 
     Consumes the ``upgrade.json`` marker FAR-675's machinery writes. When a
@@ -630,9 +604,9 @@ def _prepare_database_env(composed: dict[str, str]) -> None:
     admin_url = composed.get("DATABASE_ADMIN_URL")
     if admin_url:
         os.environ["DATABASE_ADMIN_URL"] = admin_url
-    system_url = composed.get("MODULO_SYSTEM_DATABASE_URL")
+    system_url = composed.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
     if system_url:
-        os.environ["MODULO_SYSTEM_DATABASE_URL"] = system_url
+        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] = system_url
 
 
 def _build_settings() -> Any:
@@ -669,7 +643,7 @@ def _add_saq_children(supervisor: Any, settings: Any, composed: dict[str, str]) 
 
     def _child_env(base: dict[str, str]) -> dict[str, str]:
         env = dict(base)
-        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "MODULO_SYSTEM_DATABASE_URL"):
+        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"):
             if composed.get(key):
                 env[key] = composed[key]
         return env
@@ -778,9 +752,7 @@ def _write_redis_conf(data_dir: Path, port: int, password: str) -> Path:
     return conf_path
 
 
-def _run_probe_command(
-    argv: list[str], *, env: dict[str, str] | None = None, expect: str | None = None
-) -> bool | ProbeOutcome:
+def _run_probe_command(argv: list[str], *, env: dict[str, str] | None = None, expect: str | None = None) -> bool | ProbeOutcome:
     """Run one probe binary (tri-state: healthy / unhealthy / UNAVAILABLE).
 
     A missing binary, an unexecutable path or a probe timeout means the
@@ -885,9 +857,7 @@ def _ensure_app_database(launcher_state: Any, secrets: Any) -> None:
     app_db_name = _validate_sql_identifier(APP_DB_NAME, "APP_DB_NAME")
 
     async def _create() -> None:
-        root_url = (
-            f"postgresql://modulo:{secrets.postgres_password}@{POSTGRES_HOST}:{launcher_state.postgres_port}/postgres"
-        )
+        root_url = f"postgresql://modulo:{secrets.postgres_password}@{POSTGRES_HOST}:{launcher_state.postgres_port}/postgres"
         # FAR-1441: never rely on asyncpg's fail-open ``prefer`` driver default
         # — derive the ``ssl`` arg explicitly. The bundled root URL is locally
         # constructed (no sslmode), so this yields the explicit plaintext

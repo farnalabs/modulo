@@ -30,10 +30,7 @@ _R = TypeVar("_R")
 # 409 Conflict states both facts - the mutation did NOT apply, and re-issuing
 # it later may succeed - where the generic 503 below would read as "retry now"
 # and invite a client retry storm against the very lock that is busy.
-_MSG_LOCK_TIMEOUT = (
-    "Timed out waiting for a lock on this resource; another change is in progress. "
-    "Re-issue the request once the other change completes."
-)
+_MSG_LOCK_TIMEOUT = "Timed out waiting for a lock on this resource; another change is in progress. Re-issue the request once the other change completes."
 
 # ``InvalidRequestError`` is a SQLAlchemy SESSION-CONTRACT violation (e.g. a
 # query issued on an ``autobegin=False`` session before ``session.begin()``) —
@@ -56,10 +53,7 @@ _MSG_LOCK_TIMEOUT = (
 # route-local ``except SQLAlchemyError`` arms, which never reach
 # ``handle_db_errors`` at all — e.g. every ``hitl.py`` route arm imports this
 # constant rather than re-typing the literal (FAR-1408).
-MSG_SESSION_CONTRACT = (
-    "Internal server error: a database session was used outside an active transaction. "
-    "This is a server-side bug, not a database outage; retrying will not help."
-)
+MSG_SESSION_CONTRACT = "Internal server error: a database session was used outside an active transaction. This is a server-side bug, not a database outage; retrying will not help."
 
 
 #: Signature of one ``_EXCEPTION_HANDLERS`` arm: it either raises the mapped

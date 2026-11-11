@@ -29,7 +29,7 @@ from starlette.responses import JSONResponse, Response
 _log = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
-LAN_ORIGINS_ENV = "MODULO_LAN_ORIGINS"
+LAN_ORIGINS_ENV = "FARNA_CONTROL_MODULO_LAN_ORIGINS"
 
 __all__ = ["LAN_ORIGINS_ENV", "LOOPBACK_HOSTS", "HostOriginMiddleware", "split_lan_origins"]
 

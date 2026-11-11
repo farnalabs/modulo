@@ -84,8 +84,4 @@ def validate_password_strength(password: str) -> None:
     if len(password.encode("utf-8")) > _BCRYPT_MAX_BYTES:
         raise ValueError(f"Password exceeds {_BCRYPT_MAX_BYTES} UTF-8 bytes — bcrypt limit")
     if entropy < _MIN_ENTROPY_BITS:
-        raise ValueError(
-            f"Password too weak: {entropy:.1f} entropy bits "
-            f"(minimum {_MIN_ENTROPY_BITS}). Use a longer password "
-            "with a mix of character types."
-        )
+        raise ValueError(f"Password too weak: {entropy:.1f} entropy bits (minimum {_MIN_ENTROPY_BITS}). Use a longer password with a mix of character types.")

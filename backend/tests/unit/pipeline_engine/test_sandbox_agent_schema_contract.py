@@ -36,7 +36,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"result": {"t
 @pytest.fixture(autouse=True)
 def _remote_e2b_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Script mode requires a remote E2B provider (same seam as sibling tests)."""
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-e2b-key")
 
 
 def _read_router(output_json: str) -> Callable[..., str]:
@@ -138,7 +138,7 @@ async def test_script_mode_uploads_contract_files_and_sets_env() -> None:
     # FAR-1050 R4/R6: MODULO_SCHEMA_DIR rides the agent command's environment
     # (the ABC create has no sandbox-lifetime env carrier), never the SDK
     # create kwargs.
-    assert sandbox.commands.run.call_args.kwargs["envs"]["MODULO_SCHEMA_DIR"] == "/home/user/schemas"
+    assert sandbox.commands.run.call_args.kwargs["envs"]["FARNA_CONTROL_MODULO_SCHEMA_DIR"] == "/home/user/schemas"
 
     paths = _written_paths(sandbox)
     assert f"/home/user/schemas/{node_id}/input.canonical.json" in paths

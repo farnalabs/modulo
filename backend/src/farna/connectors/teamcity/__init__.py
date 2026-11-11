@@ -116,9 +116,7 @@ class TeamCityConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=self._redacted_detail(f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text}")[
-                    :200
-                ],
+                detail=self._redacted_detail(f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="TeamCity API timeout")

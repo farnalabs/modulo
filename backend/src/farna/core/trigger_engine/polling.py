@@ -209,8 +209,7 @@ async def enforce_polling_team_scope(
         return
     if pipeline_id is None:
         raise ConnectorPermissionError(
-            f"Team-private connector {getattr(connector_instance, 'id', '?')} was read with no "
-            "pipeline context; the team scope of the connector read cannot be verified",
+            f"Team-private connector {getattr(connector_instance, 'id', '?')} was read with no pipeline context; the team scope of the connector read cannot be verified",
         )
 
     from farna.core.team_visibility import connector_team_mismatch
@@ -224,15 +223,12 @@ async def enforce_polling_team_scope(
     ).scalar_one_or_none()
     if pipeline is None:
         raise ConnectorPermissionError(
-            f"Polling trigger pipeline {pipeline_id} does not resolve in this organisation; "
-            "the team scope of the connector read cannot be verified",
+            f"Polling trigger pipeline {pipeline_id} does not resolve in this organisation; the team scope of the connector read cannot be verified",
         )
     connector_owner_team_id = getattr(connector_instance, "owner_team_id", None)
     if connector_team_mismatch(visibility, connector_owner_team_id, pipeline.owner_team_id):
         raise ConnectorPermissionError(
-            f"Team-private connector {getattr(connector_instance, 'id', '?')} (owner team "
-            f"{connector_owner_team_id}) is not usable by pipeline {pipeline_id} "
-            f"(owner team {pipeline.owner_team_id})",
+            f"Team-private connector {getattr(connector_instance, 'id', '?')} (owner team {connector_owner_team_id}) is not usable by pipeline {pipeline_id} (owner team {pipeline.owner_team_id})",
         )
 
 
@@ -404,9 +400,7 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
     now = datetime.datetime.now(datetime.UTC)
     next_fire = now + datetime.timedelta(seconds=interval)
-    await session.execute(
-        update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire)
-    )
+    await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire))
 
 
 async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> None:

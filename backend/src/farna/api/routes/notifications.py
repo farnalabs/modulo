@@ -138,9 +138,7 @@ async def list_endpoints(
     "",
     status_code=status.HTTP_201_CREATED,
     dependencies=[
-        Depends(
-            audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user)
-        ),
+        Depends(audited("notification_endpoint_created", "notification_endpoint", principal_dep=get_current_tenant_user)),
         Depends(deny_break_glass_mint),
     ],
 )
@@ -257,9 +255,7 @@ async def get_endpoint(
 @router.put(
     "/{endpoint_id}",
     dependencies=[
-        Depends(
-            audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user)
-        ),
+        Depends(audited("notification_endpoint_updated", "notification_endpoint", principal_dep=get_current_tenant_user)),
         Depends(deny_break_glass_mint),
     ],
 )
@@ -398,9 +394,7 @@ async def delete_endpoint(
 @router.post(
     "/{endpoint_id}/restore",
     dependencies=[
-        Depends(
-            audited("notification_endpoint_restored", "notification_endpoint", principal_dep=get_current_tenant_user)
-        ),
+        Depends(audited("notification_endpoint_restored", "notification_endpoint", principal_dep=get_current_tenant_user)),
         Depends(deny_break_glass_mint),
     ],
 )

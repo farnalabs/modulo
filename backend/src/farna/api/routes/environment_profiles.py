@@ -86,7 +86,7 @@ def _get_hub() -> RuntimeProviderHub:
     settings = get_settings()
     # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable — the runtime
     # override wins over the boot-time Settings value on each fresh hub.
-    concurrency = override_int_or("MODULO_MAX_LOCAL_CONCURRENCY", settings.modulo_max_local_concurrency)
+    concurrency = override_int_or("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", settings.modulo_max_local_concurrency)
     return build_hub(max_local_concurrency=concurrency)
 
 
@@ -242,9 +242,7 @@ async def list_profiles(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("environment_profile_created", "environment_profile", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("environment_profile_created", "environment_profile", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
 async def create_profile(
@@ -424,11 +422,7 @@ async def _assert_scope_change_keeps_bindings_eligible(
                 )
             )
         ).all()
-    stranded = [
-        row.id
-        for row in bound_rows
-        if environment_profile_team_mismatch(new_visibility, new_owner_team_id, row.owner_team_id)
-    ]
+    stranded = [row.id for row in bound_rows if environment_profile_team_mismatch(new_visibility, new_owner_team_id, row.owner_team_id)]
     if stranded:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -444,9 +438,7 @@ async def _assert_scope_change_keeps_bindings_eligible(
 
 @router.put(
     "/{profile_id}",
-    dependencies=[
-        Depends(audited("environment_profile_updated", "environment_profile", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("environment_profile_updated", "environment_profile", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
 async def update_profile(
@@ -572,9 +564,7 @@ async def delete_profile(
 
 @router.post(
     "/{profile_id}/restore",
-    dependencies=[
-        Depends(audited("environment_profile_restored", "environment_profile", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("environment_profile_restored", "environment_profile", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE)
 async def restore_profile(
@@ -690,11 +680,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
             SandboxTierRefusedError,
         )
 
-        raise SandboxTierRefusedError(
-            f"Sandbox test refused for profile '{profile.name}' "
-            f"(provider_type={profile.provider_type!r}, tier={_tier!r}): "
-            f"{_egress.refusal}"
-        )
+        raise SandboxTierRefusedError(f"Sandbox test refused for profile '{profile.name}' (provider_type={profile.provider_type!r}, tier={_tier!r}): {_egress.refusal}")
     # Map the canonical policy to the WorkspaceSpec egress vocabulary
     # LOSSLESSLY (FAR-1050) — "selected" must stay "selected", never
     # collapse into the permissive "outbound". The shared helper is the

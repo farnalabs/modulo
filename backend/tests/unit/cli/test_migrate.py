@@ -119,14 +119,7 @@ class TestGroupRecords:
 class TestReadJsonl:
     async def test_reads_meta_and_records(self, tmp_path: Path) -> None:
         path = tmp_path / "export.jsonl"
-        path.write_text(
-            json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}})
-            + "\n"
-            + json.dumps({"__table__": "users", "id": "1", "data": {"name": "a"}})
-            + "\n"
-            + json.dumps({"__table__": "users", "id": "2", "data": {"name": "b"}})
-            + "\n"
-        )
+        path.write_text(json.dumps({"__meta__": {"version": 1, "export_hash": "abc"}}) + "\n" + json.dumps({"__table__": "users", "id": "1", "data": {"name": "a"}}) + "\n" + json.dumps({"__table__": "users", "id": "2", "data": {"name": "b"}}) + "\n")
 
         meta, records = await _read_jsonl(path)
         assert meta["version"] == 1
@@ -302,11 +295,11 @@ class TestAuth:
 
 class TestResolveAdminAuth:
     def test_no_token_no_env_returns_none(self) -> None:
-        with patch.dict("os.environ", {"MODULO_ADMIN_SECRET": ""}):
+        with patch.dict("os.environ", {"FARNA_CONTROL_MODULO_ADMIN_SECRET": ""}):
             assert _resolve_admin_auth(None) is None
 
     def test_env_secret_uses_marker(self) -> None:
-        with patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "s3cret"}):
+        with patch.dict("os.environ", {"FARNA_CONTROL_MODULO_ADMIN_SECRET": "s3cret"}):
             assert _resolve_admin_auth(None) == "__admin_secret__"
 
     def test_non_admin_token_rejected(self) -> None:
@@ -763,9 +756,7 @@ class TestImportOrgData:
     @patch("farna.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_unknown_table_counts_error(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
         session = self._session()
-        counts = await _import_org_data(
-            session, org_id, [{"__table__": "no_such_table", "id": "1", "data": {}}], "skip"
-        )
+        counts = await _import_org_data(session, org_id, [{"__table__": "no_such_table", "id": "1", "data": {}}], "skip")
         assert counts["errors"] == 1
         session.add.assert_not_called()
 
@@ -1139,7 +1130,7 @@ class TestAuthBeforeFileRead:
 
 
 class TestAdminSecretAuth:
-    @patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "super_secret", "MODULO_ADMIN_TOKEN": ""})
+    @patch.dict("os.environ", {"FARNA_CONTROL_MODULO_ADMIN_SECRET": "super_secret", "FARNA_CONTROL_MODULO_ADMIN_TOKEN": ""})
     @patch("farna.cli.migrate.AsyncSessionLocal")
     @patch("farna.cli.migrate.get_organisation")
     @patch("farna.cli.migrate.get_account_by_id")

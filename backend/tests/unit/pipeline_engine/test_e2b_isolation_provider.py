@@ -177,9 +177,7 @@ def _patch_legacy_sandbox_policy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 def _legacy_must_not_run(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    legacy = AsyncMock(
-        side_effect=AssertionError("legacy apply_sandbox_policy must not run when routed via the provider")
-    )
+    legacy = AsyncMock(side_effect=AssertionError("legacy apply_sandbox_policy must not run when routed via the provider"))
     monkeypatch.setattr("farna.core.pipeline_engine.sandbox_policy.apply_sandbox_policy", legacy)
     return legacy
 
@@ -225,9 +223,7 @@ async def test_isolation_routes_through_provider_apply_isolation(monkeypatch: py
     assert not sandbox.files.write.called
 
 
-async def test_provider_predicate_still_gates_no_policy_no_invocation(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_predicate_still_gates_no_policy_no_invocation(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The `_should_apply_sandbox_policy` predicate is unchanged: a node
     with no isolation controls triggers NEITHER path, even the provider path."""
     monkeypatch.setenv("E2B_API_KEY", "test-key")
@@ -253,9 +249,7 @@ async def test_provider_predicate_still_gates_no_policy_no_invocation(
 # ---------------------------------------------------------------------------
 
 
-async def test_provider_capability_refusal_maps_to_terminal_named_code(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_provider_capability_refusal_maps_to_terminal_named_code(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """ADR 040: apply_isolation's refusal is a TERMINAL run failure with a
     named error code — never a retry-loop. The typed cause is preserved."""
     from farna.core.pipeline_engine import runtime_retry
@@ -322,12 +316,12 @@ def test_build_isolation_provider_returns_none_when_hub_init_fails(
 
 
 async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
-    with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
+    with pytest.raises(SandboxTierRefusedError, match="FARNA_CONTROL_MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider(
             "sbx-1",
             org_id=_ORG_ID,
@@ -372,7 +366,7 @@ async def test_helper_fails_closed_when_provider_unavailable(monkeypatch: pytest
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     _patch_isolation_builder(monkeypatch, None)
 
-    with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
+    with pytest.raises(SandboxTierRefusedError, match="FARNA_CONTROL_MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider(
             "sbx-1",
             org_id=_ORG_ID,
@@ -419,7 +413,7 @@ async def test_helper_builds_spec_and_policy_with_nil_fallbacks(monkeypatch: pyt
         git_credentials="scoped",
         egress_policy="selected",
         egress_allowlist=_FIXED_ALLOWLIST,
-        allowed_hosts={"github.com": "MODULO_GIT_CRED_0"},
+        allowed_hosts={"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0"},
     )
 
     assert len(fake.calls) == 1
@@ -432,7 +426,7 @@ async def test_helper_builds_spec_and_policy_with_nil_fallbacks(monkeypatch: pyt
     assert policy.read_only is True
     assert policy.git_credentials == "scoped"
     assert policy.egress_allowlist is not None
-    assert policy.allowed_hosts == {"github.com": "MODULO_GIT_CRED_0"}
+    assert policy.allowed_hosts == {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0"}
 
 
 # ---------------------------------------------------------------------------
@@ -473,16 +467,8 @@ def test_should_apply_sandbox_policy_keeps_the_existing_triggers() -> None:
     """Regression: each pre-existing trigger still fires, sentinel or not."""
     base = {"git_credentials": None, "egress_policy": None, "egress_allowlist": None}
     assert _should_apply_sandbox_policy(read_only=True, **base) is True
-    assert (
-        _should_apply_sandbox_policy(
-            read_only=False, git_credentials="scoped", egress_policy=None, egress_allowlist=None
-        )
-        is True
-    )
-    assert (
-        _should_apply_sandbox_policy(read_only=False, git_credentials="none", egress_policy=None, egress_allowlist=None)
-        is True
-    )
+    assert _should_apply_sandbox_policy(read_only=False, git_credentials="scoped", egress_policy=None, egress_allowlist=None) is True
+    assert _should_apply_sandbox_policy(read_only=False, git_credentials="none", egress_policy=None, egress_allowlist=None) is True
     assert (
         _should_apply_sandbox_policy(
             read_only=False,
@@ -493,12 +479,7 @@ def test_should_apply_sandbox_policy_keeps_the_existing_triggers() -> None:
         is True
     )
     # selected WITHOUT an allowlist stays False (unchanged).
-    assert (
-        _should_apply_sandbox_policy(
-            read_only=False, git_credentials=None, egress_policy="selected", egress_allowlist=None
-        )
-        is False
-    )
+    assert _should_apply_sandbox_policy(read_only=False, git_credentials=None, egress_policy="selected", egress_allowlist=None) is False
 
 
 async def test_sentinel_only_node_gets_no_guard_at_all(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
@@ -557,9 +538,7 @@ async def test_flagged_node_routes_isolation_with_the_typed_flag(monkeypatch: py
     assert not spec.workspace_metadata
 
 
-async def test_flagged_only_isolation_failure_does_not_fail_the_run(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_flagged_only_isolation_failure_does_not_fail_the_run(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The gh-guard install is best-effort by contract: when a flag-only
     node's isolation invocation cannot run (no provider), the run PROCEEDS
     exactly as it did before FAR-1264 (degrading to the prompt-level guard)
@@ -579,9 +558,7 @@ async def test_flagged_only_isolation_failure_does_not_fail_the_run(
         await fn(_run_state())
 
 
-async def test_isolation_cancellation_propagates_through_the_call_site(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_isolation_cancellation_propagates_through_the_call_site(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """Cancellation is re-raised, never swallowed by the best-effort swallow
     (which handles ordinary failures only): a cancelled dispatch must stay
     cancelled through the FAR-1264/1273 call-site guard."""
@@ -600,9 +577,7 @@ async def test_isolation_cancellation_propagates_through_the_call_site(
         await fn(_run_state())
 
 
-async def test_enforcement_node_isolation_failure_still_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, fake_file_io
-) -> None:
+async def test_enforcement_node_isolation_failure_still_fails_closed(monkeypatch: pytest.MonkeyPatch, fake_file_io) -> None:
     """The best-effort swallow applies ONLY to flag-only invocations: a
     node that asked for an enforcement control (read_only here) keeps the
     pre-existing fail-closed tier refusal."""
@@ -916,7 +891,7 @@ def _override_harvest_reply(dispatch: Any, reply: str) -> None:
     original = dispatch.exec_command
 
     async def _exec(ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
-        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+        if command and "FARNA_CONTROL_MODULO_CLAIM_RECEIPT" in command[-1]:
             return ExecResult(exit_code=0, stdout=reply, stderr="")
         return await original(ref, command, cmd_timeout=cmd_timeout)
 
@@ -1015,7 +990,7 @@ async def test_flagged_node_spends_from_the_harvested_receipt_when_the_sentinel_
         monkeypatch,
         fake_file_io,
         chunks=[("stdout", "post-create agent noise\n" * 200)],
-        harvest_reply="MODULO_CLAIM_RECEIPT_PRESENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT",
     )
     try:
         assert acquire_run_pr_guard(run_id, "later-node") == "spent"
@@ -1040,7 +1015,7 @@ async def test_flagged_node_shim_read_transcript_never_spends_when_the_harvest_c
         monkeypatch,
         fake_file_io,
         chunks=[("stdout", shim_stdout)],
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
     )
     try:
         assert acquire_run_pr_guard(run_id, "later-node") == "acquired"
@@ -1092,14 +1067,11 @@ async def test_pr_url_never_outranks_a_definitive_receipt_false(
         monkeypatch,
         fake_file_io,
         chunks=[("stdout", f"attempted create, reporting {url}\n")],
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
         output_json=f'{{"summary":"done","pr_url":"{url}"}}',
     )
     try:
-        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", (
-            "a definitive receipt=False from a LIVE install must release the hold, "
-            "never be outranked by an agent-authored pr_url"
-        )
+        assert acquire_run_pr_guard(run_id, "later-node") == "acquired", "a definitive receipt=False from a LIVE install must release the hold, never be outranked by an agent-authored pr_url"
     finally:
         reset_run_pr_guard_claims()
 
@@ -1129,13 +1101,11 @@ async def test_absent_install_leaves_the_receipt_meaningless_so_the_sentinel_sti
         monkeypatch,
         fake_file_io,
         chunks=[("stdout", shim_stdout)],
-        harvest_reply="MODULO_CLAIM_RECEIPT_ABSENT",
+        harvest_reply="FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT",
         install_status="absent",
     )
     try:
-        assert acquire_run_pr_guard(run_id, "later-node") == "spent", (
-            "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
-        )
+        assert acquire_run_pr_guard(run_id, "later-node") == "spent", "an absent install must leave the receipt UNKNOWN so the sentinel fallback still spends the run"
     finally:
         reset_run_pr_guard_claims()
 
@@ -1157,7 +1127,7 @@ class _BlockingHarvestDispatch(FakeDispatchProvider):
         *,
         cmd_timeout: int | None = None,
     ) -> ExecResult:
-        if command and "MODULO_CLAIM_RECEIPT" in command[-1]:
+        if command and "FARNA_CONTROL_MODULO_CLAIM_RECEIPT" in command[-1]:
             self.harvest_started.set()
             await asyncio.Event().wait()  # parks until the probe task is cancelled
         return await super().exec_command(provider_ref, command, cmd_timeout=cmd_timeout)
@@ -1202,15 +1172,9 @@ async def test_cancel_during_the_claim_harvest_still_tears_down(
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert "destroy_by_ref" in dispatch.events, (
-        f"the sandbox must still be destroyed after a cancel during the harvest: {dispatch.events}"
-    )
-    assert "close" in dispatch.events, (
-        f"the dispatch provider must still be closed after a cancel during the harvest: {dispatch.events}"
-    )
-    assert clear_mock.await_count >= 1, (
-        "the fenced dispatch marker must still be cleared after a cancel during the harvest"
-    )
+    assert "destroy_by_ref" in dispatch.events, f"the sandbox must still be destroyed after a cancel during the harvest: {dispatch.events}"
+    assert "close" in dispatch.events, f"the dispatch provider must still be closed after a cancel during the harvest: {dispatch.events}"
+    assert clear_mock.await_count >= 1, "the fenced dispatch marker must still be cleared after a cancel during the harvest"
 
 
 # ---------------------------------------------------------------------------
@@ -1273,9 +1237,7 @@ async def test_flagged_dispatch_teardown_runs_when_settle_raises_cancelled(
             await fn(state)
     finally:
         reset_run_pr_guard_claims()
-    assert "destroy_by_ref" in dispatch.events, (
-        f"the sandbox must still be destroyed when settle raises CancelledError: {dispatch.events}"
-    )
+    assert "destroy_by_ref" in dispatch.events, f"the sandbox must still be destroyed when settle raises CancelledError: {dispatch.events}"
     assert "close" in dispatch.events, "the provider must still be closed when settle raises CancelledError"
 
 
@@ -1315,7 +1277,5 @@ async def test_flagged_dispatch_keeps_the_original_cancellation_when_settle_also
                 await task
     finally:
         reset_run_pr_guard_claims()
-    assert "destroy_by_ref" in dispatch.events, (
-        f"the sandbox must still be destroyed when both harvest and settle cancel: {dispatch.events}"
-    )
+    assert "destroy_by_ref" in dispatch.events, f"the sandbox must still be destroyed when both harvest and settle cancel: {dispatch.events}"
     assert "close" in dispatch.events, "the provider must still be closed when both harvest and settle cancel"

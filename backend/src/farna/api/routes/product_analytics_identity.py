@@ -317,10 +317,7 @@ async def rotate_identity_secret(
             _log.warning("%s.lock_timeout", _LOG_ROTATE)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Timed out waiting for the rotation lock; another rotation is in progress. "
-                    "Re-issue the request once it completes."
-                ),
+                detail=("Timed out waiting for the rotation lock; another rotation is in progress. Re-issue the request once it completes."),
             ) from None
         _log.exception(_LOG_ROTATE)
         raise HTTPException(
@@ -372,13 +369,9 @@ async def _lock_rotation_anchor(session: AsyncSession) -> None:
     takes no lock, so a missing anchor row must fail closed rather than silently
     degrading to an unserialised rotation.
     """
-    anchor = (
-        await session.execute(select(SystemConfig).where(SystemConfig.key == _INSTANCE_ID_KEY).with_for_update())
-    ).scalar_one_or_none()
+    anchor = (await session.execute(select(SystemConfig).where(SystemConfig.key == _INSTANCE_ID_KEY).with_for_update())).scalar_one_or_none()
     if anchor is None:
-        raise SequenceStateError(
-            "Rotation identity anchor row is missing; refusing to rotate without a serialising lock."
-        )
+        raise SequenceStateError("Rotation identity anchor row is missing; refusing to rotate without a serialising lock.")
 
 
 async def _get_last_sequence(
@@ -411,10 +404,7 @@ async def _get_last_sequence(
     entry = await get_config(session, key)
     if entry is None:
         if await _has_rotated(session, instance_id):
-            raise SequenceStateError(
-                "Rotation sequence row is missing although this instance has already rotated; "
-                "refusing to reset the monotonic guard and re-mint old sequences."
-            )
+            raise SequenceStateError("Rotation sequence row is missing although this instance has already rotated; refusing to reset the monotonic guard and re-mint old sequences.")
         return 0
     value = entry.value
     if isinstance(value, bool) or not isinstance(value, int):
@@ -426,11 +416,7 @@ async def _get_last_sequence(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                f"Corrupt product-analytics rotation sequence config at key '{key}': "
-                "stored value is not a valid integer. Refusing to rotate; repair the "
-                "SystemConfig value before retrying."
-            ),
+            detail=(f"Corrupt product-analytics rotation sequence config at key '{key}': stored value is not a valid integer. Refusing to rotate; repair the SystemConfig value before retrying."),
         )
     return int(value)
 

@@ -144,11 +144,7 @@ async def evaluate_gate_coalescing(
     # rather than an unbounded wait. The shared ``unpark_parked_run`` stays
     # unbounded — FAR-1601.
     await set_mutation_row_lock_timeout(session)
-    run_row = (
-        await session.execute(
-            select(Run.input_payload, Run.input_hash).where(Run.id == run_id, Run.organisation_id == org_id)
-        )
-    ).first()
+    run_row = (await session.execute(select(Run.input_payload, Run.input_hash).where(Run.id == run_id, Run.organisation_id == org_id))).first()
     if run_row is None:
         return "raise"
     run_payload, run_hash = run_row[0], run_row[1]

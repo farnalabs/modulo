@@ -112,9 +112,7 @@ def workspace_network() -> str:
     async def _manage(action: str) -> None:
         async with aiodocker.Docker() as docker:
             if action == "create":
-                await docker.networks.create(
-                    {"Name": name, "Driver": "bridge", "Labels": {"modulo.test": "d4-docker-marked"}}
-                )
+                await docker.networks.create({"Name": name, "Driver": "bridge", "Labels": {"modulo.test": "d4-docker-marked"}})
             else:
                 with contextlib.suppress(Exception):
                     network = await docker.networks.get(name)
@@ -213,7 +211,7 @@ async def test_streaming_exec_chunks_and_exit_code(runner_image: str, workspace_
         process = await provider.exec_command_stream(
             ref,
             ["sh", "-c", "echo stream-hello; echo stream-err >&2"],
-            environment={"MODULO_TEST": "1"},
+            environment={"FARNA_CONTROL_MODULO_TEST": "1"},
         )
         chunks = []
         async for chunk in process.chunks:
@@ -362,7 +360,7 @@ async def _labelled_container(name: str, run_id: str, age_s: int) -> str:
                 "Cmd": ["sleep", "600"],
                 "Labels": {
                     "modulo.run.id": run_id,
-                    "modulo.machine.id": os.environ.get("MODULO_RUNNER_MACHINE_ID") or socket.gethostname(),
+                    "modulo.machine.id": os.environ.get("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID") or socket.gethostname(),
                     "modulo.created_at": str(int(time.time()) - age_s),
                     "modulo.test": "d4-reconciler",
                 },
@@ -563,10 +561,7 @@ async def test_reconciler_label_filter_works_through_socket_proxy() -> None:
             await source.close()
 
         rejections = await _proxy_rejection_lines()
-        assert not rejections, (
-            "the proxy rejected at least one request during the reconciler exercise "
-            f"(allowlist derivation incomplete): {rejections[:5]}"
-        )
+        assert not rejections, f"the proxy rejected at least one request during the reconciler exercise (allowlist derivation incomplete): {rejections[:5]}"
     finally:
         await _delete_container(container_id)
         await _stop_socket_proxy()
@@ -582,7 +577,7 @@ async def test_engine_kill_mid_exec_is_retryable_never_success() -> None:
     immediately and never completes as ``exit_code == 0`` (the committed CI
     mechanism per the phase-0 spike; dind state is discarded with the
     engine)."""
-    if os.environ.get("MODULO_RUNNER_DIND_TESTS") != "1":
+    if os.environ.get("FARNA_CONTROL_MODULO_RUNNER_DIND_TESTS") != "1":
         pytest.skip("opt-in dind strip: set MODULO_RUNNER_DIND_TESTS=1 (pulls ~560 MB)")
     async with aiodocker.Docker() as docker:
         try:

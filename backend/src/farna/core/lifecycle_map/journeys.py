@@ -113,9 +113,7 @@ async def _referenced_ref_pairs(
         Run.work_item_refs.isnot(None),
     )
     if viewer_account_id is not None:
-        stmt = stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
-            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
-        )
+        stmt = stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id))
     result = await session.execute(stmt)
     pairs: set[tuple[str, str]] = set()
     for (refs,) in result.all():
@@ -199,9 +197,7 @@ async def list_map_journeys(
             )
         )
 
-    rows = list(
-        (await session.execute(query.order_by(Journey.updated_at.desc(), Journey.id.desc()).limit(limit + 1))).scalars()
-    )
+    rows = list((await session.execute(query.order_by(Journey.updated_at.desc(), Journey.id.desc()).limit(limit + 1))).scalars())
     has_more = len(rows) > limit
     items = rows[:limit]
     next_cursor: str | None = None
@@ -314,9 +310,7 @@ def _journey_runs_postgres_query(
         conditions.append(_journey_refs_containment(journey))
     query = select(Run).where(*conditions)
     if viewer_account_id is not None:
-        query = query.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
-            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
-        )
+        query = query.join(Pipeline, Run.pipeline_id == Pipeline.id).where(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id))
     return query.order_by(Run.completed_at.desc().nulls_last()).limit(limit)
 
 
@@ -343,16 +337,12 @@ async def list_journey_runs(
     to (``runs`` carries only the org-isolation RLS policy).
     """
     if _is_postgres(session):
-        result = await session.execute(
-            _journey_runs_postgres_query(journey, limit=limit, viewer_account_id=viewer_account_id)
-        )
+        result = await session.execute(_journey_runs_postgres_query(journey, limit=limit, viewer_account_id=viewer_account_id))
         return list(result.scalars())
     # Portable fallback (SQLite unit tests): unbounded walk, Python filter.
     fallback = select(Run).where(Run.work_item_refs.isnot(None))
     if viewer_account_id is not None:
-        fallback = fallback.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
-            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
-        )
+        fallback = fallback.join(Pipeline, Run.pipeline_id == Pipeline.id).where(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id))
     result = await session.execute(fallback.order_by(Run.completed_at.desc().nulls_last()))
     matched: list[Run] = []
     for run in result.scalars():

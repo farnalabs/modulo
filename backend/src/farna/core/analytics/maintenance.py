@@ -303,19 +303,9 @@ async def backfill_facts(session: Any, day: date) -> int:
     )
     _node_arr = _json_array_elements(graph_nodes_json).table_valued("value")
     _node_value = _node_arr.c.value
-    sandbox_count_subq = (
-        sa.select(sa.func.count())
-        .select_from(_node_arr)
-        .where(_node_value.op("->>")("node_type") == "sandbox_agent")
-        .scalar_subquery()
-    )
+    sandbox_count_subq = sa.select(sa.func.count()).select_from(_node_arr).where(_node_value.op("->>")("node_type") == "sandbox_agent").scalar_subquery()
     sandbox_agent_node_count_expr = sa.func.coalesce(sandbox_count_subq, 0)
-    timeout_subq = (
-        sa.select(sa.func.max(sa.cast(_node_value.op("->>")("timeout_seconds"), sa.Integer)))
-        .select_from(_node_arr)
-        .where(_node_value.op("->>")("timeout_seconds").is_not(None))
-        .scalar_subquery()
-    )
+    timeout_subq = sa.select(sa.func.max(sa.cast(_node_value.op("->>")("timeout_seconds"), sa.Integer))).select_from(_node_arr).where(_node_value.op("->>")("timeout_seconds").is_not(None)).scalar_subquery()
     max_node_timeout_seconds_expr = timeout_subq
 
     # FAR-801: count of managed workspace inputs from the audit row.
@@ -373,9 +363,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             # byte formulas documented there); the legacy runs-column fallback
             # term died with migration 0215.
             _reassembled_bytes_expr(RunNodeOutput.outputs_json, _meta_flag_subq("empty_outputs")).label("output_bytes"),
-            _reassembled_bytes_expr(RunNodeOutput.node_telemetry_json, _meta_flag_subq("empty_telemetry")).label(
-                "telemetry_bytes"
-            ),
+            _reassembled_bytes_expr(RunNodeOutput.node_telemetry_json, _meta_flag_subq("empty_telemetry")).label("telemetry_bytes"),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait, mirroring the live writer.

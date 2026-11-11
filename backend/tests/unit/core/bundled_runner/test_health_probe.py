@@ -319,9 +319,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["reachable"] is True
         assert result["orgs_probed"] == 1
         assert result["transitions"] == 0
@@ -343,9 +341,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()),
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         kwargs = upsert.await_args.kwargs
         assert kwargs["engine_reachable"] is False
         assert kwargs["images_present"] is None
@@ -364,9 +360,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["transitions"] == 1
         emit.assert_awaited_once()
 
@@ -382,9 +376,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["transitions"] == 0
         emit.assert_not_awaited()
         assert upsert.await_args.kwargs["engine_reachable"] is False
@@ -400,9 +392,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["transitions"] == 1
         emit.assert_awaited_once()
 
@@ -419,9 +409,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("farna.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["transitions"] == 0
         emit.assert_not_awaited()
 
@@ -449,9 +437,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock(side_effect=_upsert)),
         ):
-            result = await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["orgs_probed"] == 1
         assert result["orgs_failed"] == 0
         assert calls["n"] == 1
@@ -470,9 +456,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         boundary.image_present.assert_not_awaited()
         kwargs = upsert.await_args.kwargs
         assert kwargs["images_present"] is None
@@ -491,9 +475,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         kwargs = upsert.await_args.kwargs
         assert kwargs["images_present"] is None
         assert kwargs["image_checks"][_IMAGE_REF] is None
@@ -511,9 +493,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         prune.assert_awaited_once()
         assert prune.await_args.kwargs["retention_seconds"] == PROBE_RETENTION_SECONDS
 
@@ -533,9 +513,7 @@ class TestRunRunnerHealthProbe:
             patch("farna.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
-            await run_runner_health_probe(
-                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            await run_runner_health_probe(_fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         boundary.image_present.assert_awaited_once_with(real_ref)
         kwargs = upsert.await_args.kwargs
         assert kwargs["images_present"] is True
@@ -559,9 +537,7 @@ class _NoAutoBeginSession:
 
     async def execute(self, *_args: Any, **_kwargs: Any) -> None:
         if not self.in_transaction:
-            raise InvalidRequestError(
-                "Autobegin is disabled on this Session; please call session.begin() to start a new transaction"
-            )
+            raise InvalidRequestError("Autobegin is disabled on this Session; please call session.begin() to start a new transaction")
 
     def begin(self) -> Any:
         return self._Transaction(self)
@@ -634,9 +610,7 @@ class TestRunRunnerHealthProbeSystemSessionFactory:
             patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()) as prune,
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
-            result = await run_runner_health_probe(
-                _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["orgs_probed"] == 1
         assert result["orgs_failed"] == 0
         upsert.assert_awaited_once()
@@ -661,9 +635,7 @@ class TestRunRunnerHealthProbeSystemSessionFactory:
             patch("farna.db.crud.runner_probe.prune_stale_runner_probe_rows", new=AsyncMock()),
             patch("farna.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
         ):
-            result = await run_runner_health_probe(
-                _no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary
-            )
+            result = await run_runner_health_probe(_no_autobegin_session_factory(session), machine_id="machine-1", engine_boundary=boundary)
         assert result["reachable"] is False
         assert result["orgs_probed"] == 1
         assert upsert.await_args is not None
@@ -864,7 +836,7 @@ async def test_multiple_org_infra_errors_keep_the_first_and_count_each() -> None
 
 
 def _clear_endpoint_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("MODULO_DOCKER_HOST", "DOCKER_HOST", "DOCKER_CONTEXT"):
+    for var in ("FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST", "DOCKER_CONTEXT"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -876,7 +848,7 @@ def _isolate_non_env_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_engine_configured_when_docker_host_env_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_endpoint_env(monkeypatch)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://socket-proxy:2375")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", "tcp://socket-proxy:2375")
     _isolate_non_env_endpoints(monkeypatch)
     assert docker_engine_configured() is True
 

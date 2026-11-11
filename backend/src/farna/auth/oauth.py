@@ -432,9 +432,7 @@ class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
         key contribute nothing. Callers that need a rejection (rather than a
         narrowed subset) use :func:`validate_client_scopes`, which fails closed.
         """
-        allowed = {
-            key for key in (resolve_scope(s) for s in scope_to_list(self._client.scopes or "")) if key is not None
-        }
+        allowed = {key for key in (resolve_scope(s) for s in scope_to_list(self._client.scopes or "")) if key is not None}
         requested = {key for key in (resolve_scope(s) for s in scope_to_list(scope)) if key is not None}
         return list_to_scope(sorted(allowed & requested))  # type: ignore[no-any-return]
 
@@ -521,9 +519,7 @@ async def validate_client_secret(session: AsyncSession, client_id: str, client_s
 
 async def list_oauth_clients(session: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
     """List OAuth clients for an organisation."""
-    result = await session.execute(
-        select(OAuthClient).where(OAuthClient.organisation_id == org_id).order_by(OAuthClient.created_at.desc())
-    )
+    result = await session.execute(select(OAuthClient).where(OAuthClient.organisation_id == org_id).order_by(OAuthClient.created_at.desc()))
     clients = list(result.scalars())
     return [
         {
@@ -690,9 +686,7 @@ async def consume_authorization_code(
         raise InvalidGrantError("redirect_uri mismatch")
 
     try:
-        result = await session.execute(
-            select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
-        )
+        result = await session.execute(select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update())
         auth_code = result.scalar_one_or_none()
         if auth_code is None:
             raise InvalidGrantError("Authorization code not found")
@@ -761,9 +755,7 @@ async def create_consent_state(
     await session.flush()
 
 
-async def consume_consent_state(
-    session: AsyncSession, *, state: str, _org_id: uuid.UUID, account_id: uuid.UUID
-) -> OAuthConsentState | None:
+async def consume_consent_state(session: AsyncSession, *, state: str, _org_id: uuid.UUID, account_id: uuid.UUID) -> OAuthConsentState | None:
     """Atomically claim and return an unexpired, unconsumed consent state.
 
     Uses ``UPDATE ... WHERE state=:s AND consumed=false AND expires_at > now
@@ -900,9 +892,7 @@ def decode_oauth_access_token(token: str, secret_key: str) -> OAuthAccessTokenCl
 # ---------------------------------------------------------------------------
 
 
-async def _get_token_family(
-    session: AsyncSession, family_id: str, client_id: str, org_id: uuid.UUID
-) -> OAuthTokenFamily | None:
+async def _get_token_family(session: AsyncSession, family_id: str, client_id: str, org_id: uuid.UUID) -> OAuthTokenFamily | None:
     """Look up a token family by ID, client, and org."""
     try:
         fid = uuid.UUID(family_id)
@@ -971,9 +961,7 @@ async def rotate_oauth_token_family(
                 "current_sequence": current_sequence,
             },
         )
-        raise InvalidGrantError(
-            "Token family rotated out of order - possible token theft. This family has been blacklisted."
-        )
+        raise InvalidGrantError("Token family rotated out of order - possible token theft. This family has been blacklisted.")
 
     new_sequence = family.max_sequence + 1
     family.max_sequence = new_sequence

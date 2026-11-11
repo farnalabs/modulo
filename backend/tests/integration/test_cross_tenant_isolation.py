@@ -23,7 +23,7 @@ from farna.core.feature_flags import LicenseData, LicenseKeyTier
 from farna.db.models.trigger_event import TriggerEvent
 from farna.db.rls import set_rls_org
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -94,9 +94,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
             account_id = uuid.uuid4()
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, "
-                    "auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
                 ),
                 {
                     "id": str(account_id),
@@ -116,8 +114,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         if membership.first() is None:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
                 ),
                 {
                     "mid": str(uuid.uuid4()),
@@ -193,11 +190,7 @@ async def _seed_run(
     async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                "input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', "
-                ":thread, :hash, :rn)",
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, langgraph_thread_id, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', :thread, :hash, :rn)",
             ),
             {
                 "id": str(run_id),
@@ -224,11 +217,7 @@ async def _seed_eval_definition(
     async with db_engine.connect() as conn, conn.begin(), _bypass_triggers(conn):
         await conn.execute(
             text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, "
-                "node_id, name, eval_type, config_json, "
-                "suite_id, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, "
-                "NULL, :uid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, suite_id, account_id) VALUES (:id, :oid, :pid, :nid, :name, 'regex', '{}'::json, NULL, :uid)",
             ),
             {
                 "id": str(eval_id),
@@ -251,11 +240,7 @@ async def _seed_sso_provider(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO sso_providers (id, organisation_id, provider_type, name, "
-                "client_id, discovery_url, enabled, auto_provision, default_role) "
-                "VALUES (:id, :oid, 'oidc', :name, 'client-a', "
-                "'https://idp.example.com/.well-known/openid-configuration', "
-                "true, true, 'runner')",
+                "INSERT INTO sso_providers (id, organisation_id, provider_type, name, client_id, discovery_url, enabled, auto_provision, default_role) VALUES (:id, :oid, 'oidc', :name, 'client-a', 'https://idp.example.com/.well-known/openid-configuration', true, true, 'runner')",
             ),
             {"id": str(provider_id), "oid": str(org_id), "name": name},
         )
@@ -290,11 +275,7 @@ async def _seed_trigger(
     trigger_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
-            ),
+            text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"),
             {
                 "id": str(trigger_id),
                 "oid": str(org_id),
@@ -316,11 +297,7 @@ async def _seed_trigger_event(
     event_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
-                "raw_payload_hash, validation_result, received_at) "
-                "VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted', :received_at)"
-            ),
+            text("INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, raw_payload_hash, validation_result, received_at) VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted', :received_at)"),
             {
                 "id": str(event_id),
                 "oid": str(org_id),
@@ -345,17 +322,14 @@ async def _seed_runner_in_orgs(db_engine: AsyncEngine, org_ids: list[uuid.UUID],
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {"id": str(account_id), "email": email, "name": "FAR-537 target"},
         )
         for oid in org_ids:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'runner')",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'runner')",
                 ),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(oid)},
             )
@@ -367,8 +341,7 @@ async def _seed_token_family(db_engine: AsyncEngine, account_id: uuid.UUID, org_
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) "
-                "VALUES (:fid, :aid, :oid, 0, false)",
+                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) VALUES (:fid, :aid, :oid, 0, false)",
             ),
             {"fid": str(family_id), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -380,9 +353,7 @@ async def _seed_org_api_key(db_engine: AsyncEngine, org_id: uuid.UUID, account_i
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, "
-                "hashed_secret, role, account_id, expires_at) "
-                "VALUES (:id, :oid, :name, :prefix, 'x', 'runner', :acc, now() + interval '1 day')",
+                "INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, hashed_secret, role, account_id, expires_at) VALUES (:id, :oid, :name, :prefix, 'x', 'runner', :acc, now() + interval '1 day')",
             ),
             {
                 "id": str(key_id),
@@ -415,16 +386,12 @@ async def _membership_tombstoned(db_engine: AsyncEngine, account_id: uuid.UUID, 
 
 
 async def _family_blacklisted(db_engine: AsyncEngine, family_id: uuid.UUID) -> bool:
-    row = await _scalar(
-        db_engine, "SELECT is_blacklisted FROM token_families WHERE family_id = :fid", {"fid": str(family_id)}
-    )
+    row = await _scalar(db_engine, "SELECT is_blacklisted FROM token_families WHERE family_id = :fid", {"fid": str(family_id)})
     return bool(row)
 
 
 async def _family_blacklisted_at(db_engine: AsyncEngine, family_id: uuid.UUID) -> datetime | None:
-    row = await _scalar(
-        db_engine, "SELECT blacklisted_at FROM token_families WHERE family_id = :fid", {"fid": str(family_id)}
-    )
+    row = await _scalar(db_engine, "SELECT blacklisted_at FROM token_families WHERE family_id = :fid", {"fid": str(family_id)})
     return row if isinstance(row, datetime) else None
 
 
@@ -638,9 +605,7 @@ async def coverage_eval_a(
     user_a: uuid.UUID,
     coverage_node_id: uuid.UUID,
 ) -> uuid.UUID:
-    return await _seed_eval_definition(
-        db_engine, org_a, coverage_pipeline_a, user_a, "OrgA-CoverageEval", node_id=coverage_node_id
-    )
+    return await _seed_eval_definition(db_engine, org_a, coverage_pipeline_a, user_a, "OrgA-CoverageEval", node_id=coverage_node_id)
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -652,9 +617,7 @@ async def coverage_eval_b_cross(
     coverage_node_id: uuid.UUID,
 ) -> uuid.UUID:
     """An eval definition on org A's coverage pipeline owned by org B."""
-    return await _seed_eval_definition(
-        db_engine, org_b, coverage_pipeline_a, user_b, "OrgB-CrossCoverageEval", node_id=coverage_node_id
-    )
+    return await _seed_eval_definition(db_engine, org_b, coverage_pipeline_a, user_b, "OrgB-CrossCoverageEval", node_id=coverage_node_id)
 
 
 # ===================================================================
@@ -799,9 +762,7 @@ class TestCrossOrgSingleResourceFetch:
             f"/api/v1/pipelines/{pipeline_b}",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 404, (
-            f"Expected 404 for cross-org pipeline fetch, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 404, f"Expected 404 for cross-org pipeline fetch, got {resp.status_code}: {resp.text}"
 
     async def test_get_own_org_pipeline_by_id_succeeds(
         self,
@@ -1022,18 +983,14 @@ class TestUpdateUserDeactivationRevocationScope:
 
         token = _token(org_a, user_a, "admin")
         headers = {"Authorization": f"Bearer {token}"}
-        first = await integration_client.put(
-            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
-        )
+        first = await integration_client.put(f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False})
         assert first.status_code == 200, first.text
         blacklisted_at = await _family_blacklisted_at(db_engine, family_a)
         revoked_at = await _key_revoked_at(db_engine, key_a)
         assert blacklisted_at is not None
         assert revoked_at is not None
 
-        second = await integration_client.put(
-            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
-        )
+        second = await integration_client.put(f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False})
         assert second.status_code == 200, second.text
         # No duplicate revocation: the original revocation timestamps survive.
         assert await _family_blacklisted_at(db_engine, family_a) == blacklisted_at
@@ -1051,14 +1008,10 @@ class TestUpdateUserDeactivationRevocationScope:
 
         token = _token(org_a, user_a, "admin")
         headers = {"Authorization": f"Bearer {token}"}
-        deactivate = await integration_client.put(
-            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False}
-        )
+        deactivate = await integration_client.put(f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": False})
         assert deactivate.status_code == 200, deactivate.text
 
-        reactivate = await integration_client.put(
-            f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": True}
-        )
+        reactivate = await integration_client.put(f"/api/v1/admin/users/{target}", headers=headers, json={"is_active": True})
         assert reactivate.status_code == 200, reactivate.text
         assert reactivate.json()["is_active"] is True
         # FAR-533: reactivation clears the caller's-org tombstone only.
@@ -1129,9 +1082,7 @@ class TestEvalsCreateCrossTenant:
                 "eval_type": "regex",
             },
         )
-        assert resp.status_code == 404, (
-            f"Expected 404 for eval against another org's pipeline, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 404, f"Expected 404 for eval against another org's pipeline, got {resp.status_code}: {resp.text}"
 
     async def test_create_eval_against_own_org_pipeline_succeeds(
         self,
@@ -1180,9 +1131,7 @@ class TestEvalsCreateFromRunCrossTenant:
                 "eval_type": "regex",
             },
         )
-        assert resp.status_code == 404, (
-            f"Expected 404 for from-run against another org's pipeline, got {resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 404, f"Expected 404 for from-run against another org's pipeline, got {resp.status_code}: {resp.text}"
 
     async def test_from_run_other_org_run_returns_404(
         self,
@@ -1345,9 +1294,7 @@ class TestEvalCoverageOrgFilter:
             None,
         )
         assert node is not None, "Coverage should include the seeded node"
-        assert node["eval_count"] == 1, (
-            f"Coverage should count only OrgA's eval definition (1), got {node['eval_count']}"
-        )
+        assert node["eval_count"] == 1, f"Coverage should count only OrgA's eval definition (1), got {node['eval_count']}"
 
 
 # ===================================================================
@@ -1376,12 +1323,8 @@ class TestTriggerEventRetentionRls:
         silently match zero rows and delete nothing."""
         import farna.core.saq_worker as sw
 
-        old_a = await _seed_trigger_event(
-            db_engine, org_a, trigger_a, received_at=datetime.now(UTC) - timedelta(days=100)
-        )
-        old_b = await _seed_trigger_event(
-            db_engine, org_b, trigger_b, received_at=datetime.now(UTC) - timedelta(days=100)
-        )
+        old_a = await _seed_trigger_event(db_engine, org_a, trigger_a, received_at=datetime.now(UTC) - timedelta(days=100))
+        old_b = await _seed_trigger_event(db_engine, org_b, trigger_b, received_at=datetime.now(UTC) - timedelta(days=100))
 
         # The testcontainers superuser bypasses RLS entirely — the same
         # effective semantics as the production modulo_system (BYPASSRLS)
@@ -1395,9 +1338,7 @@ class TestTriggerEventRetentionRls:
         assert result["deleted"] >= 2, "both orgs' expired events must be purged"
         async with db_engine.connect() as conn:
             for event_id in (old_a, old_b):
-                row = await conn.execute(
-                    text("SELECT count(*) FROM trigger_events WHERE id = :eid"), {"eid": str(event_id)}
-                )
+                row = await conn.execute(text("SELECT count(*) FROM trigger_events WHERE id = :eid"), {"eid": str(event_id)})
                 assert int(row.scalar_one()) == 0, f"expired event {event_id} must be purged cross-org"
 
     async def test_app_role_session_without_rls_context_sees_zero_rows(

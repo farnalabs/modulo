@@ -32,14 +32,7 @@ down_revision: str | None = "0160_run_idempotency_key"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
-_UPGRADE_SQL = (
-    "DO $$ BEGIN "
-    "IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
-    "WHERE table_schema='public' AND table_name='accounts' "
-    "AND column_name='must_change_password') THEN "
-    "ALTER TABLE public.accounts ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE; "
-    "END IF; END $$;"
-)
+_UPGRADE_SQL = "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='accounts' AND column_name='must_change_password') THEN ALTER TABLE public.accounts ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE; END IF; END $$;"
 
 _DOWNGRADE_SQL = "ALTER TABLE public.accounts DROP COLUMN IF EXISTS must_change_password;"
 

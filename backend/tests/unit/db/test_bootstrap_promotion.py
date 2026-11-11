@@ -74,7 +74,7 @@ def test_promoted_bootstrap_main_writes_fixed_env_files(
     monkeypatch.setenv("DATABASE_URL", "postgres://app:pw@db.internal:5432/modulo")
     # Pre-registering via setenv guarantees monkeypatch restores whatever
     # main() writes directly into os.environ (it mutates the env, not a copy).
-    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
 
     def _skip_bootstrap(coro: Any) -> None:
         coro.close()  # avoid the "coroutine was never awaited" RuntimeWarning
@@ -88,14 +88,11 @@ def test_promoted_bootstrap_main_writes_fixed_env_files(
     # FAR-1440: sslmode in DATABASE_ADMIN_URL is preserved through the fixed
     # URL (the operator's TLS setting is honoured end-to-end). DATABASE_URL
     # carries no sslmode; the system URL derives from the fixed DATABASE_URL.
-    assert (
-        written["/tmp/database_admin_url.env"]
-        == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
-    )
+    assert written["/tmp/database_admin_url.env"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
     assert written["/tmp/database_url.env"] == "postgresql+asyncpg://app:pw@db.internal:5432/modulo"
     assert written["/tmp/system_database_url.env"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
     assert os.environ["DATABASE_ADMIN_URL"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
-    assert os.environ["MODULO_SYSTEM_DATABASE_URL"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
+    assert os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
 
 
 def test_promoted_main_warns_when_system_url_derivation_fails(
@@ -104,7 +101,7 @@ def test_promoted_main_warns_when_system_url_derivation_fails(
 ) -> None:
     monkeypatch.setenv("DATABASE_ADMIN_URL", "postgresql+asyncpg://admin:pw@db.internal:5432/modulo")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/modulo")
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
 
     def _skip_bootstrap(coro: Any) -> None:
         coro.close()
@@ -128,19 +125,11 @@ def test_promoted_main_warns_when_system_url_derivation_fails(
     ("url", "expected_url", "expected_ssl"),
     [
         pytest.param("postgres://u:p@h:5432/db", "postgres://u:p@h:5432/db", False, id="no-sslmode-explicit-false"),
-        pytest.param(
-            "postgres://u:p@h:5432/db?sslmode=disable", "postgres://u:p@h:5432/db", False, id="disable-explicit-false"
-        ),
+        pytest.param("postgres://u:p@h:5432/db?sslmode=disable", "postgres://u:p@h:5432/db", False, id="disable-explicit-false"),
         pytest.param("postgres://u:p@h:5432/db?sslmode=require", "postgres://u:p@h:5432/db", "require", id="require"),
-        pytest.param(
-            "postgres://u:p@h:5432/db?sslmode=verify-ca", "postgres://u:p@h:5432/db", "verify-ca", id="verify-ca"
-        ),
-        pytest.param(
-            "postgres://u:p@h:5432/db?sslmode=verify-full", "postgres://u:p@h:5432/db", "verify-full", id="verify-full"
-        ),
-        pytest.param(
-            "postgres://u:p@h:5432/db?sslmode=REQUIRE", "postgres://u:p@h:5432/db", "require", id="uppercase-normalised"
-        ),
+        pytest.param("postgres://u:p@h:5432/db?sslmode=verify-ca", "postgres://u:p@h:5432/db", "verify-ca", id="verify-ca"),
+        pytest.param("postgres://u:p@h:5432/db?sslmode=verify-full", "postgres://u:p@h:5432/db", "verify-full", id="verify-full"),
+        pytest.param("postgres://u:p@h:5432/db?sslmode=REQUIRE", "postgres://u:p@h:5432/db", "require", id="uppercase-normalised"),
         pytest.param(
             "postgres://u:p@h:5432/db?connect_timeout=10&sslmode=require",
             "postgres://u:p@h:5432/db?connect_timeout=10",
@@ -187,11 +176,7 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
     private reimplementation.
     """
     src_root = _REPO_ROOT / "backend" / "src"
-    hits = sorted(
-        path.relative_to(src_root).as_posix()
-        for path, source in iter_source_text(src_root)
-        if "def split_postgres_sslmode" in source
-    )
+    hits = sorted(path.relative_to(src_root).as_posix() for path, source in iter_source_text(src_root) if "def split_postgres_sslmode" in source)
     assert hits == ["farna/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
     assert bootstrap_module.split_postgres_sslmode is split_postgres_sslmode
 
@@ -215,7 +200,7 @@ def _capture_connect(store: list[tuple[tuple[object, ...], dict[str, object]]]) 
 def _patch_bootstrap_env(monkeypatch: pytest.MonkeyPatch, admin_url: str) -> None:
     monkeypatch.setenv("DATABASE_ADMIN_URL", admin_url)
     monkeypatch.setenv("DATABASE_URL", "postgres://app:pw@db.internal:5432/modulo")
-    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
     monkeypatch.setattr(bootstrap_module, "_write_env_file", lambda _path, _content: None)
 
 

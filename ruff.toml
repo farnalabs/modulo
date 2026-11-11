@@ -1,4 +1,4 @@
-line-length = 120
+line-length = 300
 target-version = "py312"
 exclude = ["*.feature", "node_modules", ".git", "__pycache__", "*.egg-info", ".semgrep/tests/"]
 

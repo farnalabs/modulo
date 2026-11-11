@@ -225,9 +225,7 @@ async def test_muted_block_records_evidence_without_enforcing():
 async def test_block_after_records_not_refuses():
     cfg = _cfg()
     event = _event(direction="after", summary=f"pushed with {_SECRET}")
-    outcome, audit = await run_loop_interception(
-        EvalEngine(), [_guardrail(name="block-token", field="args.url")], event, config=cfg
-    )
+    outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token", field="args.url")], event, config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is False
     assert audit[0].event_type == "guardrail.loop_blocked"
@@ -235,9 +233,7 @@ async def test_block_after_records_not_refuses():
 
 async def test_warn_records_and_proceeds():
     cfg = _cfg()
-    outcome, audit = await run_loop_interception(
-        EvalEngine(), [_guardrail(name="warn-token", action="warn")], _event(), config=cfg
-    )
+    outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="warn-token", action="warn")], _event(), config=cfg)
     assert outcome.action == "warn"
     assert outcome.blocked is False
     assert audit[0].event_type == "guardrail.loop_warned"
@@ -488,7 +484,7 @@ def test_bridge_client_skips_non_intercepted_tool():
 def test_bridge_client_source_reads_sandbox_script():
     source = bridge_client_source()
     assert "class BridgeClient" in source
-    assert "MODULO_BRIDGE_EVENT" in source
+    assert "FARNA_CONTROL_MODULO_BRIDGE_EVENT" in source
 
 
 async def test_callback_server_returns_pass_for_unknown_path():
@@ -592,7 +588,7 @@ def test_wrap_command_allowed_event_passes_through(monkeypatch, capsys):
     assert proc.killed is False
     out = capsys.readouterr().out
     assert "agent says hello" in out
-    assert "MODULO_BRIDGE_BLOCKED" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_BLOCKED" not in out
 
 
 def test_wrap_command_bridge_failure_is_fail_open(monkeypatch, capsys):
@@ -613,7 +609,7 @@ def test_wrap_command_bridge_failure_is_fail_open(monkeypatch, capsys):
     assert code == 0
     assert proc.killed is False
     out = capsys.readouterr().out
-    assert "MODULO_BRIDGE_BLOCKED" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_BLOCKED" not in out
 
 
 def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
@@ -621,11 +617,7 @@ def test_wrap_command_redact_emits_redacted_marker(monkeypatch, capsys):
     the child is allowed to proceed."""
     import farna.core.guardrails.sandbox_bridge as sb
 
-    event_line = (
-        b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": '
-        b'"https://x-access-token:ghp_aaaaaaaaaaaaaaaaaaaaaaaa@github.com/a/b.git"}, '
-        b'"direction": "before"}'
-    )
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "https://x-access-token:ghp_aaaaaaaaaaaaaaaaaaaaaaaa@github.com/a/b.git"}, "direction": "before"}'
     proc = _FakeProc([event_line], wait_code=0)
     monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
     monkeypatch.setattr(
@@ -660,9 +652,7 @@ def test_notify_cli_exit_code_3_on_block(monkeypatch):
         "notify",
         lambda self, tool, args, direction, result_summary="": {"action": "pass", "blocked": False},
     )
-    assert (
-        sb.main(["--notify", '{"tool_name": "git status", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 0
-    )
+    assert sb.main(["--notify", '{"tool_name": "git status", "args": {}, "direction": "before"}', "--endpoint", "x"]) == 0
 
 
 def test_notify_cli_downgraded_block_exit_0(monkeypatch):
@@ -769,7 +759,7 @@ def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
     assert code == 0
     assert proc.killed is False
     out = capsys.readouterr().out
-    assert "MODULO_BRIDGE_BLOCKED" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_BLOCKED" not in out
 
 
 def test_wrap_command_empty_argv_guard_runs_before_launch(monkeypatch, capsys):
@@ -871,7 +861,7 @@ def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
     assert proc.killed is False
     assert seen == [("", {})]
     out = capsys.readouterr().out
-    assert "MODULO_BRIDGE_EVENT" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_EVENT" not in out
 
 
 def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
@@ -879,10 +869,7 @@ def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
     and the child continues — the event line is never echoed to stdout."""
     import farna.core.guardrails.sandbox_bridge as sb
 
-    event_line = (
-        b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, '
-        b'"direction": "after", "result_summary": "pushed ok"}'
-    )
+    event_line = b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, "direction": "after", "result_summary": "pushed ok"}'
     proc = _FakeProc([event_line], wait_code=0)
     monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
     decided: list[tuple[str, dict]] = []
@@ -907,7 +894,7 @@ def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
     assert decided == []
     assert notified == [("git push", {"url": "x"}, "pushed ok")]
     out = capsys.readouterr().out
-    assert "MODULO_BRIDGE_EVENT" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_EVENT" not in out
 
 
 def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
@@ -933,7 +920,7 @@ def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
     assert proc.killed is False
     assert decided == []
     out = capsys.readouterr().out
-    assert "MODULO_BRIDGE_EVENT" not in out
+    assert "FARNA_CONTROL_MODULO_BRIDGE_EVENT" not in out
 
 
 def test_load_config_resolves_patterns(tmp_path, monkeypatch):
@@ -1175,23 +1162,17 @@ async def test_load_guardrails_returns_empty_on_exception():
 
 async def test_persist_audit_returns_when_no_factory():
     # Should return without error when no factory is provided
-    result = await li.persist_loop_interception_audit(
-        None, org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[]
-    )
+    result = await li.persist_loop_interception_audit(None, org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[])
     assert result is None
 
 
 async def test_persist_audit_returns_when_no_records():
-    result = await li.persist_loop_interception_audit(
-        MagicMock(), org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[]
-    )
+    result = await li.persist_loop_interception_audit(MagicMock(), org_id=uuid.uuid4(), run_id=uuid.uuid4(), node_id="n1", records=[])
     assert result is None
 
 
 async def test_persist_audit_returns_when_invalid_ids():
-    result = await li.persist_loop_interception_audit(
-        MagicMock(), org_id="bad", run_id="bad", node_id="n1", records=[li.LoopInterceptAuditRecord("test", {})]
-    )
+    result = await li.persist_loop_interception_audit(MagicMock(), org_id="bad", run_id="bad", node_id="n1", records=[li.LoopInterceptAuditRecord("test", {})])
     assert result is None
 
 
@@ -1232,7 +1213,7 @@ def test_bridge_client_source_ships_escalate_protocol():
     """The sandbox-side source written by ``bridge_client_source`` carries the
     escalate marker + decision handling (single source of truth)."""
     source = bridge_client_source()
-    assert "MODULO_BRIDGE_ESCALATED" in source
+    assert "FARNA_CONTROL_MODULO_BRIDGE_ESCALATED" in source
     assert "ESCALATED_EXIT_CODE" in source
     assert '"escalate"' in source
 

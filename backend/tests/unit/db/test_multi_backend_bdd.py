@@ -522,7 +522,7 @@ class TestRegisterTenantFilter:
     """Verify register_tenant_filter skips for postgres and registers for others."""
 
     def test_skips_for_postgres(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_DB", "postgres")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DB", "postgres")
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/db")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
@@ -600,12 +600,7 @@ class TestOrganisationRootEntityModel:
         column = Organisation.__table__.c.created_by
         assert column.nullable is True, "created_by must be nullable for org bootstrap"
         fks = [fk for fk in column.foreign_keys if isinstance(fk, ForeignKey)]
-        assert not fks, (
-            "created_by must NOT be a foreign key to accounts.id — the first org "
-            "is created with created_by=NULL but must exist before its first user, "
-            "so a FK would block bootstrap ordering (migration 0243 drops the "
-            "fk_organisations_created_by constraint added in 0236)"
-        )
+        assert not fks, "created_by must NOT be a foreign key to accounts.id — the first org is created with created_by=NULL but must exist before its first user, so a FK would block bootstrap ordering (migration 0243 drops the fk_organisations_created_by constraint added in 0236)"
 
     def test_created_by_defaults_to_none_for_bootstrap_org(self) -> None:
         """The first org is created with no creator (``_ensure_default_org``

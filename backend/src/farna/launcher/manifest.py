@@ -98,9 +98,7 @@ _TRUST_ROWS: dict[str, tuple[str, str]] = {
     ),
 }
 
-_NO_PROVISIONED_KEYS_MESSAGE = (
-    "no provisioned production signing keys - refusing to verify (provisioning: see PROVISIONING_NOTE)"
-)
+_NO_PROVISIONED_KEYS_MESSAGE = "no provisioned production signing keys - refusing to verify (provisioning: see PROVISIONING_NOTE)"
 
 PROVISIONING_NOTE = (
     "TRUST-STORE PROVISIONING: the current production key is provisioned in "
@@ -156,9 +154,7 @@ class ReleaseManifest:
     def checksum_for(self, artifact_name: str) -> str:
         entry = self.artifact_checksums.get(artifact_name)
         if entry is None:
-            raise ManifestSecurityError(
-                f"the manifest does not cover '{artifact_name}' — refusing an artifact it does not describe"
-            )
+            raise ManifestSecurityError(f"the manifest does not cover '{artifact_name}' — refusing an artifact it does not describe")
         return entry[0]
 
 
@@ -229,9 +225,7 @@ def verify_signature(
         raise ManifestSecurityError("signature key_id and signature must be strings")
     public_key = store.get(key_id)
     if public_key is None:
-        raise ManifestSecurityError(
-            f"unknown signing key-id '{key_id}' — not in the current+next trust store; refusing"
-        )
+        raise ManifestSecurityError(f"unknown signing key-id '{key_id}' — not in the current+next trust store; refusing")
     if len(sig_text) != 128:
         raise ManifestSecurityError("ed25519 signatures are 128 hex characters")
     try:
@@ -241,10 +235,7 @@ def verify_signature(
     try:
         public_key.verify(raw, manifest_payload)
     except InvalidSignature as exc:
-        raise ManifestSecurityError(
-            f"release-manifest signature FAILED to verify under key '{key_id}' — the manifest may "
-            "have been tampered with"
-        ) from exc
+        raise ManifestSecurityError(f"release-manifest signature FAILED to verify under key '{key_id}' — the manifest may have been tampered with") from exc
     return key_id
 
 
@@ -269,13 +260,7 @@ _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 def _resolve_bundle_artifact(root: Path, name: str) -> Path:
     """Validate *name* before resolving or touching any bundle filesystem path."""
     parts = name.split("/")
-    if (
-        not name
-        or "\\" in name
-        or name.startswith(("/", "//"))
-        or _WINDOWS_DRIVE_PATH.match(name)
-        or any(part in {"", ".", ".."} for part in parts)
-    ):
+    if not name or "\\" in name or name.startswith(("/", "//")) or _WINDOWS_DRIVE_PATH.match(name) or any(part in {"", ".", ".."} for part in parts):
         raise ManifestSecurityError(f"artifact name escapes the bundle root: {name!r}")
 
     root_resolved = root.resolve(strict=True)
@@ -315,10 +300,7 @@ def verify_artifacts(root: Path, manifest: ReleaseManifest) -> None:
         artifact = _resolve_bundle_artifact(root, name)
         actual = _digest_of(artifact)
         if actual != expected:
-            raise ManifestSecurityError(
-                f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual} — do not "
-                f"use this download; report it at https://github.com/farnalabs/modulo/issues"
-            )
+            raise ManifestSecurityError(f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual} — do not use this download; report it at https://github.com/farnalabs/modulo/issues")
 
 
 def build_release_manifest(

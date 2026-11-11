@@ -55,9 +55,7 @@ class VaultSecretsBackend(SecretsBackend):
 
     def __init__(self) -> None:
         if not _MODULE_AVAILABLE:
-            raise RuntimeError(
-                "The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac"
-            )
+            raise RuntimeError("The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac")
 
         self._addr: str = (os.environ.get("VAULT_ADDR") or "").strip()
         if not self._addr:
@@ -75,9 +73,7 @@ class VaultSecretsBackend(SecretsBackend):
     async def _ensure_client(self) -> Any:
         """Return a configured hvac client, creating one if needed."""
         if not _MODULE_AVAILABLE:
-            raise RuntimeError(
-                "The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac"
-            )
+            raise RuntimeError("The 'hvac' package is required for VaultSecretsBackend. Install it with: pip install hvac")
         if self._client is not None:
             return self._client
 
@@ -98,9 +94,7 @@ class VaultSecretsBackend(SecretsBackend):
                         timeout_seconds=_TIMEOUT,
                     )
                 else:
-                    raise RuntimeError(
-                        "VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set"
-                    )
+                    raise RuntimeError("VaultSecretsBackend: neither VAULT_TOKEN nor VAULT_ROLE_ID+VAULT_SECRET_ID are set")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -262,9 +262,7 @@ async def maybe_alarm_approve_sweep(
         # savepoint rolls back only the detection; the approve proceeds, no
         # alarm is raised, and no cooldown marker is armed.
         async with session.begin_nested():
-            decision_count, distinct_pipelines = await count_recent_approves(
-                session, org_id=org_id, actor_id=actor_id, window_start=window_start
-            )
+            decision_count, distinct_pipelines = await count_recent_approves(session, org_id=org_id, actor_id=actor_id, window_start=window_start)
         if decision_count <= SWEEP_COUNT_THRESHOLD or distinct_pipelines < SWEEP_MIN_DISTINCT_PIPELINES:
             return False
 

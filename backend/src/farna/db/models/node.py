@@ -47,9 +47,7 @@ class Node(OrgScoped):
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default=text("'300'"))
     retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_delay_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
 
     children: Mapped[list["Node"]] = relationship(
         "Node",

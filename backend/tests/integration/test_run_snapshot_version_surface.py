@@ -41,7 +41,7 @@ from farna.api.main import app
 from farna.auth.jwt import create_access_token
 from farna.settings import Settings, get_settings
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -295,10 +295,7 @@ async def test_list_loads_snapshot_versions_in_one_statement(
         for item in items:
             assert item["snapshot_version"] == persisted[uuid.UUID(str(item["snapshot_id"]))]
 
-        assert len(counter.statements) == 1, (
-            "the runs list must resolve every item's snapshot_version with ONE "
-            f"batched statement; got {len(counter.statements)}: {counter.statements}"
-        )
+        assert len(counter.statements) == 1, f"the runs list must resolve every item's snapshot_version with ONE batched statement; got {len(counter.statements)}: {counter.statements}"
     finally:
         await _cleanup(db_engine, pipeline_id)
 
@@ -334,9 +331,6 @@ async def test_rerun_reuses_the_source_snapshot_already_loaded(
         assert rerun["snapshot_id"] == source["snapshot_id"]
         assert source["snapshot_version"] == 1
         assert rerun["snapshot_version"] == source["snapshot_version"]
-        assert len(counter.statements) == 1, (
-            "the rerun must reuse the snapshot it already loaded; a second "
-            f"full-row fetch for the response would show up here: {counter.statements}"
-        )
+        assert len(counter.statements) == 1, f"the rerun must reuse the snapshot it already loaded; a second full-row fetch for the response would show up here: {counter.statements}"
     finally:
         await _cleanup(db_engine, pipeline_id)

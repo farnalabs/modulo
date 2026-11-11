@@ -44,9 +44,7 @@ def setup_otel(
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
     if not telemetry_enabled:
-        _log.info(
-            "OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). No telemetry data will be exported."
-        )
+        _log.info("OTel telemetry is DISABLED (MODULO_TELEMETRY_ENABLED not set to true). No telemetry data will be exported.")
         trace.set_tracer_provider(provider)
         return
 

@@ -131,9 +131,7 @@ class GateAlreadyDecidedError(HITLError, RuntimeError):
 
 class NotTeamMemberError(HITLError, PermissionError):
     def __init__(self, run_id: uuid.UUID, review_id: str, team_id: uuid.UUID, user_id: uuid.UUID) -> None:
-        super().__init__(
-            f"User {user_id} is not a member of team {team_id} required by gate {review_id!r} on run {run_id}"
-        )
+        super().__init__(f"User {user_id} is not a member of team {team_id} required by gate {review_id!r} on run {run_id}")
         self.run_id = run_id
         self.review_id = review_id
         self.team_id = team_id
@@ -681,11 +679,7 @@ class HITLManager:
             )
         )
         if tm_still.scalar_one_or_none() is None:
-            await session.execute(
-                update(HitlClaim)
-                .where(HitlClaim.id == claimed_id)
-                .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
-            )
+            await session.execute(update(HitlClaim).where(HitlClaim.id == claimed_id).values(account_id=None, claimed_at=None, claim_token=None, expires_at=now))
             raise NotTeamMemberError(
                 run_id=run_id,
                 review_id=review_id,
@@ -756,9 +750,7 @@ class HITLManager:
             events=[
                 (
                     "hitl.output_modified",
-                    self._base_audit_payload(
-                        gate, client_type=client_type, modified_output=modified_output, **audit_kwargs
-                    ),
+                    self._base_audit_payload(gate, client_type=client_type, modified_output=modified_output, **audit_kwargs),
                 ),
                 ("hitl.output_delivered", self._base_audit_payload(gate, client_type=client_type, modified=True)),
             ],
@@ -1331,9 +1323,7 @@ class HITLManager:
         if review_id is not None:
             stamped = payload.get("review_id")
             if stamped is not None and str(stamped) != str(review_id):
-                raise DecisionPayloadError(
-                    f"decision_payload is stamped for gate {stamped!r}, not the target gate {review_id!r}"
-                )
+                raise DecisionPayloadError(f"decision_payload is stamped for gate {stamped!r}, not the target gate {review_id!r}")
         for key in ("output", "modified_output"):
             value = payload.get(key)
             if value is not None and not isinstance(value, dict):

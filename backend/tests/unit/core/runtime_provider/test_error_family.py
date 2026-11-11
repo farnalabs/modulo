@@ -123,7 +123,7 @@ def test_config_errors_are_not_caught_by_new_family_handlers() -> None:
     """And the converse: ``except RuntimeProviderError`` must not catch the
     untouched hierarchy — existing handlers keep owning those errors."""
     config_errors: tuple[BaseException, ...] = (
-        ProviderNotConfiguredError("e2b", "MODULO_E2B_API_KEY"),
+        ProviderNotConfiguredError("e2b", "FARNA_CONTROL_MODULO_E2B_API_KEY"),
         UnknownProviderTypeError("nomad", frozenset({"local", "e2b"})),
     )
     for exc in config_errors:
@@ -138,7 +138,7 @@ def test_config_error_hierarchy_handlers_behave_exactly_as_before() -> None:
     hub = RuntimeProviderHub()
     hub.register("local", LocalRuntimeProvider())
 
-    with pytest.raises(ProviderNotConfiguredError, match="MODULO_E2B_API_KEY"):
+    with pytest.raises(ProviderNotConfiguredError, match="FARNA_CONTROL_MODULO_E2B_API_KEY"):
         hub.resolve(SimpleNamespace(provider_type="e2b"))
 
     # FAR-1051: "kubernetes" is a VOCABULARY member now, so the unknown-type
@@ -335,11 +335,11 @@ async def test_dispatch_route_config_error_still_becomes_dispatch_unbound() -> N
     from farna.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
 
     def _config_boom(**_kwargs: object):
-        raise ProviderNotConfiguredError("runner_docker", "MODULO_DOCKER_HOST")
+        raise ProviderNotConfiguredError("runner_docker", "FARNA_CONTROL_MODULO_DOCKER_HOST")
 
     with (
         patch.object(runner_dispatch, "build_hub", side_effect=_config_boom),
-        pytest.raises(SandboxDispatchUnboundError, match="MODULO_DOCKER_HOST"),
+        pytest.raises(SandboxDispatchUnboundError, match="FARNA_CONTROL_MODULO_DOCKER_HOST"),
     ):
         await runner_dispatch.resolve_sandbox_dispatch_route(
             _session_factory_returning(_runner_docker_profile()),
@@ -378,7 +378,7 @@ async def test_shell_connector_config_error_still_flattened_to_value_error() -> 
 
     class _UnconfiguredHub:
         def resolve(self, profile: object) -> object:
-            raise ProviderNotConfiguredError("runner_docker", "MODULO_DOCKER_HOST")
+            raise ProviderNotConfiguredError("runner_docker", "FARNA_CONTROL_MODULO_DOCKER_HOST")
 
     connector = ShellConnector(
         runtime_provider=None,
@@ -430,7 +430,7 @@ async def test_sandbox_test_stream_config_error_still_gets_remediation_copy(
     through the INNER handler with its remediation copy (behaviour unchanged)."""
     from farna.api.routes import environment_profiles as ep
 
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     profile = SimpleNamespace(id=uuid.uuid4(), provider_type="e2b")
     # An empty real hub: resolve("e2b") raises the untouched PNCE with the
     # MODULO_E2B_API_KEY remediation (env var deliberately unset).
@@ -443,7 +443,7 @@ async def test_sandbox_test_stream_config_error_still_gets_remediation_copy(
     body = "".join(events)
     assert "failed" in body
     assert "No runtime provider registered" in body
-    assert "MODULO_E2B_API_KEY" in body
+    assert "FARNA_CONTROL_MODULO_E2B_API_KEY" in body
 
 
 # ---------------------------------------------------------------------------

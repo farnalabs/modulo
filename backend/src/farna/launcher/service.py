@@ -135,25 +135,16 @@ def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
 def assert_linux() -> None:
     """Refuse unsupported service platforms loudly (Windows = TODO(P3))."""
     if is_windows():
-        raise ServiceError(
-            "Windows service lifecycle requires Task Scheduler validation with the native installer (FAR-2229); "
-            "use `modulo start` directly until that validation is complete"
-        )
+        raise ServiceError("Windows service lifecycle requires Task Scheduler validation with the native installer (FAR-2229); use `modulo start` directly until that validation is complete")
     if sys.platform not in ("linux", "darwin"):
-        raise ServiceError(
-            f"The service install is not implemented on {sys.platform} yet; use `modulo start` directly meanwhile."
-        )
+        raise ServiceError(f"The service install is not implemented on {sys.platform} yet; use `modulo start` directly meanwhile.")
 
 
 def assert_not_elevated() -> None:
     """Refuse an elevated install (ACL-poisoning guard, mirrors the doctor)."""
     uid = os.getuid() if hasattr(os, "getuid") else None
     if uid == 0:
-        raise ServiceError(
-            "refusing to install the service as root/sudo: a root-owned user unit runs the "
-            "launcher and bundled Postgres as root and bricks the data dir's ownership for every "
-            "later unprivileged boot — install as the unprivileged user that owns the data dir"
-        )
+        raise ServiceError("refusing to install the service as root/sudo: a root-owned user unit runs the launcher and bundled Postgres as root and bricks the data dir's ownership for every later unprivileged boot — install as the unprivileged user that owns the data dir")
 
 
 def assert_systemd_available(runner: CommandRunner, *, marker_path: Path = SYSTEMD_MARKER_PATH) -> None:
@@ -163,17 +154,9 @@ def assert_systemd_available(runner: CommandRunner, *, marker_path: Path = SYSTE
     try:
         probe = runner(["systemctl", "--user", "is-system-running"])
     except OSError as exc:
-        raise ServiceError(
-            f"systemd was not detected (no {marker_path} and probing `systemctl --user` failed: "
-            f"{exc}) — this command manages a systemd USER unit; on a non-systemd host run "
-            "`modulo start` directly (the launcher is self-supervising)"
-        ) from exc
+        raise ServiceError(f"systemd was not detected (no {marker_path} and probing `systemctl --user` failed: {exc}) — this command manages a systemd USER unit; on a non-systemd host run `modulo start` directly (the launcher is self-supervising)") from exc
     if probe.returncode != 0:
-        raise ServiceError(
-            f"systemd was not detected (no {marker_path} and `systemctl --user` did not answer) — "
-            "this command manages a systemd USER unit; on a non-systemd host run `modulo start` "
-            "directly (the launcher is self-supervising)"
-        )
+        raise ServiceError(f"systemd was not detected (no {marker_path} and `systemctl --user` did not answer) — this command manages a systemd USER unit; on a non-systemd host run `modulo start` directly (the launcher is self-supervising)")
 
 
 def resolve_executable(argv0: str | None = None) -> Path:
@@ -192,10 +175,7 @@ def resolve_executable(argv0: str | None = None) -> Path:
     found = shutil.which(CONSOLE_SCRIPT_NAME)
     if found:
         return Path(found).resolve()
-    raise ServiceError(
-        "could not resolve the installed `modulo` executable (sys.argv[0] is not an executable "
-        "file and no `modulo` is on PATH) — install the farnalabs-modulo wheel and retry"
-    )
+    raise ServiceError("could not resolve the installed `modulo` executable (sys.argv[0] is not an executable file and no `modulo` is on PATH) — install the farnalabs-modulo wheel and retry")
 
 
 def resolve_username() -> str:
@@ -370,9 +350,7 @@ def _install_launchd(
     )
 
 
-def _enable_linger(
-    runner: CommandRunner, warnings: list[str], *, linger_argv_builder: Callable[[str], list[str]] | None
-) -> bool:
+def _enable_linger(runner: CommandRunner, warnings: list[str], *, linger_argv_builder: Callable[[str], list[str]] | None) -> bool:
     """``loginctl enable-linger`` via pkexec; prints the sudo fallback on failure."""
     username = resolve_username()
     argv = (
@@ -388,19 +366,12 @@ def _enable_linger(
     try:
         result = runner(argv)
     except OSError as exc:
-        warnings.append(
-            f"linger could not be granted non-interactively ({exc}): run "
-            f"`sudo loginctl enable-linger {username}` so the service survives logout"
-        )
+        warnings.append(f"linger could not be granted non-interactively ({exc}): run `sudo loginctl enable-linger {username}` so the service survives logout")
         return False
     if result.returncode == 0:
         return True
     detail = (result.stderr or result.stdout or "").strip()
-    warnings.append(
-        f"`pkexec loginctl enable-linger {username}` did not succeed ({detail or result.returncode}); "
-        f"documented fallback: `sudo loginctl enable-linger {username}` (linger keeps the user "
-        "service alive after logout)"
-    )
+    warnings.append(f"`pkexec loginctl enable-linger {username}` did not succeed ({detail or result.returncode}); documented fallback: `sudo loginctl enable-linger {username}` (linger keeps the user service alive after logout)")
     return False
 
 
@@ -452,9 +423,7 @@ def _uninstall_systemd(
     _systemctl(runner, ["daemon-reload"])
     linger_disabled = _disable_linger(runner, username, linger_argv_builder, warnings)
     if not linger_disabled and not warnings:
-        warnings.append(
-            f"could not disable linger non-interactively — run `sudo loginctl disable-linger {username}` if wanted"
-        )
+        warnings.append(f"could not disable linger non-interactively — run `sudo loginctl disable-linger {username}` if wanted")
     return ServiceUninstallResult(
         unit_removed=removed,
         stopped=stopped,

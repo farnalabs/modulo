@@ -73,16 +73,8 @@ def normalize_current_graph(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
-        "nodes": [
-            strip_unset_connector_binding_inputs(
-                PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
-            )
-            for node in payload.get("nodes") or []
-        ],
-        "edges": [
-            PipelineGraphEdge.model_validate(edge, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
-            for edge in payload.get("edges") or []
-        ],
+        "nodes": [strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")) for node in payload.get("nodes") or []],
+        "edges": [PipelineGraphEdge.model_validate(edge, context=LEGACY_READ_CONTEXT).model_dump(mode="json") for edge in payload.get("edges") or []],
     }
 
 
@@ -121,10 +113,7 @@ def resolve_graph(
         if node.agent is not None:
             agent_id = agent_ids.get(node.agent)
             if agent_id is None:
-                msg = (
-                    f"agent {node.agent!r} not found in target org - declare the agent in this config "
-                    "or create it first; apply never auto-creates agents"
-                )
+                msg = f"agent {node.agent!r} not found in target org - declare the agent in this config or create it first; apply never auto-creates agents"
                 raise ApplyEntityResolutionError(msg)
             node_data["agent_id"] = agent_id
         try:
@@ -133,9 +122,7 @@ def resolve_graph(
             msg = f"git content ref for node {node.id!s}: {exc}"
             raise ApplyEntityResolutionError(msg) from None
         nodes_payload.append(_normalized_node(node_data))
-    edges_payload = [
-        _normalized_edge(edge.api_edge_payload()) for edge in (declared.edges if declared is not None else [])
-    ]
+    edges_payload = [_normalized_edge(edge.api_edge_payload()) for edge in (declared.edges if declared is not None else [])]
     return {"nodes": nodes_payload, "edges": edges_payload}
 
 
@@ -167,9 +154,7 @@ def resolve_owner_ids(
             continue
         owner_id = users_map.get(str(email).strip().lower())
         if owner_id is None:
-            raise ApplyEntityResolutionError(
-                f"{field} {email!r} does not resolve to an active member of this organisation"
-            )
+            raise ApplyEntityResolutionError(f"{field} {email!r} does not resolve to an active member of this organisation")
         resolved.append(str(owner_id))
     return resolved[0], resolved[1]
 
@@ -201,17 +186,11 @@ def resolve_policy_gate_evals(
     for node, gate in gates:
         eval_row = evals.get(str(gate.eval_id))
         if eval_row is None:
-            return (
-                f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} "
-                "which does not exist in this organisation (apply never creates evals)"
-            )
+            return f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} which does not exist in this organisation (apply never creates evals)"
         if current_pipeline_id is not None:
             eval_pipeline_id = eval_row.get("pipeline_id")
             if eval_pipeline_id is not None and str(eval_pipeline_id) != str(current_pipeline_id):
-                return (
-                    f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} "
-                    f"which belongs to a different pipeline ({eval_pipeline_id!s})"
-                )
+                return f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} which belongs to a different pipeline ({eval_pipeline_id!s})"
     return None
 
 
@@ -479,9 +458,7 @@ def _patch_payload(
         # Stringify: the field parses to a uuid.UUID, but the wire payload
         # is JSON — send the id in the API's string space (None serialises
         # as the clearing null).
-        payload["environment_profile_id"] = (
-            None if entity.environment_profile_id is None else str(entity.environment_profile_id)
-        )
+        payload["environment_profile_id"] = None if entity.environment_profile_id is None else str(entity.environment_profile_id)
     # FAR-1294: same opt-in gate as the create path. A DECLARED limit is
     # always sent as a concrete int (the drift hash compares the key, so the
     # write must be able to change it); an OMITTED limit is never sent, so a
@@ -665,9 +642,7 @@ def apply_pipelines(
     """
     agents = current_entities.get("agents") or {}
     current_pipelines = current_entities.get(KIND_PIPELINE) or {}
-    pipeline_ids: dict[str, str] = {
-        name: str(item["id"]) for name, item in current_pipelines.items() if item.get("id") is not None
-    }
+    pipeline_ids: dict[str, str] = {name: str(item["id"]) for name, item in current_pipelines.items() if item.get("id") is not None}
     for status in ("created", "updated"):
         for entry in tuple(report[status]):
             if entry["kind"] != KIND_PIPELINE:

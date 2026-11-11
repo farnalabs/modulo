@@ -311,9 +311,7 @@ async def _resolve_capacity(
         capacity_bytes, used_bytes = resolved
         if candidate in _AUTO_DETECTED_SOURCES and measured_pg_size is not None and capacity_bytes < measured_pg_size:
             _log.warning(
-                "db_capacity: %s source reported capacity %d bytes, smaller than "
-                "the database it holds (%d bytes) - physically impossible, so it "
-                "is the wrong volume; discarding it and continuing (FAR-1882)",
+                "db_capacity: %s source reported capacity %d bytes, smaller than the database it holds (%d bytes) - physically impossible, so it is the wrong volume; discarding it and continuing (FAR-1882)",
                 candidate,
                 capacity_bytes,
                 measured_pg_size,
@@ -453,9 +451,4 @@ async def enforce_capacity_gate(
 
     if capacity_hard_stop(settings, status):
         pct = status.get("capacity_percent")
-        raise StorageExhaustedError(
-            "Storage capacity exhausted "
-            f"({pct:g}% of configured capacity, hard-stop {settings.db_capacity_hard_stop_pct:g}%). "
-            "Export/clear old runs via Run Retention, or run checkpoint housekeeping. "
-            "Set DB_CAPACITY_BYPASS=1 to force."
-        )
+        raise StorageExhaustedError(f"Storage capacity exhausted ({pct:g}% of configured capacity, hard-stop {settings.db_capacity_hard_stop_pct:g}%). Export/clear old runs via Run Retention, or run checkpoint housekeeping. Set DB_CAPACITY_BYPASS=1 to force.")

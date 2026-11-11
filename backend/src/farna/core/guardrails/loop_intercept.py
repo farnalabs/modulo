@@ -369,11 +369,7 @@ async def _evaluate_event(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            reason = (
-                f"detection exceeded {timeout_seconds:g}s budget"
-                if isinstance(exc, TimeoutError)
-                else f"detection error on guardrail {eval_def.name!r}: {type(exc).__name__}"
-            )
+            reason = f"detection exceeded {timeout_seconds:g}s budget" if isinstance(exc, TimeoutError) else f"detection error on guardrail {eval_def.name!r}: {type(exc).__name__}"
             _log.warning(
                 "guardrail.loop_detection_mechanism_error",
                 extra={"guardrail": eval_def.name, "reason": reason},
@@ -482,11 +478,7 @@ async def run_loop_interception(
     if mechanism_error:
         return _bridge_failure_outcome(tool_name, direction, latency_ms, mechanism_error)
 
-    blocking = [
-        eval_def
-        for eval_def, _ in fired
-        if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.BLOCK
-    ]
+    blocking = [eval_def for eval_def, _ in fired if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.BLOCK]
     muted_records = _muted_finding_records(tool_name, direction, fired)
     if blocking:
         outcome, records = _blocking_outcome(tool_name, direction, latency_ms, blocking[0], config)
@@ -500,13 +492,7 @@ async def run_loop_interception(
         outcome, records = redaction_outcome
         return outcome, [*muted_records, *records]
 
-    warned = sorted(
-        {
-            eval_def.name
-            for eval_def, _ in fired
-            if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.WARN
-        }
-    )
+    warned = sorted({eval_def.name for eval_def, _ in fired if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.WARN})
     if warned:
         outcome, records = _warn_outcome(tool_name, direction, latency_ms, warned)
         return outcome, [*muted_records, *records]
@@ -651,9 +637,7 @@ def _redaction_blocked_outcome(
                 "guardrail.loop_blocked",
                 {
                     "actor": SYSTEM_ACTOR,
-                    "summary": (
-                        f'Loop blocked tool "{context.tool_name}" ({context.direction}) by guardrail "{redact_names}"'
-                    ),
+                    "summary": (f'Loop blocked tool "{context.tool_name}" ({context.direction}) by guardrail "{redact_names}"'),
                     "tool": context.tool_name,
                     "direction": context.direction,
                     "guardrail": redact_names,
@@ -684,9 +668,7 @@ def _redaction_applied_outcome(
                 "guardrail.loop_redacted",
                 {
                     "actor": SYSTEM_ACTOR,
-                    "summary": (
-                        f'Loop redacted tool "{context.tool_name}" ({context.direction}) by guardrail "{redact_names}"'
-                    ),
+                    "summary": (f'Loop redacted tool "{context.tool_name}" ({context.direction}) by guardrail "{redact_names}"'),
                     "tool": context.tool_name,
                     "direction": context.direction,
                     "guardrail": redact_names,

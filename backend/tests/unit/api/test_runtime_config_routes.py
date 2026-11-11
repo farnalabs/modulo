@@ -104,7 +104,7 @@ class TestPutRuntimeConfigErrorHandling:
             "farna.api.routes.admin_runtime_config.get_runtime_config_store",
             side_effect=RuntimeError("unexpected"),
         ):
-            resp = client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": "DEBUG"}})
+            resp = client.put("/api/v1/admin/runtime-config", json={"overrides": {"FARNA_CONTROL_MODULO_LOG_LEVEL": "DEBUG"}})
         assert resp.status_code == 500
         body = resp.json()
         assert "Failed to update runtime configuration" in body["detail"]
@@ -116,7 +116,7 @@ class TestPutRuntimeConfigErrorHandling:
         assert "overrides' must be a dict" in body["detail"]
 
     def test_non_string_override_value_returns_400(self, client: TestClient) -> None:
-        resp = client.put("/api/v1/admin/runtime-config", json={"overrides": {"MODULO_LOG_LEVEL": 123}})
+        resp = client.put("/api/v1/admin/runtime-config", json={"overrides": {"FARNA_CONTROL_MODULO_LOG_LEVEL": 123}})
         assert resp.status_code == 400
         body = resp.json()
         assert "must be a string" in body["detail"]

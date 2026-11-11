@@ -78,9 +78,7 @@ async def list_folders_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("pipeline_folder_created", "pipeline_folder", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_folder_created", "pipeline_folder", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipeline_folders.create")
 async def create_folder_endpoint(
@@ -115,9 +113,7 @@ async def create_folder_endpoint(
 
 @router.patch(
     "/{folder_id}",
-    dependencies=[
-        Depends(audited("pipeline_folder_updated", "pipeline_folder", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_folder_updated", "pipeline_folder", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipeline_folders.update")
 async def update_folder_endpoint(
@@ -153,13 +149,7 @@ async def update_folder_endpoint(
 @router.delete(
     "/{folder_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            audited(
-                "pipeline_folder_deleted", "pipeline_folder", principal_dep=get_current_tenant_user, fail_closed=True
-            )
-        )
-    ],
+    dependencies=[Depends(audited("pipeline_folder_deleted", "pipeline_folder", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors("pipeline_folders.delete")
 async def delete_folder_endpoint(
@@ -184,9 +174,7 @@ async def delete_folder_endpoint(
 
 @router.patch(
     "/{folder_id}/move",
-    dependencies=[
-        Depends(audited("pipeline_folder_reordered", "pipeline_folder", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("pipeline_folder_reordered", "pipeline_folder", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("pipeline_folders.move")
 async def reorder_folder_endpoint(

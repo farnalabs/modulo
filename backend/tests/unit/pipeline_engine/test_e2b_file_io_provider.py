@@ -107,9 +107,7 @@ class _ForbiddenFiles:
 
     def __getattr__(self, name: str) -> Any:
         self.touched.append(name)
-        raise AssertionError(
-            f"sandbox.files.{name} must not be touched: the legacy direct path is retired (FAR-1050 R6)"
-        )
+        raise AssertionError(f"sandbox.files.{name} must not be touched: the legacy direct path is retired (FAR-1050 R6)")
 
 
 def _watchdog(
@@ -392,7 +390,7 @@ async def test_provider_resolution_fails_closed_without_a_sandbox_ref(fake_file_
 async def test_provider_resolution_fails_closed_without_a_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.delenv("E2B_API_KEY", raising=False)
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_file_io_provider", builder)

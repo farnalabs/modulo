@@ -95,11 +95,7 @@ def downgrade() -> None:
         """
     )
     # Primary key.
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='workspace_leases_pkey') "
-        "THEN ALTER TABLE public.workspace_leases ADD CONSTRAINT workspace_leases_pkey PRIMARY KEY (id); "
-        "END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='workspace_leases_pkey') THEN ALTER TABLE public.workspace_leases ADD CONSTRAINT workspace_leases_pkey PRIMARY KEY (id); END IF; END $$;")
     # Status CHECK.
     op.execute(
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_workspace_leases_status') "
@@ -123,22 +119,10 @@ def downgrade() -> None:
         "workspace_leases_organisation_id_fkey FOREIGN KEY (organisation_id) "
         "REFERENCES organisations(id) ON DELETE CASCADE; END IF; END $$;"
     )
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
-        "WHERE conname='workspace_leases_run_id_fkey') THEN "
-        "ALTER TABLE public.workspace_leases ADD CONSTRAINT "
-        "workspace_leases_run_id_fkey FOREIGN KEY (run_id) "
-        "REFERENCES runs(id) ON DELETE RESTRICT; END IF; END $$;"
-    )
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='workspace_leases_run_id_fkey') THEN ALTER TABLE public.workspace_leases ADD CONSTRAINT workspace_leases_run_id_fkey FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE RESTRICT; END IF; END $$;")
     # Indexes.
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_workspace_leases_environment_profile_id "
-        "ON public.workspace_leases USING btree (environment_profile_id);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_workspace_leases_organisation_id "
-        "ON public.workspace_leases USING btree (organisation_id);"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_workspace_leases_environment_profile_id ON public.workspace_leases USING btree (environment_profile_id);")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_workspace_leases_organisation_id ON public.workspace_leases USING btree (organisation_id);")
     op.execute("CREATE INDEX IF NOT EXISTS ix_workspace_leases_run_id ON public.workspace_leases USING btree (run_id);")
     # Same-org tenant triggers (0110).
     op.execute(
@@ -158,7 +142,4 @@ def downgrade() -> None:
     # RLS (0110).
     op.execute("ALTER TABLE public.workspace_leases ENABLE ROW LEVEL SECURITY;")
     op.execute("DROP POLICY IF EXISTS rls_org_isolation ON public.workspace_leases;")
-    op.execute(
-        "CREATE POLICY rls_org_isolation ON public.workspace_leases USING "
-        "((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));"
-    )
+    op.execute("CREATE POLICY rls_org_isolation ON public.workspace_leases USING ((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid));")

@@ -131,9 +131,7 @@ def verify_slack_timestamp(timestamp_header: str | None) -> int:
     try:
         return verify_timestamp(timestamp_header)
     except Exception as exc:
-        raise SlackTimestampExpiredError(
-            f"X-Slack-Request-Timestamp is missing or outside the replay window: {exc}"
-        ) from exc
+        raise SlackTimestampExpiredError(f"X-Slack-Request-Timestamp is missing or outside the replay window: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -232,9 +230,7 @@ def _trigger_failure_hash(trigger_id: uuid.UUID) -> str:
     return _slack_dedup_hash(str(trigger_id))
 
 
-async def _resolve_signing_secret(
-    session: AsyncSession, trigger_id: uuid.UUID, cfg: dict[str, Any], org_id: uuid.UUID
-) -> str:
+async def _resolve_signing_secret(session: AsyncSession, trigger_id: uuid.UUID, cfg: dict[str, Any], org_id: uuid.UUID) -> str:
     """Decode the trigger's Slack signing secret (FAR-1735 shared resolver).
 
     A decryptable value is decrypted via the scope-bound helper and a

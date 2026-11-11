@@ -13,9 +13,7 @@ from farna.db.models.account import Account
 from farna.db.models.org_membership import OrgMembership
 
 
-async def get_membership_by_account_and_org(
-    session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID
-) -> OrgMembership | None:
+async def get_membership_by_account_and_org(session: AsyncSession, account_id: uuid.UUID, org_id: uuid.UUID) -> OrgMembership | None:
     result = await session.execute(
         select(OrgMembership).where(
             OrgMembership.account_id == account_id,
@@ -25,9 +23,7 @@ async def get_membership_by_account_and_org(
     return result.scalar_one_or_none()
 
 
-async def list_memberships_for_account(
-    session: AsyncSession, account_id: uuid.UUID, *, active_only: bool = False
-) -> list[OrgMembership]:
+async def list_memberships_for_account(session: AsyncSession, account_id: uuid.UUID, *, active_only: bool = False) -> list[OrgMembership]:
     """List the account's org memberships ordered by join date.
 
     With ``active_only=True`` the tombstoned memberships (``deactivated_at``
@@ -42,9 +38,7 @@ async def list_memberships_for_account(
 
 
 async def list_memberships_for_org(session: AsyncSession, org_id: uuid.UUID) -> list[OrgMembership]:
-    result = await session.execute(
-        select(OrgMembership).where(OrgMembership.organisation_id == org_id).order_by(OrgMembership.joined_at)
-    )
+    result = await session.execute(select(OrgMembership).where(OrgMembership.organisation_id == org_id).order_by(OrgMembership.joined_at))
     return list(result.scalars().all())
 
 
@@ -136,9 +130,7 @@ async def resolve_role_from_membership(session: AsyncSession, account_id: str, o
     return result.scalar_one_or_none()
 
 
-async def resolve_live_role_and_kind(
-    session: AsyncSession, account_id: str, organisation_id: str
-) -> tuple[str, str] | None:
+async def resolve_live_role_and_kind(session: AsyncSession, account_id: str, organisation_id: str) -> tuple[str, str] | None:
     """Return ``(live_role, account.kind)`` for an active account with a live membership.
 
     The human-linkage resolver (ADR 063 step 1) needs BOTH the live role

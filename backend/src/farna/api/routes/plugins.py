@@ -57,10 +57,7 @@ async def list_plugins_endpoint(
     try:
         registry = get_plugin_registry()
         health_results = registry.health_check()
-        return [
-            _to_response(manifest, health_results.get(pid, PluginHealth(ok=False, detail="Unknown")))
-            for pid, manifest in registry.list_plugins().items()
-        ]
+        return [_to_response(manifest, health_results.get(pid, PluginHealth(ok=False, detail="Unknown"))) for pid, manifest in registry.list_plugins().items()]
     except Exception:
         logger.exception("Failed to list plugins")
         raise HTTPException(

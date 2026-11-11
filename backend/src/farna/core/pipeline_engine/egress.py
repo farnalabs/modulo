@@ -144,7 +144,7 @@ def spec_egress_for_canonical(policy: str | None) -> str:
 
 # --- Workspace NetworkPolicy deployment signal (FAR-2068) -----------------
 
-WORKSPACE_NETWORK_POLICY_ENV: str = "MODULO_WORKSPACE_NETWORK_POLICY"
+WORKSPACE_NETWORK_POLICY_ENV: str = "FARNA_CONTROL_MODULO_WORKSPACE_NETWORK_POLICY"
 """Env var the T3 Helm chart sets when it renders the workspace NetworkPolicy.
 
 The chart sets it to ``"enabled"`` only when
@@ -199,11 +199,7 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
 # capability gap; with it the operator is told where the control actually
 # lives. Tiers not listed here keep the historical message unchanged.
 _TIER_REFUSAL_NOTES: dict[str, str] = {
-    "kubernetes": (
-        "on Kubernetes, selected-mode egress is the customer's NetworkPolicy on the "
-        "workspace namespace (opt-in, requires an enforcing CNI) — the provider "
-        "authors deny_all as a declared NetworkPolicy; selected cannot be expressed"
-    ),
+    "kubernetes": ("on Kubernetes, selected-mode egress is the customer's NetworkPolicy on the workspace namespace (opt-in, requires an enforcing CNI) — the provider authors deny_all as a declared NetworkPolicy; selected cannot be expressed"),
 }
 
 
@@ -304,9 +300,7 @@ def _profile_policy_refusal(profile_network_policy: str | None) -> str | None:
     """Return a refusal reason when the profile policy is out of vocabulary."""
     raw = profile_network_policy.strip().lower() if isinstance(profile_network_policy, str) else profile_network_policy
     if raw is not None and raw not in PROFILE_NETWORK_POLICIES:
-        return (
-            f"unrecognised profile network_policy {profile_network_policy!r}; valid values: {PROFILE_NETWORK_POLICIES}"
-        )
+        return f"unrecognised profile network_policy {profile_network_policy!r}; valid values: {PROFILE_NETWORK_POLICIES}"
     return None
 
 
@@ -326,11 +320,7 @@ def _selected_allowlist(
         return list(node_egress_allowlist), None
     return (
         None,
-        (
-            "egress policy 'selected' requires a non-empty allowlist; "
-            "none available on this route (node has no egress_allowlist "
-            "and profile has no allowlist field)"
-        ),
+        ("egress policy 'selected' requires a non-empty allowlist; none available on this route (node has no egress_allowlist and profile has no allowlist field)"),
     )
 
 
@@ -348,11 +338,7 @@ def _tier_refusal(tier: str, effective: str | None) -> str | None:
     key = effective if effective is not None else "default"
     if not tier_caps.get(key, False):
         note = _TIER_REFUSAL_NOTES.get(tier)
-        return (
-            f"tier {tier!r} cannot enforce egress policy {effective!r}; "
-            f"available enforcement on this tier: "
-            f"{[k for k, v in tier_caps.items() if v]}" + (f"; {note}" if note else "")
-        )
+        return f"tier {tier!r} cannot enforce egress policy {effective!r}; available enforcement on this tier: {[k for k, v in tier_caps.items() if v]}" + (f"; {note}" if note else "")
     if tier == "kubernetes" and key == "deny_all" and not workspace_network_policy_deployed():
         return (
             "tier 'kubernetes' cannot establish an egress 'deny_all' (profile "

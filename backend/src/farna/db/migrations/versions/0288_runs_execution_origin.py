@@ -61,20 +61,13 @@ _RUNS_ORIGIN = sa.Column(
     "execution_origin",
     sa.String(20),
     nullable=True,
-    comment=(
-        "run-level execution provenance (FAR-1141): 'dispatched' = the run's frozen "
-        "snapshot graph contains at least one dispatch node; NULL = executed by Modulo "
-        "/ recorded before this shipped"
-    ),
+    comment=("run-level execution provenance (FAR-1141): 'dispatched' = the run's frozen snapshot graph contains at least one dispatch node; NULL = executed by Modulo / recorded before this shipped"),
 )
 _FACTS_ORIGIN = sa.Column(
     "execution_origin",
     sa.String(20),
     nullable=True,
-    comment=(
-        "run-level execution provenance — from runs.execution_origin at finalize "
-        "(FAR-1141); NULL for facts finalized before this shipped"
-    ),
+    comment=("run-level execution provenance — from runs.execution_origin at finalize (FAR-1141); NULL for facts finalized before this shipped"),
 )
 
 

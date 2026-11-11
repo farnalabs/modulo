@@ -15,14 +15,8 @@ if TYPE_CHECKING:
 from farna.db.models.token_family import TokenFamily
 
 
-async def get_or_create_family(
-    session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID, org_id: uuid.UUID | None
-) -> TokenFamily:
-    result = await session.execute(
-        select(TokenFamily)
-        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
-        .with_for_update()
-    )
+async def get_or_create_family(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID, org_id: uuid.UUID | None) -> TokenFamily:
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id).with_for_update())
     family = result.scalar_one_or_none()
     if family is None:
         family = TokenFamily(
@@ -84,11 +78,7 @@ async def advance_sequence(
     minted normally. The caller always mints on ``reuse_replay=False`` AND
     ``theft_detected=False``.
     """
-    result = await session.execute(
-        select(TokenFamily)
-        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
-        .with_for_update()
-    )
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id).with_for_update())
     family = result.scalar_one_or_none()
     if family is None:
         return 0, False, False
@@ -105,11 +95,7 @@ async def advance_sequence(
 
     if expected_sequence < family.max_sequence:
         last_rotation = _as_utc_aware(family.rotated_at)
-        if (
-            reuse_grace_seconds > 0
-            and last_rotation is not None
-            and (now - last_rotation).total_seconds() <= reuse_grace_seconds
-        ):
+        if reuse_grace_seconds > 0 and last_rotation is not None and (now - last_rotation).total_seconds() <= reuse_grace_seconds:
             family.max_sequence += 1
             family.rotated_at = now
             await session.flush()
@@ -142,11 +128,7 @@ def _as_utc_aware(value: datetime | None) -> datetime | None:
 
 
 async def blacklist_family(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:
-    result = await session.execute(
-        select(TokenFamily)
-        .where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
-        .with_for_update()
-    )
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id).with_for_update())
     family = result.scalar_one_or_none()
     if family is None:
         return False
@@ -162,9 +144,7 @@ async def list_families_for_account(session: AsyncSession, account_id: uuid.UUID
 
 
 async def is_family_blacklisted(session: AsyncSession, family_id: uuid.UUID, account_id: uuid.UUID) -> bool:
-    result = await session.execute(
-        select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id)
-    )
+    result = await session.execute(select(TokenFamily).where(TokenFamily.family_id == family_id, TokenFamily.account_id == account_id))
     family = result.scalar_one_or_none()
     if family is None:
         return False

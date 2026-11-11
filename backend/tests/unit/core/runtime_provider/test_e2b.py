@@ -55,13 +55,13 @@ def test_constructor_accepts_explicit_key() -> None:
 
 
 def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "sk-from-env")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "sk-from-env")
     provider = E2BRuntimeProvider(api_key=None)
     assert provider._api_key == "sk-from-env"
 
 
 def test_constructor_env_var_overrides_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_E2B_API_KEY", "sk-env")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "sk-env")
     provider = E2BRuntimeProvider()
     assert provider._api_key == "sk-env"
 
@@ -703,11 +703,11 @@ async def test_runtime_override_key_reaches_create_not_legacy_env(
     """
     from farna.core.runtime_config.store import RuntimeConfigStore, get_runtime_config_store
 
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     monkeypatch.setenv("E2B_API_KEY", "stale-legacy-env-key")
     RuntimeConfigStore.reset()
     store = get_runtime_config_store()
-    store.set_override("MODULO_E2B_API_KEY", "hot-rotated-key")
+    store.set_override("FARNA_CONTROL_MODULO_E2B_API_KEY", "hot-rotated-key")
     try:
         with patch("e2b.AsyncSandbox") as mock_cls:
             mock_cls.create = AsyncMock(return_value=MagicMock(sandbox_id="sbx-rot-001"))
@@ -721,7 +721,7 @@ async def test_runtime_override_key_reaches_create_not_legacy_env(
         _args, kwargs = mock_cls.create.call_args
         assert kwargs.get("api_key") == "hot-rotated-key"
     finally:
-        store.clear_override("MODULO_E2B_API_KEY")
+        store.clear_override("FARNA_CONTROL_MODULO_E2B_API_KEY")
         RuntimeConfigStore.reset()
 
 
@@ -732,7 +732,7 @@ def test_create_workspace_fails_closed_without_any_key(
     before any sandbox call can be attempted."""
     from farna.core.runtime_config.store import RuntimeConfigStore
 
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
     RuntimeConfigStore.reset()
     # pytest.raises is the assertion: the typed refusal fires before any
     # AsyncSandbox.create call could be attempted.

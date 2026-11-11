@@ -338,10 +338,7 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
     has_script_command = bool(script_command_raw and str(script_command_raw).strip())
 
     if has_agent_command and has_script_command:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' has BOTH agent_commands "
-            "and script_command — the two modes are mutually exclusive"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' has BOTH agent_commands and script_command — the two modes are mutually exclusive")
 
     if mode == "script":
         if not has_script_command:
@@ -350,19 +347,13 @@ def _validate_sandbox_mode_config(node_def: dict[str, Any]) -> tuple[str, str, d
 
     agent_prompt = node_def.get("agent_prompt")
     if not agent_prompt or not str(agent_prompt).strip():
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' is missing required 'agent_prompt' "
-            "— an empty prompt would dispatch the agent with no instructions"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' is missing required 'agent_prompt' — an empty prompt would dispatch the agent with no instructions")
     if agent_commands_raw:
         agent_command = commands_concatenation_string.join(str(c) for c in agent_commands_raw)
         if not agent_command.strip():
             agent_command = ""
     if not agent_commands_raw or not agent_command:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' is missing required 'agent_commands' "
-            "— a sandbox agent cannot run without an explicit command"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' is missing required 'agent_commands' — a sandbox agent cannot run without an explicit command")
     return mode, agent_command, {"agent_prompt": str(agent_prompt)}
 
 
@@ -436,10 +427,7 @@ def _validate_sandbox_egress_config(node_def: dict[str, Any]) -> None:
     if egress_policy is None:
         return
     if not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' has invalid egress_policy {egress_policy!r} "
-            "— expected None, 'default', 'deny_all' or 'selected'"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' has invalid egress_policy {egress_policy!r} — expected None, 'default', 'deny_all' or 'selected'")
 
 
 def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_allowlist: Any, node_id: str) -> None:
@@ -459,11 +447,7 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
     """
     if egress_policy != "selected":
         if egress_allowlist is not None:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' egress_allowlist is only valid with "
-                "egress_policy='selected' — a non-selected policy has no allowlist "
-                "enforcement point and would silently no-op"
-            )
+            raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist is only valid with egress_policy='selected' — a non-selected policy has no allowlist enforcement point and would silently no-op")
         return
     _require_non_empty_egress_allowlist(egress_allowlist, node_id)
     for index, entry in enumerate(egress_allowlist):
@@ -473,26 +457,16 @@ def _validate_sandbox_egress_allowlist_config(egress_policy: str | None, egress_
 def _require_non_empty_egress_allowlist(egress_allowlist: Any, node_id: str) -> None:
     """Fail-closed: ``selected`` requires a non-empty list of allowlist entries."""
     if not isinstance(egress_allowlist, list) or not egress_allowlist:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_policy='selected' requires a "
-            "non-empty 'egress_allowlist' of {{'host', 'port'}} entries"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_policy='selected' requires a non-empty 'egress_allowlist' of {{{{'host', 'port'}}}} entries")
 
 
 def _validate_egress_allowlist_entry(entry: Any, index: int, node_id: str) -> None:
     """Validate a single egress allowlist entry (host/port dict, known keys)."""
     if not isinstance(entry, dict):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] must be an "
-            f"object with 'host' and 'port', got {entry!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist[{index}] must be an object with 'host' and 'port', got {entry!r}")
     unknown = set(entry) - _SANDBOX_EGRESS_ALLOWLIST_KEYS
     if unknown:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] contains "
-            f"unknown keys {sorted(unknown)} — allowed keys are "
-            f"{sorted(_SANDBOX_EGRESS_ALLOWLIST_KEYS)}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist[{index}] contains unknown keys {sorted(unknown)} — allowed keys are {sorted(_SANDBOX_EGRESS_ALLOWLIST_KEYS)}")
     _validate_allowlist_host(entry.get("host"), index, node_id)
     _validate_allowlist_port(entry.get("port"), index, node_id)
 
@@ -521,23 +495,15 @@ def is_valid_egress_host(host: Any) -> bool:
 def _validate_allowlist_host(host: Any, index: int, node_id: str) -> None:
     """Validate the ``host`` field of an egress allowlist entry."""
     if not isinstance(host, str) or not host.strip():
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a non-empty string, got {host!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a non-empty string, got {host!r}")
     if not is_valid_egress_host(host):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a "
-            f"hostname (letters, digits, '.', '-') or an IP address literal, got {host!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a hostname (letters, digits, '.', '-') or an IP address literal, got {host!r}")
 
 
 def _validate_allowlist_port(port: Any, index: int, node_id: str) -> None:
     """Validate the ``port`` field of an egress allowlist entry."""
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'port' must "
-            f"be an int in [1, 65535], got {port!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'port' must be an int in [1, 65535], got {port!r}")
 
 
 def _validate_sandbox_read_only_config(node_def: dict[str, Any]) -> None:
@@ -574,10 +540,7 @@ def _validate_sandbox_git_credentials_config(node_def: dict[str, Any]) -> None:
     if git_credentials is None:
         return
     if not isinstance(git_credentials, str) or git_credentials not in _SANDBOX_GIT_CREDENTIAL_SCOPES:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' has invalid git_credentials {git_credentials!r} "
-            "— expected None, 'scoped', 'unscoped' or 'none'"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' has invalid git_credentials {git_credentials!r} — expected None, 'scoped', 'unscoped' or 'none'")
 
 
 def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:
@@ -593,25 +556,16 @@ def _validate_sandbox_resource_limits_config(node_def: dict[str, Any]) -> None:
     if resource_limits is None:
         return
     if not isinstance(resource_limits, dict):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' has invalid resource_limits {resource_limits!r} — expected an object"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' has invalid resource_limits {resource_limits!r} — expected an object")
     unknown = set(resource_limits) - _SANDBOX_RESOURCE_LIMIT_KEYS
     if unknown:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' resource_limits contains unknown keys "
-            f"{sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' resource_limits contains unknown keys {sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}")
     for key, value in resource_limits.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' resource_limits['{key}'] must be a positive number, got {value!r}"
-            )
+            raise ValueError(f"sandbox_agent node '{node_id}' resource_limits['{key}'] must be a positive number, got {value!r}")
 
 
-def _validate_sandbox_wallclock_budget_config(
-    wallclock_budget_seconds: Any, _sandbox_timeout_seconds: Any, node_id: str
-) -> None:
+def _validate_sandbox_wallclock_budget_config(wallclock_budget_seconds: Any, _sandbox_timeout_seconds: Any, node_id: str) -> None:
     """Validate the wall-clock spend budget (FAR-296 Phase 4a).
 
     Fail-closed: the budget must be a positive int (or None). A budget that
@@ -620,15 +574,9 @@ def _validate_sandbox_wallclock_budget_config(
     if wallclock_budget_seconds is None:
         return
     if isinstance(wallclock_budget_seconds, bool) or not isinstance(wallclock_budget_seconds, int):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (seconds), "
-            f"got {wallclock_budget_seconds!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (seconds), got {wallclock_budget_seconds!r}")
     if wallclock_budget_seconds < 1:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (>= 1), "
-            f"got {wallclock_budget_seconds!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' wallclock_budget_seconds must be a positive int (>= 1), got {wallclock_budget_seconds!r}")
     # Cross-check (informational): a budget that is tighter than the node timeout
     # is the intended use — the budget is the spend cap, the timeout the backstop.
     # No error here; a budget >= the timeout is equally valid (the timeout fires
@@ -739,12 +687,7 @@ def _validate_sandbox_managed_inputs_config(node_def: dict[str, Any]) -> None:
             inner_kept = _strip_jinja_blocks(agent_command)
             block_stripped = _re.sub(r"\s+", " ", _JINJA_BLOCK_RE.sub(" ", agent_command))
             if "git clone" in inner_kept or "git clone" in block_stripped:
-                raise ValueError(
-                    f"sandbox_agent node '{node_id}' agent_commands item contains a literal "
-                    "'git clone' after Jinja block removal — managed workspace inputs "
-                    "handle checkout; a user-provided git clone would race with or "
-                    "bypass the managed checkout"
-                )
+                raise ValueError(f"sandbox_agent node '{node_id}' agent_commands item contains a literal 'git clone' after Jinja block removal — managed workspace inputs handle checkout; a user-provided git clone would race with or bypass the managed checkout")
 
     # --- per-input validation ---
     for index, inp in enumerate(workspace_inputs):
@@ -773,38 +716,24 @@ def _validate_managed_input_dest(dest: Any, index: int, node_id: str) -> None:
 
     # Reject "." or "/" or bare "/home/user".
     if dest in (".", "/", _SANDBOX_HOME):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-            f"'dest' {dest!r} is not a valid target — must be a specific "
-            "subdirectory under /home/user/"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'dest' {dest!r} is not a valid target — must be a specific subdirectory under /home/user/")
 
     # Must be under /home/user/.
     home_prefix = "/home/user/"
     if not dest.startswith(home_prefix) and dest != _SANDBOX_HOME:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-            f"'dest' {dest!r} resolves outside /home/user/ — workspace "
-            "inputs must not traverse to other filesystem locations"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'dest' {dest!r} resolves outside /home/user/ — workspace inputs must not traverse to other filesystem locations")
 
     # Depth check (too deep is suspicious).
     rel = dest[len("/home/user/") :] if dest.startswith(home_prefix) else ""
     depth = len([p for p in rel.split("/") if p])
     if depth > _MAX_DEST_DEPTH:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-            f"'dest' {dest!r} is {depth} levels deep (max {_MAX_DEST_DEPTH})"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'dest' {dest!r} is {depth} levels deep (max {_MAX_DEST_DEPTH})")
 
     # Denylist check — compare the leaf name and trailing path component.
     parts = [p for p in dest.split("/") if p]
     for part in parts:
         if part in _DEST_DENYLIST:
-            raise ValueError(
-                f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-                f"'dest' {dest!r} contains denied path component '{part}'"
-            )
+            raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'dest' {dest!r} contains denied path component '{part}'")
 
 
 def _validate_managed_input_ref(ref: Any, index: int, node_id: str) -> None:
@@ -817,16 +746,10 @@ def _validate_managed_input_ref(ref: Any, index: int, node_id: str) -> None:
         # No ref — default (HEAD/main) is fine.
         return
     if not isinstance(ref, dict):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'ref' must be an object, got {ref!r}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'ref' must be an object, got {ref!r}")
     kind = ref.get("kind")
     if not isinstance(kind, str) or kind not in _VALID_REF_KINDS:
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-            f"'ref.kind' {kind!r} is not valid — expected one of "
-            f"{sorted(_VALID_REF_KINDS)}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'ref.kind' {kind!r} is not valid — expected one of {sorted(_VALID_REF_KINDS)}")
 
 
 def _validate_managed_input_url(url: Any, index: int, node_id: str) -> None:
@@ -838,9 +761,7 @@ def _validate_managed_input_url(url: Any, index: int, node_id: str) -> None:
         # No URL — the input may reference a connector instead (deferred).
         return
     if not isinstance(url, str) or not url.strip():
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'url' must be a non-empty string when provided"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'url' must be a non-empty string when provided")
     url = url.strip()
     # Valid prefixes: ``https://``, ``ssh://`` (scheme + authority), and
     # ``git@`` (SCP-style: ``git@host:path``).  ``git@`` is a bare prefix —
@@ -848,8 +769,4 @@ def _validate_managed_input_url(url: Any, index: int, node_id: str) -> None:
     _colon_slash_schemes = frozenset(s for s in _SUPPORTED_URL_SCHEMES if s != "git@")
     _valid_prefixes = (*[s + "://" for s in _colon_slash_schemes], "git@")
     if not url.startswith(_valid_prefixes):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' workspace_inputs[{index}] "
-            f"'url' {url!r} uses an unsupported scheme — supported schemes "
-            f"are {sorted(_SUPPORTED_URL_SCHEMES)}"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' workspace_inputs[{index}] 'url' {url!r} uses an unsupported scheme — supported schemes are {sorted(_SUPPORTED_URL_SCHEMES)}")

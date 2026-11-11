@@ -142,10 +142,7 @@ $$;
 
 
 def _role_exists(bind: sa.Connection, role: str) -> bool:
-    return (
-        bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none()
-        is not None
-    )
+    return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
 def _is_postgres(bind: sa.Connection) -> bool:
@@ -166,9 +163,7 @@ def upgrade() -> None:
         sa.Column("resource_id", sa.Uuid(), nullable=True),
         sa.Column("payload_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("request_id", sa.String(length=255), nullable=True),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("current_timestamp"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("current_timestamp"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_system_audit_events_event_type", _TABLE, ["event_type"], unique=False)
@@ -196,18 +191,10 @@ def upgrade() -> None:
         )
     )
     op.execute(
-        sa.text(
-            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='system_audit_events_no_delete') "
-            "THEN CREATE TRIGGER system_audit_events_no_delete BEFORE DELETE ON public.system_audit_events "
-            "FOR EACH ROW EXECUTE FUNCTION public.system_audit_events_append_only(); END IF; END $$;"
-        )
+        sa.text("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='system_audit_events_no_delete') THEN CREATE TRIGGER system_audit_events_no_delete BEFORE DELETE ON public.system_audit_events FOR EACH ROW EXECUTE FUNCTION public.system_audit_events_append_only(); END IF; END $$;")
     )
     op.execute(
-        sa.text(
-            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='system_audit_events_no_update') "
-            "THEN CREATE TRIGGER system_audit_events_no_update BEFORE UPDATE ON public.system_audit_events "
-            "FOR EACH ROW EXECUTE FUNCTION public.system_audit_events_append_only(); END IF; END $$;"
-        )
+        sa.text("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='system_audit_events_no_update') THEN CREATE TRIGGER system_audit_events_no_update BEFORE UPDATE ON public.system_audit_events FOR EACH ROW EXECUTE FUNCTION public.system_audit_events_append_only(); END IF; END $$;")
     )
 
     # Unblock the org hard-delete: the append-only guards on audit_events /

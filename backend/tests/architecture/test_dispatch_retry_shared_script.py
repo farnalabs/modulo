@@ -45,8 +45,8 @@ SCRIPT_MARKER = "bash scripts/dispatch_with_retry.sh"
 #: The Modulo webhook secrets. Any workflow that names one is a dispatch site
 #: and must route through the shared script.
 WEBHOOK_SECRET_MARKERS = (
-    "MODULO_BRANCH_FIXER_WEBHOOK_URL",
-    "MODULO_PR_REVIEW_WEBHOOK_URL",
+    "FARNA_CONTROL_MODULO_BRANCH_FIXER_WEBHOOK_URL",
+    "FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_URL",
 )
 
 #: The retry policy's helpers. Their DEFINITION in a workflow means the policy
@@ -98,23 +98,15 @@ def test_no_workflow_inlines_webhook_hmac_signing_or_the_policy() -> None:
     for path in _workflow_files():
         text = path.read_text(encoding="utf-8")
         for marker in inline_markers:
-            assert marker not in text, (
-                f"{path.name}: webhook dispatch policy inlined ({marker!r}); "
-                "every dispatch step must call scripts/dispatch_with_retry.sh"
-            )
+            assert marker not in text, f"{path.name}: webhook dispatch policy inlined ({marker!r}); every dispatch step must call scripts/dispatch_with_retry.sh"
 
 
 def test_every_webhook_workflow_routes_through_the_shared_script() -> None:
-    referencing = [
-        path for path in _workflow_files() if any(m in path.read_text(encoding="utf-8") for m in WEBHOOK_SECRET_MARKERS)
-    ]
+    referencing = [path for path in _workflow_files() if any(m in path.read_text(encoding="utf-8") for m in WEBHOOK_SECRET_MARKERS)]
     assert referencing, "no workflow references a Modulo webhook secret — search space is wrong"
     for path in referencing:
         text = path.read_text(encoding="utf-8")
-        assert SCRIPT_MARKER in text, (
-            f"{path.name}: references a Modulo webhook secret but never calls the shared "
-            "dispatch script — a dispatch site is bypassing the one retry policy"
-        )
+        assert SCRIPT_MARKER in text, f"{path.name}: references a Modulo webhook secret but never calls the shared dispatch script — a dispatch site is bypassing the one retry policy"
 
 
 def test_no_workflow_inlines_the_webhook_retry_ladder() -> None:
@@ -133,7 +125,4 @@ def test_no_workflow_inlines_the_webhook_retry_ladder() -> None:
         if not any(marker in text for marker in WEBHOOK_SECRET_MARKERS):
             continue
         for marker in ladder_markers:
-            assert marker not in text, (
-                f"{path.name}: a 5-attempt webhook retry ladder is inlined "
-                f"({marker!r}); every dispatch step must call scripts/dispatch_with_retry.sh"
-            )
+            assert marker not in text, f"{path.name}: a 5-attempt webhook retry ladder is inlined ({marker!r}); every dispatch step must call scripts/dispatch_with_retry.sh"

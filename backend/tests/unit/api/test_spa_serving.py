@@ -38,7 +38,7 @@ def _plain_api_app() -> FastAPI:
 
 def _spa_app(dist: Path, extra: dict[str, str] | None = None) -> tuple[FastAPI, TestClient]:
     app = _plain_api_app()
-    env: dict[str, str] = {"MODULO_SERVE_SPA": "1", "MODULO_FRONTEND_DIST": str(dist)}
+    env: dict[str, str] = {"FARNA_CONTROL_MODULO_SERVE_SPA": "1", "FARNA_CONTROL_MODULO_FRONTEND_DIST": str(dist)}
     env.update(extra or {})
     _init_once_mount_spa(app, env)
     return app, TestClient(app, base_url="http://127.0.0.1:18000")
@@ -56,15 +56,12 @@ def test_serve_spa_disabled_mounts_nothing() -> None:
 def test_serve_spa_disabled_by_default() -> None:
     app = _plain_api_app()
     assert _init_once_mount_spa(app, {}) is False
-    assert _init_once_mount_spa(app, {"MODULO_SERVE_SPA": "false"}) is False
+    assert _init_once_mount_spa(app, {"FARNA_CONTROL_MODULO_SERVE_SPA": "false"}) is False
 
 
 def test_truthy_flag_refuses_missing_dist(tmp_path: Path) -> None:
     app = _plain_api_app()
-    assert (
-        _init_once_mount_spa(app, {"MODULO_SERVE_SPA": "true", "MODULO_FRONTEND_DIST": str(tmp_path / "missing")})
-        is False
-    )
+    assert _init_once_mount_spa(app, {"FARNA_CONTROL_MODULO_SERVE_SPA": "true", "FARNA_CONTROL_MODULO_FRONTEND_DIST": str(tmp_path / "missing")}) is False
 
 
 def test_serve_spa_on_serves_the_spa_shell(tmp_path: Path) -> None:
@@ -108,9 +105,9 @@ def test_api_routes_are_never_shadowed_by_the_spa_fallback(tmp_path: Path) -> No
 
 
 def test_runtime_config_route_serves_allowlisted_keys_only(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setenv("MODULO_MONITOR_CONFIG", '{"targets": ["db"]}')
-    monkeypatch.setenv("MODULO_AUTO_LOGIN_USERNAME", "demo")
-    monkeypatch.setenv("MODULO_AUTO_LOGIN_PASSWORD", "demo-pw")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_MONITOR_CONFIG", '{"targets": ["db"]}')
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_AUTO_LOGIN_USERNAME", "demo")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_AUTO_LOGIN_PASSWORD", "demo-pw")
     dist = _dist(tmp_path)
     _, client = _spa_app(dist)
     response = client.get("/runtime-config.js")
@@ -124,7 +121,7 @@ def test_runtime_config_route_serves_allowlisted_keys_only(tmp_path: Path, monke
 
 def test_runtime_config_route_excludes_ambient_env_values(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://modulo:secret@db/modulo")
-    monkeypatch.delenv("MODULO_MONITOR_CONFIG", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_MONITOR_CONFIG", raising=False)
     dist = _dist(tmp_path)
     _, client = _spa_app(dist)
     body = client.get("/runtime-config.js").text
@@ -152,6 +149,6 @@ def test_host_origin_middleware_is_wired_when_serving(tmp_path: Path) -> None:
 
 def test_lan_origin_via_the_mount_helper(tmp_path: Path) -> None:
     dist = _dist(tmp_path)
-    _, client = _spa_app(dist, {"MODULO_LAN_ORIGINS": "192.168.1.10"})
+    _, client = _spa_app(dist, {"FARNA_CONTROL_MODULO_LAN_ORIGINS": "192.168.1.10"})
     assert client.get("/", headers={"Host": "192.168.1.10"}).status_code == 200
     assert client.get("/", headers={"Host": "evil.example"}).status_code == 403

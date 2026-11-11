@@ -159,10 +159,7 @@ async def evaluate_team_gate(
         return TeamGateDenial(
             kind="boundary",
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"This API key is scoped to team {team_key_id} and cannot access "
-                f"resources owned by team {owner_team_id}"
-            ),
+            detail=(f"This API key is scoped to team {team_key_id} and cannot access resources owned by team {owner_team_id}"),
             owner_team_id=owner_team_id,
         )
     if account_id is None:
@@ -339,13 +336,7 @@ async def resolve_trigger_team_scope(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid trigger_id path parameter",
         ) from None
-    stmt = (
-        select(Pipeline.owner_team_id, Pipeline.visibility)
-        .join(Trigger, Trigger.pipeline_id == Pipeline.id)
-        .where(Trigger.id == trigger_id)
-        .execution_options(include_deleted=True)
-        .where(Pipeline.deleted_at.is_(None))
-    )
+    stmt = select(Pipeline.owner_team_id, Pipeline.visibility).join(Trigger, Trigger.pipeline_id == Pipeline.id).where(Trigger.id == trigger_id).execution_options(include_deleted=True).where(Pipeline.deleted_at.is_(None))
     result = await session.execute(stmt)
     row = result.first()
     if row is None:
@@ -455,9 +446,7 @@ async def validate_team_transition_for_update(
     # `_assert_team_transition_allowed`).
     is_team_private = current_visibility not in ("org", None) and current_owner_team_id is not None
     if current_owner_team_id is not None and is_team_private:
-        is_member = await team_membership_exists(
-            session, account_id=principal.account_id, team_id=current_owner_team_id
-        )
+        is_member = await team_membership_exists(session, account_id=principal.account_id, team_id=current_owner_team_id)
         if not is_member:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

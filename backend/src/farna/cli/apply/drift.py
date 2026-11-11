@@ -66,9 +66,7 @@ def _diff_graph(
         detail[key] = {
             "added": sorted(i for i in desired_elements if i not in current_elements),
             "removed": sorted(i for i in current_elements if i not in desired_elements),
-            "modified": sorted(
-                i for i in desired_elements if i in current_elements and desired_elements[i] != current_elements[i]
-            ),
+            "modified": sorted(i for i in desired_elements if i in current_elements and desired_elements[i] != current_elements[i]),
         }
     return detail
 
@@ -91,10 +89,7 @@ def _diff_node_map(
     """
     desired_nodes = {str(element.get("id")): element for element in (desired.get("nodes") or [])}
     current_nodes = {str(element.get("id")): element for element in (current.get("nodes") or [])}
-    return [
-        (node_id, desired_nodes[node_id], current_nodes[node_id])
-        for node_id in sorted(desired_nodes.keys() & current_nodes.keys())
-    ]
+    return [(node_id, desired_nodes[node_id], current_nodes[node_id]) for node_id in sorted(desired_nodes.keys() & current_nodes.keys())]
 
 
 def _diff_git_scalar_fields(
@@ -320,10 +315,7 @@ def build_drift_detail(
       ``"<kind>:<name>"`` so a schema or trigger named like a pipeline can
       never collide with the bare-name pipeline key.
     """
-    updated = {
-        kind: {e["name"] for e in (report.get("updated") or []) if e.get("kind") == kind}
-        for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_PIPELINE, KIND_TRIGGER, KIND_SYSTEM_MAP)
-    }
+    updated = {kind: {e["name"] for e in (report.get("updated") or []) if e.get("kind") == kind} for kind in (KIND_SCHEMA, KIND_BACKEND, KIND_PIPELINE, KIND_TRIGGER, KIND_SYSTEM_MAP)}
     detail: dict[str, dict[str, Any]] = {}
     _add_pipeline_drift(detail, updated[KIND_PIPELINE], desired, current_entities)
     _add_managed_field_drift(detail, updated, desired, current_entities)

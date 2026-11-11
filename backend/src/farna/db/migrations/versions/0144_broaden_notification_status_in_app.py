@@ -28,33 +28,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        text(
-            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
-        )
-    )
-    op.execute(
-        text(
-            "ALTER TABLE public.notification_delivery_log ADD CONSTRAINT "
-            "ck_notification_delivery_log_status "
-            "CHECK (status::text = ANY (ARRAY['delivered'::character varying, "
-            "'failed'::character varying, 'dead_lettered'::character varying, "
-            "'in_app'::character varying]::text[]));"
-        )
-    )
+    op.execute(text("ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"))
+    op.execute(text("ALTER TABLE public.notification_delivery_log ADD CONSTRAINT ck_notification_delivery_log_status CHECK (status::text = ANY (ARRAY['delivered'::character varying, 'failed'::character varying, 'dead_lettered'::character varying, 'in_app'::character varying]::text[]));"))
 
 
 def downgrade() -> None:
-    op.execute(
-        text(
-            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
-        )
-    )
-    op.execute(
-        text(
-            "ALTER TABLE public.notification_delivery_log ADD CONSTRAINT "
-            "ck_notification_delivery_log_status "
-            "CHECK (status::text = ANY (ARRAY['delivered'::character varying, "
-            "'failed'::character varying, 'dead_lettered'::character varying]::text[]));"
-        )
-    )
+    op.execute(text("ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"))
+    op.execute(text("ALTER TABLE public.notification_delivery_log ADD CONSTRAINT ck_notification_delivery_log_status CHECK (status::text = ANY (ARRAY['delivered'::character varying, 'failed'::character varying, 'dead_lettered'::character varying]::text[]));"))

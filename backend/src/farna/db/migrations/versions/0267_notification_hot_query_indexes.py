@@ -53,31 +53,19 @@ depends_on: tuple[str, ...] | None = None
 _INDEXES = [
     (
         "ix_notifications_org_expires_at",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_notifications_org_expires_at "
-            'ON public."notifications" (organisation_id, expires_at);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_notifications_org_expires_at ON public."notifications" (organisation_id, expires_at);'),
     ),
     (
         "ix_notifications_org_scope_target",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_notifications_org_scope_target "
-            'ON public."notifications" (organisation_id, scope, target_user_id);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_notifications_org_scope_target ON public."notifications" (organisation_id, scope, target_user_id);'),
     ),
     (
         "ix_dismissals_org_user_scope",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_dismissals_org_user_scope "
-            'ON public."dismissals" (organisation_id, dismissed_by_user_id, dismiss_scope);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_dismissals_org_user_scope ON public."dismissals" (organisation_id, dismissed_by_user_id, dismiss_scope);'),
     ),
     (
         "ix_dismissals_user_scope",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_dismissals_user_scope "
-            'ON public."dismissals" (dismissed_by_user_id, dismiss_scope);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_dismissals_user_scope ON public."dismissals" (dismissed_by_user_id, dismiss_scope);'),
     ),
 ]
 

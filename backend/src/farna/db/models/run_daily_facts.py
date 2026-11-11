@@ -72,23 +72,14 @@ class RunDailyFact(OrgScoped):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         nullable=False,
-        comment=(
-            "deliberately NOT a FK to runs — facts must survive the 90-day run "
-            "purge; a future 'fix' into an FK breaks retention"
-        ),
+        comment=("deliberately NOT a FK to runs — facts must survive the 90-day run purge; a future 'fix' into an FK breaks retention"),
     )
     run_date: Mapped[date] = mapped_column(Date, nullable=False)
-    team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True)
     team_name: Mapped[str | None] = mapped_column(String(255))
-    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipelines.id", ondelete=ONDELETE_SET_NULL), index=True)
     pipeline_name: Mapped[str | None] = mapped_column(String(255))
-    folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True)
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # FAR-1141 / ADR-042: the run's execution origin copied from
     # ``Run.execution_origin`` at finalize so the analytics read path NEVER
@@ -125,40 +116,22 @@ class RunDailyFact(OrgScoped):
     # Migration 0296; stamped by ``core.analytics.record_run_facts``.
     benign: Mapped[bool | None] = mapped_column(Boolean)
     claim_count: Mapped[int | None] = mapped_column(Integer)
-    queue_wait_ms: Mapped[int | None] = mapped_column(
-        BigInteger, comment="Run.started_at - Run.dispatched_at when both present, else NULL"
-    )
-    final_idle_ms: Mapped[int | None] = mapped_column(
-        BigInteger, comment="Run.completed_at - Run.heartbeat_at (the stuck-with-no-heartbeat window), else NULL"
-    )
+    queue_wait_ms: Mapped[int | None] = mapped_column(BigInteger, comment="Run.started_at - Run.dispatched_at when both present, else NULL")
+    final_idle_ms: Mapped[int | None] = mapped_column(BigInteger, comment="Run.completed_at - Run.heartbeat_at (the stuck-with-no-heartbeat window), else NULL")
     cancellation_requested: Mapped[bool | None] = mapped_column(Boolean)
     dispatcher: Mapped[str | None] = mapped_column(String(20))
-    node_count: Mapped[int | None] = mapped_column(
-        Integer, comment="number of nodes in the pipeline snapshot graph_json (NULL-safe)"
-    )
-    sandbox_agent_node_count: Mapped[int | None] = mapped_column(
-        Integer, comment="count of sandbox_agent nodes in the snapshot graph_json (NULL-safe)"
-    )
-    max_node_timeout_seconds: Mapped[int | None] = mapped_column(
-        Integer, comment="max timeout_seconds across snapshot graph nodes (NULL-safe)"
-    )
+    node_count: Mapped[int | None] = mapped_column(Integer, comment="number of nodes in the pipeline snapshot graph_json (NULL-safe)")
+    sandbox_agent_node_count: Mapped[int | None] = mapped_column(Integer, comment="count of sandbox_agent nodes in the snapshot graph_json (NULL-safe)")
+    max_node_timeout_seconds: Mapped[int | None] = mapped_column(Integer, comment="max timeout_seconds across snapshot graph nodes (NULL-safe)")
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
-        comment=(
-            "deliberately NOT a FK to runs — facts survive the run purge; a future 'fix' into an FK breaks retention"
-        ),
+        comment=("deliberately NOT a FK to runs — facts survive the run purge; a future 'fix' into an FK breaks retention"),
     )
     batch_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
-        comment=(
-            "FAR-332 batch-scoped variant comparison — the batch_id every run fired "
-            "together by run_variant_batch shares; NOT a FK (facts survive the run "
-            "purge, ADR 020). Null for legacy and non-variant runs."
-        ),
+        comment=("FAR-332 batch-scoped variant comparison — the batch_id every run fired together by run_variant_batch shares; NOT a FK (facts survive the run purge, ADR 020). Null for legacy and non-variant runs."),
     )
-    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), comment="NOT a FK — the snapshot row may be purged independently of the fact"
-    )
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), comment="NOT a FK — the snapshot row may be purged independently of the fact")
     run_number: Mapped[int | None] = mapped_column(Integer)
     output_bytes: Mapped[int | None] = mapped_column(
         BigInteger,
@@ -177,12 +150,8 @@ class RunDailyFact(OrgScoped):
         DateTime(timezone=True),
         comment="absolute UTC instant the run was dispatched to the queue — from Run.dispatched_at",
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="absolute UTC instant the run started executing — from Run.started_at"
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="absolute UTC instant the run completed — from Run.completed_at"
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="absolute UTC instant the run started executing — from Run.started_at")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="absolute UTC instant the run completed — from Run.completed_at")
     total_queue_wait_ms: Mapped[int | None] = mapped_column(
         BigInteger,
         comment="Run.started_at - Run.created_at (full wait from creation to start), else NULL",
@@ -213,24 +182,14 @@ class RunDailyFact(OrgScoped):
     # FAR-801: count of managed workspace inputs resolved for this run.
     # NULL when the run had no workspace inputs configured or the audit
     # row was never written (best-effort write).
-    workspace_inputs_count: Mapped[int | None] = mapped_column(
-        Integer, comment="count of managed workspace inputs resolved for this run (NULL if none)"
-    )
+    workspace_inputs_count: Mapped[int | None] = mapped_column(Integer, comment="count of managed workspace inputs resolved for this run (NULL if none)")
     # FAR-902: schema enforcement aggregate counters — aggregated from
     # per-attempt enforcement records on run_node_outputs.  All nullable;
     # runs without schema enforcement have NULLs.
-    enforcement_native_count: Mapped[int | None] = mapped_column(
-        Integer, comment="count of attempts with native structured output (FAR-902)"
-    )
-    enforcement_verbatim_count: Mapped[int | None] = mapped_column(
-        Integer, comment="count of attempts with verbatim output (FAR-902)"
-    )
-    enforcement_repair_count: Mapped[int | None] = mapped_column(
-        Integer, comment="total repair loop invocations across all attempts (FAR-902)"
-    )
-    enforcement_wasted_count: Mapped[int | None] = mapped_column(
-        Integer, comment="total wasted attempts (schema rejection only, FAR-902)"
-    )
+    enforcement_native_count: Mapped[int | None] = mapped_column(Integer, comment="count of attempts with native structured output (FAR-902)")
+    enforcement_verbatim_count: Mapped[int | None] = mapped_column(Integer, comment="count of attempts with verbatim output (FAR-902)")
+    enforcement_repair_count: Mapped[int | None] = mapped_column(Integer, comment="total repair loop invocations across all attempts (FAR-902)")
+    enforcement_wasted_count: Mapped[int | None] = mapped_column(Integer, comment="total wasted attempts (schema rejection only, FAR-902)")
     # FAR-1463: absolute node-deadline watchdog firings — copied from
     # ``Run.node_deadline_watchdog_fired_count`` at finalize (and by the
     # ``backfill_facts`` select) so the analytics read path NEVER joins
@@ -246,9 +205,7 @@ class RunDailyFact(OrgScoped):
     # (pre-FAR-1463 firings were never recorded anywhere).
     node_deadline_watchdog_fired_count: Mapped[int | None] = mapped_column(
         Integer,
-        comment=(
-            "node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"
-        ),
+        comment=("node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"),
     )
     # FAR-1175 (ADR 043 S1): the autonomy level the run's HITL gates resolved
     # under, sourced at fact-write time from the run's most recent
@@ -290,10 +247,7 @@ class JourneyFact(OrgScoped):
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(),
         nullable=False,
-        comment=(
-            "deliberately NOT a FK to runs — journey facts must survive the 90-day "
-            "run purge; a future 'fix' into an FK breaks retention"
-        ),
+        comment=("deliberately NOT a FK to runs — journey facts must survive the 90-day run purge; a future 'fix' into an FK breaks retention"),
     )
     writer: Mapped[str] = mapped_column(String(30), nullable=False)
     parse_failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

@@ -69,9 +69,7 @@ class Account(Base, TimestampMixin):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=sa_text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=sa_text("gen_random_uuid()"))
     # ``email`` is NULLABLE at the DB level (FAR-1385): a service principal has
     # no human-shaped identity, so no login/invite/SSO/SCIM/audit lookup can
     # reach one by email, and the UNIQUE constraint tolerates any number of

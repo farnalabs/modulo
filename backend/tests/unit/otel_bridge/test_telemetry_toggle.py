@@ -130,17 +130,17 @@ class TestSettingsIntegration:
     def test_settings_defaults_to_disabled(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled should default to False."""
         # Isolate from any ambient MODULO_TELEMETRY_ENABLED in the runner env.
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
         assert _settings().modulo_telemetry_enabled is False
 
     def test_settings_can_enable(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled can be set to True."""
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
         assert _settings(modulo_telemetry_enabled=True).modulo_telemetry_enabled is True
 
     def test_env_var_overrides_default(self, monkeypatch: pytest.MonkeyPatch):
         """MODULO_TELEMETRY_ENABLED env var should override the default."""
-        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
         assert _settings().modulo_telemetry_enabled is True
 
 
@@ -153,7 +153,7 @@ class TestIsTelemetryEnabled:
         settings_env: None,
     ):
         """When the runtime config store is not initialised, falls back to Settings."""
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
 
         with patch("farna.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
@@ -175,9 +175,9 @@ class TestIsTelemetryEnabled:
         settings_env: None,
     ):
         """When the store has an override, is_telemetry_enabled reads it."""
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
         store = RuntimeConfigStore()
-        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
+        store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
         with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
@@ -187,9 +187,9 @@ class TestIsTelemetryEnabled:
         settings_env: None,
     ):
         """When env is true but store override is false, store wins."""
-        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
         store = RuntimeConfigStore()
-        store.set_override("MODULO_TELEMETRY_ENABLED", "false")
+        store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "false")
         with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is False
 
@@ -199,10 +199,10 @@ class TestIsTelemetryEnabled:
         settings_env: None,
     ):
         """When the store override is cleared, falls back to env/Settings."""
-        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
         store = RuntimeConfigStore()
-        store.set_override("MODULO_TELEMETRY_ENABLED", "true")
-        store.clear_override("MODULO_TELEMETRY_ENABLED")
+        store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
+        store.clear_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED")
         with patch("farna.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
@@ -217,7 +217,7 @@ class TestIsTelemetryEnabled:
         this defends the None arm of the store-first check for stores that
         were reset/torn down for test isolation.
         """
-        monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true")
         store = RuntimeConfigStore()
         with (
             patch.object(store, "get", return_value=None),
@@ -236,15 +236,13 @@ class TestToggleTelemetry:
             pytest.param(False, "false", id="disable-tears-down-otel"),
         ],
     )
-    def test_toggle_writes_override_and_reconfigures_otel(
-        self, monkeypatch: pytest.MonkeyPatch, enabled: bool, expected_override: str
-    ):
+    def test_toggle_writes_override_and_reconfigures_otel(self, monkeypatch: pytest.MonkeyPatch, enabled: bool, expected_override: str):
         """The toggle must persist its value AND reconfigure OTel to match it.
 
         Enable and disable share one code path, so both arms are pinned by one
         parameterised test rather than two copies of the same body.
         """
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
 
         store = RuntimeConfigStore()
@@ -255,12 +253,12 @@ class TestToggleTelemetry:
         ):
             mock_settings.return_value.modulo_otel_service_name = "test-svc"
             toggle_telemetry(enabled)
-        assert store.get("MODULO_TELEMETRY_ENABLED") == expected_override
+        assert store.get("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED") == expected_override
         mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=enabled)
 
     def test_toggle_is_idempotent(self, monkeypatch: pytest.MonkeyPatch):
         """Calling toggle_telemetry with the same value twice is safe."""
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", raising=False)
 
         store = RuntimeConfigStore()
         with (
@@ -271,4 +269,4 @@ class TestToggleTelemetry:
             mock_settings.return_value.modulo_otel_service_name = "test-svc"
             toggle_telemetry(True)
             toggle_telemetry(True)
-        assert store.get("MODULO_TELEMETRY_ENABLED") == "true"
+        assert store.get("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED") == "true"

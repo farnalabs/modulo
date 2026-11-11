@@ -59,7 +59,7 @@ class TestCleanupSessionFactory:
             patch.object(sw, "get_settings", return_value=settings),
             patch.object(sw, "_SYSTEM_ASYNC_ENGINE", None),
             patch.object(sw, "_make_session_factory") as mock_plain,
-            pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
+            pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
         ):
             sw._cleanup_session_factory()
 

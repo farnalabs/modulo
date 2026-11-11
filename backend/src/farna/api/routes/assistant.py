@@ -77,11 +77,7 @@ router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
 _NAV_TOOLS: dict[str, dict[str, Any]] = {
     "get_manifest": {
-        "description": (
-            "Resolve Modulo route details from the app manifest. Provide a route path to "
-            "get one page's route and element details, or omit it to get the whole app map. "
-            "Read-only: this does not move the user's browser."
-        ),
+        "description": ("Resolve Modulo route details from the app manifest. Provide a route path to get one page's route and element details, or omit it to get the whole app map. Read-only: this does not move the user's browser."),
         "parameters": {"path": {"type": "string", "description": "Optional route path to resolve."}},
     },
 }
@@ -128,9 +124,7 @@ def _get_registry() -> Any | None:
 
 class CreateSessionRequest(BaseModel):
     provider: str | None = Field(None, description="LLM provider (e.g. openai, anthropic). Auto-detected if omitted.")
-    model: str | None = Field(
-        None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted."
-    )
+    model: str | None = Field(None, description="Model ID (e.g. gpt-4o, claude-sonnet-4-20250514). Auto-detected if omitted.")
     context_window_tokens: int = Field(..., ge=1024, le=1_000_000)
     name: str | None = None
 
@@ -158,9 +152,7 @@ class StreamRequest(BaseModel):
         le=1_000_000,
         description="Override context window (defaults to session value)",
     )
-    api_key: str | None = Field(
-        None, description="Optional API key override. Auto-resolved from model backends if omitted."
-    )
+    api_key: str | None = Field(None, description="Optional API key override. Auto-resolved from model backends if omitted.")
     mcp_api_key: str | None = Field(None, description="MCP API key for tool execution.")
     page_context: str | None = Field(None, description="Current page context for Assistant's context-awareness.")
     system_prompt: str | None = Field(None, description="System prompt override.")
@@ -399,9 +391,7 @@ def _reconstruct_tool_calls(buffers: dict[int, dict[str, Any]]) -> list[dict[str
 
 
 async def _reconstruct_messages(session: AsyncSession, session_id: uuid.UUID) -> list[BaseMessage]:
-    result = await session.execute(
-        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
-    )
+    result = await session.execute(select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()))
     db_messages = result.scalars().all()
     return [_message_to_langchain(m) for m in db_messages]
 
@@ -512,9 +502,7 @@ async def _resolve_stream_api_key(ctx: _StreamContext) -> tuple[str | None, str 
             ctx.settings.fernet_key,
         )
     if resolved is None:
-        msg = (
-            f"No active {req.provider} API key configured. Add one in Settings > Model Backends or provide an api_key."
-        )
+        msg = f"No active {req.provider} API key configured. Add one in Settings > Model Backends or provide an api_key."
         return None, msg
     return resolved, None
 
@@ -824,11 +812,7 @@ async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
         langchain_messages.insert(0, SystemMessage(content=system_prompt))
 
     # 7. Context window pruning
-    context_window = (
-        ctx.req.context_window_tokens
-        if ctx.req.context_window_tokens is not None
-        else (ctx.chat_session.context_window_tokens or 200000)
-    )
+    context_window = ctx.req.context_window_tokens if ctx.req.context_window_tokens is not None else (ctx.chat_session.context_window_tokens or 200000)
     pruned_count = _prune_context_window(langchain_messages, context_window)
     if pruned_count:
         logger.info("Pruned %d messages from session %s", pruned_count, ctx.session_id)
@@ -858,23 +842,13 @@ async def list_sessions(
             total_result = await session.execute(total_q)
             total = total_result.scalar() or 0
 
-            q = (
-                select(ChatSession)
-                .where(ChatSession.account_id == principal.account_id)
-                .order_by(ChatSession.updated_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
+            q = select(ChatSession).where(ChatSession.account_id == principal.account_id).order_by(ChatSession.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
             result = await session.execute(q)
             sessions = result.scalars().all()
 
             if sessions:
                 session_ids = [s.id for s in sessions]
-                count_q = (
-                    select(ChatMessage.session_id, func.count(ChatMessage.id).label("cnt"))
-                    .where(ChatMessage.session_id.in_(session_ids))
-                    .group_by(ChatMessage.session_id)
-                )
+                count_q = select(ChatMessage.session_id, func.count(ChatMessage.id).label("cnt")).where(ChatMessage.session_id.in_(session_ids)).group_by(ChatMessage.session_id)
                 count_result = await session.execute(count_q)
                 count_map = {row.session_id: row.cnt for row in count_result}
             else:
@@ -948,9 +922,7 @@ async def _resolve_provider_model(
 @router.post(
     "/sessions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(audited("assistant_session_created", "assistant_session", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_session_created", "assistant_session", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("assistant.create_session")
 async def create_session(
@@ -962,11 +934,7 @@ async def create_session(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            max_sn = await session.execute(
-                select(func.coalesce(func.max(ChatSession.session_number), 0)).where(
-                    ChatSession.account_id == principal.account_id
-                )
-            )
+            max_sn = await session.execute(select(func.coalesce(func.max(ChatSession.session_number), 0)).where(ChatSession.account_id == principal.account_id))
             next_session_number = (max_sn.scalar() or 0) + 1
 
             provider, model = await _resolve_provider_model(session, principal, req.provider, req.model)
@@ -1053,9 +1021,7 @@ async def get_session(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
     responses={404: {"description": "Session not found"}},
-    dependencies=[
-        Depends(audited("assistant_session_renamed", "assistant_session", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_session_renamed", "assistant_session", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("assistant.rename_session")
 async def rename_session(
@@ -1183,13 +1149,7 @@ async def list_messages(
             total_result = await session.execute(total_q)
             total = total_result.scalar() or 0
 
-            q = (
-                select(ChatMessage)
-                .where(ChatMessage.session_id == session_id, ChatMessage.organisation_id == principal.organisation_id)
-                .order_by(ChatMessage.created_at.asc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
+            q = select(ChatMessage).where(ChatMessage.session_id == session_id, ChatMessage.organisation_id == principal.organisation_id).order_by(ChatMessage.created_at.asc()).offset((page - 1) * page_size).limit(page_size)
             result = await session.execute(q)
             messages = result.scalars().all()
 
@@ -1226,9 +1186,7 @@ async def list_messages(
     "/sessions/{session_id}/messages",
     status_code=status.HTTP_201_CREATED,
     responses={404: {"description": "Session not found"}},
-    dependencies=[
-        Depends(audited("assistant_message_appended", "assistant_message", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_message_appended", "assistant_message", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("assistant.append_message")
 async def append_message(
@@ -1329,9 +1287,7 @@ def _append_turn_messages(
 ) -> None:
     """Append the assistant message and tool results to the conversation for the next turn."""
     langchain_messages.append(AIMessage(content=full_content, tool_calls=tool_calls))
-    langchain_messages.extend(
-        ToolMessage(content=_tool_result_content(tr), tool_call_id=tr["tool_call_id"]) for tr in tool_results
-    )
+    langchain_messages.extend(ToolMessage(content=_tool_result_content(tr), tool_call_id=tr["tool_call_id"]) for tr in tool_results)
 
 
 def _ping_event_if_due(state: dict[str, Any]) -> str | None:
@@ -1356,9 +1312,7 @@ async def _run_stream_loop(
         tool_call_buffers: dict[int, dict[str, Any]] = {}
         tools_param = await _build_stream_tools_param(backend, ctx)
 
-        async for event in _stream_backend_tokens(
-            backend, langchain_messages, tools_param, request, tool_call_buffers, state
-        ):
+        async for event in _stream_backend_tokens(backend, langchain_messages, tools_param, request, tool_call_buffers, state):
             yield event
         if state["disconnected"]:
             return
@@ -1375,9 +1329,7 @@ async def _run_stream_loop(
 
         # Add to conversation for next LLM turn, then persist
         _append_turn_messages(langchain_messages, state["full_content"], tool_calls, tool_results)
-        state["msg_id"] = await _persist_assistant_and_tool_messages(
-            ctx, state["full_content"], tool_calls, tool_results, parent_msg_id
-        )
+        state["msg_id"] = await _persist_assistant_and_tool_messages(ctx, state["full_content"], tool_calls, tool_results, parent_msg_id)
 
         # Ping keepalive if idle
         ping = _ping_event_if_due(state)
@@ -1451,9 +1403,7 @@ async def _stream_event_generator(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
-    dependencies=[
-        Depends(audited("assistant_chat_streamed", "assistant_session", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("assistant_chat_streamed", "assistant_session", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("assistant.stream_chat")
 async def stream_chat(

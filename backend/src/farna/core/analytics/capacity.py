@@ -96,9 +96,7 @@ CAPACITY_MAX_RAW_ROWS = 50_000
 # interval or narrow the window (FAR-1343 M4). The default request is 12.
 MAX_CAPACITY_BUCKETS = 480
 
-EXECUTING_STATUSES: frozenset[str] = frozenset(
-    ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS}
-)
+EXECUTING_STATUSES: frozenset[str] = frozenset(ACTIVE_RUN_STATUSES - {"pending", AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
 PARKED_STATUSES: frozenset[str] = frozenset({AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS})
 GATE_STATUSES: frozenset[str] = frozenset(EXECUTING_STATUSES | PARKED_STATUSES)
 LIVE_STATUSES: frozenset[str] = frozenset(ACTIVE_RUN_STATUSES)
@@ -140,23 +138,16 @@ class CapacityParams:
 def validate_capacity_params(params: CapacityParams) -> CapacityParams:
     """Clamp/reject the window knobs (typed error, never a silent default)."""
     if not _MIN_WINDOW_MINUTES <= params.window_minutes <= _MAX_WINDOW_MINUTES:
-        raise AnalyticsValidationError(
-            f"window_minutes must be between {_MIN_WINDOW_MINUTES} and {_MAX_WINDOW_MINUTES}"
-        )
+        raise AnalyticsValidationError(f"window_minutes must be between {_MIN_WINDOW_MINUTES} and {_MAX_WINDOW_MINUTES}")
     if not _MIN_INTERVAL_SECONDS <= params.interval_seconds <= _MAX_INTERVAL_SECONDS:
-        raise AnalyticsValidationError(
-            f"interval_seconds must be between {_MIN_INTERVAL_SECONDS} and {_MAX_INTERVAL_SECONDS}"
-        )
+        raise AnalyticsValidationError(f"interval_seconds must be between {_MIN_INTERVAL_SECONDS} and {_MAX_INTERVAL_SECONDS}")
     if not 1 <= params.stall_intervals <= _MAX_STALL_INTERVALS:
         raise AnalyticsValidationError(f"stall_intervals must be between 1 and {_MAX_STALL_INTERVALS}")
     if params.interval_seconds > params.window_minutes * 60:
         raise AnalyticsValidationError("interval_seconds must not exceed the window length")
     bucket_count = (params.window_minutes * 60) // params.interval_seconds
     if bucket_count > MAX_CAPACITY_BUCKETS:
-        raise AnalyticsValidationError(
-            f"window_minutes / interval_seconds yields {bucket_count} intervals; "
-            f"the maximum is {MAX_CAPACITY_BUCKETS} — widen interval_seconds or narrow window_minutes"
-        )
+        raise AnalyticsValidationError(f"window_minutes / interval_seconds yields {bucket_count} intervals; the maximum is {MAX_CAPACITY_BUCKETS} — widen interval_seconds or narrow window_minutes")
     return params
 
 
@@ -656,10 +647,7 @@ def _pending_metrics(
 
     pending_created = [c for c in (_aware(_field(r, "created_at")) for r in pending) if c is not None]
     oldest_pending: datetime | None = min(pending_created) if pending_created else None
-    pending_by_pipeline = [
-        _pending_pipeline_entry(pid, items, pipeline_name, pipeline_cap, now)
-        for pid, items in per_pipeline_pending.items()
-    ]
+    pending_by_pipeline = [_pending_pipeline_entry(pid, items, pipeline_name, pipeline_cap, now) for pid, items in per_pipeline_pending.items()]
     pending_by_pipeline.sort(key=lambda item: (-item["pending_count"], item["pipeline_name"] or ""))
     return pending, cause_counts, pending_by_pipeline, oldest_pending
 
@@ -722,15 +710,9 @@ def _build_series(
     baseline_depth, baseline_oldest_age = _depth_at(all_queued, window_start)
     overall_depths = _depth_series(all_queued, bucket_ends)
     pipeline_depths = {pipe_id: _depth_series(intervals, bucket_ends) for pipe_id, intervals in queued.items()}
-    created_counts = _bin_counts(
-        rows, "created_at", bounds, window_start=window_start, interval_seconds=interval_seconds
-    )
-    started_counts = _bin_counts(
-        rows, "started_at", bounds, window_start=window_start, interval_seconds=interval_seconds
-    )
-    completed_counts = _bin_counts(
-        rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds
-    )
+    created_counts = _bin_counts(rows, "created_at", bounds, window_start=window_start, interval_seconds=interval_seconds)
+    started_counts = _bin_counts(rows, "started_at", bounds, window_start=window_start, interval_seconds=interval_seconds)
+    completed_counts = _bin_counts(rows, "completed_at", bounds, window_start=window_start, interval_seconds=interval_seconds)
 
     buckets: list[dict[str, Any]] = []
     for index in range(len(bounds) - 1):
@@ -905,9 +887,7 @@ def compute_capacity_report(
     pipeline_name = {str(_field(p, "id")): _field(p, "name") for p in pipelines}
     pipeline_cap = {str(_field(p, "id")): int(_field(p, "max_concurrent_runs") or 0) for p in pipelines}
 
-    pending, cause_counts, pending_by_pipeline, oldest_pending = _pending_metrics(
-        rows, pipeline_name, pipeline_cap, now
-    )
+    pending, cause_counts, pending_by_pipeline, oldest_pending = _pending_metrics(rows, pipeline_name, pipeline_cap, now)
 
     # --- active-run health (ORG-WIDE totals; team-scoped attribution) ------
     health = _active_health_counts(
@@ -949,9 +929,7 @@ def compute_capacity_report(
     # current interval must never read as "nothing completed while at cap".
     # Counted from the ORG-WIDE health rows so the stall signal's completion
     # side matches its org-wide cap denominator.
-    zero_completion_intervals = _trailing_zero_completion_intervals(
-        active_rows, bounds, now=now, window_start=window_start, interval_seconds=interval_seconds
-    )
+    zero_completion_intervals = _trailing_zero_completion_intervals(active_rows, bounds, now=now, window_start=window_start, interval_seconds=interval_seconds)
     completions_in_window = sum(1 for row in active_rows if _count_in_window(row, "completed_at", window_start, now))
 
     cap_held = org_run_limit is not None and gate_total >= org_run_limit
@@ -1079,24 +1057,13 @@ async def read_capacity_report(
     stale_heartbeat_seconds = settings.slot_reconcile_stale_seconds
 
     try:
-        async with _guarded_session(
-            factory, settings, org_id=org_id, account_id=account_id, org_role=org_role
-        ) as session:
-            rows = list(
-                (await session.execute(build_capacity_rows_query(org_id, params, window_start=window_start))).all()
-            )
+        async with _guarded_session(factory, settings, org_id=org_id, account_id=account_id, org_role=org_role) as session:
+            rows = list((await session.execute(build_capacity_rows_query(org_id, params, window_start=window_start))).all())
             if len(rows) > CAPACITY_MAX_RAW_ROWS:
-                raise AnalyticsValidationError(
-                    f"capacity scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — "
-                    "narrow the window or add a pipeline filter"
-                )
-            health_rows = list(
-                (await session.execute(build_capacity_health_query(org_id, window_start=window_start))).all()
-            )
+                raise AnalyticsValidationError(f"capacity scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — narrow the window or add a pipeline filter")
+            health_rows = list((await session.execute(build_capacity_health_query(org_id, window_start=window_start))).all())
             if len(health_rows) > CAPACITY_MAX_RAW_ROWS:
-                raise AnalyticsValidationError(
-                    f"capacity active-run scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — narrow the window"
-                )
+                raise AnalyticsValidationError(f"capacity active-run scan exceeded the {CAPACITY_MAX_RAW_ROWS}-row cap — narrow the window")
             pipelines = list((await session.execute(build_pipeline_meta_query(org_id, params))).all())
             org_run_limit = await get_org_run_concurrency_limit(session, org_id)
             sandbox_cap, sandbox_is_default, sandbox_active = await _sandbox_state(session, org_id)

@@ -53,20 +53,9 @@ _CONFLICT_HINT = "name already exists; rerun to apply as update"
 # owner, not an operator holding only a vault reference, authorises the move).
 # A ``credential_ref`` / ``secretref://`` token would only reach a 422 halfway
 # through an apply, leaving a partial run — so the entity is blocked up front.
-_ENDPOINT_CHANGE_CREDENTIAL_REASON = (
-    "changing base_url requires a literal api_key: the server re-authenticates a new "
-    "destination with the key itself, so a credential_ref / secretref:// vault "
-    "reference cannot change an endpoint (declare api_key: ${env:VAR} and put the key "
-    "in the environment)"
-)
-_ENDPOINT_CREATE_CREDENTIAL_REASON = (
-    "a custom base_url requires a literal api_key: a credential_ref / secretref:// "
-    "vault reference is not accepted for a new destination"
-)
-_ENDPOINT_UNSUPPORTED_REASON = (
-    "cannot manage base_url: the API did not report an endpoint for this backend - "
-    "is the server running a version that predates custom model-backend endpoints?"
-)
+_ENDPOINT_CHANGE_CREDENTIAL_REASON = "changing base_url requires a literal api_key: the server re-authenticates a new destination with the key itself, so a credential_ref / secretref:// vault reference cannot change an endpoint (declare api_key: ${env:VAR} and put the key in the environment)"
+_ENDPOINT_CREATE_CREDENTIAL_REASON = "a custom base_url requires a literal api_key: a credential_ref / secretref:// vault reference is not accepted for a new destination"
+_ENDPOINT_UNSUPPORTED_REASON = "cannot manage base_url: the API did not report an endpoint for this backend - is the server running a version that predates custom model-backend endpoints?"
 
 # Repeated API paths (S1192).
 _PATH_MODEL_BACKENDS = "/model-backends"
@@ -184,9 +173,7 @@ def resolve_secret_refs(
         if value is None:
             blocked.append((KIND_BACKEND, entity.name, f"unresolved env ref: ${{env:{var}}} is not set"))
         elif not value.strip():
-            blocked.append(
-                (KIND_BACKEND, entity.name, f"unresolved env ref: ${{env:{var}}} resolves to an empty value")
-            )
+            blocked.append((KIND_BACKEND, entity.name, f"unresolved env ref: ${{env:{var}}} resolves to an empty value"))
         else:
             resolved[entity.name] = value
     return resolved, blocked
@@ -332,11 +319,7 @@ class ApplyExecutor:
         except VaultListingError as exc:
             _log.warning("apply.vault_listing_unavailable: %s", exc)
             return [(KIND_BACKEND, name, f"cannot verify credential_ref {ref!r}: {exc}") for name, ref in declared]
-        return [
-            (KIND_BACKEND, name, f"credential_ref {ref!r} not found in the org vault")
-            for name, ref in declared
-            if ref not in vault_keys
-        ]
+        return [(KIND_BACKEND, name, f"credential_ref {ref!r} not found in the org vault") for name, ref in declared if ref not in vault_keys]
 
     def _block_unmanageable_endpoints(
         self,
@@ -566,9 +549,7 @@ class ApplyExecutor:
         except ApplyHttpError as exc:
             if exc.status_code != 403:
                 raise
-            _log.warning(
-                "apply.fetch_backends_in_dev_forbidden: falling back to default listing (missing in_dev entities)"
-            )
+            _log.warning("apply.fetch_backends_in_dev_forbidden: falling back to default listing (missing in_dev entities)")
             backends_list = self._get_paginated(_PATH_MODEL_BACKENDS)
         schemas = {item["name"]: item for item in schemas_list}
         backends = {item["name"]: item for item in backends_list}
@@ -596,17 +577,9 @@ class ApplyExecutor:
         wants_pipelines = bool(config.entities.pipelines)
         wants_triggers = bool(config.entities.triggers)
         wants_system_maps = bool(config.entities.system_maps)
-        needs_agents = any(
-            entity.graph is not None and any(node.agent is not None for node in entity.graph.nodes)
-            for entity in config.entities.pipelines
-        )
-        needs_users = any(
-            entity.business_owner_email or entity.reliability_owner_email for entity in config.entities.pipelines
-        )
-        needs_evals = any(
-            entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes)
-            for entity in config.entities.pipelines
-        )
+        needs_agents = any(entity.graph is not None and any(node.agent is not None for node in entity.graph.nodes) for entity in config.entities.pipelines)
+        needs_users = any(entity.business_owner_email or entity.reliability_owner_email for entity in config.entities.pipelines)
+        needs_evals = any(entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes) for entity in config.entities.pipelines)
         # /pipelines is fetched once here: BOTH helpers need it (graph
         # normalisation reads pipeline ids, the trigger identity map reads
         # pipeline id -> name).
@@ -619,11 +592,7 @@ class ApplyExecutor:
         if wants_system_maps:
             system_maps_list = self._get_paginated("/system-maps", params={"page_size": 100})
         ambiguous_system_map_names = _duplicate_name_counts(system_maps_list)
-        system_maps = {
-            item["name"]: item
-            for item in system_maps_list
-            if item.get("name") is not None and item["name"] not in ambiguous_system_map_names
-        }
+        system_maps = {item["name"]: item for item in system_maps_list if item.get("name") is not None and item["name"] not in ambiguous_system_map_names}
 
         bundle = self._fetch_pipeline_bundle(
             config,
@@ -703,11 +672,7 @@ class ApplyExecutor:
         if needs_users:
             try:
                 users_list = self._get_paginated("/admin/users")
-                users = {
-                    str(item.get("email")).lower(): str(item["id"])
-                    for item in users_list
-                    if item.get("email") and item.get("id")
-                }
+                users = {str(item.get("email")).lower(): str(item["id"]) for item in users_list if item.get("email") and item.get("id")}
             except ApplyHttpError as exc:
                 users_error = str(exc)
                 _log.warning("apply.fetch_users_failed: %s", users_error)
@@ -716,27 +681,15 @@ class ApplyExecutor:
         if needs_evals:
             try:
                 evals_list = self._get_paginated(_PATH_EVALS)
-                evals = {
-                    str(item["id"]): item
-                    for item in evals_list
-                    if item.get("id") is not None and item.get("deleted_at") is None
-                }
+                evals = {str(item["id"]): item for item in evals_list if item.get("id") is not None and item.get("deleted_at") is None}
             except ApplyHttpError as exc:
                 evals_error = str(exc)
                 _log.warning("apply.fetch_evals_failed: %s", evals_error)
 
         ambiguous_agent_names = _duplicate_name_counts(agents_list)
-        agents = {
-            item["name"]: item["id"]
-            for item in agents_list
-            if item.get("name") is not None and item["name"] not in ambiguous_agent_names
-        }
+        agents = {item["name"]: item["id"] for item in agents_list if item.get("name") is not None and item["name"] not in ambiguous_agent_names}
         ambiguous_pipeline_names = _duplicate_name_counts(pipelines_list)
-        pipelines = {
-            item["name"]: item
-            for item in pipelines_list
-            if item.get("name") is not None and item["name"] not in ambiguous_pipeline_names
-        }
+        pipelines = {item["name"]: item for item in pipelines_list if item.get("name") is not None and item["name"] not in ambiguous_pipeline_names}
         unreadable_graph_pipelines = self._normalize_pipeline_graphs(
             config,
             pipelines,
@@ -808,13 +761,7 @@ class ApplyExecutor:
             triggers_list = self._get_paginated("/triggers")
         # Trigger identity map: pipeline ids -> names. Pipeline ids whose name
         # is ambiguous are EXCLUDED (their composite key would be unreliable).
-        pipeline_names_by_id = {
-            str(item["id"]): item["name"]
-            for item in pipelines_list
-            if item.get("id") is not None
-            and item.get("name") is not None
-            and item["name"] not in ambiguous_pipeline_names
-        }
+        pipeline_names_by_id = {str(item["id"]): item["name"] for item in pipelines_list if item.get("id") is not None and item.get("name") is not None and item["name"] not in ambiguous_pipeline_names}
         triggers: dict[str, dict[str, Any]] = {}
         trigger_key_counts: dict[str, int] = {}
         for item in triggers_list:
@@ -894,11 +841,7 @@ class ApplyExecutor:
                 schema_id = self._create_schema(entity)
             else:
                 schema_id = self._update_schema(entity, current_entities[KIND_SCHEMA][entity.name])
-            existing_versions = (
-                {v["version"] for v in current_entities[KIND_SCHEMA][entity.name].get("versions") or []}
-                if status == "updated"
-                else set()
-            )
+            existing_versions = {v["version"] for v in current_entities[KIND_SCHEMA][entity.name].get("versions") or []} if status == "updated" else set()
             self._apply_schema_versions(entity, schema_id, existing_versions, report)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)
@@ -1136,21 +1079,13 @@ class ApplyExecutor:
             blocked.append((KIND_PIPELINE, name, f"current graph unreadable: {reason}"))
         blocked_keys = {(kind, name) for kind, name, _reason in blocked}
         desired: dict[str, list[tuple[str, dict[str, Any]]]] = {
-            KIND_SCHEMA: [
-                (name, e.managed_view()) for name, e in entities[KIND_SCHEMA] if (KIND_SCHEMA, name) not in blocked_keys
-            ],
-            KIND_BACKEND: [
-                (name, e.managed_view())
-                for name, e in entities[KIND_BACKEND]
-                if (KIND_BACKEND, name) not in blocked_keys
-            ],
+            KIND_SCHEMA: [(name, e.managed_view()) for name, e in entities[KIND_SCHEMA] if (KIND_SCHEMA, name) not in blocked_keys],
+            KIND_BACKEND: [(name, e.managed_view()) for name, e in entities[KIND_BACKEND] if (KIND_BACKEND, name) not in blocked_keys],
             KIND_PIPELINE: [],
             KIND_TRIGGER: [],
             KIND_SYSTEM_MAP: [],
         }
-        desired, blocked = pipeline_apply.build_desired_views(
-            config.entities, current_entities, desired, blocked, blocked_keys, refresh_secrets=refresh_secrets
-        )
+        desired, blocked = pipeline_apply.build_desired_views(config.entities, current_entities, desired, blocked, blocked_keys, refresh_secrets=refresh_secrets)
         # The pipeline build phase appended its own blocked entries AFTER
         # blocked_keys was computed — recompute so trigger planning sees the
         # upstream pipeline blocks (otherwise a trigger would be planned
@@ -1169,9 +1104,7 @@ class ApplyExecutor:
         )
         # System Maps: no cross-entity refs to resolve, but they must see
         # the updated blocked_keys so an ambiguous name is caught.
-        desired, blocked = system_map_apply.build_desired_views(
-            config.entities, current_entities, desired, blocked, blocked_keys
-        )
+        desired, blocked = system_map_apply.build_desired_views(config.entities, current_entities, desired, blocked, blocked_keys)
         report: dict[str, Any] = build_plan(desired, current_entities, blocked)
         report["failed"] = []
         if dry_run:
@@ -1185,9 +1118,7 @@ class ApplyExecutor:
             return report
         self.apply_schemas(entities, current_entities, report)
         self.apply_backends(entities, current_entities, resolved_api_keys, report)
-        pipeline_ids = pipeline_apply.apply_pipelines(
-            self, entities, current_entities, report, refresh_secrets=refresh_secrets
-        )
+        pipeline_ids = pipeline_apply.apply_pipelines(self, entities, current_entities, report, refresh_secrets=refresh_secrets)
         trigger_apply.apply_triggers(self, entities, current_entities, report, pipeline_ids, resolved_trigger_configs)
         system_map_apply.apply_system_maps(self, entities, current_entities, report)
         return report

@@ -62,9 +62,7 @@ def downgrade() -> None:
     # Re-point kubernetes rows to the historical column default BEFORE
     # narrowing the vocabulary (the CHECK would reject them otherwise).
     # NOT semantics-preserving — see the module docstring.
-    op.execute(
-        "UPDATE public.environment_profiles SET provider_type = 'local_docker' WHERE provider_type = 'kubernetes';"
-    )
+    op.execute("UPDATE public.environment_profiles SET provider_type = 'local_docker' WHERE provider_type = 'kubernetes';")
     op.execute("ALTER TABLE public.environment_profiles DROP CONSTRAINT IF EXISTS ck_env_profiles_provider_type;")
     op.execute(
         r"""

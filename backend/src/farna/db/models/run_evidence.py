@@ -37,13 +37,9 @@ class RunEvidence(Base):
     # Tenant anchor (matches migration 0133_run_evidence_rls which added this
     # NOT NULL FK + RLS). The ORM previously omitted it, so every INSERT failed
     # the NOT NULL / RLS FORCE guard on Postgres.
-    organisation_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    organisation_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
     # FAR-644: no FK to nodes.id — ``nodes`` is the deprecated composite-template
     # store; this node id is a JSON-graph id (pipelines.graph_nodes_json) that
     # never materialises as a ``nodes`` row (see migration 0170's correction),
@@ -51,6 +47,4 @@ class RunEvidence(Base):
     node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     evidence_state: Mapped[str] = mapped_column(String(20), nullable=False)
     evidence_detail: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    evidence_written_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    evidence_written_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)

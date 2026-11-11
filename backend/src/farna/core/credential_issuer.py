@@ -69,7 +69,7 @@ PROVENANCE_KINDS: frozenset[str] = frozenset({PROVENANCE_KIND_ATTESTED, PROVENAN
 # The sandbox env var the run reads its issuance provenance from. Reserved via
 # ``db.runner_binding_constraints.RESERVED_ENV_VAR_PREFIXES`` (``MODULO_``) and
 # the exact-name denylist, so a node's ``env_vars``/binding cannot spoof it.
-RUN_CREDENTIAL_PROVENANCE_ENV = "MODULO_CREDENTIAL_PROVENANCE"
+RUN_CREDENTIAL_PROVENANCE_ENV = "FARNA_CONTROL_MODULO_CREDENTIAL_PROVENANCE"
 
 
 @dataclass(frozen=True)
@@ -92,13 +92,9 @@ class IssuedRunCredential:
 
     def __post_init__(self) -> None:
         if self.provenance not in ISSUANCE_PROVENANCES:
-            raise ValueError(
-                f"invalid issuance provenance {self.provenance!r}; valid values: {sorted(ISSUANCE_PROVENANCES)}"
-            )
+            raise ValueError(f"invalid issuance provenance {self.provenance!r}; valid values: {sorted(ISSUANCE_PROVENANCES)}")
         if self.provenance_kind not in PROVENANCE_KINDS:
-            raise ValueError(
-                f"invalid issuance provenance kind {self.provenance_kind!r}; valid values: {sorted(PROVENANCE_KINDS)}"
-            )
+            raise ValueError(f"invalid issuance provenance kind {self.provenance_kind!r}; valid values: {sorted(PROVENANCE_KINDS)}")
 
 
 @runtime_checkable
@@ -237,11 +233,7 @@ class ModuloCredentialIssuer:
         if account_id_raw is None:
             admin_row = (
                 await session.execute(
-                    sql_text(
-                        "SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id "
-                        "WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL "
-                        "ORDER BY a.created_at LIMIT 1"
-                    ),
+                    sql_text("SELECT a.id FROM accounts a JOIN org_memberships om ON om.account_id = a.id WHERE om.organisation_id=:oid AND om.role='admin' AND om.deactivated_at IS NULL ORDER BY a.created_at LIMIT 1"),
                     {"oid": str(org_uuid)},
                 )
             ).fetchone()

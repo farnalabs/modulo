@@ -62,9 +62,7 @@ class NotionConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(
-            _NOTION_API, base_url=_NOTION_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_NOTION_API, base_url=_NOTION_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self))
 
     async def health_check(self) -> HealthResult:
         """Verify connectivity by listing users."""

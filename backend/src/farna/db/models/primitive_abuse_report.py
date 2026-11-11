@@ -26,15 +26,9 @@ class PrimitiveAbuseReport(OrgScoped):
         nullable=False,
         index=True,
     )
-    rating_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("primitive_ratings.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
-    reporter_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    rating_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("primitive_ratings.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
+    reporter_account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
     reason: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    reviewer_account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True)

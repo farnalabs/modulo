@@ -51,9 +51,7 @@ def _graph_has_script_mode_node(graph_json: dict[str, Any] | None) -> bool:
     nodes = graph_json.get("nodes")
     if not isinstance(nodes, list):
         return False
-    return any(
-        isinstance(n, dict) and n.get("node_type") == "sandbox_agent" and n.get("mode") == "script" for n in nodes
-    )
+    return any(isinstance(n, dict) and n.get("node_type") == "sandbox_agent" and n.get("mode") == "script" for n in nodes)
 
 
 def _flag_anomaly(
@@ -179,11 +177,7 @@ async def _count_unexpected_side_effect_unknown(
             continue
         # Check if ANY sandbox_agent node in the graph lacks timeout/budget.
         for node in nodes:
-            if (
-                isinstance(node, dict)
-                and node.get("node_type") == "sandbox_agent"
-                and not _node_config_has_budget(node)
-            ):
+            if isinstance(node, dict) and node.get("node_type") == "sandbox_agent" and not _node_config_has_budget(node):
                 count += 1
                 break
     return count
@@ -291,9 +285,7 @@ async def evaluate_rollback_thresholds(
             if time.monotonic() > deadline:
                 break
             try:
-                checked, found, flagged = await _evaluate_org(
-                    session_factory, org_id, window_start, window_hours, min_runs
-                )
+                checked, found, flagged = await _evaluate_org(session_factory, org_id, window_start, window_hours, min_runs)
                 orgs_checked += checked
                 anomalies_found += found
                 for org in flagged:

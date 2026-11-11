@@ -197,10 +197,7 @@ def load_env_file(
     try:
         from dotenv import dotenv_values
     except ModuleNotFoundError as exc:  # pragma: no cover - python-dotenv is a hard dep of pydantic-settings
-        raise RuntimeError(
-            f"Cannot read {existing[0]} for the migration database URL: python-dotenv is not installed. "
-            "Export DATABASE_URL instead, or reinstall the backend dependencies."
-        ) from exc
+        raise RuntimeError(f"Cannot read {existing[0]} for the migration database URL: python-dotenv is not installed. Export DATABASE_URL instead, or reinstall the backend dependencies.") from exc
 
     loaded: Path | None = None
     for path in existing:
@@ -355,13 +352,7 @@ def do_run_migrations(connection: Connection) -> None:
             # every migration run, and during rehearsal mode (FAR-717) any
             # side connection is refused outright (its effects would persist
             # outside the rehearsal transaction). NULL means unbounded (TEXT).
-            max_len = connection.execute(
-                sa.text(
-                    "SELECT character_maximum_length FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'alembic_version' "
-                    "AND column_name = 'version_num'"
-                )
-            ).scalar()
+            max_len = connection.execute(sa.text("SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'alembic_version' AND column_name = 'version_num'")).scalar()
             if max_len is None or max_len >= 255:
                 _log.debug(
                     "alembic_version.version_num already wide enough (max_len=%s) -- skipping widening",
@@ -373,14 +364,10 @@ def do_run_migrations(connection: Connection) -> None:
                 # does not abort the outer migration transaction.
                 try:
                     with connection.engine.begin() as alt_conn:
-                        alt_conn.execute(
-                            sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
-                        )
+                        alt_conn.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
                         _log.info("Widened alembic_version.version_num to VARCHAR(255)")
                 except Exception:
-                    _log.warning(
-                        "Could not widen alembic_version (non-owner); bootstrap_db.py already created it with VARCHAR(255)"
-                    )
+                    _log.warning("Could not widen alembic_version (non-owner); bootstrap_db.py already created it with VARCHAR(255)")
         else:
             connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
             _log.info("Pre-created alembic_version.version_num as VARCHAR(255)")
@@ -557,10 +544,7 @@ def _rehearsal_print(message: str) -> None:
 
 
 def _rehearsal_escape_hatch_message(culprit: str) -> str:
-    return (
-        f"{culprit} uses the autocommit escape hatch and CANNOT be rehearsed "
-        "(its effects would persist) - exclude it from rehearsal or run it for real"
-    )
+    return f"{culprit} uses the autocommit escape hatch and CANNOT be rehearsed (its effects would persist) - exclude it from rehearsal or run it for real"
 
 
 def _refuse_rehearsal_escape_hatch(culprit: str | None = None) -> None:
@@ -684,12 +668,7 @@ def _run_migrations_rehearsal(engine: Engine, url: str) -> None:
     is never set and nothing commits mid-run - a whole-run single transaction
     is mandatory in rehearsal mode.
     """
-    global \
-        _rehearsal_mode, \
-        _rehearsal_main_conn_acquired, \
-        _rehearsal_current_revision, \
-        _rehearsal_applied_steps, \
-        _rehearsal_planned_steps
+    global _rehearsal_mode, _rehearsal_main_conn_acquired, _rehearsal_current_revision, _rehearsal_applied_steps, _rehearsal_planned_steps
 
     cfg = config
     if cfg is None:
@@ -779,9 +758,7 @@ def run_migrations_online() -> None:
         if _invocation_is_upgrade() and _db_is_at_head(engine):
             _log.info("startup.migrations_already_at_head -- skipping migration run")
             if _rehearsal_requested():
-                _rehearsal_print(
-                    "=== MIGRATION REHEARSAL (ALEMBIC_REHEARSAL=1): DB already at head - nothing to rehearse ==="
-                )
+                _rehearsal_print("=== MIGRATION REHEARSAL (ALEMBIC_REHEARSAL=1): DB already at head - nothing to rehearse ===")
             return
         if _rehearsal_requested():
             _run_migrations_rehearsal(engine, url)

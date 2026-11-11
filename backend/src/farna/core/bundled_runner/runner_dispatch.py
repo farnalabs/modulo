@@ -266,10 +266,7 @@ def _assert_profile_team_scope_for_dispatch(
         },
     )
     raise SandboxDispatchUnboundError(
-        f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the bound environment profile is team-private "
-        "and is not owned by this pipeline's owner team. Dispatch refuses the binding and "
-        "selects no provider — re-bind the pipeline to a profile its owner team owns, or "
-        "re-scope the profile."
+        f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the bound environment profile is team-private and is not owned by this pipeline's owner team. Dispatch refuses the binding and selects no provider — re-bind the pipeline to a profile its owner team owns, or re-scope the profile."
     )
 
 
@@ -278,11 +275,7 @@ def validate_persistence_for_provider(profile: Any) -> None:
     provider_type = (getattr(profile, "provider_type", "") or "").strip().lower()
     persistence = getattr(profile, "persistence_policy", "ephemeral")
     if provider_type == "runner_docker" and persistence != "ephemeral":
-        raise SandboxDispatchUnboundError(
-            f"Environment profile '{getattr(profile, 'name', profile)}': the Bundled Runner "
-            f"(runner_docker) locks persistence_policy to 'ephemeral' (got '{persistence}'); "
-            "retained/cache workspaces are not supported on this provider."
-        )
+        raise SandboxDispatchUnboundError(f"Environment profile '{getattr(profile, 'name', profile)}': the Bundled Runner (runner_docker) locks persistence_policy to 'ephemeral' (got '{persistence}'); retained/cache workspaces are not supported on this provider.")
 
 
 async def _assert_team_scope_backstop(
@@ -344,7 +337,7 @@ def _build_dispatch_hub_provider(profile: Any) -> tuple[Any, Any]:
         settings = get_settings()
         # FAR-1135: MODULO_MAX_LOCAL_CONCURRENCY is hot-reloadable.
         concurrency = override_int_or(
-            "MODULO_MAX_LOCAL_CONCURRENCY",
+            "FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY",
             int(getattr(settings, "modulo_max_local_concurrency", 2) or 2),
         )
         hub = build_hub(max_local_concurrency=concurrency)
@@ -404,11 +397,7 @@ async def resolve_sandbox_dispatch_route(
     await _assert_team_scope_backstop(session_factory, org_uuid, pipeline_id, profile)
     provider_type = (getattr(profile, "provider_type", "") or "").strip().lower()
     if provider_type in ("local", "local_docker"):
-        raise SandboxDispatchUnboundError(
-            f"Pipeline-level environment profile '{getattr(profile, 'name', profile)}' is bound to "
-            f"provider '{provider_type}' which is not dispatch-relevant — re-bind the pipeline "
-            "to a Runner provider (runner_docker or e2b), or unbind it."
-        )
+        raise SandboxDispatchUnboundError(f"Pipeline-level environment profile '{getattr(profile, 'name', profile)}' is bound to provider '{provider_type}' which is not dispatch-relevant — re-bind the pipeline to a Runner provider (runner_docker or e2b), or unbind it.")
     validate_persistence_for_provider(profile)
     if provider_type == "e2b":
         return RunnerDispatchRoute(provider_type="e2b", profile=profile)
@@ -481,11 +470,7 @@ def validate_e2b_dispatch_timeout(sandbox_timeout: Any, *, max_timeout_seconds: 
     cap = _E2B_MAX_TIMEOUT_SECONDS if max_timeout_seconds is None else int(max_timeout_seconds)
     if timeout_value > cap:
         cap_name = "E2B provisioning" if max_timeout_seconds is None else "selected environment profile"
-        raise SandboxDispatchTimeoutValidationError(
-            f"sandbox_agent timeout_seconds={timeout_value} exceeds the {cap_name} cap "
-            f"(loud validation, effective cap <= {cap}) — adjust the node configuration "
-            "instead of relying on a silent clamp."
-        )
+        raise SandboxDispatchTimeoutValidationError(f"sandbox_agent timeout_seconds={timeout_value} exceeds the {cap_name} cap (loud validation, effective cap <= {cap}) — adjust the node configuration instead of relying on a silent clamp.")
 
 
 def _parse_uuid(value: Any) -> uuid.UUID | None:
@@ -561,9 +546,7 @@ def _workspace_spec_for_dispatch(
     if egress_resolved.refusal is not None:
         from farna.core.pipeline_engine.node_runner import SandboxTierRefusedError
 
-        raise SandboxTierRefusedError(
-            f"Node '{node_id}' egress refused on {_tier.capitalize()} tier: {egress_resolved.refusal}"
-        )
+        raise SandboxTierRefusedError(f"Node '{node_id}' egress refused on {_tier.capitalize()} tier: {egress_resolved.refusal}")
 
     # FAR-1690: record the TYPED egress posture on the workspace, never a
     # boolean. On this route the reachable tiers (docker, kubernetes) yield
@@ -632,10 +615,7 @@ async def _write_file_via_exec(provider: Any, provider_ref: str, path: str, cont
     ]
     result = await provider.exec_command(provider_ref, cmd, cmd_timeout=30)
     if result.exit_code != 0:
-        raise RuntimeError(
-            f"Bundled Runner workspace file write failed for {path} "
-            f"(exit {result.exit_code}): {(result.stderr or '')[:200]}"
-        )
+        raise RuntimeError(f"Bundled Runner workspace file write failed for {path} (exit {result.exit_code}): {(result.stderr or '')[:200]}")
 
 
 async def _read_file_via_exec(provider: Any, provider_ref: str, path: str) -> str:
@@ -735,9 +715,7 @@ async def _consume_stream(
     stalled = False
     try:
         while True:
-            kind, item = await _next_stream_item(
-                queue, deadline=deadline, last_progress=last_progress, stall_timeout=stall_timeout
-            )
+            kind, item = await _next_stream_item(queue, deadline=deadline, last_progress=last_progress, stall_timeout=stall_timeout)
             if kind == "timeout":
                 timed_out = True
                 break
@@ -851,24 +829,15 @@ def _run_broker_for(run_id: str) -> Any:
 
 
 def _no_output_message(node_id: str) -> str:
-    return (
-        f"Bundled Runner agent produced no parseable output.json for node '{node_id}' "
-        "(a sandbox agent with zero usable work must not complete silently)"
-    )
+    return f"Bundled Runner agent produced no parseable output.json for node '{node_id}' (a sandbox agent with zero usable work must not complete silently)"
 
 
 def _schema_failure_message(node_id: str, schema_exc: str) -> str:
-    return (
-        f"Bundled Runner output for node '{node_id}' failed its declared output "
-        f"schema validation — retry in a fresh sandbox: {schema_exc}"
-    )
+    return f"Bundled Runner output for node '{node_id}' failed its declared output schema validation — retry in a fresh sandbox: {schema_exc}"
 
 
 def _budget_killed_message(node_id: str) -> str:
-    return (
-        f"Bundled Runner sandbox exceeded its wall-clock budget for node '{node_id}' "
-        "— killed by the platform-side runtime killer"
-    )
+    return f"Bundled Runner sandbox exceeded its wall-clock budget for node '{node_id}' — killed by the platform-side runtime killer"
 
 
 def _resolve_stall_timeout(stall_timeout_override: Any) -> float:
@@ -1053,12 +1022,7 @@ def _render_agent_template(
     if _model_value is not None:
         template_vars["model"] = _model_value
     elif _node_def.get("model_class"):
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' declares model_class "
-            f"{_node_def.get('model_class')!r} but no model was resolved at snapshot mint "
-            "(no baked _resolved_model and no run-override model) — refusing to dispatch "
-            "pre-sandbox (ADR 037 D3)"
-        )
+        raise ValueError(f"sandbox_agent node '{node_id}' declares model_class {_node_def.get('model_class')!r} but no model was resolved at snapshot mint (no baked _resolved_model and no run-override model) — refusing to dispatch pre-sandbox (ADR 037 D3)")
     try:
         rendered_prompt = env.from_string(agent_prompt_template).render(**template_vars)
         rendered_agent_command = env.from_string(agent_command).render(**template_vars)
@@ -1080,10 +1044,7 @@ def _render_agent_template(
         )
         rendered_agent_command = agent_command
     if rendered_agent_command and not rendered_agent_command.strip():
-        raise ValueError(
-            f"sandbox_agent node '{node_id}' rendered agent_command is empty after "
-            "template resolution — a sandbox agent cannot run an empty command"
-        ) from None
+        raise ValueError(f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution — a sandbox agent cannot run an empty command") from None
     return (rendered_prompt, rendered_agent_command, json.dumps(raw_input))
 
 
@@ -1140,9 +1101,7 @@ async def _provision_workspace(
         provider=request.route.provider_type,
     )
     if attempt_key is None:
-        raise SupersededNodeError(
-            "Bundled Runner dispatch marker denied — run superseded or not running; workspace not created"
-        )
+        raise SupersededNodeError("Bundled Runner dispatch marker denied — run superseded or not running; workspace not created")
 
     profile = request.route.profile
     provider = request.route.provider
@@ -1240,7 +1199,7 @@ async def _resolve_sandbox_envs_with_script_setup(
     node_scope = node_def.get("capability_scope") or {}
     allowed_tools = node_scope.get("allowed_tools")
     if allowed_tools:
-        env_vars_extra["MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in allowed_tools)
+        env_vars_extra["FARNA_CONTROL_MODULO_ALLOWED_TOOLS"] = ",".join(str(t) for t in allowed_tools)
     sandbox_envs = _build_sandbox_envs(
         run_id=run_id,
         pipeline_id=pipeline_id,
@@ -1289,7 +1248,7 @@ async def _resolve_sandbox_envs_with_script_setup(
         sandbox_timeout=sandbox_timeout,
     )
     if issued is not None:
-        sandbox_envs["MODULO_API_KEY"] = issued.secret
+        sandbox_envs["FARNA_CONTROL_MODULO_API_KEY"] = issued.secret
         sandbox_envs[RUN_CREDENTIAL_PROVENANCE_ENV] = issued.provenance
 
     return sandbox_envs, script_lease_claimed
@@ -1324,20 +1283,9 @@ def _classify_exec_result(
         )
     if timed_out or stalled:
         if sandbox_mode == "script" and script_lease_claimed:
-            raise ScriptSideEffectUnknownError(
-                "Bundled Runner script-mode terminated mid-execution (side effect unknown): "
-                + (
-                    f"stalled — no output for {stall_timeout:.0f}s"
-                    if stalled
-                    else f"no output within {sandbox_timeout}s"
-                )
-            )
+            raise ScriptSideEffectUnknownError("Bundled Runner script-mode terminated mid-execution (side effect unknown): " + (f"stalled — no output for {stall_timeout:.0f}s" if stalled else f"no output within {sandbox_timeout}s"))
         raise SandboxNodeFailedError(
-            (
-                f"agent produced no output for {stall_timeout:.0f}s"
-                if stalled
-                else f"Bundled Runner command produced no output within {sandbox_timeout}s"
-            ),
+            (f"agent produced no output for {stall_timeout:.0f}s" if stalled else f"Bundled Runner command produced no output within {sandbox_timeout}s"),
             node_id=node_id,
         )
     if exec_process.exit_code is None:
@@ -1380,9 +1328,7 @@ def _output_parse_error(raw_output_str: str, output_json: Any) -> str:
     return "output.json is empty or JSON null"
 
 
-def _no_output_error(
-    node_id: str, sandbox_mode: str, script_lease_claimed: bool
-) -> SandboxNodeFailedError | ScriptInvalidOutputError:
+def _no_output_error(node_id: str, sandbox_mode: str, script_lease_claimed: bool) -> SandboxNodeFailedError | ScriptInvalidOutputError:
     """The typed error for a genuinely-empty output.json (script vs runner).
 
     The return annotation names the two CONCRETE exception types rather than
@@ -1399,9 +1345,7 @@ def _no_output_error(
     return SandboxNodeFailedError(_no_output_message(node_id), node_id=node_id)
 
 
-async def _handle_schema_validation_failure(
-    request: _OutputReadRequest, raw_output_str: str, schema_exc: ValueError
-) -> None:
+async def _handle_schema_validation_failure(request: _OutputReadRequest, raw_output_str: str, schema_exc: ValueError) -> None:
     """Retain the marker and raise the typed failure for a schema violation."""
     from farna.core.pipeline_engine.node_runner import (
         SandboxNodeFailedError,
@@ -1415,9 +1359,7 @@ async def _handle_schema_validation_failure(
         extra={"node_id": request.node_id},
     )
     if request.sandbox_mode == "script" and request.script_lease_claimed:
-        raise ScriptInvalidOutputError(
-            f"Script-mode output failed schema validation for node {request.node_id!r}: {schema_exc}"
-        ) from None
+        raise ScriptInvalidOutputError(f"Script-mode output failed schema validation for node {request.node_id!r}: {schema_exc}") from None
     await _retain_raw_output_marker(
         request.session_factory,
         _RawOutputMarkerRequest(
@@ -1486,9 +1428,7 @@ async def _read_and_validate_output(request: _OutputReadRequest) -> Any:
             raise _no_output_error(request.node_id, request.sandbox_mode, request.script_lease_claimed)
 
     if request.sandbox_mode == "script" and request.exit_code != 0:
-        raise ScriptFailedError(
-            f"Script-mode Bundled Runner exited with code {request.exit_code} (post-claim, terminal)"
-        )
+        raise ScriptFailedError(f"Script-mode Bundled Runner exited with code {request.exit_code} (post-claim, terminal)")
 
     if isinstance(request.output_schema_json, dict) and isinstance(output_json, dict):
         try:
@@ -1708,9 +1648,7 @@ def _runner_retention_artifacts(
     return agent_stdout, agent_stderr, stdout_len, stderr_len, stdout_truncated, stdout_artifact, stderr_artifact
 
 
-async def _harvest_gh_claim_receipt(
-    provider: Any, provider_ref: str, run_id: str
-) -> tuple[bool | None, asyncio.CancelledError | None]:
+async def _harvest_gh_claim_receipt(provider: Any, provider_ref: str, run_id: str) -> tuple[bool | None, asyncio.CancelledError | None]:
     """Bounded, cancellation-safe harvest of the one-PR guard receipt (FAR-1315).
 
     Returns ``(receipt, cancellation)``. The probe task is always
@@ -1835,10 +1773,7 @@ async def run_bundled_runner_node(
     # rather than silently ignoring them.
     if workspace_inputs:
         raise SandboxNodeFailedError(
-            f"Bundled Runner (runner_docker) does not support managed workspace inputs "
-            f"yet — node '{node_id}' has {len(workspace_inputs)} input(s) configured. "
-            "Use the E2B path (provider_type=e2b) or remove workspace_inputs from "
-            "the node configuration.",
+            f"Bundled Runner (runner_docker) does not support managed workspace inputs yet — node '{node_id}' has {len(workspace_inputs)} input(s) configured. Use the E2B path (provider_type=e2b) or remove workspace_inputs from the node configuration.",
             node_id=node_id,
         )
 
@@ -1887,9 +1822,7 @@ async def run_bundled_runner_node(
         raw_input: Any = run_context.get("input", {})
         from farna.core.capability_scope import filter_run_context_scope
 
-        scoped_run_context = filter_run_context_scope(
-            run_context, (node_def.get("capability_scope") or {}).get("context_scope")
-        )
+        scoped_run_context = filter_run_context_scope(run_context, (node_def.get("capability_scope") or {}).get("context_scope"))
         template_result = _render_agent_template(
             sandbox_mode=sandbox_mode,
             agent_command=agent_command,
@@ -2190,9 +2123,7 @@ async def run_bundled_runner_node(
             raise _gh_settle_cancelled
 
 
-async def _install_single_pr_guard(
-    provider: Any, provider_ref: str, *, run_id: str, node_id: str, provider_type: str
-) -> str | None:
+async def _install_single_pr_guard(provider: Any, provider_ref: str, *, run_id: str, node_id: str, provider_type: str) -> str | None:
     """Install the run-scoped one-PR ``gh`` guard on the Bundled Runner tier.
 
     FAR-1315: the engine's sandbox-policy step is E2B-only, so a flagged bundled
@@ -2223,8 +2154,7 @@ async def _install_single_pr_guard(
         )
     elif status == "pre_planted":
         _log.warning(
-            "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - "
-            "pre-planted refusal, this node cannot create a PR (FAR-1315)",
+            "runner_dispatch.gh_guard_run_claim_denied: tier=%s node=%s run=%s - pre-planted refusal, this node cannot create a PR (FAR-1315)",
             provider_type,
             node_id,
             run_id,
@@ -2299,8 +2229,8 @@ async def _maybe_start_loop_bridge(
             "/home/user/modulo_bridge_config.json",
             json.dumps(loop_intercept.model_dump(mode="json")),
         )
-        sandbox_envs["MODULO_BRIDGE_ENDPOINT"] = f"http://host.docker.internal:{bridge_port}"
-        sandbox_envs["MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
+        sandbox_envs["FARNA_CONTROL_MODULO_BRIDGE_ENDPOINT"] = f"http://host.docker.internal:{bridge_port}"
+        sandbox_envs["FARNA_CONTROL_MODULO_BRIDGE_CONFIG"] = "/home/user/modulo_bridge_config.json"
         return f"python3 /home/user/modulo_bridge.py --wrap -- {rendered_command}"
     except asyncio.CancelledError:
         raise

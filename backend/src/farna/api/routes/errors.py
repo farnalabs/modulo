@@ -168,11 +168,7 @@ def _sweep_stale_public_rate_limit_clients(window_start: float) -> int:
     key can sit behind an in-window one; the hard bound is the LRU backstop's
     job, not the sweep's. Returns the number of keys evicted.
     """
-    stale = [
-        ip
-        for ip in islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH)
-        if not any(t > window_start for t in _public_rate_limit[ip])
-    ]
+    stale = [ip for ip in islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH) if not any(t > window_start for t in _public_rate_limit[ip])]
     for ip in stale:
         del _public_rate_limit[ip]
     return len(stale)
@@ -534,9 +530,7 @@ async def ingest_errors_public(
         ) from exc
 
     # Filter events: only frontend source, reject critical level
-    valid_events = [
-        event for event in ingest_request.events if event.source == "frontend" and event.level != "critical"
-    ]
+    valid_events = [event for event in ingest_request.events if event.source == "frontend" and event.level != "critical"]
 
     if not valid_events:
         return {"results": []}
@@ -762,9 +756,7 @@ async def _error_group_events_body(
         if group is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
 
-        events = await get_error_events_by_group(
-            session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
-        )
+        events = await get_error_events_by_group(session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset)
         total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
 
     items = [_serialize_error_event_detail(e) for e in events]

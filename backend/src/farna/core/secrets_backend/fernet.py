@@ -72,9 +72,7 @@ class FernetSecretsBackend(SecretsBackend):
         try:
             return Fernet(fernet_key.encode())
         except ValueError as exc:
-            raise ValueError(
-                f"FernetSecretsBackend: invalid {field}: must be a base64-encoded 32-byte Fernet key"
-            ) from exc
+            raise ValueError(f"FernetSecretsBackend: invalid {field}: must be a base64-encoded 32-byte Fernet key") from exc
 
     def set_session(self, session: AsyncSession) -> None:
         """Set or replace the DB session used for persistence.
@@ -152,10 +150,7 @@ class FernetSecretsBackend(SecretsBackend):
             )
             org_id_str = result.scalar()
         except (OperationalError, ProgrammingError):
-            logger.debug(
-                "FernetSecretsBackend: current_setting not available, "
-                "falling back to session.info (non-Postgres backend)"
-            )
+            logger.debug("FernetSecretsBackend: current_setting not available, falling back to session.info (non-Postgres backend)")
 
         if not org_id_str:
             info = getattr(self._session, "info", {})
@@ -163,10 +158,7 @@ class FernetSecretsBackend(SecretsBackend):
                 org_id_str = info.get(_TENANT_KEY)
 
         if not org_id_str:
-            raise RuntimeError(
-                "FernetSecretsBackend: RLS organisation context not set. "
-                "Call set_rls_org(session, org_id) before set_secret."
-            )
+            raise RuntimeError("FernetSecretsBackend: RLS organisation context not set. Call set_rls_org(session, org_id) before set_secret.")
         try:
             self._org_id = uuid.UUID(str(org_id_str))
         except (ValueError, AttributeError) as exc:
@@ -185,12 +177,7 @@ class FernetSecretsBackend(SecretsBackend):
         for attempt in range(2):
             try:
                 async with self._session.begin_nested():
-                    stmt = (
-                        select(Secret)
-                        .where(Secret.key == key, Secret.organisation_id == org_id)
-                        .limit(1)
-                        .with_for_update()
-                    )
+                    stmt = select(Secret).where(Secret.key == key, Secret.organisation_id == org_id).limit(1).with_for_update()
                     result = await asyncio.wait_for(self._session.execute(stmt), timeout=_DB_TIMEOUT)
                     existing = result.scalar_one_or_none()
 

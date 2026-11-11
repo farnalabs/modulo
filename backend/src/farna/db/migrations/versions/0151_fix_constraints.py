@@ -91,13 +91,7 @@ def downgrade() -> None:
     # same slug (the documented slug-reuse flow); re-adding the full constraint
     # on that state would raise a unique-violation and abort the downgrade. Keep
     # the active row when one exists, else the most recently deleted row.
-    de_dup = (
-        "DELETE FROM organisations WHERE id IN ("
-        "SELECT id FROM ("
-        "SELECT id, ROW_NUMBER() OVER (PARTITION BY slug "
-        "ORDER BY (deleted_at IS NULL) DESC, deleted_at DESC NULLS LAST) AS rn "
-        "FROM organisations) sub WHERE rn > 1)"
-    )
+    de_dup = "DELETE FROM organisations WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY (deleted_at IS NULL) DESC, deleted_at DESC NULLS LAST) AS rn FROM organisations) sub WHERE rn > 1)"
     bind.execute(text(de_dup))
     op.create_unique_constraint("organisations_slug_key", "organisations", ["slug"])
 

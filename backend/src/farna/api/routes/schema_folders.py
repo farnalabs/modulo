@@ -156,11 +156,7 @@ async def update_folder_endpoint(
 @router.delete(
     "/{folder_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            audited("schema_folder_deleted", "schema_folder", principal_dep=get_current_tenant_user, fail_closed=True)
-        )
-    ],
+    dependencies=[Depends(audited("schema_folder_deleted", "schema_folder", principal_dep=get_current_tenant_user, fail_closed=True))],
 )
 @handle_db_errors("schema_folders.delete")
 async def delete_folder_endpoint(

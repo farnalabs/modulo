@@ -48,7 +48,7 @@ async def get_scim_principal(
     # FAR-1135: hot-reloadable keys — the runtime override (admin API)
     # wins over the boot-time Settings value so SCIM can be enabled,
     # rotated, or disabled without a restart.
-    scim_token = override_or("MODULO_SCIM_TOKEN", settings.modulo_scim_token)
+    scim_token = override_or("FARNA_CONTROL_MODULO_SCIM_TOKEN", settings.modulo_scim_token)
     if not scim_token:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -66,7 +66,7 @@ async def get_scim_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    default_org_id = override_or("MODULO_SCIM_DEFAULT_ORG_ID", settings.modulo_scim_default_org_id)
+    default_org_id = override_or("FARNA_CONTROL_MODULO_SCIM_DEFAULT_ORG_ID", settings.modulo_scim_default_org_id)
     if default_org_id:
         try:
             org_id = uuid.UUID(default_org_id)

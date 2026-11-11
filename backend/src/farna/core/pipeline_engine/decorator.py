@@ -58,9 +58,7 @@ class ContextSetterViolationError(RuntimeError):
 # Async-safe hook for DB-backed cancellation check. Set per-run by PipelineExecutor.
 # Using ContextVar ensures concurrent runs don't interfere — each asyncio task gets
 # its own copy.
-_cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = ContextVar(
-    "_cancellation_check", default=None
-)
+_cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = ContextVar("_cancellation_check", default=None)
 
 # Async-safe hook for audit-event dispatch. Set per-run by PipelineExecutor. When a
 # non-context-setter node attempts to write run_context, the hook is invoked with
@@ -318,10 +316,7 @@ async def _raise_context_violation(
             "attempted_fields": attempted,
         },
     )
-    raise ContextSetterViolationError(
-        f"Node {fn_name!r} (role={role!r}) returned a 'run_context' update. "
-        "Only nodes with role='context_setter' may modify run_context."
-    )
+    raise ContextSetterViolationError(f"Node {fn_name!r} (role={role!r}) returned a 'run_context' update. Only nodes with role='context_setter' may modify run_context.")
 
 
 def cancellable_node(

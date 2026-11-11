@@ -121,10 +121,7 @@ def evaluate_run_spend_ceiling(
             return SpendCeilingDecision(
                 allowed=False,
                 reason=RUN_CEILING_EXCEEDED,
-                message=(
-                    f"Run cost {_format_usd(projected)} USD would exceed the per-run "
-                    f"ceiling of {_format_usd(max_run_cost_cents)} USD."
-                ),
+                message=(f"Run cost {_format_usd(projected)} USD would exceed the per-run ceiling of {_format_usd(max_run_cost_cents)} USD."),
                 projected_org_cumulative_cents=run_cost_so_far_cents,
             )
     return SpendCeilingDecision(
@@ -170,11 +167,7 @@ def evaluate_org_spend_ceiling(
         return SpendCeilingDecision(
             allowed=False,
             reason=ORG_CEILING_EXCEEDED,
-            message=(
-                f"Organisation spend {_format_usd(projected)} USD would exceed the "
-                f"spend ceiling of {_format_usd(spend_ceiling_cents)} USD "
-                f"(remaining budget {_format_usd(max(spend_ceiling_cents - org_cumulative_spend_cents, 0))} USD)."
-            ),
+            message=(f"Organisation spend {_format_usd(projected)} USD would exceed the spend ceiling of {_format_usd(spend_ceiling_cents)} USD (remaining budget {_format_usd(max(spend_ceiling_cents - org_cumulative_spend_cents, 0))} USD)."),
             projected_org_cumulative_cents=projected,
         )
     return SpendCeilingDecision(

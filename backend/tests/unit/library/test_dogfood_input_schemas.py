@@ -19,7 +19,7 @@ from jsonschema import Draft202012Validator
 
 from farna.core.seed_data.library_schemas import SCHEMAS
 
-_DOGFOOD_SCHEMAS_DIR_RAW = os.environ.get("MODULO_DOGFOOD_SCHEMAS_DIR")
+_DOGFOOD_SCHEMAS_DIR_RAW = os.environ.get("FARNA_CONTROL_MODULO_DOGFOOD_SCHEMAS_DIR")
 
 
 def _definition(name: str) -> dict[str, Any]:
@@ -73,11 +73,7 @@ def test_invalid_payload_fails_validation(name: str) -> None:
 
 def _reference_files() -> list[Path]:
     if not _DOGFOOD_SCHEMAS_DIR_RAW:
-        pytest.skip(
-            "MODULO_DOGFOOD_SCHEMAS_DIR env var not set; "
-            "set it to the path containing *.schema.json reference copies to "
-            "enable this test"
-        )
+        pytest.skip("MODULO_DOGFOOD_SCHEMAS_DIR env var not set; set it to the path containing *.schema.json reference copies to enable this test")
     schemas_dir = Path(_DOGFOOD_SCHEMAS_DIR_RAW)
     if not schemas_dir.is_dir():
         pytest.skip(f"MODULO_DOGFOOD_SCHEMAS_DIR points to a non-existent directory: {schemas_dir}")

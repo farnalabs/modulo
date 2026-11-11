@@ -243,8 +243,8 @@ _HARVEST_DRAIN_TIMEOUT = 5.0
 # Harvest probe tokens: what ``harvest_gh_pr_claim_via_exec``'s one-shot shell
 # probe prints for receipt-present / receipt-absent. Kept as constants so the
 # probe script and the parser that reads it back cannot drift apart.
-_GH_PR_CLAIM_RECEIPT_PRESENT = "MODULO_CLAIM_RECEIPT_PRESENT"
-_GH_PR_CLAIM_RECEIPT_ABSENT = "MODULO_CLAIM_RECEIPT_ABSENT"
+_GH_PR_CLAIM_RECEIPT_PRESENT = "FARNA_CONTROL_MODULO_CLAIM_RECEIPT_PRESENT"
+_GH_PR_CLAIM_RECEIPT_ABSENT = "FARNA_CONTROL_MODULO_CLAIM_RECEIPT_ABSENT"
 
 # FAR-1315 re-gate: install statuses under which a HARVESTED RECEIPT is
 # meaningful. Only these say a shim actually landed in this node's workspace,
@@ -714,16 +714,8 @@ def _multi_host_credential_helper_script(hosts: dict[str, str]) -> str:
         if not isinstance(host, str) or not _HOSTNAME_RE.fullmatch(host):
             raise ValueError(f"invalid git-credential host {host!r}: must be a hostname containing only [A-Za-z0-9.-]")
         if not isinstance(env_var, str) or not _ENV_VAR_RE.fullmatch(env_var):
-            raise ValueError(
-                f"invalid git-credential env var {env_var!r} for host {host!r}: must be a valid POSIX identifier"
-            )
-        cases.append(
-            f'  "{host}")\n'
-            f'    if [ -n "${{{env_var}}}" ]; then\n'
-            f"      printf 'username=x-access-token\\npassword=%s\\n' \"${{{env_var}}}\"\n"
-            f"    fi\n"
-            f"    ;;"
-        )
+            raise ValueError(f"invalid git-credential env var {env_var!r} for host {host!r}: must be a valid POSIX identifier")
+        cases.append(f'  "{host}")\n    if [ -n "${{{env_var}}}" ]; then\n      printf \'username=x-access-token\\npassword=%s\\n\' "${{{env_var}}}"\n    fi\n    ;;')
     return f"""#!/bin/sh
 host=""
 while read -r l; do
@@ -827,9 +819,7 @@ def build_egress_selected_script(egress_allowlist: list[dict[str, Any]]) -> str:
             # unvalidated string reach the root shell; quote it as well.
             if not is_valid_egress_host(target):
                 raise ValueError(f"invalid egress allowlist target {target!r}")
-            lines.append(
-                f"iptables -A OUTPUT -d {shlex.quote(target)} -p tcp --dport {port} -j ACCEPT 2>/dev/null || true\n"
-            )
+            lines.append(f"iptables -A OUTPUT -d {shlex.quote(target)} -p tcp --dport {port} -j ACCEPT 2>/dev/null || true\n")
     lines.append("true\n")
     return "".join(lines)
 
@@ -1035,13 +1025,7 @@ def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> st
     # active, but a command used as an ``if`` condition never triggers it, so
     # an unwritable marker root degrades to a loud stderr note instead of
     # aborting the install.
-    pre_plant = (
-        'if ! mkdir -p "$MARKER" 2>/dev/null; then\n'
-        f'  echo "modulo: gh guard: WARNING {_GH_PR_GUARD_PRE_PLANT_FAILED_NOTE} the run claim at $MARKER" >&2\n'
-        "fi\n"
-        if pre_spent
-        else ""
-    )
+    pre_plant = f'if ! mkdir -p "$MARKER" 2>/dev/null; then\n  echo "modulo: gh guard: WARNING {_GH_PR_GUARD_PRE_PLANT_FAILED_NOTE} the run claim at $MARKER" >&2\nfi\n' if pre_spent else ""
     return (
         "set -e\n"
         f"MARKER='{marker_path}'\n" + pre_plant + "guard_installed=0\n"
@@ -1075,7 +1059,7 @@ def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> st
         "  if ! { printf '%s\\n' '#!/bin/sh'\n"
         '    printf "REAL_BIN=\'%s\'\\n" "$real"\n'
         '    printf "MARKER=\'%s\'\\n" "$MARKER"\n'
-        "    cat <<'MODULO_GH_GUARD_EOF'\n"
+        "    cat <<'FARNA_CONTROL_MODULO_GH_GUARD_EOF'\n"
         f"{_GH_PR_GUARD_SHIM_BODY}"
         "MODULO_GH_GUARD_EOF\n"
         f'  }} > "$tmp" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
@@ -1226,10 +1210,7 @@ async def harvest_gh_pr_claim_via_exec(
     reach the shell unquoted.
     """
     receipt_path = gh_pr_claim_receipt_path(run_scope)
-    script = (
-        f'if [ -f "{receipt_path}" ]; then printf "%s" "{_GH_PR_CLAIM_RECEIPT_PRESENT}"; '
-        f'else printf "%s" "{_GH_PR_CLAIM_RECEIPT_ABSENT}"; fi'
-    )
+    script = f'if [ -f "{receipt_path}" ]; then printf "%s" "{_GH_PR_CLAIM_RECEIPT_PRESENT}"; else printf "%s" "{_GH_PR_CLAIM_RECEIPT_ABSENT}"; fi'
     try:
         result = await exec_command(["sh", "-c", script])
     except asyncio.CancelledError:
@@ -1306,9 +1287,7 @@ async def harvest_gh_pr_claim_bounded(
     - Any other failure (exec error, non-zero exit, unparseable reply) returns
       ``None`` - receipt unknown - never raising into the teardown.
     """
-    task: asyncio.Future[bool | None] = asyncio.create_task(
-        harvest_gh_pr_claim_via_exec(exec_command, run_scope=run_scope)
-    )
+    task: asyncio.Future[bool | None] = asyncio.create_task(harvest_gh_pr_claim_via_exec(exec_command, run_scope=run_scope))
     try:
         async with asyncio.timeout(_HARVEST_PROBE_TIMEOUT_S):
             await asyncio.wait({task})
@@ -1512,8 +1491,7 @@ async def _install_gh_pr_guard(
     marker_path, pre_spent, claim_status = _gh_pr_guard_plan(run_scope, guard_owner)
     if pre_spent:
         _log.warning(
-            "sandbox_policy.gh_guard_run_claim_denied: claim=%s scope=%s owner=%s - "
-            "installing a pre-planted refusal for this node (FAR-1315)",
+            "sandbox_policy.gh_guard_run_claim_denied: claim=%s scope=%s owner=%s - installing a pre-planted refusal for this node (FAR-1315)",
             claim_status,
             _run_pr_guard_key(run_scope),
             guard_owner,

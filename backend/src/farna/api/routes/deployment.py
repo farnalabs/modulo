@@ -19,7 +19,7 @@ from farna.db.models.system_config import SystemConfig
 from farna.version import get_version
 
 _DRAIN_KEY = "deployment_drain"
-_DRAIN_TOKEN_ENV = "MODULO_DEPLOY_DRAIN_TOKEN"
+_DRAIN_TOKEN_ENV = "FARNA_CONTROL_MODULO_DEPLOY_DRAIN_TOKEN"
 
 
 def _require_drain_token(authorization: str | None) -> None:
@@ -87,7 +87,7 @@ async def deployment_info(
         "uptime_seconds": int(time.time() - _start_time),
         "started_at": _started_at.isoformat(),
         "python_version": os.environ.get("PYTHON_VERSION", ""),
-        "environment": os.environ.get("MODULO_ENV", "development"),
+        "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
         "git_sha": os.environ.get("GIT_SHA", ""),
         "git_commit_timestamp": os.environ.get("GIT_COMMIT_TIMESTAMP", ""),
         "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),

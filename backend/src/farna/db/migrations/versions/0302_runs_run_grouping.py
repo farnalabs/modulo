@@ -131,17 +131,7 @@ def downgrade() -> None:
     # unique violation would bury the cause; silently dropping the child
     # would destroy a run row. Actionable refusal, data intact (0151/0298).
     bind = op.get_bind()
-    shared = bind.execute(
-        sa.text(
-            "SELECT count(*) FROM ("
-            "SELECT langgraph_thread_id FROM runs GROUP BY langgraph_thread_id HAVING count(*) > 1"
-            ") AS shared_threads"
-        )
-    ).scalar()
+    shared = bind.execute(sa.text("SELECT count(*) FROM (SELECT langgraph_thread_id FROM runs GROUP BY langgraph_thread_id HAVING count(*) > 1) AS shared_threads")).scalar()
     if shared:
-        raise RuntimeError(
-            f"cannot restore {_GLOBAL_THREAD_UNIQUE}: {shared} thread(s) are shared by multiple runs "
-            "(resume children). Delete or resolve the resume child rows first — the downgrade "
-            "refuses to rewrite or drop run history."
-        )
+        raise RuntimeError(f"cannot restore {_GLOBAL_THREAD_UNIQUE}: {shared} thread(s) are shared by multiple runs (resume children). Delete or resolve the resume child rows first — the downgrade refuses to rewrite or drop run history.")
     op.create_unique_constraint(_GLOBAL_THREAD_UNIQUE, "runs", ["langgraph_thread_id"])

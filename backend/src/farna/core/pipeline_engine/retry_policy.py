@@ -186,10 +186,7 @@ def _timeout_event_matches(event_set: set[Any], code: str, mapped: str) -> bool:
     ``{on: ["timeout"]}`` policy re-dispatches a deadline death exactly like a
     per-node timeout.
     """
-    return "timeout" in event_set and (
-        code in ("node_timeout", "TimeoutError")
-        or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", _ERROR_CODE_NODE_DEADLINE_EXCEEDED)
-    )
+    return "timeout" in event_set and (code in ("node_timeout", "TimeoutError") or mapped in (_ERROR_CODE_NODE_TIMEOUT, "node.runaway", _ERROR_CODE_NODE_DEADLINE_EXCEEDED))
 
 
 def _eval_failed_event_matches(event_set: set[Any], final_status: str, code: str, mapped: str) -> bool:
@@ -199,9 +196,7 @@ def _eval_failed_event_matches(event_set: set[Any], final_status: str, code: str
     ``"eval_failed"`` with raw error_code ``"eval_blocked"`` (which maps to the
     canonical ``eval.blocked``), so all three spellings match the event.
     """
-    return "eval_failed" in event_set and (
-        final_status == "eval_failed" or code == "eval_blocked" or mapped == _ERROR_CODE_EVAL_BLOCKED
-    )
+    return "eval_failed" in event_set and (final_status == "eval_failed" or code == "eval_blocked" or mapped == _ERROR_CODE_EVAL_BLOCKED)
 
 
 def _failure_event_matches(
@@ -243,11 +238,7 @@ def _failure_event_matches(
     # retry paths use, so this exclusion cannot drift from them.
     # FAR-1800: main's narrower billing/provisioning set (``model_disabled``)
     # is kept alongside it, and matched on the raw code spelling too.
-    if (
-        mapped in NON_RETRYABLE_PROVIDER_CODES
-        or mapped in _NEVER_RETRYABLE_PROVIDER_CODES
-        or code in _NEVER_RETRYABLE_PROVIDER_CODES
-    ):
+    if mapped in NON_RETRYABLE_PROVIDER_CODES or mapped in _NEVER_RETRYABLE_PROVIDER_CODES or code in _NEVER_RETRYABLE_PROVIDER_CODES:
         return False
     # FAR-136 Gap 2: exclude sandbox-agent hang deaths.
     is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
@@ -386,12 +377,7 @@ def can_retry_after_policy(
     an over-budget task, whose retry is a guaranteed repeat. False by default
     so every caller that has not been taught the guard keeps today's behaviour.
     """
-    return (
-        execution_attempt_count <= retry_budget
-        and not superseded
-        and script_retry_probe_ok
-        and not attempt_consumed_budget
-    )
+    return execution_attempt_count <= retry_budget and not superseded and script_retry_probe_ok and not attempt_consumed_budget
 
 
 # ---------------------------------------------------------------------------
@@ -643,18 +629,14 @@ async def _redispatch_after_policy(
     # resolver defect can never strand a run that was already reset.
     # Total fail-open: an invalid/out-of-bounds schedule falls back to
     # the hardcoded default schedule (45s x 2.0, cap 300, jitter).
-    schedule_present, schedule_delay, schedule_multiplier, schedule_reason = resolve_backoff_schedule(
-        pipeline_retry_policy
-    )
+    schedule_present, schedule_delay, schedule_multiplier, schedule_reason = resolve_backoff_schedule(pipeline_retry_policy)
     if schedule_reason is not None:
         _log.warning(
             "pipeline.retry_policy_schedule_fail_open",
             extra={
                 "run_id": str(run_id),
                 "reason": schedule_reason,
-                "offending": sanitize_retry_policy_snippet(
-                    pipeline_retry_policy.get("backoff_schedule") if isinstance(pipeline_retry_policy, dict) else None
-                ),
+                "offending": sanitize_retry_policy_snippet(pipeline_retry_policy.get("backoff_schedule") if isinstance(pipeline_retry_policy, dict) else None),
             },
         )
     if not schedule_present:
@@ -665,9 +647,7 @@ async def _redispatch_after_policy(
         schedule_state = "valid"
     # ONE jitter draw: the delay is computed ONCE here and threaded to
     # BOTH the log line and the asyncio.sleep below (no re-resolution).
-    effective_sleep = retry_backoff_seconds(
-        execution_attempt_count, base=schedule_delay, multiplier=schedule_multiplier
-    )
+    effective_sleep = retry_backoff_seconds(execution_attempt_count, base=schedule_delay, multiplier=schedule_multiplier)
     _log.warning(
         "pipeline.retry_policy",
         extra={
@@ -691,9 +671,7 @@ async def _redispatch_after_policy(
         # re-execute it (the SAQ retry's claim only takes ``pending`` or a
         # STALE running row), and it is never terminalised here.
         _log.warning(
-            "pipeline.retry_policy_reset_timed_out run=%s status=%s — the fenced "
-            "pending-reset timed out; the row is left running for the nodeless/age "
-            "backstop (no confirmed reset, no counter)",
+            "pipeline.retry_policy_reset_timed_out run=%s status=%s — the fenced pending-reset timed out; the row is left running for the nodeless/age backstop (no confirmed reset, no counter)",
             run_id,
             final_status,
         )
@@ -734,8 +712,7 @@ def _publish_script_side_effect_unknown(broker: Any, run_id: Any) -> str:
         extra={"run_id": str(run_id), "error_code": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN},
     )
     error_detail_value = _sanitize_detail(
-        "Script-mode sandbox has an unresolved execution claim (side effect unknown); "
-        "not retried — needs human review.",
+        "Script-mode sandbox has an unresolved execution claim (side effect unknown); not retried — needs human review.",
         limit=5000,
     )
     broker.publish("run_failed", {"error": _ERROR_CODE_SCRIPT_SIDE_EFFECT_UNKNOWN, "detail": error_detail_value})
@@ -845,10 +822,7 @@ def _graph_has_script_mode(graph_json: dict[str, Any] | None) -> bool:
     for node in graph_json.get("nodes", []) or []:
         if not isinstance(node, dict):
             continue
-        if (
-            str(node.get("node_type", "")).strip() == "sandbox_agent"
-            and str(node.get("mode") or "").strip() == "script"
-        ):
+        if str(node.get("node_type", "")).strip() == "sandbox_agent" and str(node.get("mode") or "").strip() == "script":
             return True
     return False
 
@@ -949,14 +923,11 @@ def _non_retryable_failure_detail(
     """
     if execution_attempt_count < retries:
         return _sanitize_detail(
-            f"Sandbox node failed with non-retryable error {non_retryable_code}; "
-            "not retried because a retry re-hits the same fault: " + str(exc),
+            f"Sandbox node failed with non-retryable error {non_retryable_code}; not retried because a retry re-hits the same fault: " + str(exc),
             limit=5000,
         )
     return _sanitize_detail(
-        "Sandbox node failed after retries exhausted; the last failure is "
-        f"non-retryable ({non_retryable_code}) and a further retry would "
-        "re-hit the same fault: " + str(exc),
+        f"Sandbox node failed after retries exhausted; the last failure is non-retryable ({non_retryable_code}) and a further retry would re-hit the same fault: " + str(exc),
         limit=5000,
     )
 

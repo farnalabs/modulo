@@ -56,9 +56,7 @@ def _make_account(*, is_break_glass: bool = True, live: bool = True) -> MagicMoc
     account.is_break_glass = is_break_glass
     account.active = True
     account.break_glass_deactivated_at = None
-    account.break_glass_expires_at = (
-        datetime.now(UTC) + timedelta(hours=1) if live else datetime.now(UTC) - timedelta(hours=1)
-    )
+    account.break_glass_expires_at = datetime.now(UTC) + timedelta(hours=1) if live else datetime.now(UTC) - timedelta(hours=1)
     return account
 
 
@@ -175,7 +173,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
     finally:
         app.dependency_overrides.pop(get_settings, None)
     assert resp.status_code == 503
-    assert "MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
+    assert "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
     admin_rotation._rotation_owner = None
 
 
@@ -245,9 +243,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
         )
 
     assert factory_calls, "rotation did not open a session via _make_system_session_factory"
-    assert captured_session.get("session") is fake_session, (
-        "rotate_all_encrypted_data did not run on the modulo_system factory session"
-    )
+    assert captured_session.get("session") is fake_session, "rotate_all_encrypted_data did not run on the modulo_system factory session"
     assert admin_rotation._last_rotation_result["status"] == "completed"
     admin_rotation._rotation_owner = None
 

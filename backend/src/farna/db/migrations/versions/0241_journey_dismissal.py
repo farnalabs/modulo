@@ -62,23 +62,14 @@ def upgrade() -> None:
         name = column.split(" ")[0]
         column_name = name.strip('"')
         have = bind.execute(
-            text(
-                "SELECT count(*) FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = :column_name"
-            ),
+            text("SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'journeys' AND column_name = :column_name"),
             {"column_name": column_name},
         ).scalar()
         if not have:
             bind.execute(text(f"ALTER TABLE public.journeys ADD COLUMN {column}"))  # nosec B608
 
     # --- partial index (IF NOT EXISTS — idempotent) ---
-    bind.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_journeys_active_org_kind_ref "
-            "ON public.journeys USING btree (organisation_id, kind, ref) "
-            "WHERE dismissed_at IS NULL"
-        )
-    )
+    bind.execute(text("CREATE INDEX IF NOT EXISTS ix_journeys_active_org_kind_ref ON public.journeys USING btree (organisation_id, kind, ref) WHERE dismissed_at IS NULL"))
 
 
 def downgrade() -> None:

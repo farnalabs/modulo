@@ -53,12 +53,8 @@ def _create_tables() -> None:
         sa.Column("last_login", sa.DateTime(timezone=True), nullable=True),
         sa.Column("preferences", sa.JSON(), server_default=sa.text("'{}'"), nullable=False),
         sa.Column("is_system_admin", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.CheckConstraint("auth_provider IN ('local', 'oidc', 'saml', 'scim')", name="ck_accounts_auth_provider"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("email"),
@@ -69,9 +65,7 @@ def _create_tables() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("slug", sa.String(length=255), nullable=False),
         sa.Column("status", sa.String(length=20), server_default="active", nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_by", sa.Uuid(), nullable=True),
         sa.Column("settings_json", sa.JSON(), nullable=False),
@@ -92,9 +86,7 @@ def _create_tables() -> None:
         sa.Column("organisation_id", sa.Uuid(), nullable=True),
         sa.Column("max_sequence", sa.Integer(), nullable=False),
         sa.Column("is_blacklisted", sa.Boolean(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("blacklisted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
@@ -119,12 +111,8 @@ def _create_tables() -> None:
         sa.Column("group_mappings", sa.JSON(), server_default="[]", nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -139,12 +127,8 @@ def _create_tables() -> None:
         sa.Column("account_id", sa.Uuid(), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -161,15 +145,11 @@ def _create_tables() -> None:
         sa.Column("code_challenge", sa.String(length=128), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("used", sa.Boolean(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("code"),
     )
-    op.create_index(
-        op.f("ix_oauth_authorization_codes_client_id"), "oauth_authorization_codes", ["client_id"], unique=False
-    )
+    op.create_index(op.f("ix_oauth_authorization_codes_client_id"), "oauth_authorization_codes", ["client_id"], unique=False)
     op.create_index(
         op.f("ix_oauth_authorization_codes_organisation_id"),
         "oauth_authorization_codes",
@@ -183,17 +163,13 @@ def _create_tables() -> None:
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
         sa.Column("max_sequence", sa.Integer(), nullable=False),
         sa.Column("is_blacklisted", sa.Boolean(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("blacklisted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("family_id"),
     )
     op.create_index(op.f("ix_oauth_token_families_client_id"), "oauth_token_families", ["client_id"], unique=False)
-    op.create_index(
-        op.f("ix_oauth_token_families_organisation_id"), "oauth_token_families", ["organisation_id"], unique=False
-    )
+    op.create_index(op.f("ix_oauth_token_families_organisation_id"), "oauth_token_families", ["organisation_id"], unique=False)
     op.create_table(
         "org_memberships",
         sa.Column("account_id", sa.Uuid(), nullable=False),
@@ -202,15 +178,9 @@ def _create_tables() -> None:
         sa.Column("deactivated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organisation_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
-        ),
-        sa.CheckConstraint(
-            "role IN ('owner', 'admin', 'operator', 'runner', 'viewer')", name="ck_org_memberships_role"
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.CheckConstraint("role IN ('owner', 'admin', 'operator', 'runner', 'viewer')", name="ck_org_memberships_role"),
         sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -258,13 +228,7 @@ _TENANT_REFS: tuple[tuple[str, str, str], ...] = (
 
 def _create_triggers() -> None:
     for child_table, child_column, parent_table in _TENANT_REFS:
-        op.execute(
-            sa.text(
-                f'CREATE TRIGGER "trg_{child_table}_{child_column}_tenant" '
-                f'BEFORE INSERT OR UPDATE OF "{child_column}", "organisation_id" ON "{child_table}" '
-                f"FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation('{parent_table}', '{child_column}')"
-            )
-        )
+        op.execute(sa.text(f'CREATE TRIGGER "trg_{child_table}_{child_column}_tenant" BEFORE INSERT OR UPDATE OF "{child_column}", "organisation_id" ON "{child_table}" FOR EACH ROW EXECUTE FUNCTION enforce_same_organisation(\'{parent_table}\', \'{child_column}\')'))
 
 
 def _enable_rls() -> None:

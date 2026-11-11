@@ -37,7 +37,5 @@ class OrgMembership(OrgScoped):
         index=True,
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False, server_default="runner")
-    joined_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
-    )
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False)
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

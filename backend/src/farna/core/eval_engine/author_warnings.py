@@ -245,8 +245,7 @@ def _check_temporal_ordering(
         return [
             AuthorWarning(
                 "temporal_ordering",
-                f"Key '{evidence_key}' producer node is known but binding "
-                f"node is indeterminate — temporal ordering cannot be verified.",
+                f"Key '{evidence_key}' producer node is known but binding node is indeterminate — temporal ordering cannot be verified.",
             )
         ]
 

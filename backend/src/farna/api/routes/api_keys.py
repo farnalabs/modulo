@@ -368,10 +368,7 @@ async def _enforce_user_key_quota(
         )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                f"User-scoped API key quota exceeded: at most {_USER_KEY_ACTIVE_QUOTA} "
-                "active user-scoped keys per account. Revoke one first."
-            ),
+            detail=(f"User-scoped API key quota exceeded: at most {_USER_KEY_ACTIVE_QUOTA} active user-scoped keys per account. Revoke one first."),
         )
 
 
@@ -562,9 +559,7 @@ async def create_api_key_endpoint(
                 detail="API key grant-sets are not enabled for this organisation",
             )
     expires_at = _resolve_grants_expiry(expires_at, requested_scope, grants_on)
-    key, full_key = await _mint_api_key(
-        session, principal, name, req.role, team_id, expires_at, requested_scope, req.grants
-    )
+    key, full_key = await _mint_api_key(session, principal, name, req.role, team_id, expires_at, requested_scope, req.grants)
 
     # PRD §8.12 ``api_key_created``: key minting was never audited. Written in a
     # fresh transaction (the create above already committed) and failure-isolated
@@ -930,11 +925,7 @@ async def grantable_permissions_endpoint(
     caller_level = org_role_level(principal.org_role)
     return GrantablePermissionsResponse(
         enabled=True,
-        permissions=[
-            GrantablePermission(name=name, min_role=min_role)
-            for name, min_role in sorted(PERMISSIONS.items())
-            if is_delegable(name) and org_role_level(min_role) <= caller_level
-        ],
+        permissions=[GrantablePermission(name=name, min_role=min_role) for name, min_role in sorted(PERMISSIONS.items()) if is_delegable(name) and org_role_level(min_role) <= caller_level],
     )
 
 

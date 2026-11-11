@@ -21,10 +21,7 @@ def validate_runner_docker_persistence(provider_type: str, persistence_policy: s
     ``retained``/``cache`` policies are rejected before any write.
     """
     if provider_type.strip().lower() == "runner_docker" and persistence_policy != "ephemeral":
-        raise ValueError(
-            "The Bundled Runner (runner_docker) locks persistence_policy to 'ephemeral' "
-            f"(got '{persistence_policy}'); retained/cache workspaces are not supported."
-        )
+        raise ValueError(f"The Bundled Runner (runner_docker) locks persistence_policy to 'ephemeral' (got '{persistence_policy}'); retained/cache workspaces are not supported.")
 
 
 def validate_profile_workspace_network(config_json: dict[str, Any] | None) -> None:
@@ -115,9 +112,7 @@ async def create_environment_profile(
     return profile
 
 
-async def get_environment_profile(
-    session: AsyncSession, profile_id: uuid.UUID, *, include_deleted: bool = False
-) -> EnvironmentProfile | None:
+async def get_environment_profile(session: AsyncSession, profile_id: uuid.UUID, *, include_deleted: bool = False) -> EnvironmentProfile | None:
     stmt = select(EnvironmentProfile).where(EnvironmentProfile.id == profile_id)
     stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(EnvironmentProfile.deleted_at.is_(None))
     result = await session.execute(stmt)
@@ -165,13 +160,7 @@ async def list_environment_profiles(
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
 
-    q = (
-        select(EnvironmentProfile)
-        .where(*count_where)
-        .order_by(EnvironmentProfile.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    q = select(EnvironmentProfile).where(*count_where).order_by(EnvironmentProfile.created_at.desc()).offset(offset).limit(page_size)
     if include_deleted:
         q = include_soft_deleted(q)
     rows = (await session.execute(q)).scalars().all()
@@ -196,24 +185,14 @@ async def update_environment_profile(
 
 async def soft_delete_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
     """Soft-delete: set deleted_at timestamp. Returns None if not found or already deleted."""
-    result = await session.execute(
-        update(EnvironmentProfile)
-        .where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_(None))
-        .values(deleted_at=func.now())
-        .returning(EnvironmentProfile)
-    )
+    result = await session.execute(update(EnvironmentProfile).where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_(None)).values(deleted_at=func.now()).returning(EnvironmentProfile))
     await session.flush()
     return result.scalar_one_or_none()
 
 
 async def restore_environment_profile(session: AsyncSession, profile_id: uuid.UUID) -> EnvironmentProfile | None:
     """Restore a soft-deleted environment profile. Returns None if not found."""
-    result = await session.execute(
-        update(EnvironmentProfile)
-        .where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_not(None))
-        .values(deleted_at=None)
-        .returning(EnvironmentProfile)
-    )
+    result = await session.execute(update(EnvironmentProfile).where(EnvironmentProfile.id == profile_id, EnvironmentProfile.deleted_at.is_not(None)).values(deleted_at=None).returning(EnvironmentProfile))
     await session.flush()
     return result.scalar_one_or_none()
 

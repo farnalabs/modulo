@@ -730,10 +730,7 @@ def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> No
 # mirroring ``api.routes.runs.cancel_run`` and ``api.db_error_handling``.
 # ---------------------------------------------------------------------------
 
-_MSG_HITL_LOCK_TIMEOUT = (
-    "Timed out waiting for a lock on this review; another change is in progress. "
-    "Re-issue the request once it completes."
-)
+_MSG_HITL_LOCK_TIMEOUT = "Timed out waiting for a lock on this review; another change is in progress. Re-issue the request once it completes."
 
 
 def _raise_lock_timeout_if(exc: SQLAlchemyError, log_key: str) -> None:
@@ -1586,13 +1583,7 @@ async def _load_pending_run_data(
         HitlClaim.decision.is_(None),
     )
     if viewer_account_id is not None:
-        gate_stmt = (
-            gate_stmt.join(Run, HitlClaim.run_id == Run.id)
-            .join(Pipeline, Run.pipeline_id == Pipeline.id)
-            .where(
-                account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
-            )
-        )
+        gate_stmt = gate_stmt.join(Run, HitlClaim.run_id == Run.id).join(Pipeline, Run.pipeline_id == Pipeline.id).where(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id))
     result = await session.execute(gate_stmt)
     gates = list(result.scalars())
 
@@ -1707,9 +1698,7 @@ async def list_org_pending_reviews(
             pipeline_ids = list({g.pipeline_id for g in gates})
             pipeline_map: dict[uuid.UUID, str] = {}
             if pipeline_ids:
-                pipeline_rows = await session.execute(
-                    select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
-                )
+                pipeline_rows = await session.execute(select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids)))
                 pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
 
             # FAR-613: resolve each gate's description from its run's snapshot
@@ -1717,9 +1706,7 @@ async def list_org_pending_reviews(
             # few pending gates' runs + snapshots — never per-gate walks), so
             # the org review page gets the briefing without an N+1. Context
             # comes from the claim row itself (_review_to_response).
-            description_by_review = await resolve_review_descriptions(
-                session, gates=gates, org_id=principal.organisation_id
-            )
+            description_by_review = await resolve_review_descriptions(session, gates=gates, org_id=principal.organisation_id)
             # FAR-686: also resolve each gate's human label at org level so the
             # shared gate card shows a readable name (frontend falls back to
             # shortId when a label is missing).
@@ -1839,9 +1826,7 @@ async def list_org_reviews(
                 effective_page_size=effective_page_size,
                 account_id=_viewer_account_scope_id(principal),
             )
-            pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(
-                session, gates=gates, organisation_id=principal.organisation_id
-            )
+            pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(session, gates=gates, organisation_id=principal.organisation_id)
     except ProgrammingError as exc:
         logger.exception(_CODE_HITL_LIST_ORG_REVIEWS)
         raise HTTPException(
@@ -1940,9 +1925,7 @@ async def _fetch_review_page(
         if not fenced_to_actionable_runs:
             count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
             gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
-        membership_clause = account_team_scope_clause(
-            func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id
-        )
+        membership_clause = account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id)
         count_stmt = count_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
         gates_stmt = gates_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
     total = (await session.execute(count_stmt)).scalar_one()
@@ -2017,9 +2000,7 @@ async def _load_review_label_map(session: AsyncSession, gates: list[HitlClaim]) 
         return {}
 
     snapshot_ids = list(set(run_to_snapshot.values()))
-    snap_rows = (
-        await session.execute(select(SnapModel.id, SnapModel.graph_json).where(SnapModel.id.in_(snapshot_ids)))
-    ).all()
+    snap_rows = (await session.execute(select(SnapModel.id, SnapModel.graph_json).where(SnapModel.id.in_(snapshot_ids)))).all()
     labels_by_snapshot: dict[uuid.UUID, dict[str, str]] = {}
     for snap_id, graph_json in snap_rows:
         if not isinstance(graph_json, dict):
@@ -2109,9 +2090,5 @@ async def _load_claimant_name_map(session: AsyncSession, gates: list[HitlClaim])
     account_ids = list({g.account_id for g in gates if g.account_id is not None})
     if not account_ids:
         return {}
-    rows = (
-        await session.execute(
-            select(Account.id, Account.display_name, Account.email).where(Account.id.in_(account_ids))
-        )
-    ).all()
+    rows = (await session.execute(select(Account.id, Account.display_name, Account.email).where(Account.id.in_(account_ids)))).all()
     return {row[0]: row[1] or row[2] or "" for row in rows}

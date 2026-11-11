@@ -198,9 +198,7 @@ def _preference_change_is_noop(
     only requested keys can change. A ``dashboard_level`` of ``None`` means the
     request did not carry one, so it cannot change the stored level.
     """
-    opt_outs_changed = any(
-        opted_out != (category in before_opted_out) for category, opted_out in requested_opt_outs.items()
-    )
+    opt_outs_changed = any(opted_out != (category in before_opted_out) for category, opted_out in requested_opt_outs.items())
     level_changed = dashboard_level is not None and dashboard_level != before_level
     return not (opt_outs_changed or level_changed)
 
@@ -336,11 +334,7 @@ async def get_unread(
 @router.post(
     "/mark-all-read",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(
-            audited("in_app_notifications_marked_read", "in_app_notification", principal_dep=get_current_tenant_user)
-        )
-    ],
+    dependencies=[Depends(audited("in_app_notifications_marked_read", "in_app_notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_MARK_ALL_READ)
 async def mark_all_read_endpoint(
@@ -520,13 +514,7 @@ async def get_preferences(
 
 @router.put(
     "/preferences",
-    dependencies=[
-        Depends(
-            audited(
-                "notification_preferences_updated", "notification_preference", principal_dep=get_current_tenant_user
-            )
-        )
-    ],
+    dependencies=[Depends(audited("notification_preferences_updated", "notification_preference", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
 async def update_preferences(
@@ -592,9 +580,7 @@ async def update_preferences(
                 # (e.g. ``hitl_email``) written concurrently. A missing
                 # account is now loud (404) instead of a silent no-op.
                 try:
-                    await update_account_preferences(
-                        session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level}
-                    )
+                    await update_account_preferences(session, principal.account_id, {_DASHBOARD_LEVEL_KEY: dashboard_level})
                 except AccountNotFoundError:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found") from None
             opted_out = await get_opted_out_categories(
@@ -680,9 +666,7 @@ async def get_notification_detail(
 @router.post(
     "/{notification_id}/review-later",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("in_app_notification_deferred", "in_app_notification", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("in_app_notification_deferred", "in_app_notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
 async def review_later_endpoint(
@@ -740,9 +724,7 @@ async def review_later_endpoint(
 @router.post(
     "/{notification_id}/dismiss",
     status_code=status.HTTP_200_OK,
-    dependencies=[
-        Depends(audited("in_app_notification_dismissed", "in_app_notification", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("in_app_notification_dismissed", "in_app_notification", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
 async def dismiss_endpoint(

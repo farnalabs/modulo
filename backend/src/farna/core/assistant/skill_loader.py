@@ -69,12 +69,7 @@ class SkillLoader:
                     logger.warning("Unknown skill filter column: %s", k)
                     continue
                 conditions.append(col == v)
-            stmt = (
-                select(AssistantSkill)
-                .where(*conditions, AssistantSkill.active.is_(True))
-                .order_by(AssistantSkill.id)
-                .limit(_SKILL_PAGE_SIZE)
-            )
+            stmt = select(AssistantSkill).where(*conditions, AssistantSkill.active.is_(True)).order_by(AssistantSkill.id).limit(_SKILL_PAGE_SIZE)
             result = await self._session.execute(stmt)
             return [self._to_entry(s) for s in result.scalars().all()]
         except asyncio.CancelledError:
@@ -180,9 +175,7 @@ class SkillLoader:
             return f"{_SECTION_PAGE_CONTEXT}\n\n{page_context}"
         return None
 
-    async def _build_profile_section(
-        self, org_id: uuid.UUID, user_id: uuid.UUID, ctx_sources: dict[str, str]
-    ) -> str | None:
+    async def _build_profile_section(self, org_id: uuid.UUID, user_id: uuid.UUID, ctx_sources: dict[str, str]) -> str | None:
         if ctx_sources.get("user_profile") == "always_on":
             return await self._build_user_profile(org_id, user_id)
         return None

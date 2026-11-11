@@ -53,7 +53,7 @@ __all__ = [
     "CONTRIBUTION_DRAFT",
     "CONTRIBUTION_PUBLISHED",
     "CONTRIBUTION_REVIEW_QUEUE",
-    "MODULO_ORG_ID",
+    "FARNA_CONTROL_MODULO_ORG_ID",
     "CommunityPrimitiveReadOnlyError",
     "ContributionInvalidTransitionError",
     "ContributionNotFoundError",
@@ -149,9 +149,7 @@ def _filter_primitives(
     if search:
         term = search.strip().lower()
         if term:
-            primitives = [
-                p for p in primitives if term in (p.name or "").lower() or term in (p.description or "").lower()
-            ]
+            primitives = [p for p in primitives if term in (p.name or "").lower() or term in (p.description or "").lower()]
     return primitives
 
 
@@ -201,12 +199,7 @@ async def _fetch_published_community_from_db(
     try:
         saved_tenant = session.info.pop("org_id", None)
         try:
-            stmt = (
-                select(LibraryPrimitive)
-                .where(LibraryPrimitive.contribution_status == CONTRIBUTION_PUBLISHED)
-                .where(LibraryPrimitive.visibility == "community")
-                .order_by(LibraryPrimitive.created_at.desc())
-            )
+            stmt = select(LibraryPrimitive).where(LibraryPrimitive.contribution_status == CONTRIBUTION_PUBLISHED).where(LibraryPrimitive.visibility == "community").order_by(LibraryPrimitive.created_at.desc())
             allowed_types = _resolve_primitive_types(primitive_type, primitive_types)
             if allowed_types is not None:
                 stmt = stmt.where(LibraryPrimitive.primitive_type.in_(allowed_types))
@@ -421,11 +414,7 @@ async def _re_read_primitive(
 async def _increment_registry_downloads(session: AsyncSession, refreshed: LibraryPrimitive) -> None:
     """Atomically increment the download count on registry primitives."""
     if refreshed.source == "registry":
-        await session.execute(
-            sa_update(LibraryPrimitive)
-            .where(LibraryPrimitive.id == refreshed.id)
-            .values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1)
-        )
+        await session.execute(sa_update(LibraryPrimitive).where(LibraryPrimitive.id == refreshed.id).values(download_count=func.coalesce(LibraryPrimitive.download_count, 0) + 1))
 
 
 def _build_copy_args(
@@ -485,9 +474,7 @@ async def copy_to_adapt(
         raise LookupError(f"Primitive {primitive_id} not found for org {org_id}")
 
     if via_mcp and source.visibility == "community":
-        raise CommunityPrimitiveReadOnlyError(
-            "Community primitives may only be adapted via the browser UI, not via MCP."
-        )
+        raise CommunityPrimitiveReadOnlyError("Community primitives may only be adapted via the browser UI, not via MCP.")
 
     async def _do(s: AsyncSession) -> LibraryPrimitive:
         if created_by is not None:
@@ -662,10 +649,7 @@ async def submit_contribution_for_review(
             raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
         if prim.contribution_status != CONTRIBUTION_DRAFT:
-            raise ContributionInvalidTransitionError(
-                f"Cannot submit contribution {primitive_id} for review: "
-                f"expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'"
-            )
+            raise ContributionInvalidTransitionError(f"Cannot submit contribution {primitive_id} for review: expected status '{CONTRIBUTION_DRAFT}', got '{prim.contribution_status}'")
 
         updated = await update_library_primitive(
             s,
@@ -698,11 +682,7 @@ async def publish_contribution(
             raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
         if prim.contribution_status not in (CONTRIBUTION_DRAFT, CONTRIBUTION_REVIEW_QUEUE):
-            raise ContributionInvalidTransitionError(
-                f"Cannot publish contribution {primitive_id}: "
-                f"expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', "
-                f"got '{prim.contribution_status}'"
-            )
+            raise ContributionInvalidTransitionError(f"Cannot publish contribution {primitive_id}: expected status '{CONTRIBUTION_DRAFT}' or '{CONTRIBUTION_REVIEW_QUEUE}', got '{prim.contribution_status}'")
 
         updated = await update_library_primitive(
             s,
@@ -833,10 +813,7 @@ async def submit_contribution_version(
             raise ContributionNotFoundError(f"Contribution {primitive_id} not found")
 
         if existing.contribution_status != CONTRIBUTION_PUBLISHED:
-            raise ContributionInvalidTransitionError(
-                f"Cannot version contribution {primitive_id}: "
-                f"expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'"
-            )
+            raise ContributionInvalidTransitionError(f"Cannot version contribution {primitive_id}: expected status '{CONTRIBUTION_PUBLISHED}', got '{existing.contribution_status}'")
 
         new_version = _bump_version(existing.version)
         group_id = await _resolve_version_group(s, existing, primitive_id)
@@ -924,11 +901,7 @@ async def _mark_update_recipients(s: AsyncSession, prim: LibraryPrimitive) -> No
     if group_id is None:
         return
 
-    fork_stmt = select(LibraryPrimitive).where(
-        LibraryPrimitive.forked_from.in_(
-            select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
-        )
-    )
+    fork_stmt = select(LibraryPrimitive).where(LibraryPrimitive.forked_from.in_(select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)))
     installed_stmt = select(LibraryPrimitive).where(
         LibraryPrimitive.id.in_(select(CollectionInstall.collection_id)),
         or_(

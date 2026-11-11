@@ -36,13 +36,13 @@ from farna.db.models.environment_profile import PROVIDER_TYPES
 
 scenarios("provider_matrix.feature")
 
-_ENV_SIGNALS = ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST", "MODULO_KUBERNETES_ENABLED")
+_ENV_SIGNALS = ("FARNA_CONTROL_MODULO_E2B_API_KEY", "FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST", "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED")
 
 
 def _clean_env(monkeypatch) -> None:
     for var in _ENV_SIGNALS:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.delenv("MODULO_RUNNER_TEMPLATE_ID", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_TEMPLATE_ID", raising=False)
 
 
 def _hub_state(request) -> dict:
@@ -98,13 +98,13 @@ def step_env_no_signals(monkeypatch) -> None:
 @given(parsers.parse('MODULO_E2B_API_KEY is set to "{value}"'))
 def step_env_e2b_key(monkeypatch, value: str) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("MODULO_E2B_API_KEY", value)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", value)
 
 
 @given(parsers.parse('MODULO_DOCKER_HOST is set to "{value}"'))
 def step_env_modulo_docker_host(monkeypatch, value: str) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", value)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", value)
 
 
 @given(parsers.parse('DOCKER_HOST is set to "{value}"'))
@@ -116,7 +116,7 @@ def step_env_docker_host(monkeypatch, value: str) -> None:
 @given(parsers.parse('MODULO_RUNNER_TEMPLATE_ID is set to "{value}"'))
 def step_env_unrelated_runner(monkeypatch, value: str) -> None:
     _clean_env(monkeypatch)
-    monkeypatch.setenv("MODULO_RUNNER_TEMPLATE_ID", value)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_TEMPLATE_ID", value)
 
 
 @given("an empty runtime provider hub")
@@ -215,25 +215,16 @@ def step_type_resolves_to(request, ptype: str, expected: str) -> None:
     resolved = state["resolved"]
     assert error is None, f"expected resolve to succeed, got error: {error!r}"
     assert resolved is not None, "expected a resolved provider"
-    assert resolved.provider_id == expected, (
-        f"expected provider_type {ptype!r} to resolve to {expected!r}, got {resolved.provider_id!r}"
-    )
+    assert resolved.provider_id == expected, f"expected provider_type {ptype!r} to resolve to {expected!r}, got {resolved.provider_id!r}"
 
 
-@then(
-    parsers.parse(
-        'an environment profile requesting provider_type "{ptype}" fails with '
-        'ProviderNotConfiguredError mentioning "{fragment}"'
-    )
-)
+@then(parsers.parse('an environment profile requesting provider_type "{ptype}" fails with ProviderNotConfiguredError mentioning "{fragment}"'))
 def step_type_fails_mentioning(request, ptype: str, fragment: str) -> None:
     state = _hub_state(request)
     state["profile"] = _profile(provider_type=ptype)
     _request_resolve(request, state["hub"])
     error = state["resolve_error"]
-    assert isinstance(error, ProviderNotConfiguredError), (
-        f"expected ProviderNotConfiguredError for {ptype!r}, got {error!r}"
-    )
+    assert isinstance(error, ProviderNotConfiguredError), f"expected ProviderNotConfiguredError for {ptype!r}, got {error!r}"
     assert fragment.lower() in str(error).lower(), f"expected {fragment!r} in the remediation copy, got: {error!r}"
 
 
@@ -243,12 +234,8 @@ def step_docker_aliases(request, name: str) -> None:
     hub = state["hub"]
     canonical = hub.get(name)
     assert canonical is not None, f"expected provider {name!r} to be registered"
-    resolved_ids = {
-        alias: hub.resolve(_profile(provider_type=alias)).provider_id for alias in ("docker", "local_docker", name)
-    }
-    assert set(resolved_ids.values()) == {name}, (
-        f"docker-family aliases resolved to different providers: {resolved_ids}"
-    )
+    resolved_ids = {alias: hub.resolve(_profile(provider_type=alias)).provider_id for alias in ("docker", "local_docker", name)}
+    assert set(resolved_ids.values()) == {name}, f"docker-family aliases resolved to different providers: {resolved_ids}"
     state["registered"][name] = canonical
 
 
@@ -257,9 +244,7 @@ def step_resolved_is(request, expected: str) -> None:
     state = _hub_state(request)
     assert state["resolve_error"] is None, f"expected resolve to succeed, got: {state['resolve_error']!r}"
     assert state["resolved"] is not None, "expected a resolved provider"
-    assert state["resolved"].provider_id == expected, (
-        f"expected the resolved provider to be {expected!r}, got {state['resolved'].provider_id!r}"
-    )
+    assert state["resolved"].provider_id == expected, f"expected the resolved provider to be {expected!r}, got {state['resolved'].provider_id!r}"
 
 
 @then(parsers.parse('resolve fails with ProviderNotConfiguredError for provider_type "{ptype}"'))
@@ -274,9 +259,7 @@ def step_resolve_fails_configured(request, ptype: str) -> None:
 def step_error_env_var(request, expected: str) -> None:
     error = _error(request)
     assert isinstance(error, ProviderNotConfiguredError), f"expected ProviderNotConfiguredError, got {error!r}"
-    assert getattr(error, "env_var", None) == expected, (
-        f"expected env_var {expected!r}, got {getattr(error, 'env_var', None)!r}"
-    )
+    assert getattr(error, "env_var", None) == expected, f"expected env_var {expected!r}, got {getattr(error, 'env_var', None)!r}"
 
 
 @then(parsers.parse('resolve fails with UnknownProviderTypeError for provider_type "{ptype}"'))
@@ -298,18 +281,14 @@ def step_error_names_valid_types(request) -> None:
 @then("resolve fails with ProviderNotConfiguredError")
 def step_resolve_fails_bare(request) -> None:
     state = _hub_state(request)
-    assert isinstance(state["resolve_error"], ProviderNotConfiguredError), (
-        f"expected ProviderNotConfiguredError, got {state['resolve_error']!r}"
-    )
+    assert isinstance(state["resolve_error"], ProviderNotConfiguredError), f"expected ProviderNotConfiguredError, got {state['resolve_error']!r}"
 
 
 @then(parsers.parse('resolving provider_type "{ptype}" against the hub yields provider "{expected}"'))
 def step_config_resolve_yields(request, ptype: str, expected: str) -> None:
     state = _hub_state(request)
     resolved = state["hub"].resolve(_profile(provider_type=ptype))
-    assert resolved.provider_id == expected, (
-        f"expected provider_type {ptype!r} to resolve to {expected!r}, got {resolved.provider_id!r}"
-    )
+    assert resolved.provider_id == expected, f"expected provider_type {ptype!r} to resolve to {expected!r}, got {resolved.provider_id!r}"
 
 
 @then(parsers.parse('initialise fails with UnknownProviderTypeError naming "{ptype}"'))

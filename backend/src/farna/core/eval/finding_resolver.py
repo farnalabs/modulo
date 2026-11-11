@@ -255,12 +255,7 @@ async def evaluate_mute_policy(
 
     # Check if acceptance rate is below threshold
     should_mute = acceptance_rate < eval_def.mute_threshold
-    reason = (
-        f"Acceptance rate {acceptance_rate:.2%} below threshold {eval_def.mute_threshold:.2%} "
-        f"with {total_outcomes} outcomes"
-        if should_mute
-        else f"Acceptance rate {acceptance_rate:.2%} meets threshold {eval_def.mute_threshold:.2%}"
-    )
+    reason = f"Acceptance rate {acceptance_rate:.2%} below threshold {eval_def.mute_threshold:.2%} with {total_outcomes} outcomes" if should_mute else f"Acceptance rate {acceptance_rate:.2%} meets threshold {eval_def.mute_threshold:.2%}"
 
     return {
         "should_mute": should_mute,

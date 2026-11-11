@@ -4,7 +4,7 @@ Configures python-json-logger with:
 - Standard fields: timestamp, level, logger, module, function, line
 - correlation_id from middleware contextvar
 - Configurable log level per module via MODULO_LOG_LEVEL env var
-- Configurable per-module override via MODULO_LOG_LEVEL_<MODULE_PATH>
+- Configurable per-module override via FARNA_CONTROL_LOG_LEVEL_<MODULE_PATH>
 - Sensitive field redaction (keys, secrets, tokens → "***")
 """
 
@@ -94,11 +94,11 @@ class SensitiveFieldFilter(logging.Filter):
 
 def _resolve_log_level(module_name: str) -> str:
     """Resolve log level for a module, checking per-module overrides first."""
-    env_key = f"MODULO_LOG_LEVEL_{module_name.upper().replace('.', '_')}"
+    env_key = f"FARNA_CONTROL_LOG_LEVEL_{module_name.upper().replace('.', '_')}"
     override = os.environ.get(env_key)
     if override:
         return override.upper()
-    return os.environ.get("MODULO_LOG_LEVEL", "INFO").upper()
+    return os.environ.get("FARNA_CONTROL_LOG_LEVEL", "INFO").upper()
 
 
 def _log_async_emit_error(future: asyncio.Task[None]) -> None:
@@ -225,7 +225,7 @@ class ErrorTrackingLogHandler(logging.Handler):
                     "line": record.lineno,
                     "correlation_id": correlation_id_var.get(),
                 },
-                "environment": os.environ.get("MODULO_ENV", "development"),
+                "environment": os.environ.get("FARNA_CONTROL_MODULO_ENV", "development"),
                 "version": get_version(),
             }
 
@@ -282,9 +282,9 @@ def _apply_per_module_levels() -> None:
     """Apply per-module log levels from MODULO_LOG_LEVEL_<MODULE> env vars."""
     seen: set[str] = set()
     for env_name, value in os.environ.items():
-        if not env_name.startswith("MODULO_LOG_LEVEL_"):
+        if not env_name.startswith("FARNA_CONTROL_LOG_LEVEL_"):
             continue
-        module_path = env_name[len("MODULO_LOG_LEVEL_") :].lower().replace("_", ".")
+        module_path = env_name[len("FARNA_CONTROL_LOG_LEVEL_") :].lower().replace("_", ".")
         if module_path in seen:
             continue
         seen.add(module_path)

@@ -163,7 +163,7 @@ def _resolve_docker_host() -> str | None:
     # Same endpoint chain as the provider + reconciler: MODULO_DOCKER_HOST
     # first (the filtered socket-proxy), then DOCKER_HOST, else None (the
     # engine's local socket).
-    return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+    return os.environ.get("FARNA_CONTROL_MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
 
 
 def docker_engine_configured() -> bool:
@@ -417,9 +417,7 @@ async def _upsert_org_probe(
     from farna.db.crud.runner_probe import get_runner_probe_cache, upsert_runner_probe_cache
 
     real_refs = [r for r in image_refs if not is_placeholder_bundled_runner_image_ref(r)]
-    images_present: bool | None = (
-        aggregate_image_presence([checked_images.get(r) for r in real_refs]) if outcome.reachable else None
-    )
+    images_present: bool | None = aggregate_image_presence([checked_images.get(r) for r in real_refs]) if outcome.reachable else None
 
     previous = await get_runner_probe_cache(session, org_id=org_id, machine_id=identity)
     was_reachable = previous.engine_reachable if previous is not None else True

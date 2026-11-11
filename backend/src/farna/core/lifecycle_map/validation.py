@@ -49,9 +49,7 @@ def _require_bounded_str(value: Any, *, field: str, index: int, max_length: int)
     """
     text = _require_non_empty_str(value, field=field, index=index)
     if len(text) > max_length:
-        raise LifecycleMapContentError(
-            f"lifecycle-map stage #{index}: {field!r} must be at most {max_length} characters (got {len(text)})"
-        )
+        raise LifecycleMapContentError(f"lifecycle-map stage #{index}: {field!r} must be at most {max_length} characters (got {len(text)})")
     return text
 
 
@@ -64,9 +62,7 @@ def _normalise_pipeline_id(value: Any, *, index: int) -> str | None:
     try:
         _UUID_RE(raw)
     except ValueError:
-        raise LifecycleMapContentError(
-            f"lifecycle-map stage #{index}: 'pipeline_id' {raw!r} is not a valid UUID"
-        ) from None
+        raise LifecycleMapContentError(f"lifecycle-map stage #{index}: 'pipeline_id' {raw!r} is not a valid UUID") from None
     return raw
 
 
@@ -84,9 +80,7 @@ def _normalise_stage(raw: Any, index: int) -> dict[str, Any]:
             stage_type = stage.get(key)
             break
     if not isinstance(stage_type, str) or stage_type not in STAGE_TYPES:
-        raise LifecycleMapContentError(
-            f"lifecycle-map stage #{index}: 'type' must be one of {sorted(STAGE_TYPES)}, got {stage_type!r}"
-        )
+        raise LifecycleMapContentError(f"lifecycle-map stage #{index}: 'type' must be one of {sorted(STAGE_TYPES)}, got {stage_type!r}")
     stage["type"] = stage_type
 
     if "pipeline_id" in stage:
@@ -202,20 +196,14 @@ def _validate_graph_structure(stages: list[dict[str, Any]], edges: list[dict[str
     for index, stage in enumerate(stages):
         stage_id = stage["id"]
         if stage_id in seen_stage_ids:
-            raise LifecycleMapContentError(
-                f"lifecycle-map stage #{index}: duplicate stage id {stage_id!r} "
-                f"(already used by stage #{seen_stage_ids[stage_id]})"
-            )
+            raise LifecycleMapContentError(f"lifecycle-map stage #{index}: duplicate stage id {stage_id!r} (already used by stage #{seen_stage_ids[stage_id]})")
         seen_stage_ids[stage_id] = index
 
     seen_edge_ids: dict[str, int] = {}
     for index, edge in enumerate(edges):
         edge_id = edge["id"]
         if edge_id in seen_edge_ids:
-            raise LifecycleMapContentError(
-                f"lifecycle-map edge/transition #{index}: duplicate edge id {edge_id!r} "
-                f"(already used by edge/transition #{seen_edge_ids[edge_id]})"
-            )
+            raise LifecycleMapContentError(f"lifecycle-map edge/transition #{index}: duplicate edge id {edge_id!r} (already used by edge/transition #{seen_edge_ids[edge_id]})")
         seen_edge_ids[edge_id] = index
 
     stage_ids = frozenset(seen_stage_ids)
@@ -223,15 +211,9 @@ def _validate_graph_structure(stages: list[dict[str, Any]], edges: list[dict[str
         source = edge["source"]
         target = edge["target"]
         if source not in stage_ids:
-            raise LifecycleMapContentError(
-                f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): source stage {source!r} "
-                "is not defined in stages"
-            )
+            raise LifecycleMapContentError(f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): source stage {source!r} is not defined in stages")
         if target not in stage_ids:
-            raise LifecycleMapContentError(
-                f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): target stage {target!r} "
-                "is not defined in stages"
-            )
+            raise LifecycleMapContentError(f"lifecycle-map edge/transition #{index} (id {edge['id']!r}): target stage {target!r} is not defined in stages")
 
     cycle = _find_transition_cycle(edges)
     if cycle is not None:
@@ -378,9 +360,7 @@ def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any]
     result: dict[str, Any] = dict(content)
 
     if "stages" in result and not isinstance(result["stages"], list):
-        changes.append(
-            f"content_json.stages must be an array (got {type(result['stages']).__name__}); left for manual repair"
-        )
+        changes.append(f"content_json.stages must be an array (got {type(result['stages']).__name__}); left for manual repair")
         return result, changes
 
     if "stages" in result:
@@ -396,9 +376,7 @@ def clean_legacy_content(content: dict[str, Any] | None) -> tuple[dict[str, Any]
     if edges_raw is None:
         edges_raw = result.get("transitions")
     if not isinstance(edges_raw, list):
-        changes.append(
-            f"content_json.edges/transitions must be an array (got {type(edges_raw).__name__}); left for manual repair"
-        )
+        changes.append(f"content_json.edges/transitions must be an array (got {type(edges_raw).__name__}); left for manual repair")
         return result, changes
 
     valid_edges = _clean_edges(edges_raw, stage_ids, changes)

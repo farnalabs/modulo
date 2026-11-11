@@ -15,9 +15,7 @@ async def get_otel_config(session: AsyncSession, org_id: uuid.UUID) -> dict[str,
     # org is still operationally live; its OTel config must remain readable.
     from farna.db.soft_delete import include_soft_deleted
 
-    result = await session.execute(
-        include_soft_deleted(select(Organisation.otel_config_json).where(Organisation.id == org_id))
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation.otel_config_json).where(Organisation.id == org_id)))
     row = result.scalar_one_or_none()
     return row if row is not None else {}
 

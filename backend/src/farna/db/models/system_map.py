@@ -103,21 +103,13 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True)
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     default_map: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     published_revision_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True
-    )
-    updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True
-    )
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete="RESTRICT"), nullable=False, index=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     # Composite FK to system_map_revisions (id + organisation_id) is declared in the migration.
     # SQLAlchemy doesn't natively support composite FKs to a non-PK unique constraint,
@@ -125,8 +117,7 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
 
     published_revision: Mapped["SystemMapRevision | None"] = relationship(
         foreign_keys=[published_revision_id],
-        primaryjoin="and_(SystemMap.published_revision_id==SystemMapRevision.id, "
-        "SystemMap.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMap.published_revision_id==SystemMapRevision.id, SystemMap.organisation_id==SystemMapRevision.organisation_id)",
         viewonly=True,
     )
 
@@ -176,36 +167,30 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
     # Version-aware fields (FAR-2288)
     effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     system_map: Mapped[SystemMap] = relationship(
         back_populates="revisions",
-        primaryjoin="and_(SystemMapRevision.system_map_id==SystemMap.id, "
-        "SystemMapRevision.organisation_id==SystemMap.organisation_id)",
+        primaryjoin="and_(SystemMapRevision.system_map_id==SystemMap.id, SystemMapRevision.organisation_id==SystemMap.organisation_id)",
         foreign_keys="[SystemMapRevision.system_map_id, SystemMapRevision.organisation_id]",
     )
     nodes: Mapped[list["SystemMapNode"]] = relationship(
         back_populates="revision",
-        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, "
-        "SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapNode.revision_id, SystemMapNode.organisation_id]",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
         passive_deletes=True,
     )
     relationships: Mapped[list["SystemMapRelationship"]] = relationship(
         back_populates="revision",
-        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, "
-        "SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapRelationship.revision_id, SystemMapRelationship.organisation_id]",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
         passive_deletes=True,
     )
     loop_configs: Mapped[list["SystemMapLoopConfig"]] = relationship(
         back_populates="revision",
-        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, "
-        "SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapLoopConfig.revision_id, SystemMapLoopConfig.organisation_id]",
         cascade=_CASCADE_ALL_DELETE_ORPHAN,
         passive_deletes=True,
@@ -231,28 +216,17 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
     node_type: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
-    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=ONDELETE_SET_NULL), index=True
-    )
-    connector_instance_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("connector_instances.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
-    eval_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("evals.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=ONDELETE_SET_NULL), index=True)
+    connector_instance_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("connector_instances.id", ondelete=ONDELETE_SET_NULL), index=True)
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True)
+    eval_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("evals.id", ondelete=ONDELETE_SET_NULL), index=True)
     position_x: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
     position_y: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     revision: Mapped[SystemMapRevision] = relationship(
         back_populates="nodes",
-        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, "
-        "SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapNode.revision_id, SystemMapNode.organisation_id]",
     )
 
@@ -282,14 +256,11 @@ class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
     target_node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(50), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     revision: Mapped[SystemMapRevision] = relationship(
         back_populates="relationships",
-        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, "
-        "SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapRelationship.revision_id, SystemMapRelationship.organisation_id]",
     )
 
@@ -314,20 +285,15 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     target_signal: Mapped[str] = mapped_column(String(100), nullable=False)
     observation_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    action_pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=_ONDELETE_RESTRICT), nullable=False, index=True
-    )
+    action_pipeline_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=_ONDELETE_RESTRICT), nullable=False, index=True)
     budget_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     outcome_metric: Mapped[str] = mapped_column(String(100), nullable=False)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     revision: Mapped[SystemMapRevision] = relationship(
         back_populates="loop_configs",
-        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, "
-        "SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
+        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
         foreign_keys="[SystemMapLoopConfig.revision_id, SystemMapLoopConfig.organisation_id]",
     )
     action_pipeline: Mapped["Pipeline"] = relationship(foreign_keys=[action_pipeline_id])
@@ -348,8 +314,7 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"binding_kind IN ({_binding_kind_sql})", name="ck_system_map_attribution_bindings_kind"),
         CheckConstraint(
-            "(binding_kind = 'trigger' AND trigger_id IS NOT NULL) "
-            "OR (binding_kind = 'action_pipeline' AND trigger_id IS NULL)",
+            "(binding_kind = 'trigger' AND trigger_id IS NOT NULL) OR (binding_kind = 'action_pipeline' AND trigger_id IS NULL)",
             name="ck_system_map_attribution_bindings_trigger_semantics",
         ),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_attribution_bindings_id_organisation_id"),
@@ -379,18 +344,12 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
         ),
     )
 
-    pipeline_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=_ONDELETE_CASCADE), nullable=False, index=True
-    )
-    trigger_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("triggers.id", ondelete=_ONDELETE_CASCADE), index=True
-    )
+    pipeline_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey(_FK_PIPELINES_ID, ondelete=_ONDELETE_CASCADE), nullable=False, index=True)
+    trigger_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("triggers.id", ondelete=_ONDELETE_CASCADE), index=True)
     system_map_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     binding_kind: Mapped[str] = mapped_column(String(30), nullable=False)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     system_map: Mapped[SystemMap] = relationship(back_populates="attribution_bindings")
     pipeline: Mapped["Pipeline"] = relationship(foreign_keys=[pipeline_id])
@@ -414,9 +373,7 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
     loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     loop_config: Mapped[SystemMapLoopConfig] = relationship(back_populates="admission_attempts")
 
@@ -436,19 +393,13 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
     )
 
     loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
-    run_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("runs.id", ondelete=_ONDELETE_RESTRICT), nullable=False, index=True
-    )
+    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("runs.id", ondelete=_ONDELETE_RESTRICT), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    reserved_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
-    )
+    reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False)
     cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True
-    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey(FK_ACCOUNTS_ID, ondelete=ONDELETE_SET_NULL), nullable=True, index=True)
 
     loop_config: Mapped[SystemMapLoopConfig] = relationship(back_populates="reservations")

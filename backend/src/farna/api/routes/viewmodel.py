@@ -671,9 +671,7 @@ async def _fetch_pending_hitl_reviews(
         )
     )
     if user_team_ids:
-        hitl_query = hitl_query.where(
-            HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)
-        )
+        hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids))
     else:
         hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
 

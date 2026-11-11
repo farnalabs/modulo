@@ -77,9 +77,7 @@ def configure_license_trust_anchor(settings: Any) -> None:
         try:
             license_mod.set_public_key(public_key)
         except ValueError as exc:
-            raise RuntimeError(
-                f"MODULO_LICENSE_PUBLIC_KEY is not a valid Ed25519 public key (expected 64 hex characters): {exc}"
-            ) from exc
+            raise RuntimeError(f"MODULO_LICENSE_PUBLIC_KEY is not a valid Ed25519 public key (expected 64 hex characters): {exc}") from exc
         _log.info("startup.license_public_key_configured")
     elif not debug:
         _log.warning("startup.default_license_key_in_use")

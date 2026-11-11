@@ -52,17 +52,11 @@ depends_on: tuple[str, ...] | None = None
 _INDEXES = [
     (
         "ix_oauth_auth_codes_org_client",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_oauth_auth_codes_org_client "
-            'ON public."oauth_authorization_codes" (organisation_id, client_id);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_oauth_auth_codes_org_client ON public."oauth_authorization_codes" (organisation_id, client_id);'),
     ),
     (
         "ix_oauth_token_families_org_client",
-        (
-            "CREATE INDEX IF NOT EXISTS ix_oauth_token_families_org_client "
-            'ON public."oauth_token_families" (organisation_id, client_id);'
-        ),
+        ('CREATE INDEX IF NOT EXISTS ix_oauth_token_families_org_client ON public."oauth_token_families" (organisation_id, client_id);'),
     ),
 ]
 

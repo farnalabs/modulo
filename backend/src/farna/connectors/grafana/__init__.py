@@ -58,9 +58,7 @@ class GrafanaConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Grafana API healthy")
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Grafana API token")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as exc:

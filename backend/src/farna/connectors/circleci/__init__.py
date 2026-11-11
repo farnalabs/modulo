@@ -60,9 +60,7 @@ class CircleCIConnector(CIRunnerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(
-            _CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(_CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self))
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_id = raw.get("id")
@@ -73,11 +71,7 @@ class CircleCIConnector(CIRunnerBase):
         actor = trigger.get("actor") if isinstance(trigger, dict) else None
         pipeline_number = raw.get("number", "")
         project_slug = raw.get("project_slug", "")
-        pipeline_url = (
-            f"https://app.circleci.com/pipelines/{project_slug}/{pipeline_number}"
-            if project_slug and pipeline_number
-            else ""
-        )
+        pipeline_url = f"https://app.circleci.com/pipelines/{project_slug}/{pipeline_number}" if project_slug and pipeline_number else ""
         return CIRun(
             id=str(raw_id) if raw_id is not None else "",
             pipeline_id=project_slug,
@@ -103,9 +97,7 @@ class CircleCIConnector(CIRunnerBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=self._redacted_detail(f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text}")[
-                    :200
-                ],
+                detail=self._redacted_detail(f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="CircleCI API timeout")

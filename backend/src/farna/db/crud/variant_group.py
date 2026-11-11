@@ -63,9 +63,7 @@ async def create_variant_group(
     return group
 
 
-async def get_variant_group(
-    session: AsyncSession, group_id: uuid.UUID, *, include_deleted: bool = False
-) -> VariantGroup | None:
+async def get_variant_group(session: AsyncSession, group_id: uuid.UUID, *, include_deleted: bool = False) -> VariantGroup | None:
     stmt = select(VariantGroup).where(VariantGroup.id == group_id)
     stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(VariantGroup.deleted_at.is_(None))
     result = await session.execute(stmt)
@@ -79,17 +77,8 @@ async def list_variant_groups(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[VariantGroup], int]:
-    q = (
-        select(VariantGroup)
-        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
-        .where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
-    )
-    count_q = (
-        select(func.count())
-        .select_from(VariantGroup)
-        .join(Pipeline, Pipeline.id == VariantGroup.pipeline_id)
-        .where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
-    )
+    q = select(VariantGroup).join(Pipeline, Pipeline.id == VariantGroup.pipeline_id).where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
+    count_q = select(func.count()).select_from(VariantGroup).join(Pipeline, Pipeline.id == VariantGroup.pipeline_id).where(Pipeline.deleted_at.is_(None), VariantGroup.deleted_at.is_(None))
     if pipeline_id is not None:
         q = q.where(VariantGroup.pipeline_id == pipeline_id)
         count_q = count_q.where(VariantGroup.pipeline_id == pipeline_id)
@@ -100,9 +89,7 @@ async def list_variant_groups(
     except ProgrammingError:
         _log.warning("variant_group table not found — returning empty list", exc_info=True)
         return [], 0
-    items = list(
-        (await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars()
-    )
+    items = list((await session.execute(q.order_by(VariantGroup.created_at.desc()).offset(offset).limit(page_size))).scalars())
     return items, total
 
 
@@ -389,9 +376,7 @@ async def run_variant_weighted(
     if snapshot_id is None:
         return None
 
-    merged_payload, control_overrides = _merge_variant_payload(
-        variant, input_payload or {}, degraded_evals=group.degraded_evals
-    )
+    merged_payload, control_overrides = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
     # FAR-342: resolve a prompt_version override to its per-agent templates (see
     # the batch path for the full comment). The override namespace lives in the
@@ -471,9 +456,7 @@ async def _fire_batch_variant(
     if snapshot_id is None:
         return None
 
-    payload, control_overrides = _merge_variant_payload(
-        variant, input_payload or {}, degraded_evals=group.degraded_evals
-    )
+    payload, control_overrides = _merge_variant_payload(variant, input_payload or {}, degraded_evals=group.degraded_evals)
 
     # FAR-342: resolve a prompt_version override to its per-agent templates
     # so the node_runner can render the selected prompt for each node, not
@@ -738,9 +721,7 @@ async def validate_batch_ownership(
     turns a cross-org reference into a clear 403 (fail closed) instead of a
     generic FK error at insert time.
     """
-    pipeline = await session.execute(
-        select(Pipeline.id).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
-    )
+    pipeline = await session.execute(select(Pipeline.id).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
     if pipeline.scalar_one_or_none() is None:
         return False
     if not snapshot_ids:
@@ -787,9 +768,7 @@ async def get_batch_runs(
     batch must still be comparable. The explicit ``organisation_id`` predicate
     is the cross-org IDOR backstop on top of RLS.
     """
-    result = await session.execute(
-        select(Run).where(Run.organisation_id == org_id, Run.batch_id == batch_id).order_by(Run.created_at)
-    )
+    result = await session.execute(select(Run).where(Run.organisation_id == org_id, Run.batch_id == batch_id).order_by(Run.created_at))
     return list(result.scalars().all())
 
 
@@ -888,11 +867,7 @@ async def list_batch_runs_for_batch_ids(
     """
     if not batch_ids:
         return {}
-    result = await session.execute(
-        select(Run)
-        .where(Run.organisation_id == org_id, Run.batch_id.in_(batch_ids))
-        .order_by(Run.batch_id, Run.created_at)
-    )
+    result = await session.execute(select(Run).where(Run.organisation_id == org_id, Run.batch_id.in_(batch_ids)).order_by(Run.batch_id, Run.created_at))
     runs = list(result.scalars().all())
     by_batch: dict[uuid.UUID, list[Run]] = {}
     for run in runs:

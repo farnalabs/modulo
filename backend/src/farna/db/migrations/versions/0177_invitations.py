@@ -59,9 +59,7 @@ _UPGRADE_SQL = (
     "END $$;"
 )
 
-_UPGRADE_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS ix_invitations_organisation_id ON public.invitations (organisation_id);"
-)
+_UPGRADE_INDEX_SQL = "CREATE INDEX IF NOT EXISTS ix_invitations_organisation_id ON public.invitations (organisation_id);"
 
 _DOWNGRADE_SQL = "DROP TABLE IF EXISTS public.invitations;"
 

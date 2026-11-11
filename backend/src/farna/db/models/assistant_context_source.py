@@ -11,8 +11,7 @@ class AssistantContextSource(Base):
     __tablename__ = "assistant_context_sources"
     __table_args__ = (
         CheckConstraint(
-            "(organisation_id IS NOT NULL AND account_id IS NULL) OR "
-            "(organisation_id IS NULL AND account_id IS NOT NULL)",
+            "(organisation_id IS NOT NULL AND account_id IS NULL) OR (organisation_id IS NULL AND account_id IS NOT NULL)",
             name="ck_assistant_context_sources_owner",
         ),
         CheckConstraint(
@@ -27,9 +26,7 @@ class AssistantContextSource(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     organisation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(),
         ForeignKey("organisations.id", ondelete="CASCADE"),

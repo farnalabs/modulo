@@ -149,10 +149,7 @@ def apply_redaction(value: Any, classes: frozenset[str]) -> Any:
 def _redact_node(node: Any, redacted_keys: frozenset[str]) -> Any:
     """Recursively replace class-covered mapping keys, preserving list shape."""
     if isinstance(node, dict):
-        return {
-            key: (REDACTED_SENTINEL if key in redacted_keys else _redact_node(item, redacted_keys))
-            for key, item in node.items()
-        }
+        return {key: (REDACTED_SENTINEL if key in redacted_keys else _redact_node(item, redacted_keys)) for key, item in node.items()}
     if isinstance(node, list):
         return [_redact_node(item, redacted_keys) for item in node]
     return node

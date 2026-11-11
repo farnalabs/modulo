@@ -99,9 +99,7 @@ async def list_runner_probe_cache(
     *,
     org_id: uuid.UUID,
 ) -> list[RunnerProbeCache]:
-    result = await session.execute(
-        select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_id).order_by(RunnerProbeCache.machine_id)
-    )
+    result = await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_id).order_by(RunnerProbeCache.machine_id))
     return list(result.scalars().all())
 
 

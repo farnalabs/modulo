@@ -105,10 +105,7 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
     ),
     ARTIFACT_RUN_SNAPSHOT: ArtifactTypeSpec(
         artifact_type=ARTIFACT_RUN_SNAPSHOT,
-        description=(
-            "The immutable pipeline snapshot a run executed against - the frozen graph, "
-            "model, schema, guardrail and policy-gate pins."
-        ),
+        description=("The immutable pipeline snapshot a run executed against - the frozen graph, model, schema, guardrail and policy-gate pins."),
         indexed=True,
         instance_observable=True,
         provenance=PROVENANCE_OBSERVED,
@@ -142,41 +139,28 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
     ),
     ARTIFACT_AUTONOMY_CHANGE: ArtifactTypeSpec(
         artifact_type=ARTIFACT_AUTONOMY_CHANGE,
-        description=(
-            "Audited pipeline autonomy promotions and demotions, with the previous and new "
-            "level and the recorded reason."
-        ),
+        description=("Audited pipeline autonomy promotions and demotions, with the previous and new level and the recorded reason."),
         indexed=True,
         instance_observable=True,
         provenance=PROVENANCE_OBSERVED,
     ),
     ARTIFACT_RELEASE_SBOM: ArtifactTypeSpec(
         artifact_type=ARTIFACT_RELEASE_SBOM,
-        description=(
-            "The CycloneDX software bill of materials for the deployed release. Produced by "
-            "the release pipeline or by the shipped generator; retained by the operator."
-        ),
+        description=("The CycloneDX software bill of materials for the deployed release. Produced by the release pipeline or by the shipped generator; retained by the operator."),
         indexed=True,
         instance_observable=False,
         provenance=PROVENANCE_CUSTOMER_SUPPLIED,
     ),
     ARTIFACT_BUILD_IDENTITY: ArtifactTypeSpec(
         artifact_type=ARTIFACT_BUILD_IDENTITY,
-        description=(
-            "The identity of the running build: product version, source revision and build "
-            "timestamp, as reported by the deployment endpoint."
-        ),
+        description=("The identity of the running build: product version, source revision and build timestamp, as reported by the deployment endpoint."),
         indexed=True,
         instance_observable=True,
         provenance=PROVENANCE_OBSERVED,
     ),
     ARTIFACT_CUSTOMER_RECORDS: ArtifactTypeSpec(
         artifact_type=ARTIFACT_CUSTOMER_RECORDS,
-        description=(
-            "Records the customer produces and retains outside Modulo: policies, risk "
-            "assessments, internal-audit reports, vulnerability-management records, "
-            "incident and restore-test records."
-        ),
+        description=("Records the customer produces and retains outside Modulo: policies, risk assessments, internal-audit reports, vulnerability-management records, incident and restore-test records."),
         indexed=False,
         instance_observable=False,
         provenance=PROVENANCE_CUSTOMER_SUPPLIED,
@@ -185,6 +169,4 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
 
 #: The artefact types the per-instance evidence index MUST account for, in
 #: report order. A mapped type with no records is surfaced as ``absent``.
-INDEXED_ARTIFACT_TYPES: Final[tuple[str, ...]] = tuple(
-    artifact_type for artifact_type, spec in ARTIFACT_TYPES.items() if spec.indexed
-)
+INDEXED_ARTIFACT_TYPES: Final[tuple[str, ...]] = tuple(artifact_type for artifact_type, spec in ARTIFACT_TYPES.items() if spec.indexed)

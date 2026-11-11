@@ -94,9 +94,7 @@ async def _count_non_terminal_runs(session: AsyncSession, org_id: uuid.UUID) -> 
     (complete/failed/cancelled/eval_failed). A non-terminal run is still
     live — the org cannot be hard-deleted out from under it.
     """
-    result = await session.execute(
-        select(func.count()).select_from(Run).where(Run.organisation_id == org_id, Run.status.not_in(TERMINAL_STATUSES))
-    )
+    result = await session.execute(select(func.count()).select_from(Run).where(Run.organisation_id == org_id, Run.status.not_in(TERMINAL_STATUSES)))
     return int(result.scalar() or 0)
 
 
@@ -117,23 +115,13 @@ async def _abort_org_live_sandboxes(session: AsyncSession, org_id: uuid.UUID) ->
         # runs-model worker. Skip the whole abort when the column is absent —
         # an UndefinedColumnError would abort the surrounding transaction and
         # break the delete that follows.
-        col_check = await session.execute(
-            text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'runs' AND column_name = 'sandbox_id' "
-                "LIMIT 1"
-            )
-        )
+        col_check = await session.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'sandbox_id' LIMIT 1"))
         if col_check.first() is None:
             _log.info("org_deletion: runs.sandbox_id column not present; skipping sandbox abort for org %s", org_id)
             return 0
 
         result = await session.execute(
-            text(
-                "SELECT DISTINCT sandbox_id FROM runs "
-                "WHERE organisation_id = :org_id AND sandbox_id IS NOT NULL "
-                "AND status NOT IN :terminal"
-            ).bindparams(bindparam("terminal", expanding=True)),
+            text("SELECT DISTINCT sandbox_id FROM runs WHERE organisation_id = :org_id AND sandbox_id IS NOT NULL AND status NOT IN :terminal").bindparams(bindparam("terminal", expanding=True)),
             {"org_id": org_id, "terminal": tuple(TERMINAL_STATUSES)},
         )
         sandbox_ids = [row[0] for row in result.all()]
@@ -173,68 +161,18 @@ async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[
 
     stmt = select(OrgMembership).where(OrgMembership.organisation_id == org_id)
     memberships = (await session.execute(stmt)).scalars().all()
-    pipelines = (
-        (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.organisation_id == org_id))))
-        .scalars()
-        .all()
-    )
+    pipelines = (await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.organisation_id == org_id)))).scalars().all()
     runs = (await session.execute(select(Run).where(Run.organisation_id == org_id).limit(5000))).scalars().all()
-    audit = (
-        (await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).limit(10000)))
-        .scalars()
-        .all()
-    )
-    library = (
-        (
-            await session.execute(
-                include_soft_deleted(select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    connectors = (
-        (
-            await session.execute(
-                include_soft_deleted(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    backends = (
-        (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
-    )
+    audit = (await session.execute(select(AuditEvent).where(AuditEvent.organisation_id == org_id).limit(10000))).scalars().all()
+    library = (await session.execute(include_soft_deleted(select(LibraryPrimitive).where(LibraryPrimitive.organisation_id == org_id)))).scalars().all()
+    connectors = (await session.execute(include_soft_deleted(select(ConnectorInstance).where(ConnectorInstance.organisation_id == org_id)))).scalars().all()
+    backends = (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
     # Library cluster tables the archive previously omitted (FAR-1758 item 6).
-    composites = (
-        (
-            await session.execute(
-                include_soft_deleted(select(CompositeTemplate).where(CompositeTemplate.organisation_id == org_id))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    ratings = (
-        (await session.execute(select(PrimitiveRating).where(PrimitiveRating.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
-    abuse_reports = (
-        (await session.execute(select(PrimitiveAbuseReport).where(PrimitiveAbuseReport.organisation_id == org_id)))
-        .scalars()
-        .all()
-    )
+    composites = (await session.execute(include_soft_deleted(select(CompositeTemplate).where(CompositeTemplate.organisation_id == org_id)))).scalars().all()
+    ratings = (await session.execute(select(PrimitiveRating).where(PrimitiveRating.organisation_id == org_id))).scalars().all()
+    abuse_reports = (await session.execute(select(PrimitiveAbuseReport).where(PrimitiveAbuseReport.organisation_id == org_id))).scalars().all()
     publishers = (await session.execute(select(Publisher).where(Publisher.organisation_id == org_id))).scalars().all()
-    installs = (
-        (
-            await session.execute(
-                include_soft_deleted(select(CollectionInstall).where(CollectionInstall.organisation_id == org_id))
-            )
-        )
-        .scalars()
-        .all()
-    )
+    installs = (await session.execute(include_soft_deleted(select(CollectionInstall).where(CollectionInstall.organisation_id == org_id)))).scalars().all()
 
     def _serialise(records: Any) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -318,9 +256,7 @@ async def request_org_deletion(
     # (FOR KEY SHARE) before the hard delete. Premises are RE-VALIDATED under
     # the lock because a concurrent confirm/cancel may have changed the org
     # state between the snapshot and this lock acquisition.
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update()))
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -373,9 +309,7 @@ async def confirm_org_deletion(
     # `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
     # upgrade cycle; the strongest lock is kept so the hard delete blocks
     # concurrent child inserts.
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update()))
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -390,10 +324,7 @@ async def confirm_org_deletion(
     # B7 guard — refuse while live runs exist unless force proceeds.
     non_terminal = await _count_non_terminal_runs(session, org_id)
     if non_terminal and not force:
-        raise ValueError(
-            f"Cannot delete organisation: {non_terminal} run(s) still in progress. "
-            "Wait for them to finish, or force the deletion (destructive)."
-        )
+        raise ValueError(f"Cannot delete organisation: {non_terminal} run(s) still in progress. Wait for them to finish, or force the deletion (destructive).")
 
     # Abort the org's live sandboxes before hard-delete (best-effort).
     await _abort_org_live_sandboxes(session, org_id)
@@ -434,9 +365,7 @@ async def cancel_org_deletion(
     # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
     # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
     # upgrade cycle.
-    result = await session.execute(
-        include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
-    )
+    result = await session.execute(include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update()))
     org = result.scalar_one_or_none()
     if org is None:
         raise ValueError(_ERR_ORG_NOT_FOUND)
@@ -549,12 +478,7 @@ async def _checkpoint_created_at_present(session: AsyncSession) -> bool:
     (FAR-432). Note that inspecting ``checkpoints`` is sufficient: the saver
     adds the column to every checkpoint table in the same migration set.
     """
-    result = await session.execute(
-        text(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'checkpoints' AND column_name = 'created_at' LIMIT 1"
-        )
-    )
+    result = await session.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name = 'checkpoints' AND column_name = 'created_at' LIMIT 1"))
     return result.first() is not None
 
 
@@ -664,25 +588,12 @@ LIMIT :limit
 _DELETE_ALL_THREADS_SQL: dict[str, str] = {
     "checkpoints": "DELETE FROM checkpoints WHERE organisation_id = :org AND thread_id IN :threads",
     "checkpoint_writes": "DELETE FROM checkpoint_writes WHERE organisation_id = :org AND thread_id IN :threads",
-    "checkpoint_blobs": (
-        "DELETE FROM checkpoint_blobs b WHERE b.organisation_id = :org AND b.thread_id IN :threads "
-        "AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.organisation_id = :org "
-        "AND c.thread_id = b.thread_id AND c.checkpoint_ns = b.checkpoint_ns)"
-    ),
+    "checkpoint_blobs": ("DELETE FROM checkpoint_blobs b WHERE b.organisation_id = :org AND b.thread_id IN :threads AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.organisation_id = :org AND c.thread_id = b.thread_id AND c.checkpoint_ns = b.checkpoint_ns)"),
 }
 _DELETE_STALE_ROWS_SQL: dict[str, str] = {
-    "checkpoints": (
-        "DELETE FROM checkpoints WHERE organisation_id = :org AND thread_id IN :threads AND created_at < :cutoff"
-    ),
-    "checkpoint_writes": (
-        "DELETE FROM checkpoint_writes WHERE organisation_id = :org AND thread_id IN :threads AND created_at < :cutoff"
-    ),
-    "checkpoint_blobs": (
-        "DELETE FROM checkpoint_blobs b WHERE b.organisation_id = :org AND b.thread_id IN :threads "
-        "AND b.created_at < :cutoff "
-        "AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.organisation_id = :org "
-        "AND c.thread_id = b.thread_id AND c.checkpoint_ns = b.checkpoint_ns)"
-    ),
+    "checkpoints": ("DELETE FROM checkpoints WHERE organisation_id = :org AND thread_id IN :threads AND created_at < :cutoff"),
+    "checkpoint_writes": ("DELETE FROM checkpoint_writes WHERE organisation_id = :org AND thread_id IN :threads AND created_at < :cutoff"),
+    "checkpoint_blobs": ("DELETE FROM checkpoint_blobs b WHERE b.organisation_id = :org AND b.thread_id IN :threads AND b.created_at < :cutoff AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.organisation_id = :org AND c.thread_id = b.thread_id AND c.checkpoint_ns = b.checkpoint_ns)"),
 }
 #: Deletion order — blobs must be last (see above).
 _CHECKPOINT_DELETE_ORDER = ("checkpoints", "checkpoint_writes", "checkpoint_blobs")

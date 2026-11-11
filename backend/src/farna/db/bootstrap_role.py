@@ -172,9 +172,7 @@ async def _create_role(conn: asyncpg.Connection, name: str, *, login: bool, pass
     _log.info("Created role: %s (bypassrls=%s)", name, bypassrls)
 
 
-async def _alter_role(
-    conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool
-) -> None:
+async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool) -> None:
     """Bring an existing role's attributes (and password, when given) to spec.
 
     ``password=None`` means no password is configured for this role (its URL
@@ -192,9 +190,7 @@ async def _alter_role(
     _log.info("Updated role: %s (bypassrls=%s)", name, bypassrls)
 
 
-async def _create_or_update_role(
-    conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool = True
-) -> None:
+async def _create_or_update_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool = True) -> None:
     """Idempotently create/update a role, optionally applying LOGIN/BYPASSRLS.
 
     ``modulo_app`` must NEVER have BYPASSRLS — RLS policies enforce tenant
@@ -288,14 +284,10 @@ async def _grant_function_execute(conn: asyncpg.Connection, app_user: str, bg_us
     """Idempotently re-apply the SECURITY DEFINER EXECUTE grants."""
     _validate_identifier(app_user)
     _validate_identifier(bg_user)
-    func_oid = await conn.fetchval(
-        "SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL"
-    )
+    func_oid = await conn.fetchval("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)') IS NOT NULL")
     if func_oid:
         # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-        await conn.execute(
-            f'GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean) TO "{app_user}", "{bg_user}"'
-        )
+        await conn.execute(f'GRANT EXECUTE ON FUNCTION public.deactivate_break_glass(uuid, uuid, boolean) TO "{app_user}", "{bg_user}"')
 
 
 async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -> list[str]:
@@ -323,15 +315,11 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
     violations: list[str] = []
 
     rows = await conn.fetch(
-        "SELECT grantee FROM information_schema.role_table_grants "
-        "WHERE table_schema = 'public' AND table_name = 'accounts' "
-        "AND privilege_type = 'UPDATE' AND grantee IN ($1, 'PUBLIC')",
+        "SELECT grantee FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name = 'accounts' AND privilege_type = 'UPDATE' AND grantee IN ($1, 'PUBLIC')",
         app_user,
     )
     if rows:
-        violations.append(
-            "accounts has a table-level UPDATE grant for: " + ", ".join(sorted(r["grantee"] for r in rows))
-        )
+        violations.append("accounts has a table-level UPDATE grant for: " + ", ".join(sorted(r["grantee"] for r in rows)))
 
     cols = await _existing_columns(conn, "accounts")
     writable = set(ACCOUNTS_WRITABLE_COLUMNS) & cols
@@ -341,9 +329,7 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
         if ok:
             granted.add(col)
     if granted != writable:
-        violations.append(
-            f"modulo_app accounts UPDATE grant drift: granted={sorted(granted)} allow_list={sorted(writable)}"
-        )
+        violations.append(f"modulo_app accounts UPDATE grant drift: granted={sorted(granted)} allow_list={sorted(writable)}")
 
     for col in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at"):
         if col not in cols:
@@ -359,9 +345,7 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
         violations.append(f"app role {app_user} has BYPASSRLS — tenant isolation relies on RLS policies")
 
     member_rows = await conn.fetch(
-        "SELECT b.rolname FROM pg_auth_members m "
-        "JOIN pg_roles a ON a.oid = m.member JOIN pg_roles b ON b.oid = m.roleid "
-        "WHERE a.rolname = $1 AND b.rolname IN ($2, $3)",
+        "SELECT b.rolname FROM pg_auth_members m JOIN pg_roles a ON a.oid = m.member JOIN pg_roles b ON b.oid = m.roleid WHERE a.rolname = $1 AND b.rolname IN ($2, $3)",
         app_user,
         _MIGRATE_ROLE,
         _BREAK_GLASS_ROLE,
@@ -372,9 +356,7 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
     # modulo_system must have BYPASSRLS — it is the dedicated cross-org system
     # cron role. If BYPASSRLS was stripped, system crons silently return zero rows.
     if not await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = $1", _SYSTEM_ROLE):
-        violations.append(
-            f"modulo_system role {_SYSTEM_ROLE} does not have BYPASSRLS — system crons need cross-org data access"
-        )
+        violations.append(f"modulo_system role {_SYSTEM_ROLE} does not have BYPASSRLS — system crons need cross-org data access")
 
     return violations
 
@@ -508,15 +490,11 @@ async def _apply_role_ddl(
     await conn.execute(f'GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{sys_user}"')
     # Grant DML on future tables.
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-    await conn.execute(
-        f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"'
-    )
+    await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{app_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{app_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
-    await conn.execute(
-        f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"'
-    )
+    await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sys_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO "{sys_user}"')
 
@@ -591,7 +569,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     app_user = _parse_role(app_url)
     app_pass = _parse_password(app_url)
 
-    bg_url = os.environ.get("MODULO_BREAK_GLASS_DATABASE_URL", "")
+    bg_url = os.environ.get("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
     bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
     # None = URL unconfigured (or passwordless): an existing role KEEPS its
     # password; a missing role gets a random placeholder below. Reconciling a
@@ -599,7 +577,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     # drift FAR-1519 fixes — only a configured URL may set a password.
     bg_pass = _parse_password(bg_url) or None
 
-    sys_url = os.environ.get("MODULO_SYSTEM_DATABASE_URL", "")
+    sys_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
     sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
     sys_pass = _parse_password(sys_url) or None
 
@@ -616,8 +594,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         lock_acquired = await _acquire_bootstrap_lock(conn)
         if not lock_acquired:
             _log.warning(
-                "Bootstrap advisory lock not acquired within %ss — proceeding unlocked "
-                "(concurrent-update retry still applies)",
+                "Bootstrap advisory lock not acquired within %ss — proceeding unlocked (concurrent-update retry still applies)",
                 _BOOTSTRAP_LOCK_POLL_ATTEMPTS * _BOOTSTRAP_LOCK_POLL_INTERVAL,
             )
         try:

@@ -16,9 +16,7 @@ MSG_UNEXPECTED_ERROR_NO_PERIOD = "An unexpected error occurred"
 MSG_DB_OPERATION_FAILED = "Database operation failed. Please try again later."
 MSG_DB_ERROR_PLEASE_TRY = "Database error. Please try again."
 MSG_UNEXPECTED_ERROR_PLEASE_TRY = "An unexpected error occurred. Please try again."
-MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT = (
-    "Feature is not available. This feature requires a database update. Please contact support."
-)
+MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT = "Feature is not available. This feature requires a database update. Please contact support."
 MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "Database temporarily unavailable."
 MSG_DATABASE_TEMPORARILY_UNAVAILABLE_PLEASE = "Database temporarily unavailable. Please try again."
 MSG_DATABASE_ERROR_OCCURRED_PLEASE = "Database error occurred. Please try again later."

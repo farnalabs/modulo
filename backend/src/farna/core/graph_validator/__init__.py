@@ -301,8 +301,7 @@ def _check_parameter_set_schema_match(
     if schema_id != ps.parameter_schema_id:
         result.error(
             "PARAMETER_SET_SCHEMA_MISMATCH",
-            f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema "
-            f"'{ps.parameter_schema_id}', not '{schema_id}'",
+            f"Node '{node_id}': ParameterSet '{set_id}' belongs to schema '{ps.parameter_schema_id}', not '{schema_id}'",
             node_id=node_id,
         )
 
@@ -328,18 +327,14 @@ def _check_parameter_set_drift(
     if schema.version > ps.schema_version:
         result.warning(
             "PARAMETER_SCHEMA_DRIFT",
-            f"Node '{node_id}': ParameterSchema '{schema.id}' has been updated to "
-            f"version {schema.version} but ParameterSet '{set_id}' was created against "
-            f"version {ps.schema_version}. Consider updating the set.",
+            f"Node '{node_id}': ParameterSchema '{schema.id}' has been updated to version {schema.version} but ParameterSet '{set_id}' was created against version {ps.schema_version}. Consider updating the set.",
             node_id=node_id,
         )
     missing_from_set = _schema_parameters_missing_from_set(schema, ps)
     if missing_from_set:
         result.warning(
             "PARAMETER_SCHEMA_DRIFT_COMPOSITE",
-            f"Node '{node_id}': ParameterSchema '{schema.id}' defines parameters "
-            f"{missing_from_set} that are not present in ParameterSet '{set_id}'. "
-            f"Default values will be used.",
+            f"Node '{node_id}': ParameterSchema '{schema.id}' defines parameters {missing_from_set} that are not present in ParameterSet '{set_id}'. Default values will be used.",
             node_id=node_id,
         )
 
@@ -472,16 +467,14 @@ def _check_composite_sub_nodes(
         for finding in find_mask_sentinel_values([sub]):
             result.error(
                 MASK_SENTINEL_ISSUE_CODE,
-                f"Node '{node_id}': CompositeTemplate '{template.id}' {finding.describe()} holds the "
-                "credential mask sentinel - re-enter the real credential value in the composite editor",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' {finding.describe()} holds the credential mask sentinel - re-enter the real credential value in the composite editor",
                 node_id=node_id,
             )
         node_type = sub.get("node_type", "agent")
         if node_type not in ("agent", "manual", "composite", "sandbox_agent", "dispatch"):
             result.error(
                 "COMPOSITE_SUBGRAPH_INVALID_TYPE",
-                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "
-                f"invalid node_type '{node_type}'",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has invalid node_type '{node_type}'",
                 node_id=node_id,
             )
         if node_type == "sandbox_agent":
@@ -541,8 +534,7 @@ def _check_composite_sub_edges(
         if edge.get("hitl_review_config"):
             result.error(
                 "COMPOSITE_SUBGRAPH_GATE_UNSUPPORTED",
-                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate "
-                f"config which is not supported in composite sub-pipelines (no HITL write path exists)",
+                f"Node '{node_id}': CompositeTemplate '{template.id}' sub-edge carries a HITL gate config which is not supported in composite sub-pipelines (no HITL write path exists)",
                 node_id=node_id,
             )
         src = str(edge.get("source"))
@@ -699,8 +691,7 @@ def _check_sandbox_template(node: dict[str, Any], nid: str, result: ValidationRe
     elif template_id not in _KNOWN_SANDBOX_TEMPLATES:
         result.warning(
             "SANDBOX_UNKNOWN_TEMPLATE",
-            f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox "
-            "template (expected 'opencode' or 'modulo-opencode')",
+            f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox template (expected 'opencode' or 'modulo-opencode')",
             node_id=nid,
         )
 
@@ -748,8 +739,7 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
     if t > settings.MAX_NODE_TIMEOUT_SECONDS:
         result.error(
             "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
-            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox "
-            f"cap (1 hour); use <= {settings.MAX_NODE_TIMEOUT_SECONDS} to leave provisioning headroom",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox cap (1 hour); use <= {settings.MAX_NODE_TIMEOUT_SECONDS} to leave provisioning headroom",
             node_id=nid,
         )
 
@@ -766,8 +756,7 @@ def _check_sandbox_timeout_cap(node: dict[str, Any], nid: str, result: Validatio
     if t > max_node_seconds:
         result.error(
             "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP",
-            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the selected environment "
-            f"profile capability max_node_seconds={max_node_seconds}",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the selected environment profile capability max_node_seconds={max_node_seconds}",
             node_id=nid,
         )
 
@@ -802,9 +791,7 @@ def _check_sandbox_heredoc_list_item(node: dict[str, Any], nid: str, result: Val
         if final_line is not None and final_line in delimiters:
             result.error(
                 "SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM",
-                f"Sandbox agent node '{nid}' agent_commands item {i} ends with heredoc terminator "
-                f"'{final_line}' — list items are joined with the concatenation operator and the "
-                "terminator would be corrupted; use a single agent_command or base64-embed the script body",
+                f"Sandbox agent node '{nid}' agent_commands item {i} ends with heredoc terminator '{final_line}' — list items are joined with the concatenation operator and the terminator would be corrupted; use a single agent_command or base64-embed the script body",
                 node_id=nid,
             )
 
@@ -828,9 +815,7 @@ def _check_sandbox_stall_timeout(node: dict[str, Any], nid: str, result: Validat
             if timeout_seconds is not None and st > timeout_seconds:
                 result.warning(
                     "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
-                    f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
-                    f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
-                    "timeout is pointless",
+                    f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds timeout_seconds={timeout_seconds} — a stall timeout larger than the total timeout is pointless",
                     node_id=nid,
                 )
     except (ValueError, TypeError):
@@ -939,8 +924,7 @@ def _check_sandbox_context_files(node: dict[str, Any], nid: str, result: Validat
             if not source_path.startswith("/"):
                 result.warning(
                     "SANDBOX_CONTEXT_PATH_RELATIVE",
-                    f"Sandbox agent node '{nid}' context_files source '{source_path}' "
-                    f"is not an absolute path (should start with /)",
+                    f"Sandbox agent node '{nid}' context_files source '{source_path}' is not an absolute path (should start with /)",
                     node_id=nid,
                 )
 
@@ -959,8 +943,7 @@ def _check_sandbox_env_vars(
                 if key.startswith(prefix):
                     result.warning(
                         "SANDBOX_RESERVED_ENV_VAR",
-                        f"Sandbox agent node '{nid}' env var '{key}' uses reserved "
-                        f"prefix '{prefix}'. System-reserved env vars are set automatically.",
+                        f"Sandbox agent node '{nid}' env var '{key}' uses reserved prefix '{prefix}'. System-reserved env vars are set automatically.",
                         node_id=nid,
                     )
 
@@ -991,13 +974,10 @@ def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResu
     )
 
     egress_policy = node.get("egress_policy")
-    if egress_policy is not None and (
-        not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES
-    ):
+    if egress_policy is not None and (not isinstance(egress_policy, str) or egress_policy not in _SANDBOX_EGRESS_POLICIES):
         result.error(
             "SANDBOX_EGRESS_POLICY_INVALID",
-            f"Sandbox agent node '{nid}' egress_policy {egress_policy!r} is invalid — "
-            "expected None, 'default', 'deny_all' or 'selected'",
+            f"Sandbox agent node '{nid}' egress_policy {egress_policy!r} is invalid — expected None, 'default', 'deny_all' or 'selected'",
             node_id=nid,
         )
     try:
@@ -1016,10 +996,7 @@ def _check_sandbox_egress(node: dict[str, Any], nid: str, result: ValidationResu
         # save-time instead of discovering a deny_all-equivalent sandbox at run.
         result.warning(
             "SANDBOX_EGRESS_SELECTED_METADATA_ONLY",
-            f"Sandbox agent node '{nid}' egress_policy='selected' currently denies "
-            "ALL egress — the egress_allowlist is carried as sandbox metadata and "
-            "is NOT honored at runtime yet (it awaits a template-side enforcement "
-            "point). Functionally equivalent to 'deny_all' until then.",
+            f"Sandbox agent node '{nid}' egress_policy='selected' currently denies ALL egress — the egress_allowlist is carried as sandbox metadata and is NOT honored at runtime yet (it awaits a template-side enforcement point). Functionally equivalent to 'deny_all' until then.",
             node_id=nid,
         )
 
@@ -1046,8 +1023,7 @@ def _check_sandbox_resource_limits(node: dict[str, Any], nid: str, result: Valid
     if unknown:
         result.error(
             "SANDBOX_RESOURCE_LIMITS_UNKNOWN_KEY",
-            f"Sandbox agent node '{nid}' resource_limits contains unknown keys "
-            f"{sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}",
+            f"Sandbox agent node '{nid}' resource_limits contains unknown keys {sorted(unknown)} — allowed keys are {sorted(_SANDBOX_RESOURCE_LIMIT_KEYS)}",
             node_id=nid,
         )
 
@@ -1109,8 +1085,7 @@ def _check_sandbox_single_pr_per_run(node: dict[str, Any], nid: str, result: Val
         return
     result.error(
         "SANDBOX_SINGLE_PR_PER_RUN_INVALID",
-        f"Node '{nid}': single_pr_per_run must be a boolean (true = arm the "
-        f"one-PR-per-run gh guard for this sandbox run), got {value!r}",
+        f"Node '{nid}': single_pr_per_run must be a boolean (true = arm the one-PR-per-run gh guard for this sandbox run), got {value!r}",
         node_id=nid,
     )
 
@@ -1136,8 +1111,7 @@ def _reject_sandbox_only_field(
     allowed_names = allowed or field
     result.error(
         "SANDBOX_POLICY_FIELD_ON_NON_SANDBOX",
-        f"Node '{nid}' (node_type={node.get('node_type')!r}) sets {field} "
-        f"— only sandbox_agent nodes can set {allowed_names}",
+        f"Node '{nid}' (node_type={node.get('node_type')!r}) sets {field} — only sandbox_agent nodes can set {allowed_names}",
         node_id=nid,
     )
 
@@ -1302,10 +1276,7 @@ def _check_sandbox_git_content_values(
         if not ref.is_pinned:
             result.error(
                 "GIT_CONTENT_REF_UNPINNED",
-                f"{context} {label} git content ref {value.strip()!r} is not pinned to a commit "
-                "SHA — stored graphs must use git+<repo>@<40-hex-sha>#<path> so run snapshots "
-                "carry the resolved SHA for audit ('modulo apply' resolves and pins movable refs "
-                "automatically)",
+                f"{context} {label} git content ref {value.strip()!r} is not pinned to a commit SHA — stored graphs must use git+<repo>@<40-hex-sha>#<path> so run snapshots carry the resolved SHA for audit ('modulo apply' resolves and pins movable refs automatically)",
                 node_id=nid,
             )
 
@@ -1340,10 +1311,7 @@ def _report_non_whole_field_git_refs(
             continue
         result.error(
             "GIT_CONTENT_REF_NOT_WHOLE_FIELD",
-            f"{context} {key}[{index}] contains a git content ref among "
-            f"{len(items)} commands — git content refs must be the whole "
-            f"field, not one command of several (use a single-item {key} "
-            "list whose only entry is the ref, or inline the content)",
+            f"{context} {key}[{index}] contains a git content ref among {len(items)} commands — git content refs must be the whole field, not one command of several (use a single-item {key} list whose only entry is the ref, or inline the content)",
             node_id=nid,
         )
 
@@ -1424,8 +1392,7 @@ def _check_sandbox_loop_intercept(node: dict[str, Any], nid: str, result: Valida
     if isinstance(raw.get("intercepted_tool_patterns"), list) and not raw["intercepted_tool_patterns"]:
         result.warning(
             "SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS",
-            f"Sandbox agent node '{nid}' loop_intercept.intercepted_tool_patterns is empty — "
-            "no tool calls will be intercepted",
+            f"Sandbox agent node '{nid}' loop_intercept.intercepted_tool_patterns is empty — no tool calls will be intercepted",
             node_id=nid,
         )
 
@@ -1798,9 +1765,7 @@ class GraphValidator:
         # Failure & retry + compensation rules (FAR-402 P5 §4F).
         self._check_failure_and_retry(snapshot.graph_json, result)
 
-        await self._check_node_send_budget_bindings(
-            snapshot.graph_json, snapshot.connector_bindings_json, session, result
-        )
+        await self._check_node_send_budget_bindings(snapshot.graph_json, snapshot.connector_bindings_json, session, result)
 
         # Edge validation.
         self._check_edges(snapshot.graph_json, result)
@@ -1879,16 +1844,14 @@ class GraphValidator:
             if nid_str.startswith(HITL_REVIEW_NODE_ID_PREFIX):
                 result.error(
                     "TOPOLOGY_NODE_RESERVED_ID_PREFIX",
-                    f"Node id '{nid_str}' uses the reserved '{HITL_REVIEW_NODE_ID_PREFIX}' prefix "
-                    "(synthesized HITL gate nodes)",
+                    f"Node id '{nid_str}' uses the reserved '{HITL_REVIEW_NODE_ID_PREFIX}' prefix (synthesized HITL gate nodes)",
                     node_id=nid_str,
                 )
                 return None
             if nid_str.startswith(DB_SENTINEL_NODE_ID_PREFIX):
                 result.error(
                     "TOPOLOGY_NODE_DB_SENTINEL_PREFIX",
-                    f"Node id '{nid_str}' uses the reserved '{DB_SENTINEL_NODE_ID_PREFIX}' prefix "
-                    "(run_node_outputs sentinel namespace: __run_meta__ / __unknown__ / __final__)",
+                    f"Node id '{nid_str}' uses the reserved '{DB_SENTINEL_NODE_ID_PREFIX}' prefix (run_node_outputs sentinel namespace: __run_meta__ / __unknown__ / __final__)",
                     node_id=nid_str,
                 )
                 return None
@@ -1999,11 +1962,7 @@ class GraphValidator:
                 best = max(best, edges)
                 if remaining <= 0:
                     continue
-                stack.extend(
-                    (child, path_visited | {cur}, remaining - 1, edges + 1)
-                    for child in adj.get(cur, [])
-                    if child not in path_visited
-                )
+                stack.extend((child, path_visited | {cur}, remaining - 1, edges + 1) for child in adj.get(cur, []) if child not in path_visited)
             return best
 
         depth = max((_max_depth(eid, frozenset()) for eid in entry_ids), default=0)
@@ -2151,8 +2110,7 @@ class GraphValidator:
                 continue
             result.error(
                 "HITL_REVIEW_DESCRIPTION_REQUIRED",
-                f"HITL review on {source_label} requires a human-provided description "
-                f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+                f"HITL review on {source_label} requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
                 node_id=node_id,
             )
 
@@ -2181,8 +2139,7 @@ class GraphValidator:
         if len(subject_path) > HITL_SUBJECT_PATH_MAX_LENGTH:
             result.error(
                 "HITL_SUBJECT_PATH_TOO_LONG",
-                f"HITL review on {source_label}: subject_path exceeds max length"
-                f" of {HITL_SUBJECT_PATH_MAX_LENGTH} chars",
+                f"HITL review on {source_label}: subject_path exceeds max length of {HITL_SUBJECT_PATH_MAX_LENGTH} chars",
             )
             return
         try:
@@ -2450,20 +2407,12 @@ class GraphValidator:
 
             input_pin = node.get("input_schema_pin")
             if input_pin:
-                sid = (
-                    uuid.UUID(input_pin["schema_id"])
-                    if isinstance(input_pin["schema_id"], str)
-                    else input_pin["schema_id"]
-                )
+                sid = uuid.UUID(input_pin["schema_id"]) if isinstance(input_pin["schema_id"], str) else input_pin["schema_id"]
                 pins_map[node_id]["input"] = (sid, input_pin["schema_version"])
 
             output_pin = node.get("output_schema_pin")
             if output_pin:
-                sid = (
-                    uuid.UUID(output_pin["schema_id"])
-                    if isinstance(output_pin["schema_id"], str)
-                    else output_pin["schema_id"]
-                )
+                sid = uuid.UUID(output_pin["schema_id"]) if isinstance(output_pin["schema_id"], str) else output_pin["schema_id"]
                 pins_map[node_id]["output"] = (sid, output_pin["schema_version"])
 
         return pins_map
@@ -2501,12 +2450,7 @@ class GraphValidator:
         """Field-level schema: output fields must exist in input with compatible types."""
         pins = self._build_schema_pins_map(graph_json)
 
-        all_pins: dict[tuple[uuid.UUID, str], None] = {
-            direction_pin: None
-            for node_pins in pins.values()
-            for direction_pin in node_pins.values()
-            if direction_pin is not None
-        }
+        all_pins: dict[tuple[uuid.UUID, str], None] = {direction_pin: None for node_pins in pins.values() for direction_pin in node_pins.values() if direction_pin is not None}
 
         if not all_pins:
             return
@@ -2536,8 +2480,7 @@ class GraphValidator:
             if has_deferred:
                 result.warning(
                     "SCHEMA_CHECK_DEFERRED",
-                    f"Edge {src}→{tgt}: schema contains deferred keywords ($ref, oneOf, etc.). "
-                    f"Full structural validation deferred.",
+                    f"Edge {src}→{tgt}: schema contains deferred keywords ($ref, oneOf, etc.). Full structural validation deferred.",
                     node_id=src,
                 )
 
@@ -2610,11 +2553,7 @@ class GraphValidator:
             return errors
 
         in_required = in_field.get("required", [])
-        errors.extend(
-            f"{path}.{req_field}: required field missing in output"
-            for req_field in in_required
-            if req_field not in out_properties
-        )
+        errors.extend(f"{path}.{req_field}: required field missing in output" for req_field in in_required if req_field not in out_properties)
 
         for field_name, out_val in out_properties.items():
             if field_name in in_properties:
@@ -2778,11 +2717,7 @@ class GraphValidator:
         if not instance_ids:
             return
 
-        rows = (
-            (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids))))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids)))).scalars().all()
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
         # FAR-1667: map graph nodes by id ONCE so each binding can read the
@@ -2877,8 +2812,7 @@ class GraphValidator:
             except ConnectorPermissionError:
                 result.error(
                     "CONNECTOR_MISSING_OPERATIONS",
-                    f"Connector {cid} ({instance.name!r}) does not allow {op!r} "
-                    f"required by node's {operation!r} operation",
+                    f"Connector {cid} ({instance.name!r}) does not allow {op!r} required by node's {operation!r} operation",
                     node_id,
                 )
 
@@ -2937,12 +2871,7 @@ class GraphValidator:
         type_id = str(instance.connector_type_id or "").strip()
         if not type_id or connector_type_supports_dispatch(type_id):
             return None
-        return (
-            f"Node '{node.get('id')}': connector instance {cid_obj} ({instance.name!r}) has type "
-            f"{type_id!r}, which does not implement the CI-runner operations "
-            f"(trigger_run / get_run_status / get_run_logs / list_runs) a "
-            f"dispatch binding requires"
-        )
+        return f"Node '{node.get('id')}': connector instance {cid_obj} ({instance.name!r}) has type {type_id!r}, which does not implement the CI-runner operations (trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires"
 
     # ------------------------------------------------------------------
     # Model backend health
@@ -3027,9 +2956,7 @@ class GraphValidator:
                 if parsed is not None:
                     agent_ids.add(parsed)
 
-        rows = (
-            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all() if agent_ids else []
-        )
+        rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all() if agent_ids else []
 
         profile_caps: set[str] = set(profile.capabilities_json or [])
 
@@ -3038,8 +2965,7 @@ class GraphValidator:
         if max_node_seconds > transport_cap:
             result.error(
                 "ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING",
-                f"Environment profile {environment_profile_id} max_node_seconds={max_node_seconds} "
-                f"exceeds the run transport ceiling of {transport_cap}s",
+                f"Environment profile {environment_profile_id} max_node_seconds={max_node_seconds} exceeds the run transport ceiling of {transport_cap}s",
             )
         self._check_profile_wall_clock_capability(profile, graph_json, result, transport_cap=transport_cap)
 
@@ -3134,10 +3060,7 @@ class GraphValidator:
                 continue
             result.error(
                 "REDACT_CORRECT_BLOCKED",
-                f"Guardrail {row.name!r} declares a 'correction' block on a 'redact'-action "
-                "guardrail — a correction on a redaction guardrail is an exfiltration channel "
-                "for the exact data redaction protects. Remove the correction block or change "
-                "the guardrail action.",
+                f"Guardrail {row.name!r} declares a 'correction' block on a 'redact'-action guardrail — a correction on a redaction guardrail is an exfiltration channel for the exact data redaction protects. Remove the correction block or change the guardrail action.",
             )
 
     # ------------------------------------------------------------------
@@ -3148,9 +3071,7 @@ class GraphValidator:
     # Parameter schema / set references
     # ------------------------------------------------------------------
 
-    async def _fetch_parameter_schemas(
-        self, session: AsyncSession, ids: set[uuid.UUID]
-    ) -> dict[uuid.UUID, ParameterSchema]:
+    async def _fetch_parameter_schemas(self, session: AsyncSession, ids: set[uuid.UUID]) -> dict[uuid.UUID, ParameterSchema]:
         """Load the referenced ParameterSchema rows (empty map when nothing referenced)."""
         if not ids:
             return {}
@@ -3234,11 +3155,7 @@ class GraphValidator:
         if not composite_refs:
             return
 
-        rows = (
-            (await session.execute(select(CompositeTemplate).where(CompositeTemplate.id.in_(composite_refs))))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(CompositeTemplate).where(CompositeTemplate.id.in_(composite_refs)))).scalars().all()
         found: dict[uuid.UUID, CompositeTemplate] = {r.id: r for r in rows}
 
         for node in composite_nodes:
@@ -3293,12 +3210,7 @@ class GraphValidator:
         5. failure_behaviour must be valid.
         """
         max_retries = output_validation.get("max_validation_retries", 0)
-        if (
-            isinstance(max_retries, bool)
-            or not isinstance(max_retries, (int, float))
-            or max_retries < 0
-            or max_retries > 5
-        ):
+        if isinstance(max_retries, bool) or not isinstance(max_retries, (int, float)) or max_retries < 0 or max_retries > 5:
             result.error(
                 "COMPOSITE_VALIDATION_RETRIES_RANGE",
                 f"Node '{node_id}': max_validation_retries must be an integer between 0 and 5 (got {max_retries!r})",
@@ -3327,8 +3239,7 @@ class GraphValidator:
             if behaviour not in valid_behaviours:
                 result.error(
                     "COMPOSITE_VALIDATION_INVALID_BEHAVIOUR",
-                    f"Node '{node_id}', eval '{eval_name}': failure_behaviour must be"
-                    f" one of {valid_behaviours} (got {behaviour!r})",
+                    f"Node '{node_id}', eval '{eval_name}': failure_behaviour must be one of {valid_behaviours} (got {behaviour!r})",
                     node_id=node_id,
                 )
 
@@ -3495,8 +3406,7 @@ class GraphValidator:
                 nid = _string_or_default(node.get("id"))
                 result.error(
                     "NODE_IDEMPOTENT_INVALID",
-                    f"Node '{nid}': idempotent must be a boolean (true = safe to re-run, "
-                    f"false = never auto-retry), got {node.get('idempotent')!r}",
+                    f"Node '{nid}': idempotent must be a boolean (true = safe to re-run, false = never auto-retry), got {node.get('idempotent')!r}",
                     node_id=nid,
                 )
 
@@ -3600,11 +3510,7 @@ class GraphValidator:
         if not instance_ids:
             return
 
-        rows = (
-            (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids))))
-            .scalars()
-            .all()
-        )
+        rows = (await session.execute(select(ConnectorInstance).where(ConnectorInstance.id.in_(instance_ids)))).scalars().all()
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
 
         for binding in connector_bindings:
@@ -3724,9 +3630,7 @@ class GraphValidator:
         if not isinstance(policy, dict):
             result.error(
                 "RETRY_POLICY_MALFORMED",
-                "retry_policy must be an object like "
-                f"{{'on': ['stall','timeout','failure','eval_failed'], "
-                f"'max_retries': 0-{RETRY_POLICY_MAX_RETRIES}}}",
+                f"retry_policy must be an object like {{'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-{RETRY_POLICY_MAX_RETRIES}}}",
             )
             return
         events = policy.get("on")
@@ -3745,8 +3649,7 @@ class GraphValidator:
             if unknown:
                 result.error(
                     "RETRY_POLICY_MALFORMED",
-                    f"retry_policy 'on' contains unknown values {sorted(unknown)}; "
-                    "allowed values are ['stall','timeout','failure','eval_failed']",
+                    f"retry_policy 'on' contains unknown values {sorted(unknown)}; allowed values are ['stall','timeout','failure','eval_failed']",
                 )
         max_retries = policy.get("max_retries", 0)
         if not _is_valid_retry_budget(max_retries):
@@ -3783,16 +3686,14 @@ class GraphValidator:
         if not isinstance(schedule, dict):
             result.error(
                 "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' must be an object like "
-                "{'delay_seconds': 1-300, 'multiplier': 1.0-10.0}",
+                "retry_policy 'backoff_schedule' must be an object like {'delay_seconds': 1-300, 'multiplier': 1.0-10.0}",
             )
             return False
         unknown = set(schedule) - rc.RETRY_SCHEDULE_ALLOWED_KEYS
         if unknown:
             result.error(
                 "RETRY_POLICY_SCHEDULE_MALFORMED",
-                f"retry_policy 'backoff_schedule' contains unknown keys {sorted(str(k) for k in unknown)}; "
-                f"allowed keys are {sorted(rc.RETRY_SCHEDULE_ALLOWED_KEYS)}",
+                f"retry_policy 'backoff_schedule' contains unknown keys {sorted(str(k) for k in unknown)}; allowed keys are {sorted(rc.RETRY_SCHEDULE_ALLOWED_KEYS)}",
             )
         return True
 
@@ -3804,17 +3705,12 @@ class GraphValidator:
         if delay is None:
             result.error(
                 "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' must include 'delay_seconds' "
-                f"(integer seconds, {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS}-{rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS})",
+                f"retry_policy 'backoff_schedule' must include 'delay_seconds' (integer seconds, {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS}-{rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS})",
             )
-        elif delay_f is None or not (
-            rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS
-            and delay_f == int(delay_f)
-        ):
+        elif delay_f is None or not (rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS <= delay_f <= rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS and delay_f == int(delay_f)):
             result.error(
                 "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between "
-                f"{rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS}",
+                f"retry_policy 'backoff_schedule' 'delay_seconds' must be an integer between {rc.RETRY_SCHEDULE_MIN_DELAY_SECONDS} and {rc.RETRY_SCHEDULE_MAX_DELAY_SECONDS}",
             )
 
     @staticmethod
@@ -3826,8 +3722,7 @@ class GraphValidator:
         if mult_f is None or not rc.RETRY_SCHEDULE_MIN_MULTIPLIER <= mult_f <= rc.RETRY_SCHEDULE_MAX_MULTIPLIER:
             result.error(
                 "RETRY_POLICY_SCHEDULE_MALFORMED",
-                "retry_policy 'backoff_schedule' 'multiplier' must be a number between "
-                f"{rc.RETRY_SCHEDULE_MIN_MULTIPLIER} and {rc.RETRY_SCHEDULE_MAX_MULTIPLIER}",
+                f"retry_policy 'backoff_schedule' 'multiplier' must be a number between {rc.RETRY_SCHEDULE_MIN_MULTIPLIER} and {rc.RETRY_SCHEDULE_MAX_MULTIPLIER}",
             )
 
     @staticmethod
@@ -3872,8 +3767,7 @@ class GraphValidator:
         if nodes and not edges:
             result.warning(
                 "GRAPH_NO_EDGES",
-                f"Graph has {len(nodes)} nodes but no edges. Single-node pipeline? "
-                "If the graph should have flow connections, add edges between nodes.",
+                f"Graph has {len(nodes)} nodes but no edges. Single-node pipeline? If the graph should have flow connections, add edges between nodes.",
             )
 
         # Check for duplicate node IDs (belt-and-suspenders with Pydantic/MCP layer).
@@ -3978,9 +3872,7 @@ class GraphValidator:
 
             result.warning(
                 "PARALLEL_RUN_CONTEXT_WRITE",
-                f"Source '{source}' fans out to multiple context-setter branches; "
-                f"{detail}. run_context writes are last-write-wins and order-dependent "
-                "(the branch that completes last wins).",
+                f"Source '{source}' fans out to multiple context-setter branches; {detail}. run_context writes are last-write-wins and order-dependent (the branch that completes last wins).",
                 node_id=source,
             )
 

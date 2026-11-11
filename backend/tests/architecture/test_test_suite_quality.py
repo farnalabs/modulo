@@ -1123,7 +1123,7 @@ def _is_mark_decorator(dec: ast.AST) -> bool:
     return "mark" in parts
 
 
-_MODULO_TEST_STYLE_SCOPE_VAR = "MODULO_TEST_STYLE_SCOPE"
+_MODULO_TEST_STYLE_SCOPE_VAR = "FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE"
 
 
 @functools.cache
@@ -1234,19 +1234,11 @@ def test_no_always_pass_or_fail_assertions():
                 value = test.value
                 verdict = "always FAILS" if not value else "always PASSES"
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  assert {value!r} — {verdict}")
-            elif (
-                isinstance(test, ast.UnaryOp)
-                and isinstance(test.op, ast.Not)
-                and isinstance(test.operand, ast.Constant)
-                and not isinstance(test.operand.value, complex)
-            ):
+            elif isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and isinstance(test.operand, ast.Constant) and not isinstance(test.operand.value, complex):
                 value = test.operand.value
                 verdict = "always PASSES" if not value else "always FAILS"
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  assert not {value!r} — {verdict}")
-    assert not violations, (
-        f"Found {len(violations)} assertion(s) against literal constants.\n"
-        "Assert against the actual behavior under test instead of a constant.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} assertion(s) against literal constants.\nAssert against the actual behavior under test instead of a constant.\n" + "\n".join(violations)
 
 
 # Folders for comparison operators whose outcome is fully determined when both
@@ -1317,14 +1309,8 @@ def test_no_literal_constant_comparisons():
                 verdict = _fold_literal_comparison(sub)
                 if verdict is None:
                     continue
-                violations.append(
-                    f"  {rel}:{sub.lineno}  {ast.unparse(sub)} — {verdict} (both operands are literal constants)"
-                )
-    assert not violations, (
-        f"Found {len(violations)} literal-constant comparison(s) in assertions.\n"
-        "Both operands are source literals, so the outcome is fixed at write time.\n"
-        "Assert against the actual value under test, or the comparison is dead code.\n" + "\n".join(violations)
-    )
+                violations.append(f"  {rel}:{sub.lineno}  {ast.unparse(sub)} — {verdict} (both operands are literal constants)")
+    assert not violations, f"Found {len(violations)} literal-constant comparison(s) in assertions.\nBoth operands are source literals, so the outcome is fixed at write time.\nAssert against the actual value under test, or the comparison is dead code.\n" + "\n".join(violations)
 
 
 def test_literal_comparison_lens_flags_constant_outcomes():
@@ -1346,10 +1332,7 @@ def test_literal_comparison_lens_flags_constant_outcomes():
     for source in positive_sources:
         tree = ast.parse(source)
         assert_node = next(n for n in _all_nodes(tree) if isinstance(n, ast.Assert))
-        flagged = any(
-            isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
-            for sub in ast.walk(assert_node.test)
-        )
+        flagged = any(isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None for sub in ast.walk(assert_node.test))
         assert flagged, f"lens should flag:\n{source}"
 
     negative_sources = [
@@ -1366,10 +1349,7 @@ def test_literal_comparison_lens_flags_constant_outcomes():
     for source in negative_sources:
         tree = ast.parse(source)
         assert_node = next(n for n in _all_nodes(tree) if isinstance(n, ast.Assert))
-        flagged = any(
-            isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
-            for sub in ast.walk(assert_node.test)
-        )
+        flagged = any(isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None for sub in ast.walk(assert_node.test))
         assert not flagged, f"lens should NOT flag:\n{source}"
 
 
@@ -1392,10 +1372,7 @@ def test_no_none_equality_comparison():
                     op_name = "==" if isinstance(op, ast.Eq) else "!="
                     violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  compares {op_name} None")
                     break
-    assert not violations, (
-        f"Found {len(violations)} equality comparison(s) against None.\n"
-        "Use 'is None'/'is not None' to compare identity, not equality.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} equality comparison(s) against None.\nUse 'is None'/'is not None' to compare identity, not equality.\n" + "\n".join(violations)
 
 
 def test_no_test_redefinition_in_same_scope():
@@ -1433,10 +1410,7 @@ def test_no_test_redefinition_in_same_scope():
             for name, lines in class_seen.items():
                 if len(lines) > 1:
                     violations.append(f"  {rel}  {cls.name}.{name} redefined: {lines}")
-    assert not violations, (
-        f"Found {len(violations)} test redefinition(s) in the same scope.\n"
-        "A later definition silently shadows the earlier test; rename it.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} test redefinition(s) in the same scope.\nA later definition silently shadows the earlier test; rename it.\n" + "\n".join(violations)
 
 
 def test_no_asyncio_run_inside_async_test():
@@ -1456,17 +1430,9 @@ def test_no_asyncio_run_inside_async_test():
                 if not isinstance(node, ast.Call):
                     continue
                 f = node.func
-                if (
-                    isinstance(f, ast.Attribute)
-                    and f.attr == "run"
-                    and isinstance(f.value, ast.Name)
-                    and f.value.id == "asyncio"
-                ):
+                if isinstance(f, ast.Attribute) and f.attr == "run" and isinstance(f.value, ast.Name) and f.value.id == "asyncio":
                     violations.append(f"  {rel}:{node.lineno}  asyncio.run() inside async def {fn.name}")
-    assert not violations, (
-        f"Found {len(violations)} asyncio.run() call(s) inside async tests.\n"
-        "pytest-asyncio provides the loop; drop the nested asyncio.run().\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} asyncio.run() call(s) inside async tests.\npytest-asyncio provides the loop; drop the nested asyncio.run().\n" + "\n".join(violations)
 
 
 def test_no_assert_under_swallowing_except():
@@ -1517,10 +1483,7 @@ def test_no_assert_under_swallowing_except():
                         break
                 current = parent
                 parent = parents.get(current)
-    assert not violations, (
-        f"Found {len(violations)} assert(s) inside a try/except that swallows failures.\n"
-        "Move the assert outside the try or re-raise/pytest.fail in the handler.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} assert(s) inside a try/except that swallows failures.\nMove the assert outside the try or re-raise/pytest.fail in the handler.\n" + "\n".join(violations)
 
 
 def test_no_skip_without_reason():
@@ -1550,10 +1513,7 @@ def test_no_skip_without_reason():
                     continue
                 if not any(k.arg == "reason" and k.value for k in dec.keywords):
                     violations.append(f"  {path.relative_to(TESTS)}:{dec.lineno}  @pytest.mark.{dname} without reason")
-    assert not violations, (
-        f"Found {len(violations)} skip/skipif/xfail without a reason.\n"
-        "Always pass reason= so the skip is self-documenting.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} skip/skipif/xfail without a reason.\nAlways pass reason= so the skip is self-documenting.\n" + "\n".join(violations)
 
 
 def test_no_bare_except():
@@ -1564,15 +1524,8 @@ def test_no_bare_except():
         tree = _parse(path)
         if tree is None:
             continue
-        violations.extend(
-            f"  {path.relative_to(TESTS)}:{node.lineno}  bare 'except:'"
-            for node in _all_nodes(tree)
-            if isinstance(node, ast.ExceptHandler) and node.type is None
-        )
-    assert not violations, (
-        f"Found {len(violations)} bare 'except:' handler(s).\n"
-        "Use 'except Exception:' so KeyboardInterrupt/SystemExit still propagate.\n" + "\n".join(violations)
-    )
+        violations.extend(f"  {path.relative_to(TESTS)}:{node.lineno}  bare 'except:'" for node in _all_nodes(tree) if isinstance(node, ast.ExceptHandler) and node.type is None)
+    assert not violations, f"Found {len(violations)} bare 'except:' handler(s).\nUse 'except Exception:' so KeyboardInterrupt/SystemExit still propagate.\n" + "\n".join(violations)
 
 
 def test_no_debugger_remnants():
@@ -1590,18 +1543,9 @@ def test_no_debugger_remnants():
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  import {node.names[0].name}")
             if isinstance(node, ast.ImportFrom) and node.module in ("pdb", "ipdb", "pudb"):
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  from {node.module} import ...")
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "set_trace"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("pdb", "ipdb")
-            ):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "set_trace" and isinstance(node.func.value, ast.Name) and node.func.value.id in ("pdb", "ipdb"):
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  {node.func.value.id}.set_trace()")
-    assert not violations, (
-        f"Found {len(violations)} debugger remnant(s).\n"
-        "Remove breakpoint()/pdb before committing.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} debugger remnant(s).\nRemove breakpoint()/pdb before committing.\n" + "\n".join(violations)
 
 
 def test_no_deprecated_utcnow():
@@ -1615,18 +1559,9 @@ def test_no_deprecated_utcnow():
         for node in _all_nodes(tree):
             if isinstance(node, ast.Attribute) and node.attr in ("utcnow", "utcfromtimestamp"):
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  datetime.{node.attr}()")
-            if (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "datetime"
-                and any(a.name in ("utcnow", "utcfromtimestamp") for a in node.names)
-            ):
-                violations.append(
-                    f"  {path.relative_to(TESTS)}:{node.lineno}  from datetime import {node.names[0].name}"
-                )
-    assert not violations, (
-        f"Found {len(violations)} deprecated utcnow()/utcfromtimestamp() usage(s).\n"
-        "Use timezone-aware datetime.now(datetime.timezone.utc).\n" + "\n".join(violations)
-    )
+            if isinstance(node, ast.ImportFrom) and node.module == "datetime" and any(a.name in ("utcnow", "utcfromtimestamp") for a in node.names):
+                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  from datetime import {node.names[0].name}")
+    assert not violations, f"Found {len(violations)} deprecated utcnow()/utcfromtimestamp() usage(s).\nUse timezone-aware datetime.now(datetime.timezone.utc).\n" + "\n".join(violations)
 
 
 def test_no_naive_datetime_now():
@@ -1649,12 +1584,7 @@ def test_no_naive_datetime_now():
             return (
                 (isinstance(value, ast.Name) and value.id == "datetime")
                 # datetime.datetime.now()  (import datetime)
-                or (
-                    isinstance(value, ast.Attribute)
-                    and value.attr == "datetime"
-                    and isinstance(value.value, ast.Name)
-                    and value.value.id == "datetime"
-                )
+                or (isinstance(value, ast.Attribute) and value.attr == "datetime" and isinstance(value.value, ast.Name) and value.value.id == "datetime")
             )
 
         for node in _all_nodes(tree):
@@ -1668,11 +1598,7 @@ def test_no_naive_datetime_now():
             if not _is_datetime_receiver(func.value):
                 continue
             violations.append(f"  {rel}:{node.lineno}  datetime.now() with no timezone (naive datetime)")
-    assert not violations, (
-        f"Found {len(violations)} naive datetime.now() call(s) (no timezone argument).\n"
-        "Use timezone-aware datetime.now(UTC) so the value is\n"
-        "comparable with DateTime(timezone=True) columns and aware datetimes.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} naive datetime.now() call(s) (no timezone argument).\nUse timezone-aware datetime.now(UTC) so the value is\ncomparable with DateTime(timezone=True) columns and aware datetimes.\n" + "\n".join(violations)
 
 
 def test_no_boolean_literal_equality():
@@ -1695,13 +1621,8 @@ def test_no_boolean_literal_equality():
             for comp in node.comparators:
                 if isinstance(comp, ast.Constant) and (comp.value is True or comp.value is False):
                     op_name = "==" if isinstance(op, ast.Eq) else "!="
-                    violations.append(
-                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares value {op_name} {comp.value!r}"
-                    )
-    assert not violations, (
-        f"Found {len(violations)} boolean-literal comparison(s).\n"
-        "Prefer 'is True'/'is False' over '== True'/'== False'.\n" + "\n".join(violations)
-    )
+                    violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  compares value {op_name} {comp.value!r}")
+    assert not violations, f"Found {len(violations)} boolean-literal comparison(s).\nPrefer 'is True'/'is False' over '== True'/'== False'.\n" + "\n".join(violations)
 
 
 def test_no_stray_print_in_test_code():
@@ -1712,15 +1633,8 @@ def test_no_stray_print_in_test_code():
         tree = _parse(path)
         if tree is None:
             continue
-        violations.extend(
-            f"  {path.relative_to(TESTS)}:{node.lineno}  print(...)"
-            for node in _all_nodes(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
-        )
-    assert not violations, (
-        f"Found {len(violations)} stray print() call(s) in test code.\n"
-        "Remove debug prints or route diagnostics through logging.\n" + "\n".join(violations)
-    )
+        violations.extend(f"  {path.relative_to(TESTS)}:{node.lineno}  print(...)" for node in _all_nodes(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print")
+    assert not violations, f"Found {len(violations)} stray print() call(s) in test code.\nRemove debug prints or route diagnostics through logging.\n" + "\n".join(violations)
 
 
 def _fixture_used_names(sources: Iterable[tuple[ast.AST, str]]) -> dict[str, int]:
@@ -1751,9 +1665,7 @@ def _decorator_autouse(dec: ast.AST) -> bool:
     """True when a fixture decorator carries ``autouse=True``."""
     if not isinstance(dec, ast.Call):
         return False
-    return any(
-        kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords
-    )
+    return any(kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords)
 
 
 def _dead_fixture_violations(
@@ -1799,21 +1711,11 @@ def test_no_dead_fixtures():
     alone would flag every such live fixture as dead (a false failure on every
     conftest edit).
     """
-    used_names = _fixture_used_names(
-        (tree, path.read_text(encoding="utf-8"))
-        for path in _iter_all_test_modules()
-        if (tree := _parse(path)) is not None
-    )
+    used_names = _fixture_used_names((tree, path.read_text(encoding="utf-8")) for path in _iter_all_test_modules() if (tree := _parse(path)) is not None)
 
-    definitions = [
-        (str(path.relative_to(TESTS)), tree) for path in _iter_test_modules() if (tree := _parse(path)) is not None
-    ]
+    definitions = [(str(path.relative_to(TESTS)), tree) for path in _iter_test_modules() if (tree := _parse(path)) is not None]
     violations = _dead_fixture_violations(definitions, used_names)
-    assert not violations, (
-        f"Found {len(violations)} fixture(s) that no test requests.\n"
-        "pytest never instantiates an unrequested fixture, so its body is dead code.\n"
-        "Remove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} fixture(s) that no test requests.\npytest never instantiates an unrequested fixture, so its body is dead code.\nRemove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
 
 
 def test_dead_fixture_lens_resolves_requesters_across_the_whole_tree():
@@ -1826,10 +1728,7 @@ def test_dead_fixture_lens_resolves_requesters_across_the_whole_tree():
     — so any edit to ``backend/tests/bdd/conftest.py`` flagged its live
     ``unauth_client`` fixture as dead.
     """
-    definition = ast.parse(
-        "@pytest.fixture\ndef cross_file_client():\n    return 1\n\n"
-        "@pytest.fixture\ndef truly_dead_fixture():\n    return 2\n"
-    )
+    definition = ast.parse("@pytest.fixture\ndef cross_file_client():\n    return 1\n\n@pytest.fixture\ndef truly_dead_fixture():\n    return 2\n")
     requester_elsewhere = ast.parse("def test_uses_it(cross_file_client):\n    assert cross_file_client == 1\n")
 
     # The whole-tree used-name set is fed from BOTH the changed definition
@@ -1837,12 +1736,8 @@ def test_dead_fixture_lens_resolves_requesters_across_the_whole_tree():
     used_names = _fixture_used_names([(definition, ""), (requester_elsewhere, "")])
     violations = _dead_fixture_violations([("bdd/conftest.py", definition)], used_names)
 
-    assert not any("cross_file_client" in v for v in violations), (
-        f"a fixture requested by an unchanged module must not be flagged:\n{violations}"
-    )
-    assert any("truly_dead_fixture" in v for v in violations), (
-        f"a fixture no module requests must still be flagged:\n{violations}"
-    )
+    assert not any("cross_file_client" in v for v in violations), f"a fixture requested by an unchanged module must not be flagged:\n{violations}"
+    assert any("truly_dead_fixture" in v for v in violations), f"a fixture no module requests must still be flagged:\n{violations}"
 
 
 def _len_equals_zero_violations(tree: ast.AST) -> list[tuple[int, str]]:
@@ -1893,10 +1788,7 @@ def test_no_len_equals_zero_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _len_equals_zero_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} 'assert len(...) == 0' assertion(s).\n"
-        "Sized containers are falsy when empty; write 'assert not <expr>' instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} 'assert len(...) == 0' assertion(s).\nSized containers are falsy when empty; write 'assert not <expr>' instead.\n" + "\n".join(violations)
 
 
 def test_len_equals_zero_lens_flags_empty_checks():
@@ -1967,11 +1859,7 @@ def _len_gt_zero_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 continue
             if not isinstance(rhs, ast.Constant):
                 continue
-            matches = (
-                (effective is ast.Gt and rhs.value == 0)
-                or (effective is ast.GtE and rhs.value == 1)
-                or (effective is ast.NotEq and rhs.value == 0)
-            )
+            matches = (effective is ast.Gt and rhs.value == 0) or (effective is ast.GtE and rhs.value == 1) or (effective is ast.NotEq and rhs.value == 0)
             if not matches:
                 continue
             operand = lhs.args[0]
@@ -2001,10 +1889,7 @@ def test_no_len_gt_zero_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _len_gt_zero_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} 'assert len(...) > 0' assertion(s).\n"
-        "Sized containers are truthy when non-empty; write 'assert <expr>' instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} 'assert len(...) > 0' assertion(s).\nSized containers are truthy when non-empty; write 'assert <expr>' instead.\n" + "\n".join(violations)
 
 
 def test_len_gt_zero_lens_flags_nonempty_checks():
@@ -2068,9 +1953,7 @@ def test_no_empty_container_literal_equality():
                 continue
             sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
             for operand, literal in sides:
-                empty_literal = (isinstance(literal, ast.List) and not literal.elts) or (
-                    isinstance(literal, ast.Dict) and not literal.keys
-                )
+                empty_literal = (isinstance(literal, ast.List) and not literal.elts) or (isinstance(literal, ast.Dict) and not literal.keys)
                 if not empty_literal:
                     continue
                 if isinstance(operand, ast.Name):
@@ -2079,16 +1962,9 @@ def test_no_empty_container_literal_equality():
                     continue
                 op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
                 prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
-                violations.append(
-                    f"  {rel}:{node.lineno}  asserts value {op_name} {'[]' if isinstance(literal, ast.List) else '{}'} "
-                    f"— prefer '{prefer}'"
-                )
+                violations.append(f"  {rel}:{node.lineno}  asserts value {op_name} {'[]' if isinstance(literal, ast.List) else '{}'} — prefer '{prefer}'")
                 break
-    assert not violations, (
-        f"Found {len(violations)} empty-container literal comparison(s).\n"
-        "An empty list/dict is falsy; write 'assert not <expr>' instead of "
-        "'assert <expr> == []/{}' and 'assert <expr>' instead of 'assert <expr> != []/{}'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} empty-container literal comparison(s).\nAn empty list/dict is falsy; write 'assert not <expr>' instead of 'assert <expr> == []/{{}}' and 'assert <expr>' instead of 'assert <expr> != []/{{}}'.\n" + "\n".join(violations)
 
 
 def test_no_empty_string_equality():
@@ -2123,11 +1999,7 @@ def test_no_empty_string_equality():
                     continue
                 if isinstance(operand, ast.Name):
                     continue
-                if (
-                    isinstance(operand, ast.Call)
-                    and isinstance(operand.func, ast.Attribute)
-                    and operand.func.attr == "get"
-                ):
+                if isinstance(operand, ast.Call) and isinstance(operand.func, ast.Attribute) and operand.func.attr == "get":
                     continue
                 if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
                     continue
@@ -2135,11 +2007,7 @@ def test_no_empty_string_equality():
                 prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
                 violations.append(f"  {rel}:{node.lineno}  asserts value {op_name} '' — prefer '{prefer}'")
                 break
-    assert not violations, (
-        f"Found {len(violations)} empty-string comparison(s).\n"
-        "An empty string is falsy; write 'assert not <expr>' instead of "
-        "'assert <expr> == \"\"' and 'assert <expr>' instead of 'assert <expr> != \"\"'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} empty-string comparison(s).\nAn empty string is falsy; write 'assert not <expr>' instead of 'assert <expr> == \"\"' and 'assert <expr>' instead of 'assert <expr> != \"\"'.\n" + "\n".join(violations)
 
 
 _EMPTY_TUPLE_OPERANDS = (ast.Attribute, ast.Subscript, ast.Call, ast.Await)
@@ -2200,11 +2068,7 @@ def test_no_empty_tuple_equality():
         rel = path.relative_to(TESTS)
         for lineno, detail in _empty_tuple_comparisons(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} empty-tuple comparison(s).\n"
-        "An empty tuple is falsy; write 'assert not <expr>' instead of "
-        "'assert <expr> == ()' and 'assert <expr>' instead of 'assert <expr> != ()'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} empty-tuple comparison(s).\nAn empty tuple is falsy; write 'assert not <expr>' instead of 'assert <expr> == ()' and 'assert <expr>' instead of 'assert <expr> != ()'.\n" + "\n".join(violations)
 
 
 def test_empty_tuple_lens_flags_empty_tuple():
@@ -2281,11 +2145,7 @@ def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
                     continue
                 if isinstance(operand, ast.Name):
                     continue
-                if (
-                    isinstance(operand, ast.Call)
-                    and isinstance(operand.func, ast.Attribute)
-                    and operand.func.attr == "get"
-                ):
+                if isinstance(operand, ast.Call) and isinstance(operand.func, ast.Attribute) and operand.func.attr == "get":
                     continue
                 if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
                     continue
@@ -2345,12 +2205,7 @@ def test_no_empty_bytes_tautologies():
         rel = path.relative_to(TESTS)
         for lineno, detail in _empty_bytes_tautologies(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} empty-bytes assertion(s).\n"
-        "An empty b'' is falsy and can never contain anything; write "
-        "'assert not <expr>' / 'assert <expr>' instead of '== b\"\"' / '!= b\"\"'\n"
-        "and drop the dead membership check.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} empty-bytes assertion(s).\nAn empty b'' is falsy and can never contain anything; write 'assert not <expr>' / 'assert <expr>' instead of '== b\"\"' / '!= b\"\"'\nand drop the dead membership check.\n" + "\n".join(violations)
 
 
 def test_empty_bytes_tautology_lens_flags_fixed_outcomes():
@@ -2383,9 +2238,7 @@ def test_empty_bytes_tautology_lens_flags_fixed_outcomes():
         assert findings, f"lens should flag:\n{source}"
         if source in positive_verdicts:
             expected = positive_verdicts[source]
-            assert any(expected in detail for _, detail in findings), (
-                f"lens should report '{expected}' for:\n{source}\n got: {findings}"
-            )
+            assert any(expected in detail for _, detail in findings), f"lens should report '{expected}' for:\n{source}\n got: {findings}"
 
     negative_sources = [
         "def test_foo():\n    assert x == b''\n",
@@ -2429,13 +2282,7 @@ def _empty_builtin_call_comparisons(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
         for operand, literal in sides:
-            if not (
-                isinstance(literal, ast.Call)
-                and isinstance(literal.func, ast.Name)
-                and literal.func.id in _EMPTY_BUILTIN_CALLS
-                and not literal.args
-                and not literal.keywords
-            ):
+            if not (isinstance(literal, ast.Call) and isinstance(literal.func, ast.Name) and literal.func.id in _EMPTY_BUILTIN_CALLS and not literal.args and not literal.keywords):
                 continue
             if isinstance(operand, ast.Name):
                 continue
@@ -2472,10 +2319,7 @@ def test_no_empty_builtin_call_equality():
         for lineno, detail in _empty_builtin_call_comparisons(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} empty-builtin-call comparison(s).\n"
-        "An empty list()/dict()/set()/tuple()/bytes()/frozenset() is falsy; write "
-        "'assert not <expr>' instead of 'assert <expr> == list()/set()' and "
-        "'assert <expr>' instead of 'assert <expr> != list()/set()'.\n" + "\n".join(violations)
+        f"Found {len(violations)} empty-builtin-call comparison(s).\nAn empty list()/dict()/set()/tuple()/bytes()/frozenset() is falsy; write 'assert not <expr>' instead of 'assert <expr> == list()/set()' and 'assert <expr>' instead of 'assert <expr> != list()/set()'.\n" + "\n".join(violations)
     )
 
 
@@ -2545,15 +2389,8 @@ def test_no_precision_fragile_float_equality():
                         continue
                     if Fraction(side.value) == Fraction(str(side.value)):
                         continue
-                    violations.append(
-                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares "
-                        f"value == {side.value!r} (no exact binary representation)"
-                    )
-    assert not violations, (
-        f"Found {len(violations)} precision-fragile float comparison(s).\n"
-        "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
-        + "\n".join(violations)
-    )
+                    violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  compares value == {side.value!r} (no exact binary representation)")
+    assert not violations, f"Found {len(violations)} precision-fragile float comparison(s).\nUse pytest.approx(<literal>) instead of == against a non-representable float literal.\n" + "\n".join(violations)
 
 
 def test_no_tautological_len_bounds():
@@ -2573,19 +2410,12 @@ def test_no_tautological_len_bounds():
         rel = path.relative_to(TESTS)
 
         def _is_len(expr: ast.AST) -> bool:
-            return (
-                isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "len" and expr.args
-            )
+            return isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "len" and expr.args
 
         def _int_value(expr: ast.AST) -> int | None:
             if isinstance(expr, ast.Constant) and isinstance(expr.value, int):
                 return expr.value
-            if (
-                isinstance(expr, ast.UnaryOp)
-                and isinstance(expr.op, ast.USub)
-                and isinstance(expr.operand, ast.Constant)
-                and isinstance(expr.operand.value, int)
-            ):
+            if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub) and isinstance(expr.operand, ast.Constant) and isinstance(expr.operand.value, int):
                 return -expr.operand.value
             return None
 
@@ -2640,14 +2470,8 @@ def test_no_tautological_len_bounds():
                     ast.Eq: "==",
                     ast.NotEq: "!=",
                 }.get(effective, "?")
-                violations.append(
-                    f"  {rel}:{node.lineno}  assert len(...) {op_name} {value} — {verdict} (len() is never negative)"
-                )
-    assert not violations, (
-        f"Found {len(violations)} tautological len() comparison(s).\n"
-        "len() never returns a negative number, so the bound can never be exercised.\n"
-        "Assert the real condition (assert x / assert not x) or drop the dead check.\n" + "\n".join(violations)
-    )
+                violations.append(f"  {rel}:{node.lineno}  assert len(...) {op_name} {value} — {verdict} (len() is never negative)")
+    assert not violations, f"Found {len(violations)} tautological len() comparison(s).\nlen() never returns a negative number, so the bound can never be exercised.\nAssert the real condition (assert x / assert not x) or drop the dead check.\n" + "\n".join(violations)
 
 
 def test_no_manual_raises_pattern():
@@ -2668,23 +2492,11 @@ def test_no_manual_raises_pattern():
         for node in _all_nodes(tree):
             if not isinstance(node, ast.Try):
                 continue
-            raises_assert = any(
-                isinstance(stmt, ast.Raise)
-                and stmt.exc is not None
-                and isinstance(stmt.exc, ast.Call)
-                and isinstance(stmt.exc.func, ast.Name)
-                and stmt.exc.func.id == "AssertionError"
-                for stmt in node.body
-            )
-            swallows = any(
-                len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass) for handler in node.handlers
-            )
+            raises_assert = any(isinstance(stmt, ast.Raise) and stmt.exc is not None and isinstance(stmt.exc, ast.Call) and isinstance(stmt.exc.func, ast.Name) and stmt.exc.func.id == "AssertionError" for stmt in node.body)
+            swallows = any(len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass) for handler in node.handlers)
             if raises_assert and swallows:
                 violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  try/raise AssertionError/except: pass")
-    assert not violations, (
-        f"Found {len(violations)} hand-rolled raises pattern(s).\n"
-        "Replace try/raise AssertionError/except: pass with `with pytest.raises(...):`.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} hand-rolled raises pattern(s).\nReplace try/raise AssertionError/except: pass with `with pytest.raises(...):`.\n" + "\n".join(violations)
 
 
 def test_no_assert_inside_except():
@@ -2702,15 +2514,8 @@ def test_no_assert_inside_except():
         for node in _all_nodes(tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
-            violations.extend(
-                f"  {path.relative_to(TESTS)}:{sub.lineno}  assert inside except handler"
-                for sub in ast.walk(node)
-                if isinstance(sub, ast.Assert)
-            )
-    assert not violations, (
-        f"Found {len(violations)} assertion(s) inside except handler(s).\n"
-        "Use pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
-    )
+            violations.extend(f"  {path.relative_to(TESTS)}:{sub.lineno}  assert inside except handler" for sub in ast.walk(node) if isinstance(sub, ast.Assert))
+    assert not violations, f"Found {len(violations)} assertion(s) inside except handler(s).\nUse pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
 
 
 def _assert_inside_finally(tree: ast.AST) -> list[ast.Assert]:
@@ -2749,9 +2554,7 @@ def test_no_assert_inside_finally():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        violations.extend(
-            f"  {rel}:{assert_node.lineno}  assert inside finally block" for assert_node in _assert_inside_finally(tree)
-        )
+        violations.extend(f"  {rel}:{assert_node.lineno}  assert inside finally block" for assert_node in _assert_inside_finally(tree))
     assert not violations, (
         f"Found {len(violations)} assertion(s) inside finally block(s).\n"
         "A finally block runs on every exit path; an assert there can mask the\n"
@@ -2767,33 +2570,9 @@ def test_assert_inside_finally_lens_flags_masking_hazard():
     ``finally`` that only runs cleanup, or a plain ``pytest.raises`` context."""
     positive_sources = [
         "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleaned\n",
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        foo()\n"
-            "    finally:\n"
-            "        with ctx:\n"
-            "            bar()\n"
-            "            assert bar.done\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        foo()\n"
-            "    except ValueError:\n"
-            "        pass\n"
-            "    finally:\n"
-            "        assert cleanup()\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        foo()\n"
-            "    finally:\n"
-            "        def helper():\n"
-            "            assert finished()\n"
-            "        helper()\n"
-        ),
+        ("def test_foo():\n    try:\n        foo()\n    finally:\n        with ctx:\n            bar()\n            assert bar.done\n"),
+        ("def test_foo():\n    try:\n        foo()\n    except ValueError:\n        pass\n    finally:\n        assert cleanup()\n"),
+        ("def test_foo():\n    try:\n        foo()\n    finally:\n        def helper():\n            assert finished()\n        helper()\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -2828,9 +2607,7 @@ _RAISES_CONTEXT_NAMES = frozenset(
 _FAIL_CALL_NAMES = frozenset({"fail", "skip", "xfail"})
 """Calls that report test outcome directly (other than ``assert``)."""
 
-_SCHEMATISEST_SELF_VALIDATING = frozenset(
-    {"call_and_validate", "call_and_validate_examples", "call_and_validate_frozen"}
-)
+_SCHEMATISEST_SELF_VALIDATING = frozenset({"call_and_validate", "call_and_validate_examples", "call_and_validate_frozen"})
 """Schemathesis case methods that validate every generated response internally."""
 
 
@@ -2866,12 +2643,7 @@ def _noop_lens_verifies(node: ast.AST) -> bool:
                 return True
             if name and "assert" in name:
                 return True
-        if (
-            isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and sub is not node
-            and not in_invoked_class
-            and sub.name not in invoked
-        ):
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub is not node and not in_invoked_class and sub.name not in invoked:
             continue
         if isinstance(sub, ast.ClassDef) and sub is not node:
             if sub.name not in invoked:
@@ -2918,11 +2690,7 @@ def test_no_noop_test_functions():
             if _noop_lens_verifies(node):
                 continue
             violations.append(f"  {rel}:{node.lineno}  {node.name}() — no assertion or raises context in body")
-    assert not violations, (
-        f"Found {len(violations)} no-op test function(s) that never verify anything.\n"
-        "Add an assertion on the outcome, or wrap the call in pytest.raises(...) if it must raise.\n"
-        + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} no-op test function(s) that never verify anything.\nAdd an assertion on the outcome, or wrap the call in pytest.raises(...) if it must raise.\n" + "\n".join(violations)
 
 
 def test_noop_lens_recognizes_verification_patterns():
@@ -2941,13 +2709,7 @@ def test_noop_lens_recognizes_verification_patterns():
         "async def test_foo():\n    async with pytest.warns(UserWarning):\n        await foo()\n",
         "def test_foo():\n    pytest.fail('boom')\n",
         "def test_foo():\n    def helper():\n        assert foo() == 1\n    helper()\n",
-        (
-            "def test_foo():\n"
-            "    class Helper:\n"
-            "        def check(self):\n"
-            "            assert foo() == 1\n"
-            "    Helper().check()\n"
-        ),
+        ("def test_foo():\n    class Helper:\n        def check(self):\n            assert foo() == 1\n    Helper().check()\n"),
     ]
     for source in verifying_sources:
         tree = ast.parse(source)
@@ -3044,9 +2806,7 @@ def _self_comparison_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         op_name = node.ops[0].__class__.__name__
         expr = ast.unparse(left)
-        found.append(
-            (node.lineno, f"compares {expr} {op_name} {expr} — identical operands can never exercise distinct values")
-        )
+        found.append((node.lineno, f"compares {expr} {op_name} {expr} — identical operands can never exercise distinct values"))
     return found
 
 
@@ -3082,11 +2842,7 @@ def test_no_self_comparison_tautology():
         rel = path.relative_to(TESTS)
         for lineno, detail in _self_comparison_tautologies(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} self-comparison tautolog(ies).\n"
-        "Comparing a value with itself can never exercise distinct values; it is dead code.\n"
-        "Assert against the expected value instead: 'assert x == <expected>'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} self-comparison tautolog(ies).\nComparing a value with itself can never exercise distinct values; it is dead code.\nAssert against the expected value instead: 'assert x == <expected>'.\n" + "\n".join(violations)
 
 
 def test_self_comparison_lens_flags_tautologies():
@@ -3161,10 +2917,7 @@ def _identity_literal_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"compares value {op_name} {kind} literal — freshly allocated each time, "
-                        f"{verdict} (use ==/!= for value equality)"
-                    ),
+                    (f"compares value {op_name} {kind} literal — freshly allocated each time, {verdict} (use ==/!= for value equality)"),
                 )
             )
             break
@@ -3191,12 +2944,7 @@ def test_no_identity_comparison_with_container_literal():
         rel = path.relative_to(TESTS)
         for lineno, detail in _identity_literal_tautologies(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} identity comparison(s) against container literal(s).\n"
-        "A list/dict/set literal is freshly allocated on every evaluation, so 'is'/'is not' "
-        "against it is dead code.\n"
-        "Use value equality (== / !=) instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} identity comparison(s) against container literal(s).\nA list/dict/set literal is freshly allocated on every evaluation, so 'is'/'is not' against it is dead code.\nUse value equality (== / !=) instead.\n" + "\n".join(violations)
 
 
 def test_identity_literal_lens_flags_tautologies():
@@ -3230,9 +2978,7 @@ def test_identity_literal_lens_flags_tautologies():
         assert not _identity_literal_tautologies(tree), f"lens should NOT flag:\n{source}"
 
 
-_MOCK_CALL_INTROSPECTION = frozenset(
-    {"calls", "call_args", "call_args_list", "call_count", "await_args", "await_args_list", "await_count"}
-)
+_MOCK_CALL_INTROSPECTION = frozenset({"calls", "call_args", "call_args_list", "call_count", "await_args", "await_args_list", "await_count"})
 """Mock attributes that inspect the recorded calls after the fact. Accessing
 ``<mock>.calls[0]``/``<mock>.call_args[0]`` (or the ``await_*`` twins for
 AsyncMock) fails loudly (``IndexError``/``AttributeError``) when the call never
@@ -3269,22 +3015,12 @@ def _redundant_called_assertions(tree: ast.AST) -> list[tuple[int, str]]:
             if base is None or not isinstance(base, (ast.Attribute, ast.Name)):
                 continue
             nxt = node.body[i + 1]
-            nxt_attrs = [
-                sub for sub in ast.walk(nxt) if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION
-            ]
+            nxt_attrs = [sub for sub in ast.walk(nxt) if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION]
             if any(ast.dump(sub.value) == ast.dump(base) for sub in nxt_attrs):
                 if isinstance(stmt, ast.Assert):
-                    detail = (
-                        f"assert {ast.unparse(base)}.called is redundant — the "
-                        f"following {ast.unparse(base)}.<calls>/<call_args> access already "
-                        "fails loudly when no call was recorded"
-                    )
+                    detail = f"assert {ast.unparse(base)}.called is redundant — the following {ast.unparse(base)}.<calls>/<call_args> access already fails loudly when no call was recorded"
                 else:
-                    detail = (
-                        f"{ast.unparse(stmt.value)} is redundant — the "
-                        f"following {ast.unparse(base)}.<calls>/<call_args>/<await_args> "
-                        "access already fails loudly when no call was recorded"
-                    )
+                    detail = f"{ast.unparse(stmt.value)} is redundant — the following {ast.unparse(base)}.<calls>/<call_args>/<await_args> access already fails loudly when no call was recorded"
                 found.append((stmt.lineno, detail))
     return found
 
@@ -3429,11 +3165,7 @@ def test_no_empty_container_membership():
         rel = path.relative_to(TESTS)
         for lineno, detail in _empty_container_membership_tautologies(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} membership assertion(s) against an empty container literal.\n"
-        "An empty container can never satisfy 'in' (and always satisfies 'not in').\n"
-        "Assert the actual membership you mean, or drop the dead check.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} membership assertion(s) against an empty container literal.\nAn empty container can never satisfy 'in' (and always satisfies 'not in').\nAssert the actual membership you mean, or drop the dead check.\n" + "\n".join(violations)
 
 
 def test_empty_container_membership_lens_flags_impossible_membership():
@@ -3572,11 +3304,7 @@ def _mock_membership_probe_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 if container is None:
                     continue
                 verdict = "ALWAYS PASSES" if isinstance(op, ast.In) else "ALWAYS FAILS"
-                detail = (
-                    f"assert {ast.unparse(node.test)} — membership against the mock "
-                    f"{container!r}; a mock's __contains__ returns an always-truthy "
-                    f"child double, so this check {verdict} regardless of the recorded calls"
-                )
+                detail = f"assert {ast.unparse(node.test)} — membership against the mock {container!r}; a mock's __contains__ returns an always-truthy child double, so this check {verdict} regardless of the recorded calls"
                 if (node.lineno, detail) not in found:
                     found.append((node.lineno, detail))
     return found
@@ -3688,11 +3416,7 @@ def _single_case_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     decorator whose ``argvalues`` holds exactly one case. Only decorator
     applications are considered — a bare ``parametrize(...)`` call inside a
     body is not pytest parametrization and belongs to a different lens."""
-    return [
-        (lineno, "parametrize with a single case in argvalues — collapse to a plain test")
-        for lineno, elts, _dec in _parametrize_argvalue_lists(tree)
-        if len(elts) == 1
-    ]
+    return [(lineno, "parametrize with a single case in argvalues — collapse to a plain test") for lineno, elts, _dec in _parametrize_argvalue_lists(tree) if len(elts) == 1]
 
 
 def test_no_single_value_parametrize():
@@ -3712,11 +3436,7 @@ def test_no_single_value_parametrize():
         rel = path.relative_to(TESTS)
         for lineno, detail in _single_case_parametrize_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} parametrize decorator(s) with a single case.\n"
-        "A single-case parametrize adds no matrix coverage; write the value as a "
-        "local variable in an ordinary test.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} parametrize decorator(s) with a single case.\nA single-case parametrize adds no matrix coverage; write the value as a local variable in an ordinary test.\n" + "\n".join(violations)
 
 
 def test_single_value_parametrize_lens_flags_redundant_cases():
@@ -3729,10 +3449,7 @@ def test_single_value_parametrize_lens_flags_redundant_cases():
         "def test_foo():\n    @pytest.mark.parametrize('x', [1])\n    def test_bar(x): pass\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', (1,))\n    def test_bar(x): pass\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', argvalues=[1])\n    def test_bar(x): pass\n",
-        (
-            "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n"
-            "    @pytest.mark.parametrize('y', [3])\n    def test_bar(x, y): pass\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    @pytest.mark.parametrize('y', [3])\n    def test_bar(x, y): pass\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -3755,11 +3472,7 @@ def _empty_parametrize_violations(tree: ast.AST) -> list[tuple[int, str]]:
     decorator whose ``argvalues`` holds zero cases. Only decorator applications
     are considered — a bare ``parametrize(...)`` call inside a body is not
     pytest parametrization and belongs to a different lens."""
-    return [
-        (lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs")
-        for lineno, elts, _dec in _parametrize_argvalue_lists(tree)
-        if len(elts) == 0
-    ]
+    return [(lineno, "parametrize with an empty argvalues — the test is collected as zero items and never runs") for lineno, elts, _dec in _parametrize_argvalue_lists(tree) if len(elts) == 0]
 
 
 def test_no_empty_parametrize():
@@ -3780,12 +3493,7 @@ def test_no_empty_parametrize():
         rel = path.relative_to(TESTS)
         for lineno, detail in _empty_parametrize_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} parametrize decorator(s) with an empty case list.\n"
-        "A zero-case parametrize is collected as zero test items — the test never runs, "
-        "so its coverage silently disappears. Delete the dead parametrize or supply a real case.\n"
-        + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} parametrize decorator(s) with an empty case list.\nA zero-case parametrize is collected as zero test items — the test never runs, so its coverage silently disappears. Delete the dead parametrize or supply a real case.\n" + "\n".join(violations)
 
 
 def test_empty_parametrize_lens_flags_never_run_cases():
@@ -3798,10 +3506,7 @@ def test_empty_parametrize_lens_flags_never_run_cases():
         "def test_foo():\n    @pytest.mark.parametrize('x', [])\n    def test_bar(x): pass\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', ())\n    def test_bar(x): pass\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', argvalues=[])\n    def test_bar(x): pass\n",
-        (
-            "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n"
-            "    @pytest.mark.parametrize('y', [])\n    def test_bar(x, y): pass\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    @pytest.mark.parametrize('y', [])\n    def test_bar(x, y): pass\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -3836,16 +3541,10 @@ def _unbounded_sync_subprocess_violations(tree: ast.AST) -> list[tuple[int, str]
             continue
         if not isinstance(f.value, ast.Name) or f.value.id != "subprocess":
             continue
-        bounded = any(
-            kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
-            for kw in node.keywords
-            if kw.arg
-        )
+        bounded = any(kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None) for kw in node.keywords if kw.arg)
         if bounded:
             continue
-        found.append(
-            (node.lineno, f"subprocess.{f.attr}(...) without a timeout bound — a hung child blocks the test forever")
-        )
+        found.append((node.lineno, f"subprocess.{f.attr}(...) without a timeout bound — a hung child blocks the test forever"))
     return found
 
 
@@ -3869,10 +3568,7 @@ def _compound_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                (
-                    f"asserts {ast.unparse(test)} — compound 'and'; split into separate asserts "
-                    "so a failure reports which condition broke"
-                ),
+                (f"asserts {ast.unparse(test)} — compound 'and'; split into separate asserts so a failure reports which condition broke"),
             )
         )
     return found
@@ -3933,10 +3629,7 @@ def _unbounded_async_subprocess_violations(tree: ast.AST) -> list[tuple[int, str
             found.append(
                 (
                     node.lineno,
-                    (
-                        "proc.communicate()/wait() not wrapped in "
-                        "asyncio.wait_for(..., timeout=...) — a hung child blocks the test forever"
-                    ),
+                    ("proc.communicate()/wait() not wrapped in asyncio.wait_for(..., timeout=...) — a hung child blocks the test forever"),
                 )
             )
     return found
@@ -3960,12 +3653,7 @@ def test_no_unbounded_subprocess_calls():
             violations.append(f"  {rel}:{lineno}  {detail}")
         for lineno, detail in _unbounded_async_subprocess_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} unbounded subprocess call(s).\n"
-        "Give every child process an explicit timeout bound: add timeout=<secs> "
-        "to the subprocess call, or wrap await proc.communicate()/wait() in "
-        "asyncio.wait_for(..., timeout=<secs>).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} unbounded subprocess call(s).\nGive every child process an explicit timeout bound: add timeout=<secs> to the subprocess call, or wrap await proc.communicate()/wait() in asyncio.wait_for(..., timeout=<secs>).\n" + "\n".join(violations)
 
 
 def test_unbounded_subprocess_lens_flags_hang_risks():
@@ -3978,35 +3666,21 @@ def test_unbounded_subprocess_lens_flags_hang_risks():
         "def test_foo():\n    subprocess.run(['ls'])\n",
         "def test_foo():\n    subprocess.Popen(['ls'], stdout=subprocess.PIPE)\n",
         "def test_foo():\n    subprocess.check_call(['ls'], timeout=None)\n",
-        (
-            "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
-            "    out = await proc.communicate()\n"
-        ),
+        ("async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n    out = await proc.communicate()\n"),
         "async def test_foo():\n    proc = await asyncio.create_subprocess_exec('ls')\n    code = await proc.wait()\n",
-        (
-            "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
-            "    out = await asyncio.wait_for(proc.communicate(), timeout=None)\n"
-        ),
+        ("async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n    out = await asyncio.wait_for(proc.communicate(), timeout=None)\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
-        assert _unbounded_sync_subprocess_violations(tree) or _unbounded_async_subprocess_violations(tree), (
-            f"lens should flag:\n{source}"
-        )
+        assert _unbounded_sync_subprocess_violations(tree) or _unbounded_async_subprocess_violations(tree), f"lens should flag:\n{source}"
 
     negative_sources = [
         "def test_foo():\n    subprocess.run(['ls'], timeout=5)\n",
         "def test_foo():\n    subprocess.run(['ls'], timeout=TIMEOUT)\n",
         "def test_foo():\n    os.system('ls')\n",
         "def test_foo():\n    subprocess.run(['ls'], check=True, capture_output=True, text=True, timeout=5)\n",
-        (
-            "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
-            "    out = await asyncio.wait_for(proc.communicate(), timeout=10)\n"
-        ),
-        (
-            "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
-            "    out = await asyncio.wait_for(proc.communicate(), 10)\n"
-        ),
+        ("async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n    out = await asyncio.wait_for(proc.communicate(), timeout=10)\n"),
+        ("async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n    out = await asyncio.wait_for(proc.communicate(), 10)\n"),
         "async def test_foo():\n    out = await foo.communicate()\n",
         "def test_foo():\n    subprocess.run(['ls'], timeout=5)\n    my_func(subprocess.run)\n",
     ]
@@ -4036,11 +3710,7 @@ def _unbounded_thread_join_violations(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         if node.args:
             continue
-        bounded = any(
-            kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
-            for kw in node.keywords
-            if kw.arg
-        )
+        bounded = any(kw.arg == "timeout" and not (isinstance(kw.value, ast.Constant) and kw.value.value is None) for kw in node.keywords if kw.arg)
         if bounded:
             continue
         found.append((node.lineno, "thread .join() without a timeout bound — a hung worker blocks the test forever"))
@@ -4065,11 +3735,7 @@ def test_no_unbounded_thread_join():
         rel = path.relative_to(TESTS)
         for lineno, detail in _unbounded_thread_join_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} unbounded thread .join() call(s).\n"
-        "Give every worker-thread join an explicit timeout bound: thread.join(timeout=<secs>), "
-        "then assert not thread.is_alive() when the thread must have finished.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} unbounded thread .join() call(s).\nGive every worker-thread join an explicit timeout bound: thread.join(timeout=<secs>), then assert not thread.is_alive() when the thread must have finished.\n" + "\n".join(violations)
 
 
 def test_unbounded_thread_join_lens_flags_hang_risks():
@@ -4147,12 +3813,7 @@ def _unbounded_async_wait_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                (
-                    f"{ast.unparse(node)} — unbounded asyncio "
-                    f"{'wait_for' if node.func.attr == 'wait_for' else 'wait'} "
-                    "with no timeout; pass timeout=<secs> so a hung coroutine fails loudly "
-                    "instead of stalling the whole test run"
-                ),
+                (f"{ast.unparse(node)} — unbounded asyncio {'wait_for' if node.func.attr == 'wait_for' else 'wait'} with no timeout; pass timeout=<secs> so a hung coroutine fails loudly instead of stalling the whole test run"),
             )
         )
     return found
@@ -4175,12 +3836,7 @@ def test_no_unbounded_async_wait():
         rel = path.relative_to(TESTS)
         for lineno, detail in _unbounded_async_wait_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} unbounded asyncio wait call(s).\n"
-        "Give every asyncio.wait_for / asyncio.wait an explicit timeout bound: "
-        "pass timeout=<secs> (a None or omitted timeout means 'wait forever' "
-        "and can hang the whole test run).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} unbounded asyncio wait call(s).\nGive every asyncio.wait_for / asyncio.wait an explicit timeout bound: pass timeout=<secs> (a None or omitted timeout means 'wait forever' and can hang the whole test run).\n" + "\n".join(violations)
 
 
 def test_unbounded_async_wait_lens_flags_hang_risks():
@@ -4237,10 +3893,7 @@ def test_no_compound_boolean_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _compound_boolean_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} compound 'and' assertion(s).\n"
-        "Each comparison should be its own assert so a failure names the broken condition.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} compound 'and' assertion(s).\nEach comparison should be its own assert so a failure names the broken condition.\n" + "\n".join(violations)
 
 
 def test_compound_boolean_lens_flags_split_able_conjunctions():
@@ -4281,13 +3934,7 @@ def _redundant_bool_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         test = node.test
         negated = isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
         target = test.operand if negated else test
-        if not (
-            isinstance(target, ast.Call)
-            and isinstance(target.func, ast.Name)
-            and target.func.id == "bool"
-            and len(target.args) == 1
-            and not target.keywords
-        ):
+        if not (isinstance(target, ast.Call) and isinstance(target.func, ast.Name) and target.func.id == "bool" and len(target.args) == 1 and not target.keywords):
             continue
         found.append((node.lineno, f"assert {ast.unparse(test)} — bool() is redundant inside an assert"))
     return found
@@ -4307,10 +3954,7 @@ def test_no_redundant_bool_in_assert():
         rel = path.relative_to(TESTS)
         for lineno, detail in _redundant_bool_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} redundant bool() assertion(s).\n"
-        "assert already tests truthiness; drop the bool() wrapper.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} redundant bool() assertion(s).\nassert already tests truthiness; drop the bool() wrapper.\n" + "\n".join(violations)
 
 
 def test_redundant_bool_lens_flags_noop_wrappers():
@@ -4397,11 +4041,7 @@ def test_no_negated_comparison_asserts():
         rel = path.relative_to(TESTS)
         for lineno, detail in _negated_comparison_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} negated single-comparison assertion(s).\n"
-        "Write the comparison with the mirrored operator instead of wrapping it "
-        "in not: 'assert a != b' / 'assert a not in b' / 'assert a is not b'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} negated single-comparison assertion(s).\nWrite the comparison with the mirrored operator instead of wrapping it in not: 'assert a != b' / 'assert a not in b' / 'assert a is not b'.\n" + "\n".join(violations)
 
 
 def test_negated_comparison_lens_flags_reversed_asserts():
@@ -4483,10 +4123,7 @@ def _async_test_without_async_behavior_violations(tree: ast.AST) -> list[tuple[i
         found.append(
             (
                 node.lineno,
-                (
-                    f"async def {node.name}() — body never awaits, declares no async with/for, "
-                    "yields nothing, and has no async comprehension; declare it a plain def"
-                ),
+                (f"async def {node.name}() — body never awaits, declares no async with/for, yields nothing, and has no async comprehension; declare it a plain def"),
             )
         )
     return found
@@ -4533,13 +4170,7 @@ def test_async_test_lens_flags_needlessly_async_tests():
         "async def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
         "async def test_foo():\n    assert await_unaware_call()\n",
         "async def test_foo():\n    def helper():\n        return 1\n    assert helper() == 1\n",
-        (
-            "async def test_foo():\n"
-            "    class Helper:\n"
-            "        async def run(self):\n"
-            "            return 1\n"
-            "    assert Helper().run() is not None\n"
-        ),
+        ("async def test_foo():\n    class Helper:\n        async def run(self):\n            return 1\n    assert Helper().run() is not None\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -4574,10 +4205,7 @@ def _async_fixture_without_async_behavior_violations(tree: ast.AST) -> list[tupl
         found.append(
             (
                 node.lineno,
-                (
-                    f"async fixture {node.name}() — body never awaits, declares no async with/for, "
-                    "yields nothing, and has no async comprehension; declare it a plain def"
-                ),
+                (f"async fixture {node.name}() — body never awaits, declares no async with/for, yields nothing, and has no async comprehension; declare it a plain def"),
             )
         )
     return found
@@ -4658,17 +4286,12 @@ def _compound_isinstance_assert_violations(tree: ast.AST) -> list[tuple[int, str
             continue
         if len(test.values) < 2:
             continue
-        if not all(
-            isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "isinstance" for v in test.values
-        ):
+        if not all(isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "isinstance" for v in test.values):
             continue
         found.append(
             (
                 node.lineno,
-                (
-                    f"asserts {ast.unparse(test)} — compound isinstance 'and'; split into separate asserts "
-                    "so a failure reports which operand has the wrong type"
-                ),
+                (f"asserts {ast.unparse(test)} — compound isinstance 'and'; split into separate asserts so a failure reports which operand has the wrong type"),
             )
         )
     return found
@@ -4693,11 +4316,7 @@ def test_no_compound_isinstance_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _compound_isinstance_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} compound isinstance 'and' assertion(s).\n"
-        "Each isinstance should be its own assert so a failure names the operand with the wrong type.\n"
-        + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} compound isinstance 'and' assertion(s).\nEach isinstance should be its own assert so a failure names the operand with the wrong type.\n" + "\n".join(violations)
 
 
 def test_compound_isinstance_lens_flags_split_able_conjunctions():
@@ -4768,10 +4387,7 @@ def _unused_parametrize_arg_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         dec.lineno,
-                        (
-                            f"parametrize arg {name!r} never referenced in {node.name}() body — "
-                            "every case runs the same assertion, so the matrix coverage is illusory"
-                        ),
+                        (f"parametrize arg {name!r} never referenced in {node.name}() body — every case runs the same assertion, so the matrix coverage is illusory"),
                     )
                 )
     return found
@@ -4812,14 +4428,8 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
     parametrizes without a string argname."""
     positive_sources = [
         "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    def test_bar(x):\n        assert 1 == 1\n",
-        (
-            "def test_foo():\n    @pytest.mark.parametrize('endpoint', ENDPOINTS)\n"
-            "    def test_bar(endpoint):\n        do_thing()\n"
-        ),
-        (
-            "def test_foo():\n    @pytest.mark.parametrize('a,b', [(1, 2)])\n"
-            "    def test_bar(a, b):\n        assert a == 1\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('endpoint', ENDPOINTS)\n    def test_bar(endpoint):\n        do_thing()\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('a,b', [(1, 2)])\n    def test_bar(a, b):\n        assert a == 1\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -4827,11 +4437,7 @@ def test_unused_parametrize_arg_lens_flags_ignored_cases():
 
     negative_sources = [
         "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2])\n    def test_bar(x):\n        assert x == 1\n",
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', [1, 2], indirect=True)\n"
-            "    def test_bar(x):\n        do_thing()\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1, 2], indirect=True)\n    def test_bar(x):\n        do_thing()\n"),
         "def test_foo():\n    parametrize('x', [1])\n",
         "def test_foo():\n    @pytest.mark.parametrize(CASES, [1, 2])\n    def test_bar(x):\n        assert x == 1\n",
     ]
@@ -4887,10 +4493,7 @@ def _unused_builtin_fixture_param_violations(tree: ast.AST) -> list[tuple[int, s
         found.extend(
             (
                 node.lineno,
-                (
-                    f"{name}() built-in fixture parameter never referenced in {node.name}() body — "
-                    "the fixture has no setup side effect, so the request is dead weight"
-                ),
+                (f"{name}() built-in fixture parameter never referenced in {node.name}() body — the fixture has no setup side effect, so the request is dead weight"),
             )
             for name in sorted(params - body_names)
         )
@@ -4915,11 +4518,7 @@ def test_no_unused_builtin_fixture_params():
         rel = path.relative_to(TESTS)
         for lineno, detail in _unused_builtin_fixture_param_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} parameter(s) naming a built-in fixture the body never uses.\n"
-        "The fixture has no setup side effect, so the request is dead weight — "
-        "drop the parameter.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} parameter(s) naming a built-in fixture the body never uses.\nThe fixture has no setup side effect, so the request is dead weight — drop the parameter.\n" + "\n".join(violations)
 
 
 def test_unused_builtin_fixture_lens_flags_dead_params():
@@ -4997,12 +4596,7 @@ def _split_once_with_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     stmt.lineno,
-                    (
-                        f"{first_attr}() + {second_attr}(...) on the same mock is a split "
-                        f"pair — combine into the single atomic {ast.unparse(first_base)}."
-                        f"{second_attr[:-5]}_once_with(...) so 'exactly once with these args' "
-                        "cannot silently drift out of sync"
-                    ),
+                    (f"{first_attr}() + {second_attr}(...) on the same mock is a split pair — combine into the single atomic {ast.unparse(first_base)}.{second_attr[:-5]}_once_with(...) so 'exactly once with these args' cannot silently drift out of sync"),
                 )
             )
     return found
@@ -5016,9 +4610,7 @@ def _mock_assert_method(stmt: ast.stmt) -> tuple[ast.AST, str] | None:
     f = stmt.value.func
     if not isinstance(f, ast.Attribute):
         return None
-    if f.attr not in (
-        _SPLIT_ONCE_METHODS | _SPLIT_WITH_METHODS | {"assert_called_once_with", "assert_awaited_once_with"}
-    ):
+    if f.attr not in (_SPLIT_ONCE_METHODS | _SPLIT_WITH_METHODS | {"assert_called_once_with", "assert_awaited_once_with"}):
         return None
     if not isinstance(f.value, (ast.Name, ast.Attribute, ast.Subscript)):
         return None
@@ -5063,10 +4655,7 @@ def test_split_once_with_lens_flags_redundant_pairs():
     positive_sources = [
         "def test_foo():\n    mock.assert_called_once()\n    mock.assert_called_with(1, 2)\n",
         "def test_foo():\n    mock_async.assert_awaited_once()\n    mock_async.assert_awaited_with(record)\n",
-        (
-            "def test_foo():\n    self.provider.execute.assert_called_once()\n"
-            "    self.provider.execute.assert_called_with('x')\n"
-        ),
+        ("def test_foo():\n    self.provider.execute.assert_called_once()\n    self.provider.execute.assert_called_with('x')\n"),
         "def test_foo():\n    mock.assert_awaited_once()\n    mock.assert_awaited_with()\n",
     ]
     for source in positive_sources:
@@ -5078,12 +4667,7 @@ def test_split_once_with_lens_flags_redundant_pairs():
         "def test_foo():\n    mock.assert_called_once_with(1, 2)\n",
         "def test_foo():\n    mock.assert_called_with(1, 2)\n",
         "def test_foo():\n    mock_a.assert_called_once()\n    mock_b.assert_called_with(1, 2)\n",
-        (
-            "def test_foo():\n"
-            "    mock.assert_called_once()\n"
-            "    result = do_work()\n"
-            "    mock.assert_called_with(result)\n"
-        ),
+        ("def test_foo():\n    mock.assert_called_once()\n    result = do_work()\n    mock.assert_called_with(result)\n"),
         "def test_foo():\n    mock.assert_called_once()\n    mock.assert_not_called()\n",
     ]
     for source in negative_sources:
@@ -5121,21 +4705,14 @@ def _async_decorator_on_sync_function_violations(tree: ast.AST) -> list[tuple[in
                 found.append(
                     (
                         dec.lineno,
-                        (
-                            f"sync def {node.name}() marked @{qualname} — the async marker is a "
-                            "no-op on a non-coroutine function (asyncio_mode=auto already infers "
-                            "async behaviour from async def)"
-                        ),
+                        (f"sync def {node.name}() marked @{qualname} — the async marker is a no-op on a non-coroutine function (asyncio_mode=auto already infers async behaviour from async def)"),
                     )
                 )
             elif name == "fixture" and "asyncio" in qualname:
                 found.append(
                     (
                         dec.lineno,
-                        (
-                            f"sync def fixture {node.name}() decorated with @{qualname} — use "
-                            "@pytest.fixture for a synchronous fixture body"
-                        ),
+                        (f"sync def fixture {node.name}() decorated with @{qualname} — use @pytest.fixture for a synchronous fixture body"),
                     )
                 )
     return found
@@ -5224,8 +4801,7 @@ def _equality_chain_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                "chained equality in an assert — pytest reports the whole chain and cannot say "
-                "which link broke; split into separate asserts:\n        " + "\n        ".join(links),
+                "chained equality in an assert — pytest reports the whole chain and cannot say which link broke; split into separate asserts:\n        " + "\n        ".join(links),
             )
         )
     return found
@@ -5320,11 +4896,7 @@ def _duplicate_parametrize_case_violations(tree: ast.AST) -> list[tuple[int, str
             found.append(
                 (
                     lineno,
-                    (
-                        f"parametrize case {key} appears {len(lines)} times (lines {lines}) — "
-                        "duplicate cases run the same assertion with identical inputs, "
-                        "so the advertised matrix coverage is inflated"
-                    ),
+                    (f"parametrize case {key} appears {len(lines)} times (lines {lines}) — duplicate cases run the same assertion with identical inputs, so the advertised matrix coverage is inflated"),
                 )
             )
     return found
@@ -5350,12 +4922,7 @@ def test_no_duplicate_parametrize_cases():
         rel = path.relative_to(TESTS)
         for lineno, detail in _duplicate_parametrize_case_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} parametrize case(s) duplicated in argvalues.\n"
-        "A duplicate case runs the same assertion with identical inputs — the matrix coverage "
-        "is inflated, not extended. Remove the redundant twin (and its id when ids= is parallel).\n"
-        + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} parametrize case(s) duplicated in argvalues.\nA duplicate case runs the same assertion with identical inputs — the matrix coverage is inflated, not extended. Remove the redundant twin (and its id when ids= is parallel).\n" + "\n".join(violations)
 
 
 def test_duplicate_parametrize_lens_flags_repeated_cases():
@@ -5367,26 +4934,10 @@ def test_duplicate_parametrize_lens_flags_repeated_cases():
     positive_sources = [
         "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 2])\n    def test_bar(x):\n        assert x == 1\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', ('a', 'a', 'b'))\n    def test_bar(x):\n        assert x\n",
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('a,b', [(1, 2), (3, 4), (1, 2)])\n"
-            "    def test_bar(a, b):\n        assert a + b == 3\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', argvalues=[{'k': 1}, {'k': 1}])\n"
-            "    def test_bar(x):\n        assert x['k'] == 1\n"
-        ),
-        (
-            "def test_foo():\n    @pytest.mark.parametrize('x', [0.5, 0.5])\n"
-            "    def test_bar(x):\n        assert x == 0.5\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', [1, 2, 1])\n"
-            "    @pytest.mark.parametrize('y', [3])\n"
-            "    def test_bar(x, y):\n        assert x + y == 4\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('a,b', [(1, 2), (3, 4), (1, 2)])\n    def test_bar(a, b):\n        assert a + b == 3\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', argvalues=[{'k': 1}, {'k': 1}])\n    def test_bar(x):\n        assert x['k'] == 1\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [0.5, 0.5])\n    def test_bar(x):\n        assert x == 0.5\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 1])\n    @pytest.mark.parametrize('y', [3])\n    def test_bar(x, y):\n        assert x + y == 4\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -5396,11 +4947,7 @@ def test_duplicate_parametrize_lens_flags_repeated_cases():
         "def test_foo():\n    @pytest.mark.parametrize('x', [1, 2, 3])\n    def test_bar(x):\n        assert x == 1\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', [1, True])\n    def test_bar(x):\n        assert x\n",
         "def test_foo():\n    @pytest.mark.parametrize('x', CASES)\n    def test_bar(x):\n        assert x\n",
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', [1, make_case()])\n"
-            "    def test_bar(x):\n        assert x == 1\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1, make_case()])\n    def test_bar(x):\n        assert x == 1\n"),
         "def test_foo():\n    @pytest.mark.parametrize('x', [1])\n    def test_bar(x):\n        assert x == 1\n",
         "def test_foo():\n    parametrize('x', [1, 1])\n",
     ]
@@ -5437,21 +4984,13 @@ def _parametrize_without_ids_violations(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         if len(elts) < _PARAMETRIZE_IDS_MIN_CASES:
             continue
-        per_case_ids = sum(
-            1
-            for el in elts
-            if isinstance(el, ast.Call) and _decorator_name(el) == "param" and any(kw.arg == "id" for kw in el.keywords)
-        )
+        per_case_ids = sum(1 for el in elts if isinstance(el, ast.Call) and _decorator_name(el) == "param" and any(kw.arg == "id" for kw in el.keywords))
         if per_case_ids == len(elts):
             continue
         violations.append(
             (
                 dec.lineno,
-                (
-                    f"parametrize with {len(elts)} cases and no ids= — failure nodeids are "
-                    f"auto-indexed (arr[0]..arr[{len(elts) - 1}]), so triage must count "
-                    "cases by hand"
-                ),
+                (f"parametrize with {len(elts)} cases and no ids= — failure nodeids are auto-indexed (arr[0]..arr[{len(elts) - 1}]), so triage must count cases by hand"),
             )
         )
     return violations
@@ -5493,21 +5032,9 @@ def test_parametrize_without_ids_lens_flags_large_matrices():
     matrices, matrices with ``ids=``, fully self-documented matrices, non-
     literal case lists, and a bare ``parametrize(...)`` body call."""
     positive_sources = [
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8])\n"
-            "    def test_bar(x):\n        assert x\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('a,b', [(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9)])\n"
-            "    def test_bar(a, b):\n        assert a == b\n"
-        ),
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', argvalues=['a','b','c','d','e','f','g','h','i','j'])\n"
-            "    def test_bar(x):\n        assert x\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8])\n    def test_bar(x):\n        assert x\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('a,b', [(1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9)])\n    def test_bar(a, b):\n        assert a == b\n"),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', argvalues=['a','b','c','d','e','f','g','h','i','j'])\n    def test_bar(x):\n        assert x\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -5515,12 +5042,7 @@ def test_parametrize_without_ids_lens_flags_large_matrices():
 
     negative_sources = [
         "def test_foo():\n    @pytest.mark.parametrize('x', [1,2,3])\n    def test_bar(x):\n        assert x\n",
-        (
-            "def test_foo():\n"
-            "    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8],\n"
-            "        ids=['a','b','c','d','e','f','g','h'])\n"
-            "    def test_bar(x):\n        assert x\n"
-        ),
+        ("def test_foo():\n    @pytest.mark.parametrize('x', [1,2,3,4,5,6,7,8],\n        ids=['a','b','c','d','e','f','g','h'])\n    def test_bar(x):\n        assert x\n"),
         (
             "def test_foo():\n"
             "    @pytest.mark.parametrize('x', [pytest.param(1, id='a'), pytest.param(2, id='b'), \n"
@@ -5604,21 +5126,14 @@ def _constant_condition_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     lineno,
-                    (
-                        f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
-                        "always skips, so the item never runs (replace with a real condition or "
-                        "delete the marker entirely)"
-                    ),
+                    (f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — always skips, so the item never runs (replace with a real condition or delete the marker entirely)"),
                 )
             )
         else:
             found.append(
                 (
                     lineno,
-                    (
-                        f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — "
-                        "never skips, so the marker is dead code (delete it)"
-                    ),
+                    (f"{context}pytest.mark.{name} with a constant condition {ast.unparse(condition)} — never skips, so the marker is dead code (delete it)"),
                 )
             )
 
@@ -5765,17 +5280,13 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 if cls in _BROAD_EXCEPTION_CLASSES:
                     _report(
                         node.lineno,
-                        f"pytest.{name}({cls}) catches any {cls} — a regression that raises a "
-                        "different exception (or the test's own assertion error) still reports "
-                        "green; name the specific exception the code is documented to raise",
+                        f"pytest.{name}({cls}) catches any {cls} — a regression that raises a different exception (or the test's own assertion error) still reports green; name the specific exception the code is documented to raise",
                     )
                     break
                 if cls == "AssertionError" and name == "raises" and not has_match:
                     _report(
                         node.lineno,
-                        "pytest.raises(AssertionError) without match= — an internal assert bug in "
-                        "the code under test is swallowed as the expected exception; pin the message "
-                        "with match= or expect the specific error",
+                        "pytest.raises(AssertionError) without match= — an internal assert bug in the code under test is swallowed as the expected exception; pin the message with match= or expect the specific error",
                     )
                     break
 
@@ -5793,9 +5304,7 @@ def _broad_exception_catch_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 if kw.arg == "raises" and _is_broad(kw.value):
                     _report(
                         dec.lineno,
-                        f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any "
-                        "exception, so the test stays green no matter which error the code raises; "
-                        "name the concrete exception type",
+                        f"@pytest.mark.xfail(raises={ast.unparse(kw.value)}) — xfails on any exception, so the test stays green no matter which error the code raises; name the concrete exception type",
                     )
     return found
 
@@ -5918,12 +5427,7 @@ def _unentered_raises_context_violations(tree: ast.AST) -> list[tuple[int, str]]
         found.append(
             (
                 node.lineno,
-                (
-                    f"pytest.{name}(...) as a bare statement — the raises/warns context manager is "
-                    "never entered with 'with', so no exception/warning is ever checked and the test "
-                    "passes whether or not the code under test raises it; wrap the call in "
-                    f"'with {name}(...):'"
-                ),
+                (f"pytest.{name}(...) as a bare statement — the raises/warns context manager is never entered with 'with', so no exception/warning is ever checked and the test passes whether or not the code under test raises it; wrap the call in 'with {name}(...):'"),
             )
         )
     return found
@@ -5992,9 +5496,7 @@ def test_unentered_raises_context_lens_flags_dead_statements():
         assert not _unentered_raises_context_violations(tree), f"lens should NOT flag:\n{source}"
 
 
-_MOCK_CONSTRUCTOR_NAMES = frozenset(
-    {"Mock", "MagicMock", "AsyncMock", "NonCallableMock", "NonCallableMagicMock", "PropertyMock"}
-)
+_MOCK_CONSTRUCTOR_NAMES = frozenset({"Mock", "MagicMock", "AsyncMock", "NonCallableMock", "NonCallableMagicMock", "PropertyMock"})
 
 
 def _is_mock_constructor_call(node: ast.AST) -> bool:
@@ -6030,10 +5532,7 @@ def _mock_constructor_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 lineno,
-                (
-                    f"assert {detail} — a fresh Mock instance is always truthy and compares by "
-                    "identity, so the outcome is fixed at source time"
-                ),
+                (f"assert {detail} — a fresh Mock instance is always truthy and compares by identity, so the outcome is fixed at source time"),
             )
         )
 
@@ -6154,20 +5653,12 @@ def _mock_constructor_container_violations(tree: ast.AST) -> list[tuple[int, str
         for container in ast.walk(node.test):
             if not isinstance(container, (ast.List, ast.Dict, ast.Tuple, ast.Set)):
                 continue
-            elements = (
-                list(container.elts)
-                if isinstance(container, (ast.List, ast.Tuple, ast.Set))
-                else (list(container.keys) + list(container.values))
-            )
+            elements = list(container.elts) if isinstance(container, (ast.List, ast.Tuple, ast.Set)) else (list(container.keys) + list(container.values))
             if any(_is_mock_constructor_call(el) for el in elements):
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(node.test)} — a fresh Mock nested inside a "
-                            "container literal is compared by identity, so the outcome is fixed "
-                            "at source time"
-                        ),
+                        (f"assert {ast.unparse(node.test)} — a fresh Mock nested inside a container literal is compared by identity, so the outcome is fixed at source time"),
                     )
                 )
                 break
@@ -6282,22 +5773,14 @@ def _mock_assert_in_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
 
     def _is_mock_assert_call(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _MOCK_ASSERT_METHOD_NAMES
-        )
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _MOCK_ASSERT_METHOD_NAMES
 
     def _report(lineno: int, negated: bool, source: ast.AST) -> None:
         verb = "ALWAYS FAILS" if not negated else "ALWAYS PASSES"
         found.append(
             (
                 lineno,
-                (
-                    f"assert {'not ' if negated else ''}{ast.unparse(source)} — "
-                    f"a mock verification method returns None, so this is assert "
-                    f"None, which {verb} regardless of the recorded calls"
-                ),
+                (f"assert {'not ' if negated else ''}{ast.unparse(source)} — a mock verification method returns None, so this is assert None, which {verb} regardless of the recorded calls"),
             )
         )
 
@@ -6307,11 +5790,7 @@ def _mock_assert_in_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if _is_mock_assert_call(node.test):
             _report(node.lineno, negated=False, source=node.test)
             continue
-        if (
-            isinstance(node.test, ast.UnaryOp)
-            and isinstance(node.test.op, ast.Not)
-            and _is_mock_assert_call(node.test.operand)
-        ):
+        if isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not) and _is_mock_assert_call(node.test.operand):
             _report(node.lineno, negated=True, source=node.test)
     return found
 
@@ -6435,12 +5914,7 @@ def _fresh_mock_in_call_assertions(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 lineno,
-                (
-                    f"{ast.unparse(arg)} passed as an expected-call argument to {method}() — "
-                    "a fresh Mock compares by identity, so the recorded call can never equal it "
-                    "and the assertion always FAILS; configure the double and pass the configured "
-                    "instance, or assert on the real expected value"
-                ),
+                (f"{ast.unparse(arg)} passed as an expected-call argument to {method}() — a fresh Mock compares by identity, so the recorded call can never equal it and the assertion always FAILS; configure the double and pass the configured instance, or assert on the real expected value"),
             )
         )
 
@@ -6580,11 +6054,7 @@ def _fresh_mock_side_effect_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 lineno,
-                (
-                    f"{detail} — a fresh Mock in the side_effect slot is callable, so calling the "
-                    "double returns its return_value (a brand-new Mock every call) instead of the "
-                    "intended value or exception"
-                ),
+                (f"{detail} — a fresh Mock in the side_effect slot is callable, so calling the double returns its return_value (a brand-new Mock every call) instead of the intended value or exception"),
             )
         )
 
@@ -6772,10 +6242,7 @@ def _fresh_mock_in_call_wrapper_violations(tree: ast.AST) -> list[tuple[int, str
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"{ast.unparse(node)} — a fresh Mock wrapped in call(...) is compared "
-                            "by identity, so the expected call can never match the recorded one"
-                        ),
+                        (f"{ast.unparse(node)} — a fresh Mock wrapped in call(...) is compared by identity, so the expected call can never match the recorded one"),
                     )
                 )
                 break
@@ -7036,11 +6503,7 @@ def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, s
     found: list[tuple[int, str]] = []
 
     def _is_negation(candidate: ast.AST, plain: ast.AST) -> bool:
-        return (
-            isinstance(candidate, ast.UnaryOp)
-            and isinstance(candidate.op, ast.Not)
-            and ast.dump(candidate.operand) == ast.dump(plain)
-        )
+        return isinstance(candidate, ast.UnaryOp) and isinstance(candidate.op, ast.Not) and ast.dump(candidate.operand) == ast.dump(plain)
 
     for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
@@ -7066,11 +6529,7 @@ def _complementary_boolean_assert_violations(tree: ast.AST) -> list[tuple[int, s
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(node.test)} — operand {ast.unparse(a)} is the "
-                            f"negation of {ast.unparse(b)}, a {kind}: {verdict} regardless of the "
-                            "code under test"
-                        ),
+                        (f"assert {ast.unparse(node.test)} — operand {ast.unparse(a)} is the negation of {ast.unparse(b)}, a {kind}: {verdict} regardless of the code under test"),
                     )
                 )
                 break
@@ -7295,12 +6754,7 @@ def _mirrored_complement_comparison_violations(tree: ast.AST) -> list[tuple[int,
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — "
-                            f"operand {ast.unparse(a)} and {ast.unparse(b)} are mirrored-conjugate "
-                            f"comparisons over the same operand pair, a {kind} under {op_name}: "
-                            f"{verdict} regardless of the code under test"
-                        ),
+                        (f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — operand {ast.unparse(a)} and {ast.unparse(b)} are mirrored-conjugate comparisons over the same operand pair, a {kind} under {op_name}: {verdict} regardless of the code under test"),
                     )
                 )
                 break
@@ -7447,12 +6901,7 @@ def _constant_boolean_absorbent_assert_violations(tree: ast.AST) -> list[tuple[i
         found.append(
             (
                 node.lineno,
-                (
-                    f"assert {'not ' if negated else ''}{ast.unparse(test)} — the "
-                    f"{'falsy ' if is_and else 'truthy '}constant {ast.unparse(absorbing)} under "
-                    f"'{operator}' absorbs the other operand(s), so the assert {verdict} "
-                    "regardless of the code under test"
-                ),
+                (f"assert {'not ' if negated else ''}{ast.unparse(test)} — the {'falsy ' if is_and else 'truthy '}constant {ast.unparse(absorbing)} under '{operator}' absorbs the other operand(s), so the assert {verdict} regardless of the code under test"),
             )
         )
     return found
@@ -7788,10 +7237,7 @@ def _computed_wall_clock_sleep_violations(tree: ast.AST) -> list[tuple[int, str]
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"{ast.unparse(node.func.value)}.sleep({arg.id}) — duration is a computed name; "
-                        "inject the time source the code under test reads and advance it deterministically"
-                    ),
+                    (f"{ast.unparse(node.func.value)}.sleep({arg.id}) — duration is a computed name; inject the time source the code under test reads and advance it deterministically"),
                 )
             )
     return found
@@ -7893,10 +7339,7 @@ def _any_equality_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         sub.lineno,
-                        (
-                            f"{ast.unparse(sub)} — compares a value against unittest.mock.ANY, whose "
-                            f"__eq__ always returns True, so this {verdict} regardless of the operand"
-                        ),
+                        (f"{ast.unparse(sub)} — compares a value against unittest.mock.ANY, whose __eq__ always returns True, so this {verdict} regardless of the operand"),
                     )
                 )
                 continue
@@ -7911,10 +7354,7 @@ def _any_equality_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         sub.lineno,
-                        (
-                            f"{ast.unparse(sub)} — tests membership in a container that holds "
-                            f"unittest.mock.ANY, which matches any value, so this {verdict}"
-                        ),
+                        (f"{ast.unparse(sub)} — tests membership in a container that holds unittest.mock.ANY, which matches any value, so this {verdict}"),
                     )
                 )
                 break
@@ -8046,11 +7486,7 @@ def _container_literal_truthiness_violations(tree: ast.AST) -> list[tuple[int, s
         found.append(
             (
                 node.lineno,
-                (
-                    f"assert {ast.unparse(test)} — a {shape} container literal is "
-                    f"always {'' if (empty is not negated) else 'not '}truthy, so this {verdict} "
-                    f"regardless of its elements; assert against the behaviour under test instead"
-                ),
+                (f"assert {ast.unparse(test)} — a {shape} container literal is always {'' if (empty is not negated) else 'not '}truthy, so this {verdict} regardless of its elements; assert against the behaviour under test instead"),
             )
         )
     return found
@@ -8076,11 +7512,7 @@ def test_no_container_literal_truthiness_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _container_literal_truthiness_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} assertion(s) against a container literal.\n"
-        "A literal container is truthy iff non-empty, so the outcome is fixed at write time.\n"
-        "Assert against the behaviour under test (e.g. assert a and b, not assert (a, b)).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} assertion(s) against a container literal.\nA literal container is truthy iff non-empty, so the outcome is fixed at write time.\nAssert against the behaviour under test (e.g. assert a and b, not assert (a, b)).\n" + "\n".join(violations)
 
 
 def test_container_literal_lens_flags_fixed_outcomes():
@@ -8295,18 +7727,9 @@ def _environ_mutation_violations(tree: ast.AST) -> list[tuple[int, str]]:
                         _record(node, fn, "subscript set/del")
                 elif isinstance(node, ast.Call):
                     func = node.func
-                    if (
-                        isinstance(func, ast.Attribute)
-                        and _is_environ_reference(func.value)
-                        and func.attr in _MUTATING_ENVIRON_METHODS
-                    ):
+                    if isinstance(func, ast.Attribute) and _is_environ_reference(func.value) and func.attr in _MUTATING_ENVIRON_METHODS:
                         _record(node, fn, f"environ.{func.attr}()")
-                    elif (
-                        isinstance(func, ast.Attribute)
-                        and isinstance(func.value, ast.Name)
-                        and func.value.id == "os"
-                        and func.attr in ("putenv", "unsetenv")
-                    ):
+                    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "os" and func.attr in ("putenv", "unsetenv"):
                         _record(node, fn, f"os.{func.attr}()")
             pending.extend(ast.iter_child_nodes(node))
     return found
@@ -8328,11 +7751,7 @@ def test_no_environ_mutation_without_monkeypatch():
         rel = path.relative_to(TESTS)
         for lineno, detail in _environ_mutation_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} direct os.environ mutation(s) without monkeypatch.\n"
-        "Unrestored environment changes leak into every later test and make the suite\n"
-        "order-dependent. Use monkeypatch.setenv()/delenv() to get automatic teardown.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} direct os.environ mutation(s) without monkeypatch.\nUnrestored environment changes leak into every later test and make the suite\norder-dependent. Use monkeypatch.setenv()/delenv() to get automatic teardown.\n" + "\n".join(violations)
 
 
 def test_environ_mutation_lens_flags_unguarded_mutations():
@@ -8454,10 +7873,7 @@ def _unreachable_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                     found.append(
                         (
                             stmt.lineno,
-                            (
-                                f"assert {ast.unparse(stmt.test)} in {fn.name} is unreachable — "
-                                "preceded by an unconditional return/raise in the same body"
-                            ),
+                            (f"assert {ast.unparse(stmt.test)} in {fn.name} is unreachable — preceded by an unconditional return/raise in the same body"),
                         )
                     )
             elif isinstance(stmt, (ast.Return, ast.Raise)):
@@ -8481,11 +7897,7 @@ def test_no_unreachable_assert_after_unconditional_exit():
         rel = path.relative_to(TESTS)
         for lineno, detail in _unreachable_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} unreachable assertion(s) after an unconditional return/raise.\n"
-        "The assert can never run, so it verifies nothing. Move it before the exit, or delete it.\n"
-        + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} unreachable assertion(s) after an unconditional return/raise.\nThe assert can never run, so it verifies nothing. Move it before the exit, or delete it.\n" + "\n".join(violations)
 
 
 def test_unreachable_assert_lens_flags_dead_asserts():
@@ -8750,13 +8162,7 @@ def _container_literal_truthiness(expr: ast.AST) -> str | None:
         if any(isinstance(elt, ast.Starred) for elt in expr.elts):
             return None
         return "always falsy" if not expr.elts else "always truthy"
-    if (
-        isinstance(expr, ast.Call)
-        and isinstance(expr.func, ast.Name)
-        and expr.func.id in _EMPTY_BUILTIN_CALLS
-        and not expr.args
-        and not expr.keywords
-    ):
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id in _EMPTY_BUILTIN_CALLS and not expr.args and not expr.keywords:
         return "always falsy"
     return None
 
@@ -8800,10 +8206,7 @@ def _dead_container_literal_assert_violations(tree: ast.AST) -> list[tuple[int, 
         found.append(
             (
                 node.lineno,
-                (
-                    f"{ast.unparse(candidate)} — {outcome}: {kind} has fixed truthiness, so the "
-                    "outcome is decided at source time, never by the code under test"
-                ),
+                (f"{ast.unparse(candidate)} — {outcome}: {kind} has fixed truthiness, so the outcome is decided at source time, never by the code under test"),
             )
         )
     return found
@@ -8919,19 +8322,10 @@ def _blocking_sleep_in_async_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.extend(
             (
                 node.lineno,
-                (
-                    f"{ast.unparse(node)} in async def {fn.name} — time.sleep() blocks the event "
-                    "loop; use 'await asyncio.sleep(...)' so the loop can interleave other work"
-                ),
+                (f"{ast.unparse(node)} in async def {fn.name} — time.sleep() blocks the event loop; use 'await asyncio.sleep(...)' so the loop can interleave other work"),
             )
             for node in ast.walk(fn)
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "sleep"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "time"
-            )
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "sleep" and isinstance(node.func.value, ast.Name) and node.func.value.id == "time")
         )
     return found
 
@@ -9027,12 +8421,7 @@ def _is_fresh_value_call(node: ast.AST) -> bool:
         receiver = func.value
         if isinstance(receiver, ast.Name) and receiver.id == "datetime":
             return True
-        if (
-            isinstance(receiver, ast.Attribute)
-            and receiver.attr == "datetime"
-            and isinstance(receiver.value, ast.Name)
-            and receiver.value.id == "datetime"
-        ):
+        if isinstance(receiver, ast.Attribute) and receiver.attr == "datetime" and isinstance(receiver.value, ast.Name) and receiver.value.id == "datetime":
             return True
     return (
         attr
@@ -9120,10 +8509,7 @@ def _fresh_value_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 lineno,
-                (
-                    f"assert {detail} — a fresh non-deterministic value is regenerated on every "
-                    "evaluation, so the outcome is fixed at source time"
-                ),
+                (f"assert {detail} — a fresh non-deterministic value is regenerated on every evaluation, so the outcome is fixed at source time"),
             )
         )
 
@@ -9171,8 +8557,7 @@ def test_no_fresh_value_in_asserts():
         f"Found {len(violations)} assertion(s) against a freshly generated non-deterministic value.\n"
         "A UUID/token/time call returns a value unique to that single evaluation, so the outcome of\n"
         "the assertion is fixed at source time, never by the code under test. Capture the generated\n"
-        "value in a variable first, feed it into the code under test, and assert against that name.\n"
-        + "\n".join(violations)
+        "value in a variable first, feed it into the code under test, and assert against that name.\n" + "\n".join(violations)
     )
 
 
@@ -9281,20 +8666,14 @@ def _unconditional_body_skip_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         stmt.lineno,
-                        (
-                            f"{name}() called unconditionally on the test body ('{reason}') — "
-                            f"the test ALWAYS {name}s, so the rest of the body never runs"
-                        ),
+                        (f"{name}() called unconditionally on the test body ('{reason}') — the test ALWAYS {name}s, so the rest of the body never runs"),
                     )
                 )
             else:
                 found.append(
                     (
                         stmt.lineno,
-                        (
-                            f"{name}() called unconditionally on the test body — "
-                            f"the test ALWAYS {name}s, so the rest of the body never runs"
-                        ),
+                        (f"{name}() called unconditionally on the test body — the test ALWAYS {name}s, so the rest of the body never runs"),
                     )
                 )
     return found
@@ -9356,13 +8735,7 @@ def test_unconditional_body_skip_lens_flags_permanent_deselection():
         "def test_foo():\n    def inner():\n        pytest.skip('nested helper')\n    inner()\n",
         "def test_foo():\n    pytest.skipif(True, reason='always')\n",
         "def test_foo():\n    self.skipTest('x')\n",
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        do_work()\n"
-            "    except NotImplementedError:\n"
-            "        pytest.xfail('not there')\n"
-        ),
+        ("def test_foo():\n    try:\n        do_work()\n    except NotImplementedError:\n        pytest.xfail('not there')\n"),
         "def test_foo():\n    skip_service.run()\n",
     ]
     for source in negative_sources:
@@ -9424,11 +8797,7 @@ def _unconditional_skip_marker_violations(tree: ast.AST) -> list[tuple[int, str]
         found.append(
             (
                 lineno,
-                (
-                    f"{prefix}skip marker with no condition{reason} — "
-                    "the test ALWAYS skips, so it never runs (replace with "
-                    "@pytest.mark.skipif(<real condition>, ...) or delete the marker)"
-                ),
+                (f"{prefix}skip marker with no condition{reason} — the test ALWAYS skips, so it never runs (replace with @pytest.mark.skipif(<real condition>, ...) or delete the marker)"),
             )
         )
 
@@ -9491,22 +8860,8 @@ def test_unconditional_skip_marker_lens_flags_permanent_deselection():
         "@pytest.mark.skip(reason='not implemented')\ndef test_foo():\n    assert x\n",
         "import pytest\n@skip\ndef test_foo():\n    assert x\n",
         "@pytest.mark.skip(reason='flaky in CI')\nasync def test_foo():\n    await x\n",
-        (
-            "import pytest\n"
-            "\n"
-            "class TestFoo:\n"
-            "    @pytest.mark.skip(reason='legacy')\n"
-            "    def test_bar(self):\n"
-            "        assert x\n"
-        ),
-        (
-            "import pytest\n"
-            "\n"
-            "@pytest.mark.skip(reason='legacy')\n"
-            "class TestFoo:\n"
-            "    def test_bar(self):\n"
-            "        assert x\n"
-        ),
+        ("import pytest\n\nclass TestFoo:\n    @pytest.mark.skip(reason='legacy')\n    def test_bar(self):\n        assert x\n"),
+        ("import pytest\n\n@pytest.mark.skip(reason='legacy')\nclass TestFoo:\n    def test_bar(self):\n        assert x\n"),
         "pytestmark = pytest.mark.skip\ndef test_foo():\n    assert x\n",
         "pytestmark = pytest.mark.skip(reason='whole module dormant')\ndef test_foo():\n    assert x\n",
         "pytestmark = [pytest.mark.skip(reason='whole module dormant')]\ndef test_foo():\n    assert x\n",
@@ -9567,18 +8922,7 @@ def _empty_raises_context_body_violations(tree: ast.AST) -> list[tuple[int, str]
     found: list[tuple[int, str]] = []
 
     def _body_is_empty(body: list[ast.stmt]) -> bool:
-        statements = [
-            s
-            for s in body
-            if not (
-                isinstance(s, ast.Pass)
-                or (
-                    isinstance(s, ast.Expr)
-                    and isinstance(s.value, ast.Constant)
-                    and (isinstance(s.value.value, str) or s.value.value is Ellipsis)
-                )
-            )
-        ]
+        statements = [s for s in body if not (isinstance(s, ast.Pass) or (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and (isinstance(s.value.value, str) or s.value.value is Ellipsis)))]
         return not statements
 
     for node in _all_nodes(tree):
@@ -9660,10 +9004,7 @@ def test_empty_raises_context_body_lens_flags_unfinished_bodies():
 
     negative_sources = [
         "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
-        (
-            "def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        foo()\n"
-            "        assert exc_info.value.args[0] == 'boom'\n"
-        ),
+        ("def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        foo()\n        assert exc_info.value.args[0] == 'boom'\n"),
         "def test_foo():\n    async with pytest.raises(ValueError):\n        await foo()\n",
         "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
         "def test_foo():\n    with pytest.raises(ValueError):\n        x = 1\n",
@@ -9785,11 +9126,7 @@ def _bound_method_truthiness_violations(tree: ast.AST) -> list[tuple[int, str]]:
     is *never* called (a plain boolean/property attribute, e.g.
     ``assert response.ok``) is a legitimate truthiness check and is left
     alone; only a demonstrably-invocable method trips it."""
-    called = {
-        ast.dump(node.func)
-        for node in _all_nodes(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
+    called = {ast.dump(node.func) for node in _all_nodes(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
     violations: list[tuple[int, str]] = []
     for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
@@ -9846,35 +9183,12 @@ def test_selection_marker_on_fixture_lens_flags_silent_noops():
         "@pytest.fixture\n@pytest.mark.skip\ndef fx():\n    return 1\n",
         "@pytest.fixture\n@pytest.mark.skip(reason='why')\ndef fx():\n    return 1\n",
         "@pytest.fixture\n@pytest.mark.skipif(not pkg, reason='no pkg')\ndef fx():\n    return 1\n",
-        (
-            "@pytest.fixture(scope='session')\n"
-            "@pytest.mark.skipif(sys.platform == 'win32', reason='win')\n"
-            "def fx():\n"
-            "    return 1\n"
-        ),
+        ("@pytest.fixture(scope='session')\n@pytest.mark.skipif(sys.platform == 'win32', reason='win')\ndef fx():\n    return 1\n"),
         "@pytest_asyncio.fixture\n@pytest.mark.xfail(reason='known bug')\ndef afx():\n    return 1\n",
         "@pytest.fixture\n@skipif(not openssl_available, reason='no ssl')\ndef fx():\n    return 1\n",
         "@pytest.fixture\n@xfail(reason='flaky')\nasync def afx():\n    return 1\n",
-        (
-            "import pytest\n"
-            "\n"
-            "class TestFoo:\n"
-            "    @pytest.fixture\n"
-            "    @pytest.mark.skip(reason='legacy')\n"
-            "    def fx(self):\n"
-            "        return 1\n"
-        ),
-        (
-            "import pytest\n"
-            "\n"
-            "fx_value = None\n"
-            "\n"
-            "@pytest.fixture\n"
-            "@pytest.mark.skipif(True, reason='temp')\n"
-            "def fx():\n"
-            "    global fx_value\n"
-            "    return fx_value\n"
-        ),
+        ("import pytest\n\nclass TestFoo:\n    @pytest.fixture\n    @pytest.mark.skip(reason='legacy')\n    def fx(self):\n        return 1\n"),
+        ("import pytest\n\nfx_value = None\n\n@pytest.fixture\n@pytest.mark.skipif(True, reason='temp')\ndef fx():\n    global fx_value\n    return fx_value\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -9888,23 +9202,8 @@ def test_selection_marker_on_fixture_lens_flags_silent_noops():
         "@pytest.mark.skipif(not pkg, reason='no pkg')\ndef test_foo():\n    assert x\n",
         "@pytest.mark.xfail(reason='known bug')\ndef test_foo():\n    assert x\n",
         "pytestmark = pytest.mark.skip(reason='whole module dormant')\ndef test_foo():\n    assert x\n",
-        (
-            "import pytest\n"
-            "\n"
-            "@pytest.mark.skip(reason='legacy')\n"
-            "class TestFoo:\n"
-            "    def test_bar(self):\n"
-            "        assert x\n"
-        ),
-        (
-            "import pytest\n"
-            "\n"
-            "def make_fx():\n"
-            "    @pytest.mark.skipif(True, reason='x')\n"
-            "    def inner():\n"
-            "        return 1\n"
-            "    return inner\n"
-        ),
+        ("import pytest\n\n@pytest.mark.skip(reason='legacy')\nclass TestFoo:\n    def test_bar(self):\n        assert x\n"),
+        ("import pytest\n\ndef make_fx():\n    @pytest.mark.skipif(True, reason='x')\n    def inner():\n        return 1\n    return inner\n"),
         "@pytest.fixture\n@something_else\ndef fx():\n    return 1\n",
     ]
     for source in negative_sources:
@@ -10051,21 +9350,11 @@ def _cross_type_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 }
                 lname = kind_names.get(left_kind, left_kind)
                 rname = kind_names.get(right_kind, right_kind)
-                detail = (
-                    f"{ast.unparse(sub)} — compares {lname} against {rname}; "
-                    f"a dict view only compares equal to a view of the same kind, so this "
-                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
-                    f"regardless of the dict contents"
-                )
+                detail = f"{ast.unparse(sub)} — compares {lname} against {rname}; a dict view only compares equal to a view of the same kind, so this {'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} regardless of the dict contents"
             else:
                 if left_kind == right_kind:
                     continue
-                detail = (
-                    f"{ast.unparse(sub)} — compares {left_kind} against {right_kind}; "
-                    f"a {left_kind} never compares equal to a {right_kind}, so this "
-                    f"{'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} "
-                    f"regardless of the operands (normalise both sides with the same container)"
-                )
+                detail = f"{ast.unparse(sub)} — compares {left_kind} against {right_kind}; a {left_kind} never compares equal to a {right_kind}, so this {'ALWAYS FAILS' if isinstance(op, ast.Eq) else 'ALWAYS PASSES'} regardless of the operands (normalise both sides with the same container)"
 
             found.append((sub.lineno, detail))
     return found
@@ -10213,13 +9502,7 @@ def _empty_string_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(node, ast.Assert):
             continue
         for sub in ast.walk(node.test):
-            if (
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and sub.func.attr in _EMPTY_STRING_METHODS
-                and sub.args
-                and _empty_str_constant(sub.args[0])
-            ):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in _EMPTY_STRING_METHODS and sub.args and _empty_str_constant(sub.args[0]):
                 _record(
                     node.lineno,
                     f"assert ... .{sub.func.attr}('') — {_EMPTY_STRING_FIXED_OUTCOMES[sub.func.attr]}",
@@ -10231,8 +9514,7 @@ def _empty_string_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
                     verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
                     _record(
                         node.lineno,
-                        f"assert '' in value — {verdict} at source time "
-                        "(the empty string is a substring of every string)",
+                        f"assert '' in value — {verdict} at source time (the empty string is a substring of every string)",
                     )
     return found
 
@@ -10254,12 +9536,7 @@ def test_no_empty_string_membership_and_method_tautologies():
         rel = path.relative_to(TESTS)
         for lineno, detail in _empty_string_tautologies(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} empty-string tautolog(ies) in assertions.\n"
-        "An empty-string membership test or str-method argument has a fixed outcome "
-        "that can never depend on the code under test — it is a dead assertion "
-        "(usually a ' ' typo).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} empty-string tautolog(ies) in assertions.\nAn empty-string membership test or str-method argument has a fixed outcome that can never depend on the code under test — it is a dead assertion (usually a ' ' typo).\n" + "\n".join(violations)
 
 
 def test_empty_string_lens_flags_fixed_outcomes():
@@ -10322,12 +9599,7 @@ def _is_nan_literal(node: ast.AST) -> bool:
         return _is_nan_literal(node.operand)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "float":
         return bool(node.args) and _is_nan_literal(node.args[0])
-    return (
-        isinstance(node, ast.Attribute)
-        and node.attr == "nan"
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "math"
-    )
+    return isinstance(node, ast.Attribute) and node.attr == "nan" and isinstance(node.value, ast.Name) and node.value.id == "math"
 
 
 def _nan_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
@@ -10360,10 +9632,7 @@ def _nan_comparison_violations(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"assert {ast.unparse(test)} — comparing against {ast.unparse(side)} "
-                        f"(NaN, the one value unequal to itself): {verdict}"
-                    ),
+                    (f"assert {ast.unparse(test)} — comparing against {ast.unparse(side)} (NaN, the one value unequal to itself): {verdict}"),
                 )
             )
             break
@@ -10385,11 +9654,7 @@ def test_no_nan_expected_comparison_value():
         rel = path.relative_to(TESTS)
         for lineno, detail in _nan_comparison_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} comparison(s) against NaN.\n"
-        "NaN is the one value unequal to itself, so ==/is can never pass and !=/is not can never fail.\n"
-        "Assert against the real expected value instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} comparison(s) against NaN.\nNaN is the one value unequal to itself, so ==/is can never pass and !=/is not can never fail.\nAssert against the real expected value instead.\n" + "\n".join(violations)
 
 
 def test_nan_lens_flags_dead_comparisons():
@@ -10451,10 +9716,7 @@ def _single_element_isinstance_violations(tree: ast.AST) -> list[tuple[int, str]
         found.append(
             (
                 node.lineno,
-                (
-                    f"isinstance({ast.unparse(node.args[0])}, ({inner},)) — a single-element type tuple "
-                    f"is just isinstance(x, {inner}); drop the redundant tuple"
-                ),
+                (f"isinstance({ast.unparse(node.args[0])}, ({inner},)) — a single-element type tuple is just isinstance(x, {inner}); drop the redundant tuple"),
             )
         )
     return found
@@ -10474,11 +9736,7 @@ def test_no_single_element_isinstance_type_tuple():
         rel = path.relative_to(TESTS)
         for lineno, detail in _single_element_isinstance_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} isinstance call(s) with a single-element type tuple.\n"
-        "A one-element type tuple is equivalent to isinstance(x, T) — write it without "
-        "the redundant tuple.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} isinstance call(s) with a single-element type tuple.\nA one-element type tuple is equivalent to isinstance(x, T) — write it without the redundant tuple.\n" + "\n".join(violations)
 
 
 def test_single_element_isinstance_lens_flags_redundant_tuples():
@@ -10571,20 +9829,11 @@ def _raises_body_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
     def _collect_body_asserts(body: list[ast.stmt], exc_repr: str) -> None:
         for stmt in body:
             if isinstance(stmt, ast.Assert):
-                verdict = (
-                    "unreachable when the expected exception is raised (anything after the "
-                    "raising call never runs), and raises a mismatched AssertionError (not the "
-                    "expected exception) when it fails"
-                )
+                verdict = "unreachable when the expected exception is raised (anything after the raising call never runs), and raises a mismatched AssertionError (not the expected exception) when it fails"
                 found.append(
                     (
                         stmt.lineno,
-                        (
-                            f"assert {ast.unparse(stmt.test)} is a direct statement of the "
-                            f"pytest.raises({exc_repr}) body — the assertion is {verdict}; move it "
-                            "after the with-block (assert on exc_info.value) or make it the intended "
-                            "trigger with pytest.raises(AssertionError)"
-                        ),
+                        (f"assert {ast.unparse(stmt.test)} is a direct statement of the pytest.raises({exc_repr}) body — the assertion is {verdict}; move it after the with-block (assert on exc_info.value) or make it the intended trigger with pytest.raises(AssertionError)"),
                     )
                 )
             elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -10667,10 +9916,7 @@ def test_raises_body_assert_lens_flags_hazardous_asserts():
         "def test_foo():\n    with pytest.raises(ValueError) as exc_info:\n        assert ready\n",
         "def test_foo():\n    with pytest.raises(expected_exception=ValueError):\n        assert ready\n",
         "from pytest import raises\n\ndef test_foo():\n    with raises(ValueError):\n        assert ready\n",
-        (
-            "def test_foo():\n    with pytest.raises(AttributeError, match='no attribute'):\n"
-            "        assert events.DoesNotExist\n"
-        ),
+        ("def test_foo():\n    with pytest.raises(AttributeError, match='no attribute'):\n        assert events.DoesNotExist\n"),
         "def test_foo():\n    with pytest.raises(ValueError):\n        if flag:\n            assert ready\n",
         "def test_foo():\n    with pytest.raises(ValueError):\n        for x in items:\n            assert x\n",
     ]
@@ -10682,10 +9928,7 @@ def test_raises_body_assert_lens_flags_hazardous_asserts():
         "def test_foo():\n    with pytest.raises(AssertionError, match='x invalid'):\n        assert validate(x)\n",
         "def test_foo():\n    with pytest.raises(AssertionError):\n        assert validate(x)\n",
         "def test_foo():\n    with pytest.raises(ValueError):\n        step()\n    assert ready\n",
-        (
-            "def test_foo():\n    with pytest.raises(ValueError):\n        def helper():\n"
-            "            assert ready\n        step()\n"
-        ),
+        ("def test_foo():\n    with pytest.raises(ValueError):\n        def helper():\n            assert ready\n        step()\n"),
         "def test_foo():\n    with pytest.warns(UserWarning):\n        assert flag\n",
         "def test_foo():\n    with some_manager():\n        assert ready\n",
         "def test_foo():\n    with pytest.raises(ValueError):\n        step()\n",
@@ -10734,11 +9977,7 @@ def test_no_assert_in_finally():
         rel = path.relative_to(TESTS)
         for lineno, detail in _assert_in_finally_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} assert(s) inside a finally: clause.\n"
-        "An assert in finally runs during unwinding and masks the original failure.\n"
-        "Move the check to the normal path or into the except handler that owns it.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} assert(s) inside a finally: clause.\nAn assert in finally runs during unwinding and masks the original failure.\nMove the check to the normal path or into the except handler that owns it.\n" + "\n".join(violations)
 
 
 def test_assert_in_finally_lens_flags_unwind_time_verification():
@@ -10749,15 +9988,7 @@ def test_assert_in_finally_lens_flags_unwind_time_verification():
     statements."""
     positive_sources = [
         "def test_foo():\n    try:\n        foo()\n    finally:\n        assert cleanup_done\n",
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        foo()\n"
-            "    except Exception:\n"
-            "        raise\n"
-            "    finally:\n"
-            "        assert x == 1\n"
-        ),
+        ("def test_foo():\n    try:\n        foo()\n    except Exception:\n        raise\n    finally:\n        assert x == 1\n"),
         "def test_foo():\n    try:\n        foo()\n    finally:\n        assert result is not None\n",
     ]
     for source in positive_sources:
@@ -10769,15 +10000,7 @@ def test_assert_in_finally_lens_flags_unwind_time_verification():
         "def test_foo():\n    assert x == 1\n",
         "def test_foo():\n    try:\n        assert x\n    except Exception:\n        pass\n",
         "def test_foo():\n    try:\n        foo()\n    except Exception as e:\n        assert e.args\n",
-        (
-            "def test_foo():\n"
-            "    try:\n"
-            "        foo()\n"
-            "    except Exception as e:\n"
-            "        assert e.args\n"
-            "    finally:\n"
-            "        cleanup()\n"
-        ),
+        ("def test_foo():\n    try:\n        foo()\n    except Exception as e:\n        assert e.args\n    finally:\n        cleanup()\n"),
     ]
     for source in negative_sources:
         tree = ast.parse(source)
@@ -10812,9 +10035,7 @@ def _named_base_exception_violations(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(node, ast.ExceptHandler) or node.type is None:
             continue
         if "BaseException" in _exception_names(node.type):
-            found.append(
-                (node.lineno, "except BaseException swallows KeyboardInterrupt/SystemExit alongside Exception")
-            )
+            found.append((node.lineno, "except BaseException swallows KeyboardInterrupt/SystemExit alongside Exception"))
     return found
 
 
@@ -10833,11 +10054,7 @@ def test_no_named_base_exception_handler():
         rel = path.relative_to(TESTS)
         for lineno, detail in _named_base_exception_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} except handler(s) naming BaseException.\n"
-        "BaseException catches KeyboardInterrupt/SystemExit too; name Exception\n"
-        "or the specific failure the code is documented to raise.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} except handler(s) naming BaseException.\nBaseException catches KeyboardInterrupt/SystemExit too; name Exception\nor the specific failure the code is documented to raise.\n" + "\n".join(violations)
 
 
 def test_named_base_exception_lens_flags_control_flow_swallows():
@@ -10920,9 +10137,7 @@ def _infinite_exit_less_loop_violations(tree: ast.AST) -> list[tuple[int, str]]:
             continue
         if _loop_has_exit(node):
             continue
-        found.append(
-            (node.lineno, f"while {ast.unparse(test)} has no break/return/raise that stops it — the loop is infinite")
-        )
+        found.append((node.lineno, f"while {ast.unparse(test)} has no break/return/raise that stops it — the loop is infinite"))
     return found
 
 
@@ -10940,11 +10155,7 @@ def test_no_infinite_constant_condition_loops():
         rel = path.relative_to(TESTS)
         for lineno, detail in _infinite_exit_less_loop_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} exit-less constant-condition while loop(s).\n"
-        "A while True loop with no break can never terminate; add a break on the\n"
-        "completion condition or drive the loop with a real (non-constant) guard.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} exit-less constant-condition while loop(s).\nA while True loop with no break can never terminate; add a break on the\ncompletion condition or drive the loop with a real (non-constant) guard.\n" + "\n".join(violations)
 
 
 def test_infinite_loop_lens_flags_hang_risks():
@@ -10958,14 +10169,7 @@ def test_infinite_loop_lens_flags_hang_risks():
         "def test_foo():\n    while True:\n        step()\n",
         "def test_foo():\n    while 1:\n        x = foo()\n        x.bar()\n",
         "def test_foo():\n    while True:\n        for i in items:\n            break\n",
-        (
-            "def test_foo():\n"
-            "    while True:\n"
-            "        try:\n"
-            "            work()\n"
-            "        except Exception:\n"
-            "            pass\n"
-        ),
+        ("def test_foo():\n    while True:\n        try:\n            work()\n        except Exception:\n            pass\n"),
         "def test_foo():\n    while True:\n        step(1)\n        step(2)\n    return\n",
         "async def test_foo():\n    while True:\n        await tick()\n",
     ]
@@ -10976,15 +10180,7 @@ def test_infinite_loop_lens_flags_hang_risks():
     negative_sources = [
         "def test_foo():\n    while True:\n        if done:\n            break\n",
         "def test_foo():\n    while True:\n        if not done:\n            continue\n        break\n",
-        (
-            "def test_foo():\n"
-            "    while True:\n"
-            "        try:\n"
-            "            work()\n"
-            "            break\n"
-            "        except Exception:\n"
-            "            retry()\n"
-        ),
+        ("def test_foo():\n    while True:\n        try:\n            work()\n            break\n        except Exception:\n            retry()\n"),
         "def test_foo():\n    while True:\n        if end:\n            return obj\n",
         ("def test_foo():\n    while True:\n        if text[index] == 'X':\n            raise AssertionError('bad')\n"),
         "def test_foo():\n    while condition:\n        step()\n",
@@ -11083,10 +10279,7 @@ def _random_draw_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 lineno,
-                (
-                    f"assert {detail} — a fresh random value is drawn on every evaluation, "
-                    "so the outcome is decided at source time (capture the draw in a variable first)"
-                ),
+                (f"assert {detail} — a fresh random value is drawn on every evaluation, so the outcome is decided at source time (capture the draw in a variable first)"),
             )
         )
 
@@ -11248,11 +10441,7 @@ def _self_referential_membership_violations(tree: ast.AST) -> list[tuple[int, st
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"assert {ast.unparse(test)} — the container literal embeds the operand "
-                        f"itself, so the membership verdict is fixed at source time ({verdict}); "
-                        "test a genuinely distinct value (or drop the assertion)"
-                    ),
+                    (f"assert {ast.unparse(test)} — the container literal embeds the operand itself, so the membership verdict is fixed at source time ({verdict}); test a genuinely distinct value (or drop the assertion)"),
                 )
             )
             break
@@ -11279,11 +10468,8 @@ def test_no_self_referential_membership():
         rel = path.relative_to(TESTS)
         for lineno, detail in _self_referential_membership_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} self-referential membership assertion(s).\n"
-        "A membership container literal that embeds its own operand has a fixed outcome\n"
-        "that can never depend on the value checked. Test a genuinely distinct value\n"
-        "(or drop the assertion).\n" + "\n".join(violations)
+    assert not violations, f"Found {len(violations)} self-referential membership assertion(s).\nA membership container literal that embeds its own operand has a fixed outcome\nthat can never depend on the value checked. Test a genuinely distinct value\n(or drop the assertion).\n" + "\n".join(
+        violations
     )
 
 
@@ -11354,11 +10540,7 @@ def _duplicate_membership_literal_violations(tree: ast.AST) -> list[tuple[int, s
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(test)} — the container literal repeats "
-                            f"{ast.unparse(el)}; membership behaves identically to the single "
-                            "occurrence (drop the duplicate case)"
-                        ),
+                        (f"assert {ast.unparse(test)} — the container literal repeats {ast.unparse(el)}; membership behaves identically to the single occurrence (drop the duplicate case)"),
                     )
                 )
                 break
@@ -11382,11 +10564,7 @@ def test_no_duplicate_membership_literal_elements():
         rel = path.relative_to(TESTS)
         for lineno, detail in _duplicate_membership_literal_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} membership container(s) with a duplicate element.\n"
-        "Repeating an element inside a membership literal adds no alternative to the check;\n"
-        "drop the duplicate case.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} membership container(s) with a duplicate element.\nRepeating an element inside a membership literal adds no alternative to the check;\ndrop the duplicate case.\n" + "\n".join(violations)
 
 
 def test_duplicate_membership_literal_lens_flags_repeated_cases():
@@ -11445,11 +10623,7 @@ def _redundant_boolean_operand_violations(tree: ast.AST) -> list[tuple[int, str]
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(test)} — operand {ast.unparse(value)} repeats earlier "
-                            f"in the same {op_name.upper()} conjunction and the compound collapses to "
-                            f"a single {op_name} of that operand (drop the duplicate)"
-                        ),
+                        (f"assert {ast.unparse(test)} — operand {ast.unparse(value)} repeats earlier in the same {op_name.upper()} conjunction and the compound collapses to a single {op_name} of that operand (drop the duplicate)"),
                     )
                 )
                 break
@@ -11474,11 +10648,7 @@ def test_no_redundant_boolean_operands():
         rel = path.relative_to(TESTS)
         for lineno, detail in _redundant_boolean_operand_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} boolean assertion(s) with a repeated operand.\n"
-        "An and/or expression that repeats the same operand collapses to the single operand;\n"
-        "drop the duplicate.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} boolean assertion(s) with a repeated operand.\nAn and/or expression that repeats the same operand collapses to the single operand;\ndrop the duplicate.\n" + "\n".join(violations)
 
 
 def test_redundant_boolean_operand_lens_flags_absorbent_pairs():
@@ -11539,11 +10709,7 @@ def _point_collapsed_range_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                (
-                    f"assert {ast.unparse(test)} — an ordering chain whose first and last operands "
-                    "are the same expression collapses to a point (every interior value is forced "
-                    "equal to it) and never spans a range; use two distinct bounds"
-                ),
+                (f"assert {ast.unparse(test)} — an ordering chain whose first and last operands are the same expression collapses to a point (every interior value is forced equal to it) and never spans a range; use two distinct bounds"),
             )
         )
     return found
@@ -11566,11 +10732,7 @@ def test_no_point_collapsed_range_chains():
         rel = path.relative_to(TESTS)
         for lineno, detail in _point_collapsed_range_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} point-collapsed range chain(s).\n"
-        "An ordering chain whose first and last operands are the same expression never spans\n"
-        "an interval; use two distinct bounds (or assert the equality directly).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} point-collapsed range chain(s).\nAn ordering chain whose first and last operands are the same expression never spans\nan interval; use two distinct bounds (or assert the equality directly).\n" + "\n".join(violations)
 
 
 def test_point_collapsed_range_lens_flags_degenerate_bounds():
@@ -11630,11 +10792,7 @@ def _duplicate_dict_key_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"dict literal repeats key {ast.unparse(key)} (first occurrence at line "
-                            f"{seen[key_dump]}); Python silently keeps only the last value, so the "
-                            "earlier entry is dead data (drop the duplicate key)"
-                        ),
+                        (f"dict literal repeats key {ast.unparse(key)} (first occurrence at line {seen[key_dump]}); Python silently keeps only the last value, so the earlier entry is dead data (drop the duplicate key)"),
                     )
                 )
                 break
@@ -11661,11 +10819,7 @@ def test_no_duplicate_dict_literal_keys():
         rel = path.relative_to(TESTS)
         for lineno, detail in _duplicate_dict_key_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} dict literal(s) with a duplicate key.\n"
-        "Python keeps only the last of two identical keys, so the first occurrence is dead\n"
-        "data that a reader and a mutation-testing run believe is used; drop the duplicate.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} dict literal(s) with a duplicate key.\nPython keeps only the last of two identical keys, so the first occurrence is dead\ndata that a reader and a mutation-testing run believe is used; drop the duplicate.\n" + "\n".join(violations)
 
 
 def test_duplicate_dict_key_lens_flags_dead_first_values():
@@ -11736,12 +10890,7 @@ def _unseeded_rng_violations(tree: ast.AST) -> list[tuple[int, str]]:
     name from ``random`` — otherwise it is some other Random the lens cannot
     know. Calls carrying any positional argument or a non-``None`` ``seed=`` are
     seeded by definition and are left alone."""
-    from_random_names = {
-        alias.name
-        for node in _all_nodes(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "random"
-        for alias in node.names
-    }
+    from_random_names = {alias.name for node in _all_nodes(tree) if isinstance(node, ast.ImportFrom) and node.module == "random" for alias in node.names}
     found: list[tuple[int, str]] = []
 
     for node in _all_nodes(tree):
@@ -11767,11 +10916,7 @@ def _unseeded_rng_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                (
-                    f"{ast.unparse(node)} constructs a random-number generator without a seed — every "
-                    "run draws different data, so a failure cannot be reproduced with the same inputs; "
-                    "pass an explicit seed (e.g. random.Random(0))"
-                ),
+                (f"{ast.unparse(node)} constructs a random-number generator without a seed — every run draws different data, so a failure cannot be reproduced with the same inputs; pass an explicit seed (e.g. random.Random(0))"),
             )
         )
     return found
@@ -11875,15 +11020,7 @@ def _wall_clock_read(node: ast.AST) -> bool:
     ``_ns``/``thread_time`` twins. A local helper bound to a different name
     cannot be distinguished statically and is deliberately not matched,
     mirroring the ``wait_for``/``wait`` exclusion in the asyncio lens."""
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _WALL_CLOCK_READS
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "time"
-        and not node.args
-        and not node.keywords
-    )
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _WALL_CLOCK_READS and isinstance(node.func.value, ast.Name) and node.func.value.id == "time" and not node.args and not node.keywords
 
 
 def _wall_clock_elapsed_violations(tree: ast.AST) -> list[tuple[int, str]]:
@@ -11949,11 +11086,7 @@ def test_no_wall_clock_elapsed_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _wall_clock_elapsed_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} wall-clock elapsed assertion(s).\n"
-        "An assert on an elapsed duration bakes real wall-clock time into the verdict and\n"
-        "flakes under CI load; inject the clock the code under test reads instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} wall-clock elapsed assertion(s).\nAn assert on an elapsed duration bakes real wall-clock time into the verdict and\nflakes under CI load; inject the clock the code under test reads instead.\n" + "\n".join(violations)
 
 
 def test_wall_clock_elapsed_lens_flags_flaky_durations():
@@ -12146,13 +11279,7 @@ def _empty_builtin_call_membership_violations(tree: ast.AST) -> list[tuple[int, 
         if not isinstance(test.ops[0], (ast.In, ast.NotIn)):
             continue
         for operand, container in ((test.left, test.comparators[0]), (test.comparators[0], test.left)):
-            if not (
-                isinstance(container, ast.Call)
-                and isinstance(container.func, ast.Name)
-                and container.func.id in _EMPTY_MEMBERSHIP_BUILTINS
-                and not container.args
-                and not container.keywords
-            ):
+            if not (isinstance(container, ast.Call) and isinstance(container.func, ast.Name) and container.func.id in _EMPTY_MEMBERSHIP_BUILTINS and not container.args and not container.keywords):
                 continue
             if isinstance(operand, ast.Constant):
                 continue
@@ -12161,11 +11288,7 @@ def _empty_builtin_call_membership_violations(tree: ast.AST) -> list[tuple[int, 
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"asserts value {op_name} {container.func.id}() — {verdict} "
-                        "(the zero-argument builtin always yields an empty container, which never "
-                        "contains anything)"
-                    ),
+                    (f"asserts value {op_name} {container.func.id}() — {verdict} (the zero-argument builtin always yields an empty container, which never contains anything)"),
                 )
             )
             break
@@ -12346,12 +11469,7 @@ def _fresh_value_container_assert_violations(tree: ast.AST) -> list[tuple[int, s
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"assert {ast.unparse(test)} — every membership candidate of the container "
-                        f"literal is a fresh non-deterministic value, so no value the code under "
-                        f"test produced can match and {op_name} {verdict}; assert against a "
-                        "captured bound name instead"
-                    ),
+                    (f"assert {ast.unparse(test)} — every membership candidate of the container literal is a fresh non-deterministic value, so no value the code under test produced can match and {op_name} {verdict}; assert against a captured bound name instead"),
                 )
             )
     return found
@@ -12645,12 +11763,7 @@ def _iterator_object_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"assert not {ast.unparse(test.operand)} — a {label} is ALWAYS truthy "
-                        "(iterator objects have no __bool__/__len__), so the assert ALWAYS FAILS; "
-                        "consume the iterator (list(...)/next(...)) or reduce it (any(...)/all(...)) "
-                        "and assert on its contents"
-                    ),
+                    (f"assert not {ast.unparse(test.operand)} — a {label} is ALWAYS truthy (iterator objects have no __bool__/__len__), so the assert ALWAYS FAILS; consume the iterator (list(...)/next(...)) or reduce it (any(...)/all(...)) and assert on its contents"),
                 )
             )
             continue
@@ -12665,12 +11778,7 @@ def _iterator_object_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(test)} — two freshly-constructed iterator objects "
-                            "compare by identity, so they can never be equal: == ALWAYS FAILS / != "
-                            "ALWAYS PASSES regardless of the data; materialize or reduce the iterators "
-                            "(list(...)/any(...)) before comparing"
-                        ),
+                        (f"assert {ast.unparse(test)} — two freshly-constructed iterator objects compare by identity, so they can never be equal: == ALWAYS FAILS / != ALWAYS PASSES regardless of the data; materialize or reduce the iterators (list(...)/any(...)) before comparing"),
                     )
                 )
                 continue
@@ -12683,12 +11791,7 @@ def _iterator_object_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             found.append(
                 (
                     node.lineno,
-                    (
-                        f"assert {ast.unparse(test)} — a {left or right} can never compare equal to the "
-                        f"freshly-allocated {other}: == ALWAYS FAILS / != ALWAYS PASSES no matter what "
-                        "the code under test produced; materialize the iterator "
-                        "(list(...)/tuple(...)/sorted(...)) before comparing"
-                    ),
+                    (f"assert {ast.unparse(test)} — a {left or right} can never compare equal to the freshly-allocated {other}: == ALWAYS FAILS / != ALWAYS PASSES no matter what the code under test produced; materialize the iterator (list(...)/tuple(...)/sorted(...)) before comparing"),
                 )
             )
             continue
@@ -12809,13 +11912,7 @@ def _type_equality_violations(tree: ast.AST) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
 
     def _is_type_call(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "type"
-            and len(node.args) == 1
-            and not node.keywords
-        )
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "type" and len(node.args) == 1 and not node.keywords
 
     for node in _all_nodes(tree):
         if not isinstance(node, ast.Compare) or len(node.ops) != 1:
@@ -12833,35 +11930,21 @@ def _type_equality_violations(tree: ast.AST) -> list[tuple[int, str]]:
                     found.append(
                         (
                             node.lineno,
-                            (
-                                f"assert {ast.unparse(node)} — two identical type() calls always compare "
-                                "equal (a tautology that passes no matter how broken the code under test is); "
-                                "assert against a real expected type"
-                            ),
+                            (f"assert {ast.unparse(node)} — two identical type() calls always compare equal (a tautology that passes no matter how broken the code under test is); assert against a real expected type"),
                         )
                     )
                 else:
                     found.append(
                         (
                             node.lineno,
-                            (
-                                f"assert {ast.unparse(node)} — compares the exact type of two values with "
-                                f"{op_name}; a subclass instance fails silently and a mocked class defeats "
-                                "the check, prefer 'type(a) is type(b)' (exact-type identity) or "
-                                "isinstance(a, type(b)) (subclass-aware)"
-                            ),
+                            (f"assert {ast.unparse(node)} — compares the exact type of two values with {op_name}; a subclass instance fails silently and a mocked class defeats the check, prefer 'type(a) is type(b)' (exact-type identity) or isinstance(a, type(b)) (subclass-aware)"),
                         )
                     )
             else:
                 found.append(
                     (
                         node.lineno,
-                        (
-                            f"assert {ast.unparse(node)} — compares {op_name} the exact type via type(); "
-                            "an instance of a subclass of the expected class fails silently and a mocked "
-                            "class defeats the check, prefer isinstance(x, X) (subclass-aware) or "
-                            "'type(x) is X' (exact type)"
-                        ),
+                        (f"assert {ast.unparse(node)} — compares {op_name} the exact type via type(); an instance of a subclass of the expected class fails silently and a mocked class defeats the check, prefer isinstance(x, X) (subclass-aware) or 'type(x) is X' (exact type)"),
                     )
                 )
             break
@@ -12968,18 +12051,10 @@ def _noop_typecheck_violations(tree: ast.AST) -> list[tuple[int, str]]:
         why: str | None = None
         if _is_object_name(types):
             verdict = "ALWAYS True"
-            why = (
-                "every object is an instance of object"
-                if node.func.id == "isinstance"
-                else "every class is a subclass of object"
-            )
+            why = "every object is an instance of object" if node.func.id == "isinstance" else "every class is a subclass of object"
         elif isinstance(types, ast.Tuple) and not types.elts:
             verdict = "ALWAYS False"
-            why = (
-                "an empty types tuple matches nothing"
-                if node.func.id == "isinstance"
-                else "an empty types tuple has no subclass"
-            )
+            why = "an empty types tuple matches nothing" if node.func.id == "isinstance" else "an empty types tuple has no subclass"
         elif isinstance(types, ast.Tuple) and any(_is_object_name(elt) for elt in types.elts):
             verdict = "ALWAYS True"
             why = "a types tuple is a disjunction and object matches every object"
@@ -12988,11 +12063,7 @@ def _noop_typecheck_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 node.lineno,
-                (
-                    f"{node.func.id}({ast.unparse(node.args[0])}, {ast.unparse(types)}) — {verdict} "
-                    f"({why}); the outcome is fixed at source time, so the assert is dead code — "
-                    "assert against a specific type or drop the check"
-                ),
+                (f"{node.func.id}({ast.unparse(node.args[0])}, {ast.unparse(types)}) — {verdict} ({why}); the outcome is fixed at source time, so the assert is dead code — assert against a specific type or drop the check"),
             )
         )
     return found
@@ -13120,11 +12191,7 @@ def _conditional_verdict_assert_violations(tree: ast.AST) -> list[tuple[int, str
             branches = (test.body, test.orelse)
             both_outcomes = all(_is_verdict(b) or _is_bool_constant(b) for b in branches)
             if both_outcomes:
-                verdict_pin = (
-                    "both branches are full boolean verdicts"
-                    if not any(_is_bool_constant(b) for b in branches)
-                    else "a branch is a literal True/False constant"
-                )
+                verdict_pin = "both branches are full boolean verdicts" if not any(_is_bool_constant(b) for b in branches) else "a branch is a literal True/False constant"
                 found.append(
                     (
                         node.lineno,
@@ -13197,10 +12264,7 @@ def test_conditional_verdict_lens_flags_opaque_branches():
         "def test_foo():\n    assert x in (err if isinstance(err, str) else str(err))\n",
         "def test_foo():\n    assert result.ok if c else result.valid\n",
         "def test_foo():\n    assert pending or done if c else a == 1\n",
-        (
-            "def test_foo():\n    expected = 501 if isinstance(exc, ProgrammingError) else 503\n"
-            "    assert resp.status_code == expected\n"
-        ),
+        ("def test_foo():\n    expected = 501 if isinstance(exc, ProgrammingError) else 503\n    assert resp.status_code == expected\n"),
         "def test_foo():\n    assert (x if c else y) == 1\n",
         "def test_foo():\n    assert len(x) if c else len(y)\n",
         "def test_foo():\n    assert a == 1 if c else b\n",
@@ -13231,13 +12295,7 @@ def _dict_keys_membership_violations(tree: ast.AST) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
 
     def _is_keys_view(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and not node.args
-            and not node.keywords
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "keys"
-        )
+        return isinstance(node, ast.Call) and not node.args and not node.keywords and isinstance(node.func, ast.Attribute) and node.func.attr == "keys"
 
     for node in _all_nodes(tree):
         if not isinstance(node, ast.Assert):
@@ -13394,13 +12452,7 @@ def _range_folds_to_length_zero(node: ast.Call) -> bool:
         ``UnaryOp(USub, Constant(3))``, not a constant) to an int, else None."""
         if isinstance(expr, ast.Constant) and isinstance(expr.value, int) and not isinstance(expr.value, bool):
             return expr.value
-        if (
-            isinstance(expr, ast.UnaryOp)
-            and isinstance(expr.op, ast.USub)
-            and isinstance(expr.operand, ast.Constant)
-            and isinstance(expr.operand.value, int)
-            and not isinstance(expr.operand.value, bool)
-        ):
+        if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.USub) and isinstance(expr.operand, ast.Constant) and isinstance(expr.operand.value, int) and not isinstance(expr.operand.value, bool):
             return -expr.operand.value
         return None
 
@@ -13494,19 +12546,12 @@ def _dead_scope_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
             return
         if isinstance(node, (ast.For, ast.AsyncFor)):
             if _statically_empty_iterable(node.iter):
-                inner = (
-                    f"the loop iterates over the statically-empty "
-                    f"{ast.unparse(node.iter)} (zero iterations, so its body "
-                    "never runs)"
-                )
+                inner = f"the loop iterates over the statically-empty {ast.unparse(node.iter)} (zero iterations, so its body never runs)"
             else:
                 inner = dead
         elif isinstance(node, ast.While):
             if _always_falsy_condition(node.test):
-                inner = (
-                    f"the 'while {ast.unparse(node.test)}' condition is "
-                    "statically False (zero iterations, so its body never runs)"
-                )
+                inner = f"the 'while {ast.unparse(node.test)}' condition is statically False (zero iterations, so its body never runs)"
             else:
                 inner = dead
         elif isinstance(node, ast.If):
@@ -13650,9 +12695,7 @@ def test_dead_scope_lens_flags_never_run_asserts():
     found = _dead_scope_assert_violations(ast.parse(mixed_while))
     assert [lineno for lineno, _ in found] == [3], f"body/else split wrong: {found}"
 
-    mixed_nested = (
-        "def test_foo():\n    if False:\n        for x in []:\n            assert x\n    assert reachable()\n"
-    )
+    mixed_nested = "def test_foo():\n    if False:\n        for x in []:\n            assert x\n    assert reachable()\n"
     found = _dead_scope_assert_violations(ast.parse(mixed_nested))
     assert [lineno for lineno, _ in found] == [4], f"dead-scope reachability split wrong: {found}"
 
@@ -13684,11 +12727,7 @@ def _superseded_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
         found.append(
             (
                 stmt.lineno,
-                (
-                    f"assert {ast.unparse(stmt.test)} in {fn_name} is unreachable — a direct "
-                    "return/raise/break/continue in the same statement list transfers control "
-                    "before it, so this assertion can never execute"
-                ),
+                (f"assert {ast.unparse(stmt.test)} in {fn_name} is unreachable — a direct return/raise/break/continue in the same statement list transfers control before it, so this assertion can never execute"),
             )
         )
 
@@ -13744,10 +12783,8 @@ def test_no_asserts_superseded_by_control_transfer():
         rel = path.relative_to(TESTS)
         for lineno, detail in _superseded_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} assertion(s) superseded by an unconditional control transfer.\n"
-        "A statement after a direct return/raise/break/continue in the same body can never run,\n"
-        "so the assert verifies nothing. Move it above the transfer, or delete it.\n" + "\n".join(violations)
+    assert not violations, f"Found {len(violations)} assertion(s) superseded by an unconditional control transfer.\nA statement after a direct return/raise/break/continue in the same body can never run,\nso the assert verifies nothing. Move it above the transfer, or delete it.\n" + "\n".join(
+        violations
     )
 
 
@@ -13767,15 +12804,12 @@ def test_control_transfer_lens_flags_dead_asserts():
         "def test_foo():\n    if flag:\n        raise RuntimeError\n        assert never()\n",
         "def test_foo():\n    if flag:\n        pass\n    else:\n        continue\n        assert never()\n",
         "def test_foo():\n    with open('f') as fh:\n        return None\n        assert fh.read()\n",
-        "def test_foo():\n    try:\n        probe()\n        return None\n        assert never()\n"
-        "    except ValueError:\n        pass\n",
+        "def test_foo():\n    try:\n        probe()\n        return None\n        assert never()\n    except ValueError:\n        pass\n",
         "def test_foo():\n    try:\n        probe()\n    except ValueError:\n        return\n        assert never()\n",
-        "def test_foo():\n    try:\n        probe()\n    finally:\n        raise RuntimeError\n"
-        "        assert never()\n",
+        "def test_foo():\n    try:\n        probe()\n    finally:\n        raise RuntimeError\n        assert never()\n",
         "def test_foo():\n    try:\n        probe()\n    except* ValueError:\n        raise\n        assert never()\n",
         "async def test_foo():\n    async for item in stream:\n        continue\n        assert item\n",
-        "def test_foo():\n    for item in items:\n        if item:\n            return item\n"
-        "            assert inner_dead()\n",
+        "def test_foo():\n    for item in items:\n        if item:\n            return item\n            assert inner_dead()\n",
         "def test_foo():\n    for item in items:\n        assert first()\n        continue\n        assert second()\n",
     ]
     for source in positive_sources:
@@ -13799,9 +12833,7 @@ def test_control_transfer_lens_flags_dead_asserts():
         tree = ast.parse(source)
         assert not _superseded_assert_violations(tree), f"lens should NOT flag:\n{source}"
 
-    split = (
-        "def test_foo():\n    for item in items:\n        assert first()\n        continue\n        assert second()\n"
-    )
+    split = "def test_foo():\n    for item in items:\n        assert first()\n        continue\n        assert second()\n"
     found = _superseded_assert_violations(ast.parse(split))
     assert [lineno for lineno, _ in found] == [5], f"live/dead split wrong: {found}"
 
@@ -13851,12 +12883,7 @@ def _none_returning_mutator_hit(node: ast.AST) -> tuple[ast.AST, str] | None:
     name is the only thing assumed: a call receiver (``factory().append(x)``)
     has an unknowable type and is left alone, and a method call that is not in
     the curated None-returning set is never implicated."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _NONE_RETURNING_MUTATOR_METHODS
-        and _stable_dump(node.func.value) is not None
-    ):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _NONE_RETURNING_MUTATOR_METHODS and _stable_dump(node.func.value) is not None:
         return node.func.value, node.func.attr
     return None
 
@@ -13885,12 +12912,7 @@ def _none_returning_mutator_assert_violations(tree: ast.AST) -> list[tuple[int, 
         found.append(
             (
                 node.lineno,
-                (
-                    f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — "
-                    f"{method}() mutates in place and returns None, so the assertion tests "
-                    f"None's truthiness and {verdict}; assert on the container's contents or "
-                    "the mutated value instead"
-                ),
+                (f"assert {'not ' if negated else ''}{ast.unparse(node.test)} — {method}() mutates in place and returns None, so the assertion tests None's truthiness and {verdict}; assert on the container's contents or the mutated value instead"),
             )
         )
     return found
@@ -14021,11 +13043,7 @@ def _duplicate_consecutive_assert_violations(tree: ast.AST) -> list[tuple[int, s
                     found.append(
                         (
                             stmt.lineno,
-                            (
-                                f"assert {ast.unparse(stmt.test)} repeats the immediately preceding "
-                                "identical assertion — the expression is pure, so the duplicate can "
-                                "never change the verdict; drop it"
-                            ),
+                            (f"assert {ast.unparse(stmt.test)} repeats the immediately preceding identical assertion — the expression is pure, so the duplicate can never change the verdict; drop it"),
                         )
                     )
                 previous = fingerprint
@@ -14073,11 +13091,7 @@ def test_no_duplicate_consecutive_assertions():
         rel = path.relative_to(TESTS)
         for lineno, detail in _duplicate_consecutive_assert_violations(tree):
             violations.append(f"  {rel}:{lineno}  {detail}")
-    assert not violations, (
-        f"Found {len(violations)} duplicate consecutive assertion(s).\n"
-        "An immediately repeated pure assertion can never verify anything the first one did not;\n"
-        "drop the duplicate (repeated calls are exempt).\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} duplicate consecutive assertion(s).\nAn immediately repeated pure assertion can never verify anything the first one did not;\ndrop the duplicate (repeated calls are exempt).\n" + "\n".join(violations)
 
 
 def test_duplicate_consecutive_assert_lens_flags_repeats():
@@ -14153,11 +13167,7 @@ def _url_like(arg: ast.expr) -> bool:
         return arg.value.startswith("/") or arg.value.startswith("http")
     if isinstance(arg, ast.JoinedStr):
         for part in arg.values:
-            if (
-                isinstance(part, ast.Constant)
-                and isinstance(part.value, str)
-                and (part.value.startswith("/") or part.value.startswith("http"))
-            ):
+            if isinstance(part, ast.Constant) and isinstance(part.value, str) and (part.value.startswith("/") or part.value.startswith("http")):
                 return True
     return False
 
@@ -14190,11 +13200,7 @@ def _step_invokes_app(fn: ast.AST, module_funcs: dict[str, ast.AST], seen: set[s
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr in _HTTP_METHOD_CALL_NAMES
-            and (client_mentioned or any(_url_like(arg) for arg in node.args))
-        ):
+        if isinstance(func, ast.Attribute) and func.attr in _HTTP_METHOD_CALL_NAMES and (client_mentioned or any(_url_like(arg) for arg in node.args)):
             return True
         if isinstance(func, ast.Name):
             if func.id == "TestClient":
@@ -14235,9 +13241,7 @@ def _self_asserting_bdd_step_violation_functions(tree: ast.AST) -> list[tuple[st
     the app. The step function name is the stable baseline key: line numbers
     drift, function names do not."""
     found: list[tuple[str, int, str]] = []
-    module_funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {
-        node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    module_funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     for fn in module_funcs.values():
         if not _bdd_step_decorator_names(fn):
             continue
@@ -14304,11 +13308,7 @@ def _self_asserting_bdd_baseline_keys() -> set[str]:
 
 def _read_self_asserting_bdd_baseline() -> set[str]:
     """Baseline entries (comments and blank lines stripped)."""
-    return {
-        line.strip()
-        for line in _BDD_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    }
+    return {line.strip() for line in _BDD_BASELINE_PATH.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")}
 
 
 def _render_self_asserting_bdd_baseline(keys: set[str]) -> str:
@@ -14375,21 +13375,14 @@ def test_self_asserting_bdd_baseline_has_no_stale_entries():
     rewritten to drive the app) must leave the baseline: the ratchet only
     shrinks, so a completed sweep is recorded and never silently re-opens."""
     stale = _self_asserting_bdd_baseline_candidates() - _self_asserting_bdd_baseline_keys()
-    assert not stale, (
-        f"{len(stale)} baseline entr(ies) no longer violate the lens - regenerate the baseline\n"
-        "with `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`:\n  "
-        + "\n  ".join(sorted(stale))
-    )
+    assert not stale, f"{len(stale)} baseline entr(ies) no longer violate the lens - regenerate the baseline\nwith `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`:\n  " + "\n  ".join(sorted(stale))
 
 
 def test_self_asserting_bdd_baseline_is_sorted_and_regenerable():
     """The baseline must be byte-stable (fixed header + sorted entries) so
     regeneration is idempotent and review diffs stay minimal."""
     current = _BDD_BASELINE_PATH.read_text(encoding="utf-8")
-    assert current == _render_self_asserting_bdd_baseline(_read_self_asserting_bdd_baseline()), (
-        "baseline is not in canonical form - regenerate it with "
-        "`cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`"
-    )
+    assert current == _render_self_asserting_bdd_baseline(_read_self_asserting_bdd_baseline()), "baseline is not in canonical form - regenerate it with `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`"
 
 
 def test_self_asserting_bdd_step_lens_flags_fabricated_responses():
@@ -14402,92 +13395,25 @@ def test_self_asserting_bdd_step_lens_flags_fabricated_responses():
     response reads, TestClient steps, helper delegation that *does* call the
     app, the ``_resp = None`` no-op, and outbound-service mocks."""
     positive_sources = [
-        (
-            "@when('I request the list')\n"
-            "def request_list(request):\n"
-            "    resp = MagicMock()\n"
-            "    resp.status_code = 200\n"
-            "    resp.json = lambda: {'items': []}\n"
-            "    request.node._resp = resp\n"
-        ),
-        (
-            "@when('I view pipelines')\n"
-            "def view_pipelines(request):\n"
-            "    allowed = check_membership()\n"
-            "    resp = MagicMock()\n"
-            "    resp.status_code = 200 if allowed else 404\n"
-            "    request.node._resp = resp\n"
-        ),
-        (
-            "@when('I POST /api/evals')\n"
-            "def trigger_eval(request):\n"
-            "    request.node._resp = {'status': 'pending'}\n"
-            "    request.node._resp_status = 202\n"
-        ),
-        (
-            "@when('I browse the library')\n"
-            "def browse(ctx, request):\n"
-            "    body = {'items': [], 'total': 0}\n"
-            "    request.node._resp_body = body\n"
-            "    ctx['response'] = body\n"
-        ),
-        (
-            "@given('an admin client exists')\n"
-            "def admin_client(request):\n"
-            "    request.node._resp = build_fabricated_response(403)\n"
-        ),
-        (
-            "@when('I request the connector')\n"
-            "def request_connector(request):\n"
-            "    request.node.response = {'status': 'ok'}\n"
-        ),
-        (
-            "@when('I remove the resource')\n"
-            "def remove_resource(request):\n"
-            "    ctx_resp = MagicMock()\n"
-            "    ctx_resp.status_code = 204\n"
-            "    store(request, ctx_resp)\n"
-        ),
+        ("@when('I request the list')\ndef request_list(request):\n    resp = MagicMock()\n    resp.status_code = 200\n    resp.json = lambda: {'items': []}\n    request.node._resp = resp\n"),
+        ("@when('I view pipelines')\ndef view_pipelines(request):\n    allowed = check_membership()\n    resp = MagicMock()\n    resp.status_code = 200 if allowed else 404\n    request.node._resp = resp\n"),
+        ("@when('I POST /api/evals')\ndef trigger_eval(request):\n    request.node._resp = {'status': 'pending'}\n    request.node._resp_status = 202\n"),
+        ("@when('I browse the library')\ndef browse(ctx, request):\n    body = {'items': [], 'total': 0}\n    request.node._resp_body = body\n    ctx['response'] = body\n"),
+        ("@given('an admin client exists')\ndef admin_client(request):\n    request.node._resp = build_fabricated_response(403)\n"),
+        ("@when('I request the connector')\ndef request_connector(request):\n    request.node.response = {'status': 'ok'}\n"),
+        ("@when('I remove the resource')\ndef remove_resource(request):\n    ctx_resp = MagicMock()\n    ctx_resp.status_code = 204\n    store(request, ctx_resp)\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
         assert _self_asserting_bdd_step_violations(tree), f"lens should flag:\n{source}"
 
     negative_sources = [
-        (
-            "@when('I request the list')\n"
-            "def request_list(request, client):\n"
-            "    request.node._resp = client.get('/api/v1/pipelines')\n"
-        ),
-        (
-            "@then('the response status is {code:d}')\n"
-            "def check_status(code, request):\n"
-            "    assert request.node._resp.status_code == code\n"
-        ),
-        (
-            "@when('I GET /api/v1/me')\n"
-            "def get_me(request):\n"
-            "    from farna.api.main import app\n"
-            "    client = TestClient(app)\n"
-            "    request.node._resp = client.get('/api/v1/me')\n"
-        ),
-        (
-            "@when('I request the runs')\n"
-            "def request_runs(request, client):\n"
-            "    fetch_runs(client, request)\n"
-            "\n"
-            "def fetch_runs(client, request):\n"
-            "    request.node._resp = client.post('/api/v1/runs/list', json={})\n"
-        ),
+        ("@when('I request the list')\ndef request_list(request, client):\n    request.node._resp = client.get('/api/v1/pipelines')\n"),
+        ("@then('the response status is {code:d}')\ndef check_status(code, request):\n    assert request.node._resp.status_code == code\n"),
+        ("@when('I GET /api/v1/me')\ndef get_me(request):\n    from farna.api.main import app\n    client = TestClient(app)\n    request.node._resp = client.get('/api/v1/me')\n"),
+        ("@when('I request the runs')\ndef request_runs(request, client):\n    fetch_runs(client, request)\n\ndef fetch_runs(client, request):\n    request.node._resp = client.post('/api/v1/runs/list', json={})\n"),
         ("@when('I trigger a run')\ndef trigger_run(request):\n    request.node._resp = None\n"),
-        (
-            "@when('the connector checks health')\n"
-            "def health_check(ctx):\n"
-            "    response = httpx.Response(200, json={'displayName': 'x'})\n"
-            "    with respx.mock:\n"
-            "        respx.get(PROFILE_URL).mock(return_value=response)\n"
-            "        ctx['health_result'] = run(ctx['connector'].health_check())\n"
-        ),
+        ("@when('the connector checks health')\ndef health_check(ctx):\n    response = httpx.Response(200, json={'displayName': 'x'})\n    with respx.mock:\n        respx.get(PROFILE_URL).mock(return_value=response)\n        ctx['health_result'] = run(ctx['connector'].health_check())\n"),
         ("@when('the user loads the dashboard')\ndef load_dashboard(ctx):\n    ctx['response'] = None\n"),
     ]
     for source in negative_sources:
@@ -14640,11 +13566,7 @@ def _duplicate_test_body_baseline_candidates() -> set[str]:
 
 def _read_duplicate_test_body_baseline() -> set[str]:
     """Baseline entries (comments and blank lines stripped)."""
-    return {
-        stripped
-        for raw in _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
-        if (stripped := raw.strip()) and not stripped.startswith("#")
-    }
+    return {stripped for raw in _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8").splitlines() if (stripped := raw.strip()) and not stripped.startswith("#")}
 
 
 def _render_duplicate_test_body_baseline(keys: set[str]) -> str:
@@ -14677,14 +13599,9 @@ def test_no_duplicate_test_bodies():
             if _duplicate_test_body_baseline_key(rel, scope, first, second) in baseline:
                 continue
             where = "" if scope == "<module>" else f" (class {scope})"
-            violations.append(
-                f"  {rel}:{lineno}{where}  {second} repeats {first} — identical parameters, decorators, and body"
-            )
+            violations.append(f"  {rel}:{lineno}{where}  {second} repeats {first} — identical parameters, decorators, and body")
     assert not violations, (
-        f"Found {len(violations)} duplicate test function(s) outside the\n"
-        "duplicate_test_body_baseline.txt ratchet.\n"
-        "Two tests with identical parameters, decorators, and body exercise the same code with\n"
-        "the same inputs: untangle the second (drive its scenario) or drop it.\n" + "\n".join(violations)
+        f"Found {len(violations)} duplicate test function(s) outside the\nduplicate_test_body_baseline.txt ratchet.\nTwo tests with identical parameters, decorators, and body exercise the same code with\nthe same inputs: untangle the second (drive its scenario) or drop it.\n" + "\n".join(violations)
     )
 
 
@@ -14693,21 +13610,14 @@ def test_duplicate_test_body_baseline_has_no_stale_entries():
     untangled or removed) must leave the baseline: the ratchet only shrinks, so
     a completed sweep is recorded and never silently re-opens."""
     stale = _duplicate_test_body_baseline_candidates() - _duplicate_test_body_baseline_keys()
-    assert not stale, (
-        f"{len(stale)} duplicate-test-body baseline entries are no longer duplicates - regenerate\n"
-        "the baseline with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`:\n  "
-        + "\n  ".join(sorted(stale))
-    )
+    assert not stale, f"{len(stale)} duplicate-test-body baseline entries are no longer duplicates - regenerate\nthe baseline with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`:\n  " + "\n  ".join(sorted(stale))
 
 
 def test_duplicate_test_body_baseline_is_sorted_and_regenerable():
     """The baseline must be byte-stable (fixed header + sorted entries) so
     regeneration is idempotent and review diffs stay minimal."""
     current = _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8")
-    assert current == _render_duplicate_test_body_baseline(_read_duplicate_test_body_baseline()), (
-        "dup baseline is not in canonical form - regenerate it with "
-        "`cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`"
-    )
+    assert current == _render_duplicate_test_body_baseline(_read_duplicate_test_body_baseline()), "dup baseline is not in canonical form - regenerate it with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`"
 
 
 def test_duplicate_test_body_lens_flags_copies():
@@ -14720,20 +13630,10 @@ def test_duplicate_test_body_lens_flags_copies():
     change the behaviour)."""
     positive_sources = [
         "def test_a():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 1\n",
-        (
-            "class TestX:\n"
-            "    def test_a(self):\n        assert self.url == '/x'\n"
-            "    def test_b(self):\n        assert self.url == '/x'\n"
-        ),
+        ("class TestX:\n    def test_a(self):\n        assert self.url == '/x'\n    def test_b(self):\n        assert self.url == '/x'\n"),
         ("async def test_a():\n    assert await load() == 1\n\nasync def test_b():\n    assert await load() == 1\n"),
-        (
-            'def test_a():\n    """one scenario"""\n    assert f() == 1\n\n'
-            'def test_b():\n    """another scenario"""\n    assert f() == 1\n'
-        ),
-        (
-            "def test_a(client):\n    assert client.get('/x').status_code == 200\n\n"
-            "def test_b(client):\n    assert client.get('/x').status_code == 200\n"
-        ),
+        ('def test_a():\n    """one scenario"""\n    assert f() == 1\n\ndef test_b():\n    """another scenario"""\n    assert f() == 1\n'),
+        ("def test_a(client):\n    assert client.get('/x').status_code == 200\n\ndef test_b(client):\n    assert client.get('/x').status_code == 200\n"),
     ]
     for source in positive_sources:
         tree = ast.parse(source)
@@ -14743,15 +13643,8 @@ def test_duplicate_test_body_lens_flags_copies():
         "def test_a():\n    assert f() == 1\n",
         "def test_a():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 2\n",
         "def test_a(client):\n    assert f() == 1\n\ndef test_b(other):\n    assert f() == 1\n",
-        (
-            "def test_a():\n    assert f() == 1\n\n"
-            "@pytest.mark.parametrize('x', [1, 2])\n"
-            "def test_b():\n    assert f() == 1\n"
-        ),
-        (
-            "class TestX:\n    def test_a(self):\n        assert self.url == '/x'\n\n"
-            "class TestY:\n    def test_a(self):\n        assert self.url == '/x'\n"
-        ),
+        ("def test_a():\n    assert f() == 1\n\n@pytest.mark.parametrize('x', [1, 2])\ndef test_b():\n    assert f() == 1\n"),
+        ("class TestX:\n    def test_a(self):\n        assert self.url == '/x'\n\nclass TestY:\n    def test_a(self):\n        assert self.url == '/x'\n"),
         ("def test_a():\n    assert f() == 1\n\ndef test_a():\n    assert f() == 1\n"),
         "def helper():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 1\n",
     ]
@@ -14759,9 +13652,7 @@ def test_duplicate_test_body_lens_flags_copies():
         tree = ast.parse(source)
         assert not _duplicate_test_body_functions(tree), f"lens should NOT flag:\n{source}"
 
-    triple = (
-        "def test_a():\n    assert f() == 1\ndef test_b():\n    assert f() == 1\ndef test_c():\n    assert f() == 1\n"
-    )
+    triple = "def test_a():\n    assert f() == 1\ndef test_b():\n    assert f() == 1\ndef test_c():\n    assert f() == 1\n"
     found = _duplicate_test_body_functions(ast.parse(triple))
     assert [(first, second) for _scope, first, second, _line in found] == [
         ("test_a", "test_b"),
@@ -14782,11 +13673,7 @@ def _pass_only_bdd_step_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
     body = list(node.body)
     if body and _docstring_value(body[0]) is not None:
         body = body[1:]
-    return all(
-        isinstance(stmt, ast.Pass)
-        or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis)
-        for stmt in body
-    )
+    return all(isinstance(stmt, ast.Pass) or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis) for stmt in body)
 
 
 def _then_step_text(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
@@ -14883,11 +13770,7 @@ def _noop_bdd_then_baseline_keys() -> set[str]:
 
 def _read_noop_bdd_then_baseline() -> set[str]:
     """Baseline entries (comments and blank lines stripped)."""
-    return {
-        stripped
-        for raw in _NOOP_BDD_THEN_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
-        if (stripped := raw.strip()) and not stripped.startswith("#")
-    }
+    return {stripped for raw in _NOOP_BDD_THEN_BASELINE_PATH.read_text(encoding="utf-8").splitlines() if (stripped := raw.strip()) and not stripped.startswith("#")}
 
 
 def _render_noop_bdd_then_baseline(keys: set[str]) -> str:
@@ -14937,10 +13820,7 @@ def test_no_noop_bdd_then_steps():
                 continue
             violations.append(f'  {rel}:{lineno}  @then("{step_text}") — body is a no-op')
     assert not violations, (
-        f"Found {len(violations)} no-op @then step(s) outside the\n"
-        "noop_bdd_then_baseline.txt ratchet.\n"
-        "A @then step is the assertion half of the scenario; a pass-only body certifies nothing.\n"
-        "Implement the assertion the step text promises (or delete an unused step).\n" + "\n".join(violations)
+        f"Found {len(violations)} no-op @then step(s) outside the\nnoop_bdd_then_baseline.txt ratchet.\nA @then step is the assertion half of the scenario; a pass-only body certifies nothing.\nImplement the assertion the step text promises (or delete an unused step).\n" + "\n".join(violations)
     )
 
 
@@ -14949,21 +13829,14 @@ def test_noop_bdd_then_baseline_has_no_stale_entries():
     implemented or removed) must leave the baseline: the ratchet only shrinks,
     so a completed sweep is recorded and never silently re-opens."""
     stale = _noop_bdd_then_baseline_candidates() - _noop_bdd_then_baseline_keys()
-    assert not stale, (
-        f"{len(stale)} no-op-@then baseline entries are no longer no-op steps - regenerate\n"
-        "the baseline with `cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`:\n  "
-        + "\n  ".join(sorted(stale))
-    )
+    assert not stale, f"{len(stale)} no-op-@then baseline entries are no longer no-op steps - regenerate\nthe baseline with `cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`:\n  " + "\n  ".join(sorted(stale))
 
 
 def test_noop_bdd_then_baseline_is_sorted_and_regenerable():
     """The baseline must be byte-stable (fixed header + sorted entries) so
     regeneration is idempotent and review diffs stay minimal."""
     current = _NOOP_BDD_THEN_BASELINE_PATH.read_text(encoding="utf-8")
-    assert current == _render_noop_bdd_then_baseline(_read_noop_bdd_then_baseline()), (
-        "no-op-@then baseline is not in canonical form - regenerate it with "
-        "`cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`"
-    )
+    assert current == _render_noop_bdd_then_baseline(_read_noop_bdd_then_baseline()), "no-op-@then baseline is not in canonical form - regenerate it with `cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`"
 
 
 def test_noop_bdd_then_lens_flags_pass_only_steps():
@@ -14999,9 +13872,7 @@ def test_noop_bdd_then_lens_flags_pass_only_steps():
         tree = ast.parse(source)
         assert not _noop_bdd_then_violation_functions(tree), f"lens should NOT flag:\n{source}"
 
-    text_source = (
-        "@then(parsers.parse('the {thing} appears'), target_fixture=\"page\")\ndef f(thing, page):\n    pass\n"
-    )
+    text_source = "@then(parsers.parse('the {thing} appears'), target_fixture=\"page\")\ndef f(thing, page):\n    pass\n"
     found = _noop_bdd_then_violation_functions(ast.parse(text_source))
     assert found, f"step text extraction found nothing: {text_source}"
     assert found[0][0] == "the {thing} appears", f"step text extraction wrong: {found}"

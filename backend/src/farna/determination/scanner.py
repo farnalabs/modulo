@@ -102,9 +102,7 @@ async def _sample_repo_family(
     entry that has a usable name.
     """
     samples: list[ScanSample] = []
-    listing_result, listing_error = await _sample_query(
-        connector, connector_id, list_resource, ConnectorQuery(resource=list_resource, limit=_SAMPLE_LIMIT)
-    )
+    listing_result, listing_error = await _sample_query(connector, connector_id, list_resource, ConnectorQuery(resource=list_resource, limit=_SAMPLE_LIMIT))
     listing = listing_result.records if listing_result is not None else []
     _add(samples, connector_id, ct, list_resource, listing, len(listing), listing_error)
 

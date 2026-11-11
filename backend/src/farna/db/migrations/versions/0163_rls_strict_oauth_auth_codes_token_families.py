@@ -44,10 +44,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _STRICT_SCOPE = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
-_FAIL_OPEN_SCOPE = (
-    "(organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid) "
-    "OR (nullif(current_setting('app.organisation_id', true), '') IS NULL)"
-)
+_FAIL_OPEN_SCOPE = "(organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid) OR (nullif(current_setting('app.organisation_id', true), '') IS NULL)"
 
 _TABLES = ("oauth_authorization_codes", "oauth_token_families")
 

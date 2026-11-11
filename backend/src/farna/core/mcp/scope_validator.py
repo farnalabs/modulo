@@ -38,9 +38,7 @@ _log = getLogger(__name__)
 # McpAuthMiddleware. ``check_tool_scope`` consults it as the default narrowing
 # filter so the production tool-dispatch chokepoint enforces it without every
 # handler call-site having to thread the value. Unset (None) = UNRESTRICTED.
-_ctx_allowed_tools: contextvars.ContextVar[Sequence[str] | None] = contextvars.ContextVar(
-    "scope_allowed_tools", default=None
-)
+_ctx_allowed_tools: contextvars.ContextVar[Sequence[str] | None] = contextvars.ContextVar("scope_allowed_tools", default=None)
 
 
 def set_request_allowed_tools(allowed_tools: Sequence[str] | None) -> None:
@@ -300,16 +298,12 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
 # Derived view: mapped tool/action key -> permission key. Kept as the public
 # ``Mapping[str, str]`` so every existing consumer (capability_scope, the role
 # parity tests, per-leg resolution) is unchanged.
-_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
-    key: req.permission_key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is not None
-}
+_TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {key: req.permission_key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is not None}
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
 
 # Derived view: tools with no permission key are the explicit read-only
 # allowlist (pinned at viewer).
-READ_ONLY_TOOLS: frozenset[str] = frozenset(
-    key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is None
-)
+READ_ONLY_TOOLS: frozenset[str] = frozenset(key for key, req in _TOOL_REQUIREMENTS.items() if req.permission_key is None)
 
 # Derived view (FAR-1930): tools whose REST twin is guarded by
 # ``require_system_permission`` — a STRICT ``is_system_admin`` claim with NO
@@ -358,9 +352,7 @@ _CALLER_SCOPE_ORG_ONLY = "org-only"
 _CALLER_SCOPE_ORG_CREDENTIAL = "org-credential"
 _CALLER_SCOPE_CALLER = "caller-scoped"
 _CALLER_SCOPE_ANY = "any"
-VALID_CALLER_SCOPE_CLASSIFICATIONS: frozenset[str] = frozenset(
-    {_CALLER_SCOPE_ORG_ONLY, _CALLER_SCOPE_ORG_CREDENTIAL, _CALLER_SCOPE_CALLER, _CALLER_SCOPE_ANY}
-)
+VALID_CALLER_SCOPE_CLASSIFICATIONS: frozenset[str] = frozenset({_CALLER_SCOPE_ORG_ONLY, _CALLER_SCOPE_ORG_CREDENTIAL, _CALLER_SCOPE_CALLER, _CALLER_SCOPE_ANY})
 
 # Caller-scoped tools are DERIVED from the ``.self`` permission-key suffix —
 # a tool whose permission key ends in ``.self`` operates on the caller's own
@@ -429,8 +421,7 @@ def _validate_caller_scope_classification(tool: str, classification: str) -> Non
     """
     if classification not in VALID_CALLER_SCOPE_CLASSIFICATIONS:
         raise MCPConfigurationError(
-            f"Misconfigured caller-scope classification for '{tool}': "
-            f"'{classification}' is not one of {sorted(VALID_CALLER_SCOPE_CLASSIFICATIONS)}",
+            f"Misconfigured caller-scope classification for '{tool}': '{classification}' is not one of {sorted(VALID_CALLER_SCOPE_CLASSIFICATIONS)}",
         )
 
 
@@ -674,8 +665,7 @@ for tool, permission_key in _TOOL_SCOPE_REQUIREMENTS.items():
         ) from exc
     if role not in ORG_ROLE_HIERARCHY:
         raise MCPConfigurationError(
-            f"Misconfigured scope requirement for '{tool}': "
-            f"permission '{permission_key}' resolves to unknown role '{role}'",
+            f"Misconfigured scope requirement for '{tool}': permission '{permission_key}' resolves to unknown role '{role}'",
         )
 
 # FAR-620 fail-fast: every explicit caller-scope classification must be in
@@ -806,15 +796,9 @@ def _caller_scope_denial_message(
     """
     classification = classify_caller_scope(scope_key, permission_key)
     if classification == _CALLER_SCOPE_CALLER and key_scope != "user":
-        return (
-            f"Tool '{tool_name}' is caller-scoped and requires a user-scoped "
-            f"credential; this caller's key scope is '{key_scope or 'unset'}'"
-        )
+        return f"Tool '{tool_name}' is caller-scoped and requires a user-scoped credential; this caller's key scope is '{key_scope or 'unset'}'"
     if classification == _CALLER_SCOPE_ORG_CREDENTIAL and _org_credential_denied(key_scope, auth_type, team_id):
-        return (
-            f"Tool '{tool_name}' performs an organisation-wide operation and requires an "
-            "org-scoped credential; team-scoped and user-scoped credentials are refused"
-        )
+        return f"Tool '{tool_name}' performs an organisation-wide operation and requires an org-scoped credential; team-scoped and user-scoped credentials are refused"
     if classification == _CALLER_SCOPE_ORG_ONLY and key_scope == "user" and auth_type == "api_key":
         return f"Tool '{tool_name}' is org-scoped and cannot be called with a user-scoped API key"
     return None

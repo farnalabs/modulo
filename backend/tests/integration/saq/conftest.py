@@ -29,7 +29,7 @@ def saq_settings_env(saq_redis_url: str, migrated_db_url: str, monkeypatch: pyte
     monkeypatch.setenv("REDIS_URL", saq_redis_url)
     monkeypatch.setenv("SECRET_KEY", "a" * 40)
     monkeypatch.setenv("FERNET_KEY", "b" * 44)
-    monkeypatch.setenv("MODULO_ADMIN_PASSWORD", "test")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
 
     from farna.settings import get_settings
 

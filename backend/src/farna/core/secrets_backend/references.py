@@ -153,8 +153,7 @@ async def resolve_credential_reference(
         # Raised BEFORE any backend read — never a cross-org read.
         raise CredentialReferenceError(
             key,
-            "external secrets backends are not organisation-scoped, so credential "
-            "references are refused in a multi-org deployment",
+            "external secrets backends are not organisation-scoped, so credential references are refused in a multi-org deployment",
         )
     try:
         value = await secrets_backend.get_secret(key)

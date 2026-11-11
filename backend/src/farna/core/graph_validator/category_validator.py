@@ -101,9 +101,7 @@ async def _report_missing_categories(
 ) -> None:
     """Batch-fetch the parsed category ids and emit ``CATEGORY_NOT_FOUND`` for the missing ones."""
     uuids = {uuid.UUID(raw) for raw in parsed}
-    rows: Sequence[NodeCategory] = (
-        (await session.execute(select(NodeCategory).where(NodeCategory.id.in_(uuids)))).scalars().all()
-    )
+    rows: Sequence[NodeCategory] = (await session.execute(select(NodeCategory).where(NodeCategory.id.in_(uuids)))).scalars().all()
     found: dict[str, NodeCategory] = {str(r.id): r for r in rows}
 
     for raw, nodes in parsed.items():

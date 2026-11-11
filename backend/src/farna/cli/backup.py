@@ -332,9 +332,7 @@ def _take_safety_dump(raw_url: str, timeout: int = 300) -> Path | None:
     """
     if shutil.which("pg_dump") is None:
         click.echo(
-            "WARNING: pg_dump is not installed — proceeding WITHOUT a pre-restore safety dump. "
-            "The restore will fail on the psql step before touching the database; install the "
-            "PostgreSQL client tools for a full safety net (or pass --no-safety-dump to silence this).",
+            "WARNING: pg_dump is not installed — proceeding WITHOUT a pre-restore safety dump. The restore will fail on the psql step before touching the database; install the PostgreSQL client tools for a full safety net (or pass --no-safety-dump to silence this).",
             err=True,
         )
         return None
@@ -349,11 +347,7 @@ def _take_safety_dump(raw_url: str, timeout: int = 300) -> Path | None:
         _run_pg_dump(raw_url, safety_dir / _DB_SQL_FILE, timeout=timeout)
     except Exception as exc:
         shutil.rmtree(safety_dir, ignore_errors=True)
-        raise click.ClickException(
-            "Taking the pre-restore safety dump FAILED — refusing to wipe the current data (nothing was restored). "
-            "Fix the dump failure, or pass --no-safety-dump to explicitly proceed without a safety net. "
-            f"Original error: {exc}"
-        ) from exc
+        raise click.ClickException(f"Taking the pre-restore safety dump FAILED — refusing to wipe the current data (nothing was restored). Fix the dump failure, or pass --no-safety-dump to explicitly proceed without a safety net. Original error: {exc}") from exc
     click.echo(f"Pre-restore safety dump taken: {safety_dir} (the previous cluster stays restorable)")
     return safety_dir
 
@@ -365,9 +359,7 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
-        )
+        cur.execute("SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version")
         return [_serialise_export_row(row) for row in cur]
 
 
@@ -383,10 +375,7 @@ def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError(_ERR_PSYCOPG_UNAVAILABLE)
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM checkpoint_writes "
-            "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
-        )
+        cur.execute("SELECT * FROM checkpoint_writes ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx")
         return [_serialise_export_row(row) for row in cur]
 
 
@@ -428,9 +417,7 @@ def _restore_checkpoint_blobs_sync(raw_url: str, blobs: list[dict[str, Any]]) ->
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
                 org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
-                    "INSERT INTO checkpoint_blobs "
-                    "(organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (
                         org_uuid,
                         row.get("thread_id"),
@@ -454,10 +441,7 @@ def _restore_checkpoints_sync(raw_url: str, checkpoints: list[dict[str, Any]]) -
             for row in checkpoints:
                 org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
-                    "INSERT INTO checkpoints "
-                    "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
-                    " parent_checkpoint_id, type, checkpoint, metadata) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id,  parent_checkpoint_id, type, checkpoint, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         org_uuid,
                         row.get("thread_id"),
@@ -486,10 +470,7 @@ def _restore_checkpoint_writes_sync(raw_url: str, writes: list[dict[str, Any]]) 
                     blob = bytes.fromhex(raw_blob) if raw_blob else b""
                 org_uuid = _parse_org_id(row.get("organisation_id"))
                 cur.execute(
-                    "INSERT INTO checkpoint_writes "
-                    "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
-                    " task_id, idx, channel, type, blob) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id,  task_id, idx, channel, type, blob) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         org_uuid,
                         row.get("thread_id"),
@@ -533,9 +514,7 @@ def _re_encrypt_credentials_sync(
                     try:
                         plaintext = old_fernet.decrypt(old_ct)
                     except InvalidToken as exc:
-                        raise RuntimeError(
-                            f"Failed to decrypt {table} row {row.get('id', '?')}: --previous-fernet-key may be wrong"
-                        ) from exc
+                        raise RuntimeError(f"Failed to decrypt {table} row {row.get('id', '?')}: --previous-fernet-key may be wrong") from exc
                     new_ct = new_fernet.encrypt(plaintext)
                     try:
                         row_id = uuid.UUID(row["id"])
@@ -588,9 +567,7 @@ def _warn_cloud_sync_output(backup_dir: Path) -> None:
     hit = sorted(root for root in _CLOUD_SYNC_VENDOR_ROOTS if root in lowered_parts)
     if hit:
         click.echo(
-            f"WARNING: backup target {backup_dir} is inside a cloud-synced folder ({', '.join(hit)}). "
-            "Sync churn can corrupt the dump mid-write and the archive leaves the machine automatically. "
-            "Back up to a local directory and copy the finished archive explicitly instead.",
+            f"WARNING: backup target {backup_dir} is inside a cloud-synced folder ({', '.join(hit)}). Sync churn can corrupt the dump mid-write and the archive leaves the machine automatically. Back up to a local directory and copy the finished archive explicitly instead.",
             err=True,
         )
 
@@ -656,9 +633,7 @@ def _read_state_mac(state_path: Path) -> str | None:
     return mac if isinstance(mac, str) and mac else None
 
 
-def _launcher_snapshot_files(
-    data_dir: Path, backup_dir: Path, include_secrets: bool
-) -> tuple[dict[str, Any], list[str]]:
+def _launcher_snapshot_files(data_dir: Path, backup_dir: Path, include_secrets: bool) -> tuple[dict[str, Any], list[str]]:
     """Copy the launcher data-dir artefacts into the archive; describe them.
 
     Included unconditionally (when present): ``state.json`` — credential-free
@@ -682,17 +657,8 @@ def _launcher_snapshot_files(
         "conf_profile": {"included": False, "note": "excluded by default (carries generated credentials)"},
         "secrets_file": {"included": False, "note": "excluded by default (generated credentials)"},
         "tls_files": [],
-        "tls_note": (
-            "Rides along when the data dir has tls/ — includes the server PRIVATE KEY. "
-            "Point --data-dir at a dir without tls/ (or leave --data-dir out) to keep TLS "
-            "material off the archive."
-        ),
-        "ephemeral": {
-            "redis_saq_queue_data": (
-                "EXCLUDED by design — Redis/SAQ queue data is ephemeral (ADR 031 Decision 6); "
-                "queued jobs do not survive a backup/restore cycle"
-            )
-        },
+        "tls_note": ("Rides along when the data dir has tls/ — includes the server PRIVATE KEY. Point --data-dir at a dir without tls/ (or leave --data-dir out) to keep TLS material off the archive."),
+        "ephemeral": {"redis_saq_queue_data": ("EXCLUDED by design — Redis/SAQ queue data is ephemeral (ADR 031 Decision 6); queued jobs do not survive a backup/restore cycle")},
     }
     checksums: list[str] = []
     _snapshot_launcher_state(data_dir, backup_dir, section, checksums)
@@ -829,11 +795,7 @@ def _disk_preflight(backup_dir: Path, data_dir: Path | None) -> None:
         _log.warning("backup_preflight_statfs_failed path=%s error=%s", target_fs, exc)
         return
     if free < needed:
-        raise click.ClickException(
-            f"Disk pre-flight FAILED: the restore needs ~2x the dump size free "
-            f"({_human_size(needed)}) but only {_human_size(free)} is available on {target_fs}. "
-            "Free space before restoring — refusing to wipe the current data."
-        )
+        raise click.ClickException(f"Disk pre-flight FAILED: the restore needs ~2x the dump size free ({_human_size(needed)}) but only {_human_size(free)} is available on {target_fs}. Free space before restoring — refusing to wipe the current data.")
 
 
 def _check_instance_identity(
@@ -867,25 +829,14 @@ def _check_instance_identity(
     try:
         target_mac = _read_state_mac(target_state)
     except RuntimeError as exc:
-        raise click.ClickException(
-            f"The target data dir has an UNREADABLE state.json ({exc}). Use a clean data dir "
-            "instead — refusing to restore over a state whose integrity cannot be checked."
-        ) from exc
+        raise click.ClickException(f"The target data dir has an UNREADABLE state.json ({exc}). Use a clean data dir instead — refusing to restore over a state whose integrity cannot be checked.") from exc
     if target_mac is None:
-        raise click.ClickException(
-            "The target data dir carries a populated state.json WITHOUT an identity fingerprint — "
-            "integrity cannot be verified against the archive. Refusing to restore. Re-run the "
-            "launcher on that data dir or use a clean data dir."
-        )
+        raise click.ClickException("The target data dir carries a populated state.json WITHOUT an identity fingerprint — integrity cannot be verified against the archive. Refusing to restore. Re-run the launcher on that data dir or use a clean data dir.")
     if archive_mac is None:
         if isinstance(identity, dict) and identity.get("state_json_included"):
-            raise click.ClickException(
-                "The archive includes a state.json whose identity cannot be verified — refusing to "
-                "restore over this data dir."
-            )
+            raise click.ClickException("The archive includes a state.json whose identity cannot be verified — refusing to restore over this data dir.")
         click.echo(
-            "WARNING: legacy archive carries no instance identity — cannot verify this restore targets "
-            "the backed-up installation. Verify manually that this is the intended target.",
+            "WARNING: legacy archive carries no instance identity — cannot verify this restore targets the backed-up installation. Verify manually that this is the intended target.",
             err=True,
         )
         return
@@ -901,18 +852,11 @@ def _check_instance_identity(
             "onto a clean data dir."
         )
     click.echo(
-        "REPLACE CLUSTER CONFIRMATION — you are about to OVERWRITE a populated Modulo instance:\n"
-        f"  Target instance (data dir): {target_mac}\n"
-        f"  Archive instance (backup):  {archive_mac}\n"
-        "All data in the target data dir's database will be replaced by the archive.",
+        f"REPLACE CLUSTER CONFIRMATION — you are about to OVERWRITE a populated Modulo instance:\n  Target instance (data dir): {target_mac}\n  Archive instance (backup):  {archive_mac}\nAll data in the target data dir's database will be replaced by the archive.",
         err=True,
     )
     if not _is_interactive_stdin():
-        raise click.ClickException(
-            "--replace-cluster requires an INTERACTIVE confirmation (it intentionally overwrites a "
-            "populated instance) — a piped/non-interactive stdin cannot approve it. Run the command "
-            "directly in a terminal."
-        )
+        raise click.ClickException("--replace-cluster requires an INTERACTIVE confirmation (it intentionally overwrites a populated instance) — a piped/non-interactive stdin cannot approve it. Run the command directly in a terminal.")
     click.confirm("Replace the target instance with the archived one?", abort=True)
 
 
@@ -960,10 +904,7 @@ def _check_manifest_version(manifest: dict[str, Any]) -> None:
     if isinstance(raw_version, bool) or not isinstance(raw_version, int):
         raise click.ClickException(f"backup manifest_version is not an integer: {raw_version!r}")
     if raw_version > MANIFEST_VERSION:
-        raise click.ClickException(
-            f"Refusing to restore: the archive's manifest_version {raw_version} is NEWER than this "
-            f"Modulo supports (max {MANIFEST_VERSION}). Upgrade Modulo first, then restore."
-        )
+        raise click.ClickException(f"Refusing to restore: the archive's manifest_version {raw_version} is NEWER than this Modulo supports (max {MANIFEST_VERSION}). Upgrade Modulo first, then restore.")
     if raw_version < 1:
         raise click.ClickException(f"Refusing to restore: invalid manifest_version {raw_version!r}.")
 
@@ -985,10 +926,7 @@ def _read_and_validate_manifest(backup_dir: Path) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise click.ClickException(f"The backup manifest {manifest_path} is unreadable: {exc}") from exc
     if not isinstance(manifest, dict):
-        raise click.ClickException(
-            f"The backup manifest {manifest_path} is not a JSON object — refusing to restore "
-            "from an archive whose manifest shape cannot be trusted."
-        )
+        raise click.ClickException(f"The backup manifest {manifest_path} is not a JSON object — refusing to restore from an archive whose manifest shape cannot be trusted.")
     _check_manifest_version(manifest)
     _validate_manifest_scalars(manifest)
     _validate_manifest_schema_versions(manifest)
@@ -1003,27 +941,20 @@ def _validate_manifest_scalars(manifest: dict[str, Any]) -> None:
         if key in manifest and not isinstance(manifest[key], str):
             raise click.ClickException(f"backup manifest field {key} is not a string: {manifest[key]!r}")
     if "fernet_key_hash" in manifest and not isinstance(manifest["fernet_key_hash"], str):
-        raise click.ClickException(
-            f"backup manifest field fernet_key_hash is not a string: {manifest['fernet_key_hash']!r}"
-        )
+        raise click.ClickException(f"backup manifest field fernet_key_hash is not a string: {manifest['fernet_key_hash']!r}")
 
 
 def _validate_manifest_schema_versions(manifest: dict[str, Any]) -> None:
     """``schema_versions`` must be a list of strings."""
     schema_versions = manifest.get("schema_versions", [])
     if not isinstance(schema_versions, list) or any(not isinstance(v, str) for v in schema_versions):
-        raise click.ClickException(
-            f"backup manifest field schema_versions is not a list of strings: {schema_versions!r}"
-        )
+        raise click.ClickException(f"backup manifest field schema_versions is not a list of strings: {schema_versions!r}")
 
 
 def _validate_manifest_checksums(manifest: dict[str, Any]) -> None:
     """``file_checksums`` must be a mapping of strings when present."""
     checksums = manifest.get("file_checksums")
-    if checksums is not None and (
-        not isinstance(checksums, dict)
-        or any(not isinstance(k, str) or not isinstance(v, str) for k, v in checksums.items())
-    ):
+    if checksums is not None and (not isinstance(checksums, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in checksums.items())):
         raise click.ClickException("backup manifest field file_checksums is not a mapping of strings")
 
 
@@ -1059,18 +990,13 @@ def _check_schema_downgrade(manifest: dict[str, Any]) -> None:
     current = _get_schema_versions()
     if any(not isinstance(v, str) or v == "unknown" for v in current):
         click.echo(
-            f"WARNING: cannot read this installation's current schema version — the archive declares "
-            f"{', '.join(archive_versions)}. Verify manually that this binary is not OLDER before restoring.",
+            f"WARNING: cannot read this installation's current schema version — the archive declares {', '.join(archive_versions)}. Verify manually that this binary is not OLDER before restoring.",
             err=True,
         )
         return
     missing = sorted(set(archive_versions) - set(current))
     if missing:
-        raise click.ClickException(
-            f"Refusing to restore: the archive's schema ({', '.join(missing)}) is NEWER than this "
-            f"installation speaks ({', '.join(current)}). Downgrading a database under an older binary "
-            "corrupts the schema. Upgrade Modulo to the matching newer version first."
-        )
+        raise click.ClickException(f"Refusing to restore: the archive's schema ({', '.join(missing)}) is NEWER than this installation speaks ({', '.join(current)}). Downgrading a database under an older binary corrupts the schema. Upgrade Modulo to the matching newer version first.")
 
 
 def _db_has_modulo_tables(raw_url: str) -> bool:
@@ -1087,10 +1013,7 @@ def _db_has_modulo_tables(raw_url: str) -> bool:
         return True  # cannot verify — insist on the deliberate opt-in
     try:
         with psycopg.connect(raw_url, connect_timeout=10) as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT count(*) FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
-            )
+            cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")
             row = cur.fetchone()
     except Exception:
         _log.exception("restore_target_db_probe_failed")
@@ -1114,25 +1037,15 @@ def _check_archived_state_consistency(backup_dir: Path, manifest: dict[str, Any]
     recorded_mac = identity.get("state_mac")
     archived_state = backup_dir / _LAUNCHER_STATE_FILE
     if identity.get("state_json_included") and not archived_state.exists():
-        raise click.ClickException(
-            "The archive's manifest claims a launcher state.json was backed up, but the file is NOT in "
-            "the archive — refusing to adopt launcher artefacts from an incomplete archive."
-        )
+        raise click.ClickException("The archive's manifest claims a launcher state.json was backed up, but the file is NOT in the archive — refusing to adopt launcher artefacts from an incomplete archive.")
     if not archived_state.exists() or recorded_mac is None:
         return
     try:
         archived_mac = _read_state_mac(archived_state)
     except RuntimeError as exc:
-        raise click.ClickException(
-            f"The archived state.json is unreadable ({exc}) — refusing to adopt launcher artefacts from this archive."
-        ) from exc
+        raise click.ClickException(f"The archived state.json is unreadable ({exc}) — refusing to adopt launcher artefacts from this archive.") from exc
     if archived_mac != recorded_mac:
-        raise click.ClickException(
-            "The archive's state.json identity does NOT match the manifest's recorded fingerprint:\n"
-            f"  Archived state.json mac: {archived_mac}\n"
-            f"  Manifest state_mac:      {recorded_mac}\n"
-            "Refusing to adopt launcher artefacts — the archive is inconsistent or tampered with."
-        )
+        raise click.ClickException(f"The archive's state.json identity does NOT match the manifest's recorded fingerprint:\n  Archived state.json mac: {archived_mac}\n  Manifest state_mac:      {recorded_mac}\nRefusing to adopt launcher artefacts — the archive is inconsistent or tampered with.")
 
 
 class RestorePostureError(click.ClickException):
@@ -1176,10 +1089,7 @@ def _as_asyncpg_url(url: str) -> str:
     for prefix in _APP_URL_PREFIXES:
         if url.startswith(prefix):
             return _POSTGRES_ASYNC_PREFIX + url[len(prefix) :]
-    raise click.ClickException(
-        f"Cannot use {_url_display(url)} as the application connection URL — expected a "
-        "postgresql:// URL. Pass --app-db-url with the app role's Postgres URL."
-    )
+    raise click.ClickException(f"Cannot use {_url_display(url)} as the application connection URL — expected a postgresql:// URL. Pass --app-db-url with the app role's Postgres URL.")
 
 
 def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:
@@ -1196,11 +1106,7 @@ def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:
     """
     source = app_db_url or settings.database_url
     if not isinstance(source, str) or not source:
-        raise click.ClickException(
-            "Cannot resolve the application role for the restore: --app-db-url was not given "
-            "and DATABASE_URL is unset or empty. Pass --app-db-url with the app role's "
-            "connection URL."
-        )
+        raise click.ClickException("Cannot resolve the application role for the restore: --app-db-url was not given and DATABASE_URL is unset or empty. Pass --app-db-url with the app role's connection URL.")
     return _as_asyncpg_url(source)
 
 
@@ -1271,10 +1177,7 @@ def _check_collation_versions_sync(raw_url: str) -> None:
     """
     if psycopg is None:
         return
-    query = (
-        "SELECT collname, collversion, pg_collversion() AS detected_version, collprovider "
-        "FROM pg_collation WHERE collversion IS NOT NULL AND collversion <> pg_collversion()"
-    )
+    query = "SELECT collname, collversion, pg_collversion() AS detected_version, collprovider FROM pg_collation WHERE collversion IS NOT NULL AND collversion <> pg_collversion()"
     try:
         with psycopg.connect(raw_url, connect_timeout=10) as conn, conn.cursor() as cur:
             cur.execute(query)
@@ -1370,9 +1273,7 @@ def _preview_credential_restore(
         click.echo("  FERNET_KEY unchanged — WOULD skip credential re-encryption")
         return
     if not previous_fernet_key:
-        raise click.ClickException(
-            "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
-        )
+        raise click.ClickException("FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials.")
     _preview_credential_reencryption(creds)
 
 
@@ -1513,21 +1414,13 @@ def _validate_targets(opts: _RestoreOptions, manifest: dict[str, Any], raw_url: 
     # Fresh-target exemption is about the DATA DIR, not the DATABASE: a
     # populated production database behind a fresh/absent data dir is NOT
     # eligible for the silent exemption — it must be --replace-cluster.
-    if (
-        opts.data_dir is not None
-        and _db_has_modulo_tables(raw_url)
-        and not (opts.data_dir / _LAUNCHER_STATE_FILE).exists()
-    ):
+    if opts.data_dir is not None and _db_has_modulo_tables(raw_url) and not (opts.data_dir / _LAUNCHER_STATE_FILE).exists():
         if not opts.replace_cluster:
             raise click.ClickException(
-                "The target database ALREADY CONTAINS application tables, but its data dir is fresh "
-                "(no state.json) — this restore would silently overwrite an existing production "
-                "database. Pass --replace-cluster if you really intend to replace it, or point at a "
-                "clean database."
+                "The target database ALREADY CONTAINS application tables, but its data dir is fresh (no state.json) — this restore would silently overwrite an existing production database. Pass --replace-cluster if you really intend to replace it, or point at a clean database."
             )
         click.echo(
-            "REPLACING an existing POPULATED database whose data dir was fresh/absent (acknowledged via "
-            "--replace-cluster).",
+            "REPLACING an existing POPULATED database whose data dir was fresh/absent (acknowledged via --replace-cluster).",
             err=True,
         )
     return True
@@ -1646,9 +1539,7 @@ def _re_encrypt_credentials_if_needed(
 
     if creds_json.exists() and current_key_hash != backup_key_hash:
         if not opts.previous_fernet_key:
-            raise click.ClickException(
-                "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
-            )
+            raise click.ClickException("FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials.")
         click.echo("Re-encrypting credentials with current FERNET_KEY...")
         creds_data: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
         counts = _re_encrypt_credentials_sync(raw_url, creds_data, opts.previous_fernet_key, settings.fernet_key)
@@ -1701,19 +1592,13 @@ def cli() -> None:
     "--data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help=(
-        "Launcher data dir to include (and lock): copies state.json, and the TLS keypair when present. "
-        "Passes the secrets file / conf profile only with --include-secrets."
-    ),
+    help=("Launcher data dir to include (and lock): copies state.json, and the TLS keypair when present. Passes the secrets file / conf profile only with --include-secrets."),
 )
 @click.option(
     "--include-secrets",
     is_flag=True,
     default=False,
-    help=(
-        "Include the 0600 launcher secrets file and the credential-bearing conf profile in the archive. "
-        "LOUD WARNING: the archive then carries the generated service passwords."
-    ),
+    help=("Include the 0600 launcher secrets file and the credential-bearing conf profile in the archive. LOUD WARNING: the archive then carries the generated service passwords."),
 )
 def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, include_secrets: bool) -> None:
     """Create a full backup of the Modulo database.
@@ -1767,12 +1652,7 @@ def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, i
             "secrets_file": {"included": False, "note": "no data dir given"},
             "tls_files": [],
             "tls_note": ("no data dir given — no TLS material in the archive"),
-            "ephemeral": {
-                "redis_saq_queue_data": (
-                    "EXCLUDED by design — Redis/SAQ queue data is ephemeral (ADR 031 Decision 6); "
-                    "queued jobs do not survive a backup/restore cycle"
-                )
-            },
+            "ephemeral": {"redis_saq_queue_data": ("EXCLUDED by design — Redis/SAQ queue data is ephemeral (ADR 031 Decision 6); queued jobs do not survive a backup/restore cycle")},
         }
         launcher_checksums: list[str] = []
         if data_dir is not None:
@@ -1869,10 +1749,7 @@ def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, i
 @click.option(
     "--app-db-url",
     default=None,
-    help=(
-        "Connection URL of the APPLICATION role whose RLS posture and grants the restore "
-        "re-applies (default: DATABASE_URL from settings). Never derived from --db-url."
-    ),
+    help=("Connection URL of the APPLICATION role whose RLS posture and grants the restore re-applies (default: DATABASE_URL from settings). Never derived from --db-url."),
 )
 @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompt")
 @click.option(
@@ -1890,29 +1767,19 @@ def backup(db_url: str | None, output_dir: Path | None, data_dir: Path | None, i
     "--data-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help=(
-        "Launcher data dir to lock and refresh: adopts the archive's launcher artefacts "
-        "(state.json / secrets.json / conf profile / TLS keypair, where included) and refuses "
-        "while that data dir's launcher is running."
-    ),
+    help=("Launcher data dir to lock and refresh: adopts the archive's launcher artefacts (state.json / secrets.json / conf profile / TLS keypair, where included) and refuses while that data dir's launcher is running."),
 )
 @click.option(
     "--replace-cluster",
     is_flag=True,
     default=False,
-    help=(
-        "Intentionally replace a DIFFERENT populated instance with the archive (per-instance "
-        "identity mismatch otherwise refuses)."
-    ),
+    help=("Intentionally replace a DIFFERENT populated instance with the archive (per-instance identity mismatch otherwise refuses)."),
 )
 @click.option(
     "--no-safety-dump",
     is_flag=True,
     default=False,
-    help=(
-        "Skip the automatic pre-restore safety dump of the TARGET. LOUD: without it, a mid-import "
-        "failure would otherwise abort out of a half-dropped database."
-    ),
+    help=("Skip the automatic pre-restore safety dump of the TARGET. LOUD: without it, a mid-import failure would otherwise abort out of a half-dropped database."),
 )
 def restore(
     backup_dir: Path,

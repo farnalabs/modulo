@@ -72,9 +72,7 @@ class Eval(SoftDeleteMixin, OrgScoped):
         ForeignKey("eval_suites.id", ondelete="SET NULL"),
         nullable=True,
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    account_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
     eval_type: Mapped[str] = mapped_column(Text, nullable=False)
     # Physical jsonb: 0250 created it ``json``; 0254 promoted it to match the
     # 0147 standard. JSONB_COL keeps the ORM declaration honest while
@@ -89,9 +87,7 @@ class Eval(SoftDeleteMixin, OrgScoped):
     # FAR-2028: Mute policy fields.
     is_muted: Mapped[bool] = mapped_column(nullable=False, server_default="false", default=False)
     muted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    muted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
-    )
+    muted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     # FAR-2028: Mute policy configuration.
     # When acceptance_rate < mute_threshold across mute_min_outcomes recorded outcomes,
     # the definition is auto-muted (stops interrupting but keeps recording).

@@ -23,7 +23,7 @@ from farna.auth.api_key import _MK_PREFIX, generate_api_key
 from farna.auth.dependencies import InvalidToken, get_current_tenant_user_or_api_key
 from farna.settings import Settings
 
-os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
@@ -87,12 +87,7 @@ async def org_api_key(
     key_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, "
-                "hashed_secret, role, account_id, expires_at) "
-                "VALUES (:id, :oid, :name, :prefix, :hashed, :role, :uid, "
-                "(CURRENT_TIMESTAMP + INTERVAL '30 days'))"
-            ),
+            text("INSERT INTO org_api_keys (id, organisation_id, name, lookup_prefix, hashed_secret, role, account_id, expires_at) VALUES (:id, :oid, :name, :prefix, :hashed, :role, :uid, (CURRENT_TIMESTAMP + INTERVAL '30 days'))"),
             {
                 "id": str(key_id),
                 "oid": str(test_org),
@@ -191,9 +186,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
                 await session.execute(text(f'SET LOCAL ROLE "{role}"'))
                 # Explicitly clear any org context so the RLS policy filters.
                 await session.execute(text("SELECT set_config('app.organisation_id', '', true)"))
-                result = await session.execute(
-                    select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"])
-                )
+                result = await session.execute(select(OrgApiKey).where(OrgApiKey.lookup_prefix == org_api_key["prefix"]))
                 assert result.scalar_one_or_none() is None
         finally:
             await engine.dispose()

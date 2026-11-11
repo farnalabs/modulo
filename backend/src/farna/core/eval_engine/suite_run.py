@@ -43,9 +43,7 @@ _log = logging.getLogger(__name__)
 _EVAL_EVENT_TYPES = frozenset({"eval_regression", "eval_blocked"})
 # Events that belong to the production error-forwarder path. An eval endpoint
 # must NEVER subscribe to these (the no-forwarder-leak guard).
-_ERROR_FORWARDER_EVENT_TYPES = frozenset(
-    {"error_forwarded", "run_failed", "run_stalled", "hitl_overdue", "circuit_breaker_tripped"}
-)
+_ERROR_FORWARDER_EVENT_TYPES = frozenset({"error_forwarded", "run_failed", "run_stalled", "hitl_overdue", "circuit_breaker_tripped"})
 
 
 class SuiteRunError(RuntimeError):
@@ -191,14 +189,7 @@ async def resolve_baseline_run(
         .order_by(SuiteRun.created_at.desc(), SuiteRun.id.desc())
     )
     candidates = (await session.scalars(stmt)).all()
-    matching = [
-        c
-        for c in candidates
-        if c.organisation_id == run.organisation_id
-        and c.state == SuiteRunState.COMPLETED.value
-        and tuple_is_matching(c, run.baseline_tuple or {})
-        and _strictly_prior(run, c)
-    ]
+    matching = [c for c in candidates if c.organisation_id == run.organisation_id and c.state == SuiteRunState.COMPLETED.value and tuple_is_matching(c, run.baseline_tuple or {}) and _strictly_prior(run, c)]
     if not matching:
         return [], "no completed prior run with the same baseline tuple — comparison skipped"
     # Deterministic tiebreak (created_at, id) — the lexically-``id``-latest
@@ -580,9 +571,7 @@ def aggregate_eval_leaderboard(rows: Sequence[Any], *, group_by: str) -> list[di
         entries.append(entry)
 
     # Sort by aggregate pass-rate descending; rate-less entries sink to bottom.
-    entries.sort(
-        key=lambda e: (e["pass_rate"] is not None, e["pass_rate"] if e["pass_rate"] is not None else 0.0), reverse=True
-    )
+    entries.sort(key=lambda e: (e["pass_rate"] is not None, e["pass_rate"] if e["pass_rate"] is not None else 0.0), reverse=True)
     return entries
 
 
@@ -681,14 +670,7 @@ async def claim_suite_run_cost(session: AsyncSession, run: SuiteRun, amount: Dec
     ledger (``claimed_cost``) is incremented first, then the caller compares the
     new total against the ceiling. Returns the new claimed total.
     """
-    new_total = (
-        await session.execute(
-            update(SuiteRun)
-            .where(SuiteRun.id == run.id)
-            .values(claimed_cost=SuiteRun.claimed_cost + amount)
-            .returning(SuiteRun.claimed_cost)
-        )
-    ).scalar_one_or_none()
+    new_total = (await session.execute(update(SuiteRun).where(SuiteRun.id == run.id).values(claimed_cost=SuiteRun.claimed_cost + amount).returning(SuiteRun.claimed_cost))).scalar_one_or_none()
     if new_total is None:  # pragma: no cover - defensive; row must exist
         raise SuiteRunError(f"SuiteRun {run.id} not found while claiming cost")
     run.claimed_cost = new_total

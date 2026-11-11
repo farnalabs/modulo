@@ -102,10 +102,7 @@ async def admin_get_email_settings(
         logger.exception(_CODE_ADMIN_EMAIL_ADMIN_GET_EMAIL_SETTINGS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Database error while fetching email settings."
-                " Check that the latest database migrations have been applied."
-            ),
+            detail=("Database error while fetching email settings. Check that the latest database migrations have been applied."),
         ) from None
     except HTTPException:
         raise
@@ -320,9 +317,7 @@ async def _build_test_email_settings(
     temp_settings.smtp_username = email_cfg.get("smtp_username", "")
     try:
         async with session.begin():
-            temp_settings.smtp_password = await decode_stored_secret_scoped(
-                session, email_cfg.get("smtp_password", ""), settings.fernet_key, org_id=org_id
-            )
+            temp_settings.smtp_password = await decode_stored_secret_scoped(session, email_cfg.get("smtp_password", ""), settings.fernet_key, org_id=org_id)
     except Exception:
         logger.exception("admin_email.test_send_smtp_password_decrypt_failed")
         raise HTTPException(
@@ -342,8 +337,7 @@ async def _send_test_email(temp_settings: Any, recipient: str) -> dict[str, Any]
             temp_settings,
             [recipient],
             "Modulo Test Email",
-            "<html><body><h1>Test Email</h1><p>If you receive this, your SMTP configuration"
-            " is working.</p></body></html>",
+            "<html><body><h1>Test Email</h1><p>If you receive this, your SMTP configuration is working.</p></body></html>",
             "If you receive this, your SMTP configuration is working.",
         )
         if success:

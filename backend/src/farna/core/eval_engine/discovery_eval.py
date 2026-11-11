@@ -150,9 +150,7 @@ def normalise_discovery_output(output: Any) -> dict[str, Any]:
     return _canonical_graph(output)
 
 
-def _diff_mapping(
-    expected: dict[str, Any], actual: dict[str, Any], path: tuple[str | int, ...]
-) -> list[dict[str, Any]]:
+def _diff_mapping(expected: dict[str, Any], actual: dict[str, Any], path: tuple[str | int, ...]) -> list[dict[str, Any]]:
     differences: list[dict[str, Any]] = []
     for key in sorted(set(expected) | set(actual)):
         if key in expected and key in actual:

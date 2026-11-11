@@ -143,9 +143,9 @@ _UUID_TRUNC_LEN = 16
 _CONTAINER_NAME = "workspace"
 _DEFAULT_NAMESPACE = "modulo"
 _DEFAULT_SERVICE_ACCOUNT = "default"
-_NAMESPACE_ENV = "MODULO_KUBERNETES_NAMESPACE"
-_SERVICE_ACCOUNT_ENV = "MODULO_KUBERNETES_SERVICE_ACCOUNT"
-_DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
+_NAMESPACE_ENV = "FARNA_CONTROL_MODULO_KUBERNETES_NAMESPACE"
+_SERVICE_ACCOUNT_ENV = "FARNA_CONTROL_MODULO_KUBERNETES_SERVICE_ACCOUNT"
+_DEPLOYMENT_IDENTITY_ENV = "FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID"
 _DEFAULT_PROVISION_TIMEOUT_S = 120
 _PROVISION_POLL_INTERVAL = 1.0
 # Workspace agent log file: the dispatcher redirects the agent command's
@@ -345,10 +345,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    raise BackendUnreachableError(
-                        "Kubernetes configuration could not be loaded (no in-cluster service "
-                        f"account and no usable kubeconfig): {type(exc).__name__}: {exc}"
-                    ) from exc
+                    raise BackendUnreachableError(f"Kubernetes configuration could not be loaded (no in-cluster service account and no usable kubeconfig): {type(exc).__name__}: {exc}") from exc
                 self._configuration = configuration
             return self._configuration
 
@@ -480,8 +477,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         non_root_kwargs: dict[str, Any] = {}
         if spec.allow_root_user:
             _log.warning(
-                "workspace image %s running as root (allow_root_user=True) — this weakens the "
-                "security boundary and may be rejected by a restricted Pod Security namespace",
+                "workspace image %s running as root (allow_root_user=True) — this weakens the security boundary and may be rejected by a restricted Pod Security namespace",
                 image,
             )
         else:
@@ -591,13 +587,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             raise
         except ApiException as exc:
             _log.exception("Kubernetes API rejected workspace pod %s", pod_name)
-            raise RuntimeProviderError(
-                f"Kubernetes API rejected workspace pod create (HTTP {exc.status}): {exc.reason}"
-            ) from exc
+            raise RuntimeProviderError(f"Kubernetes API rejected workspace pod create (HTTP {exc.status}): {exc.reason}") from exc
         except Exception as exc:
-            raise BackendUnreachableError(
-                f"Kubernetes API unreachable while creating workspace pod {pod_name}: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise BackendUnreachableError(f"Kubernetes API unreachable while creating workspace pod {pod_name}: {type(exc).__name__}: {exc}") from exc
 
         try:
             await self._wait_until_running(pod_name, wait_bound_s)
@@ -623,15 +615,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             if phase == "running":
                 return
             if phase in ("failed", "succeeded"):
-                raise RuntimeProviderError(
-                    f"Kubernetes workspace pod {pod_name} entered phase {phase} before running"
-                    + (f" ({note})" if note else "")
-                )
+                raise RuntimeProviderError(f"Kubernetes workspace pod {pod_name} entered phase {phase} before running" + (f" ({note})" if note else ""))
             if time.monotonic() >= deadline:
-                raise ProvisionTimeoutError(
-                    f"Kubernetes workspace pod {pod_name} did not reach Running within "
-                    f"{wait_bound_s:.0f}s (phase {phase}" + (f": {note})" if note else ")")
-                )
+                raise ProvisionTimeoutError(f"Kubernetes workspace pod {pod_name} did not reach Running within {wait_bound_s:.0f}s (phase {phase}" + (f": {note})" if note else ")"))
             await asyncio.sleep(_PROVISION_POLL_INTERVAL)
 
     @staticmethod
@@ -705,13 +691,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         except ApiException as exc:
             if exc.status == 404:
                 return None
-            raise RuntimeProviderError(
-                f"Kubernetes API error reading pod {pod_name} (HTTP {exc.status}): {exc.reason}"
-            ) from exc
+            raise RuntimeProviderError(f"Kubernetes API error reading pod {pod_name} (HTTP {exc.status}): {exc.reason}") from exc
         except Exception as exc:
-            raise BackendUnreachableError(
-                f"Kubernetes API unreachable while reading pod {pod_name}: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise BackendUnreachableError(f"Kubernetes API unreachable while reading pod {pod_name}: {type(exc).__name__}: {exc}") from exc
 
     async def _delete_pod_best_effort(self, pod_name: str) -> None:
         """Delete the pod, swallowing (with a log) every failure but cancellation."""
@@ -748,9 +730,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
 
-        timeout_result = await self._collect_exec_or_timeout(
-            ws, state, provider_ref, cmd_timeout, start, stdout_parts, stderr_parts
-        )
+        timeout_result = await self._collect_exec_or_timeout(ws, state, provider_ref, cmd_timeout, start, stdout_parts, stderr_parts)
         if timeout_result is not None:
             return timeout_result
         await self._close_ws(ws)
@@ -812,9 +792,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             )
         except Exception as exc:
             await self._close_ws(ws)
-            raise BackendUnreachableError(
-                f"Kubernetes exec stream failed for pod {provider_ref}: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise BackendUnreachableError(f"Kubernetes exec stream failed for pod {provider_ref}: {type(exc).__name__}: {exc}") from exc
         return None
 
     async def _open_exec(
@@ -862,12 +840,8 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             raise
         except Exception as exc:
             if getattr(exc, "status", None) == 404:
-                raise UnknownRefError(
-                    f"Kubernetes workspace pod {provider_ref!r} does not exist in namespace {self._namespace!r}"
-                ) from exc
-            raise BackendUnreachableError(
-                f"Kubernetes exec subresource unreachable for pod {provider_ref!r}: {type(exc).__name__}: {exc}"
-            ) from exc
+                raise UnknownRefError(f"Kubernetes workspace pod {provider_ref!r} does not exist in namespace {self._namespace!r}") from exc
+            raise BackendUnreachableError(f"Kubernetes exec subresource unreachable for pod {provider_ref!r}: {type(exc).__name__}: {exc}") from exc
 
     @staticmethod
     def _command_with_environment(command: list[str], environment: dict[str, str] | None) -> list[str]:
@@ -1222,14 +1196,10 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         step_timeout = max(1, int(policy.command_timeout))
 
         if policy.git_credentials == "scoped":
-            script = (
-                build_git_multi_host_script(policy.allowed_hosts) if policy.allowed_hosts else build_git_scoped_script()
-            )
+            script = build_git_multi_host_script(policy.allowed_hosts) if policy.allowed_hosts else build_git_scoped_script()
             await self._run_enforcement_step(provider_ref, script, "git-credential scope", step_timeout)
         elif policy.git_credentials == "none":
-            await self._run_enforcement_step(
-                provider_ref, build_git_none_script(), "git-credential scope", step_timeout
-            )
+            await self._run_enforcement_step(provider_ref, build_git_none_script(), "git-credential scope", step_timeout)
 
         guard_status: str | None = None
         if policy.single_pr_per_run:
@@ -1270,10 +1240,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         result = await self.exec_command(provider_ref, ["sh", "-c", script], cmd_timeout=step_bound_s)
         if result.exit_code != 0:
             detail = (result.stderr or result.stdout or "").strip()
-            raise RuntimeProviderError(
-                f"Kubernetes isolation step {step_name!r} failed for pod {provider_ref} "
-                f"(exit {result.exit_code})" + (f": {detail[:200]}" if detail else "")
-            )
+            raise RuntimeProviderError(f"Kubernetes isolation step {step_name!r} failed for pod {provider_ref} (exit {result.exit_code})" + (f": {detail[:200]}" if detail else ""))
 
     async def close(self) -> None:
         """Destroy tracked workspace pods, then close owned API clients (hub aclose).

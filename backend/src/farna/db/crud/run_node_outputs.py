@@ -403,8 +403,7 @@ def _sanitise_jsonb_for_store(value: Any, *, run_id: uuid.UUID, label: str) -> A
     cleaned, changed = _sanitise_jsonb(value)
     if changed:
         _log.warning(
-            "run_node_outputs: replaced Postgres/JSONB-illegal code points "
-            "(NUL / lone surrogate) in the %s payload for run %s",
+            "run_node_outputs: replaced Postgres/JSONB-illegal code points (NUL / lone surrogate) in the %s payload for run %s",
             label,
             run_id,
         )
@@ -466,9 +465,7 @@ def dialect_insert(dialect: str) -> Any:
         return pg_insert
     if dialect == "sqlite":
         return sqlite_insert
-    raise NotImplementedError(
-        f"run_node_outputs writes are not supported on the {dialect!r} backend (postgres/sqlite only)"
-    )
+    raise NotImplementedError(f"run_node_outputs writes are not supported on the {dialect!r} backend (postgres/sqlite only)")
 
 
 # The 0192 quarantine side table as a CORE-ONLY Table - deliberately NOT an
@@ -514,32 +511,22 @@ def _validate_sentinel_keys(
         return
     for key in mapping:
         if key.startswith("__"):
-            raise OutputsSentinelViolation(
-                f"{kind} key {key!r} squats the reserved '__' sentinel namespace "
-                "(run_node_outputs metadata/unknown sentinels)"
-            )
+            raise OutputsSentinelViolation(f"{kind} key {key!r} squats the reserved '__' sentinel namespace (run_node_outputs metadata/unknown sentinels)")
         if attempt_keys:
             node_id = parse_marker_node_id(key)
             if node_id != UNKNOWN_NODE_ID and node_id.startswith("__"):
-                raise OutputsSentinelViolation(
-                    f"{kind} key {key!r} derives node id {node_id!r}, squatting the reserved '__' sentinel namespace"
-                )
+                raise OutputsSentinelViolation(f"{kind} key {key!r} derives node id {node_id!r}, squatting the reserved '__' sentinel namespace")
 
 
 async def assert_write_org(session: AsyncSession, organisation_id: uuid.UUID | None) -> None:
     """WRITE paths REQUIRE a bound, matching RLS org context (fail-closed)."""
     session_org = await read_rls_org(session)
     if session_org is None:
-        raise OutputsRlsMismatch(
-            "run_node_outputs write requires a bound RLS organisation context; "
-            "wrap the call in `async with session.begin():` + set_rls_org(session, org)"
-        )
+        raise OutputsRlsMismatch("run_node_outputs write requires a bound RLS organisation context; wrap the call in `async with session.begin():` + set_rls_org(session, org)")
     if organisation_id is None:
         raise OutputsRlsMismatch("run_node_outputs write requires an explicit organisation_id")
     if session_org != organisation_id:
-        raise OutputsRlsMismatch(
-            f"run_node_outputs org mismatch: session org {session_org} != row org {organisation_id}"
-        )
+        raise OutputsRlsMismatch(f"run_node_outputs org mismatch: session org {session_org} != row org {organisation_id}")
 
 
 def _assert_read_org(
@@ -550,9 +537,7 @@ def _assert_read_org(
     """READ paths: no session org -> skip (the caller's RLS scope governs);
     mismatched org -> raise."""
     if session_org is not None and row_org is not None and session_org != row_org:
-        raise OutputsRlsMismatch(
-            f"run_node_outputs org mismatch on read of run {run_id}: session org {session_org} != row org {row_org}"
-        )
+        raise OutputsRlsMismatch(f"run_node_outputs org mismatch on read of run {run_id}: session org {session_org} != row org {row_org}")
 
 
 # The four JSONB blob columns in side-signature tuple order
@@ -647,10 +632,7 @@ def _row_changed_predicate(stmt: Any, columns: Sequence[Any]) -> Any:
     Returns the predicate to pass as ``where=``; *columns* is the set of
     written columns, so a writer only compares what it is actually setting.
     """
-    comparisons = [
-        cast(getattr(stmt.excluded, column), Text).is_distinct_from(cast(getattr(RunNodeOutput, column), Text))
-        for column in columns
-    ]
+    comparisons = [cast(getattr(stmt.excluded, column), Text).is_distinct_from(cast(getattr(RunNodeOutput, column), Text)) for column in columns]
     if not comparisons:
         # No payload column is being written: nothing can have changed, so the
         # conflict is a no-op (the row keeps its value AND its stamp).
@@ -867,8 +849,7 @@ async def replace_run_node_outputs(
     telemetry, telemetry_sanitised = _sanitise_side(telemetry)
     if outputs_sanitised or telemetry_sanitised:
         _log.warning(
-            "run_node_outputs: replaced Postgres/JSONB-illegal code points "
-            "(NUL / lone surrogate) in the outputs/telemetry payload for run %s",
+            "run_node_outputs: replaced Postgres/JSONB-illegal code points (NUL / lone surrogate) in the outputs/telemetry payload for run %s",
             run_id,
         )
     # ``_sanitise_side(None)`` is a no-op returning ``(None, False)``, so the
@@ -943,10 +924,7 @@ def _split_inherited_sentinel_keys(
         if inherited_keys and key in inherited_keys:
             filtered.add(key)
             continue
-        raise OutputsSentinelViolation(
-            f"{kind} key {key!r} squats the reserved '__' sentinel namespace "
-            "(run_node_outputs metadata/unknown sentinels)"
-        )
+        raise OutputsSentinelViolation(f"{kind} key {key!r} squats the reserved '__' sentinel namespace (run_node_outputs metadata/unknown sentinels)")
     return filtered
 
 
@@ -1021,10 +999,7 @@ async def write_run_markers(
     _validate_sentinel_keys(markers, kind="marker attempt key", attempt_keys=True)
     await assert_write_org(session, organisation_id)
 
-    rows = [
-        NodeOutputWrite(node_id=parse_marker_node_id(key), attempt_key=key, markers=value)
-        for key, value in markers.items()
-    ]
+    rows = [NodeOutputWrite(node_id=parse_marker_node_id(key), attempt_key=key, markers=value) for key, value in markers.items()]
     if rows:
         await upsert_rows(session, run_id=run_id, organisation_id=organisation_id, rows=rows, ignore_conflicts=False)
 
@@ -1211,8 +1186,7 @@ def _valid_meta_flags(row: Any) -> dict[str, Any] | None:
     if isinstance(flags, dict) and "empty_outputs" in flags and "empty_telemetry" in flags:
         return flags
     _log.warning(
-        "run_node_outputs malformed metadata row treated as absent "
-        "(expected empty_outputs/empty_telemetry booleans, got %r)",
+        "run_node_outputs malformed metadata row treated as absent (expected empty_outputs/empty_telemetry booleans, got %r)",
         flags,
     )
     return None
@@ -1645,9 +1619,7 @@ async def persist_schema_enforcement_record(
         "organisation_id": organisation_id,
         "node_id": node_id,
         "attempt_key": attempt_key,
-        "schema_enforcement_json": _sanitise_jsonb_for_store(
-            enforcement_record, run_id=run_id, label="schema enforcement"
-        ),
+        "schema_enforcement_json": _sanitise_jsonb_for_store(enforcement_record, run_id=run_id, label="schema enforcement"),
     }
     await session.execute(_targeted_upsert_stmt(insert_factory, values, "schema_enforcement_json"), [values])
 

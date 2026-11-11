@@ -111,11 +111,7 @@ async def read_output_interception_flags(
         async with session_factory() as session:
             row = (
                 await session.execute(
-                    text(
-                        "SELECT r.is_replay, o.guardrails_kill_switch "
-                        "FROM runs r JOIN organisations o ON o.id = r.organisation_id "
-                        "WHERE r.id = :rid"
-                    ),
+                    text("SELECT r.is_replay, o.guardrails_kill_switch FROM runs r JOIN organisations o ON o.id = r.organisation_id WHERE r.id = :rid"),
                     {"rid": run_id.hex if hasattr(run_id, "hex") else run_id},
                 )
             ).first()

@@ -303,7 +303,7 @@ class TestAuthRateLimitMiddleware:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/auth/login",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
             )
         assert resp.status_code == 200
         mock_limiter.check_login.assert_not_called()
@@ -315,7 +315,7 @@ class TestAuthRateLimitMiddleware:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/auth/login",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "wrong-token"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "wrong-token"},
             )
         assert resp.status_code == 429
 
@@ -347,7 +347,7 @@ class TestAuthRateLimitMiddleware:
         with TestClient(app) as client:
             resp = client.post(
                 "/api/v1/auth/login",
-                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+                headers={"FARNA_CONTROL_MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
             )
         assert resp.status_code == 200
         mock_limiter.check_login.assert_not_called()

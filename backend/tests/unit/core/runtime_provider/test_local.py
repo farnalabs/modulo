@@ -131,17 +131,17 @@ class TestLocalRuntimeProvider:
         assert provider.supports(FakeProfile()) is True
 
     def test_create_local_provider_from_env_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_MAX_LOCAL_CONCURRENCY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", raising=False)
         p = create_local_provider_from_env()
         assert p._max_concurrency == 2
 
     def test_create_local_provider_from_env_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_MAX_LOCAL_CONCURRENCY", "10")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", "10")
         p = create_local_provider_from_env()
         assert p._max_concurrency == 10
 
     def test_create_local_provider_from_env_invalid(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_MAX_LOCAL_CONCURRENCY", "not-a-number")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_MAX_LOCAL_CONCURRENCY", "not-a-number")
         p = create_local_provider_from_env()
         assert p._max_concurrency == 2
 
@@ -156,9 +156,7 @@ class TestLocalRuntimeProvider:
         assert "timed out" in result.stderr
         await provider.destroy_workspace(ref)
 
-    async def test_exec_spawn_failure_reports_error(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exec_spawn_failure_reports_error(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         def _no_such_binary(*args: object, **kwargs: object) -> object:
             raise FileNotFoundError("no such binary")
 
@@ -171,9 +169,7 @@ class TestLocalRuntimeProvider:
         assert "Failed to start process" in result.stderr
         await provider.destroy_workspace(ref)
 
-    async def test_exec_timeout_kills_process(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exec_timeout_kills_process(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         proc = MagicMock()
         proc.communicate = AsyncMock()
         proc.kill = MagicMock()
@@ -194,9 +190,7 @@ class TestLocalRuntimeProvider:
         proc.kill.assert_called_once()
         await provider.destroy_workspace(ref)
 
-    async def test_exec_generic_failure_kills_and_reports(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exec_generic_failure_kills_and_reports(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         proc = MagicMock()
         proc.communicate = AsyncMock()
         proc.kill = MagicMock()
@@ -222,9 +216,7 @@ class TestLocalRuntimeProvider:
         proc.kill.assert_called_once()
         await provider.destroy_workspace(ref)
 
-    async def test_exec_cancellation_propagates(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exec_cancellation_propagates(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _wait_for(coro: object, timeout: int) -> object:  # noqa: ASYNC109
             await coro  # type: ignore[misc]
             raise asyncio.CancelledError
@@ -240,9 +232,7 @@ class TestLocalRuntimeProvider:
             await provider.exec_command(ref, [sys.executable, "-c", "import time; time.sleep(1)"])
         await provider.destroy_workspace(ref)
 
-    async def test_create_workspace_clones_repo(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_create_workspace_clones_repo(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         spec.repo_url = "https://github.com/acme/app"
         clone_calls: list[tuple[list[str], str]] = []
 
@@ -258,9 +248,7 @@ class TestLocalRuntimeProvider:
         assert clone_calls == [(["git", "clone", "https://github.com/acme/app", "."], provider._workspaces[ref])]
         await provider.destroy_workspace(ref)
 
-    async def test_create_workspace_clone_failure_cleans_up(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_create_workspace_clone_failure_cleans_up(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         spec.repo_url = "https://github.com/acme/app"
         rmtree = MagicMock()
         monkeypatch.setattr("farna.core.runtime_provider.local.shutil.rmtree", rmtree)
@@ -276,9 +264,7 @@ class TestLocalRuntimeProvider:
         assert not provider._workspaces
         rmtree.assert_called_once()
 
-    async def test_create_workspace_labels_never_trigger_clone(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_create_workspace_labels_never_trigger_clone(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-595 contract: clone inputs are first-class spec fields only.
 
         A consumer setting ``labels`` for env-injection-style use on a local
@@ -321,9 +307,7 @@ class TestLocalRuntimeProvider:
         assert "Failed to remove workspace" in caplog.text
         assert ref not in provider._workspaces
 
-    async def test_destroy_workspace_cancellation_propagates(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_destroy_workspace_cancellation_propagates(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         ref = await provider.create_workspace(spec)
 
         async def _cancelled(*args: object, **kwargs: object) -> object:
@@ -335,9 +319,7 @@ class TestLocalRuntimeProvider:
             await provider.destroy_workspace(ref)
         assert ref not in provider._workspaces
 
-    async def test_create_workspace_tempdir_failure_raises_structured_error(
-        self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_create_workspace_tempdir_failure_raises_structured_error(self, provider: LocalRuntimeProvider, spec: WorkspaceSpec, monkeypatch: pytest.MonkeyPatch) -> None:
         def _mkdtemp_fails(*args: object, **kwargs: object) -> str:
             raise OSError("No space left on device")
 

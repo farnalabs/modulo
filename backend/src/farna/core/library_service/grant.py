@@ -63,10 +63,7 @@ async def grant_collection_agents(
         raise InstallNotFoundError(f"Install {install_id} not found")
 
     if not install.community_sourced:
-        raise NotCommunitySourcedError(
-            f"Install {install_id} is not community-sourced; grant is only "
-            "available for community-sourced collection installs"
-        )
+        raise NotCommunitySourcedError(f"Install {install_id} is not community-sourced; grant is only available for community-sourced collection installs")
 
     if install.agents_granted:
         return install

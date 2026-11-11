@@ -50,15 +50,8 @@ _NEW_FK = "fk_eval_results_eval_org"
 # Static DDL, built as literals so no f-string identifier interpolation appears
 # in this module (the FAR-915 ``migration-fstring-sql`` semgrep rule).
 _ENSURE_UNIQUE_SQL = "ALTER TABLE evals ADD CONSTRAINT uq_evals_id_organisation_id UNIQUE (id, organisation_id)"
-_ADD_COMPOSITE_FK_SQL = (
-    "ALTER TABLE eval_results ADD CONSTRAINT fk_eval_results_eval_org "
-    "FOREIGN KEY (eval_id, organisation_id) "
-    "REFERENCES evals (id, organisation_id) ON DELETE CASCADE"
-)
-_ADD_PLAIN_FK_SQL = (
-    "ALTER TABLE eval_results ADD CONSTRAINT eval_results_eval_id_fkey "
-    "FOREIGN KEY (eval_id) REFERENCES evals (id) ON DELETE CASCADE"
-)
+_ADD_COMPOSITE_FK_SQL = "ALTER TABLE eval_results ADD CONSTRAINT fk_eval_results_eval_org FOREIGN KEY (eval_id, organisation_id) REFERENCES evals (id, organisation_id) ON DELETE CASCADE"
+_ADD_PLAIN_FK_SQL = "ALTER TABLE eval_results ADD CONSTRAINT eval_results_eval_id_fkey FOREIGN KEY (eval_id) REFERENCES evals (id) ON DELETE CASCADE"
 
 
 def _is_postgres() -> bool:

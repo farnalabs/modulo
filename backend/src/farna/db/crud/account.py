@@ -144,9 +144,7 @@ async def _get_account_locked(session: AsyncSession, account_id: uuid.UUID) -> A
     return account
 
 
-async def update_account_preferences(
-    session: AsyncSession, account_id: uuid.UUID, preferences: dict[str, object]
-) -> dict[str, object]:
+async def update_account_preferences(session: AsyncSession, account_id: uuid.UUID, preferences: dict[str, object]) -> dict[str, object]:
     """Merge *preferences* into the account's preferences blob (top-level keys).
 
     Row-locked read-merge-write (FAR-620): concurrent writers serialise on the
@@ -201,11 +199,7 @@ async def set_hitl_email_preference(
         block["pipeline_overrides"] = dict(pipeline_overrides)
     else:
         existing = current.get(PREFERENCE_KEY)
-        block["pipeline_overrides"] = (
-            dict(existing.get("pipeline_overrides", {}))
-            if isinstance(existing, dict) and isinstance(existing.get("pipeline_overrides"), dict)
-            else {}
-        )
+        block["pipeline_overrides"] = dict(existing.get("pipeline_overrides", {})) if isinstance(existing, dict) and isinstance(existing.get("pipeline_overrides"), dict) else {}
     merged = {**current, PREFERENCE_KEY: block}
     account.preferences = merged
     await session.flush()

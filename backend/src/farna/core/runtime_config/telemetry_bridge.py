@@ -38,7 +38,7 @@ def is_telemetry_enabled() -> bool:
     try:
         from farna.core.runtime_config.store import get_runtime_config_store
 
-        store_val = get_runtime_config_store().get("MODULO_TELEMETRY_ENABLED")
+        store_val = get_runtime_config_store().get("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED")
         if store_val is not None:
             return store_val.lower() in ("true", "1", "yes")
     except RuntimeError:
@@ -68,7 +68,7 @@ def toggle_telemetry(enabled: bool) -> None:
     from farna.core.runtime_config.store import get_runtime_config_store
 
     store = get_runtime_config_store()
-    store.set_override("MODULO_TELEMETRY_ENABLED", "true" if enabled else "false")
+    store.set_override("FARNA_CONTROL_MODULO_TELEMETRY_ENABLED", "true" if enabled else "false")
 
     # Reconfigure the global OTel TracerProvider so that exporters are
     # added or torn down immediately.  setup_otel is idempotent (calls

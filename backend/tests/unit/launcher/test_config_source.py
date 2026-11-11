@@ -94,7 +94,7 @@ def test_compose_config_derives_all_bundled_endpoints() -> None:
     assert composed["DATABASE_URL"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert composed["DATABASE_ADMIN_URL"] == composed["DATABASE_URL"]
     assert composed["REDIS_URL"] == "redis://:redis-pw@127.0.0.1:16379/0"
-    system_url = composed["MODULO_SYSTEM_DATABASE_URL"]
+    system_url = composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]
     assert system_url.startswith("postgresql+asyncpg://modulo_system:pg-pw@127.0.0.1:15432/modulo")
 
 
@@ -140,16 +140,14 @@ def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
     monkeypatch.setenv("REDIS_URL", "redis://operator:secret@cache.example.com:6379/7")
     resolved = LauncherConfigSource(data_dir)()
     assert "redis_url" not in resolved  # the operator's env wins
     assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
 
 
-def test_source_system_database_url_environment_wins_over_composed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_source_system_database_url_environment_wins_over_composed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """MODULO_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -159,16 +157,14 @@ def test_source_system_database_url_environment_wins_over_composed(
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", "postgresql://system:op@db.example.com:5432/modulo")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgresql://system:op@db.example.com:5432/modulo")
     resolved = LauncherConfigSource(data_dir)()
     assert "modulo_system_database_url" not in resolved  # the operator's env wins
     assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
-def test_source_derives_system_url_from_the_operators_database_url(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_source_derives_system_url_from_the_operators_database_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The app/system URL pair is atomic: an operator DATABASE_URL must never
     end up paired with a system URL still pointing at the bundled Postgres."""
     data_dir = tmp_path / "data"
@@ -178,7 +174,7 @@ def test_source_derives_system_url_from_the_operators_database_url(
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.setenv("DATABASE_URL", "postgresql://app:op-pass@db.example.com:5432/modulo")
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     assert "database_url" not in resolved
     system = resolved.get("modulo_system_database_url", "")
@@ -191,9 +187,7 @@ def test_source_derives_system_url_from_the_operators_database_url(
     assert "pg-pw" not in system
 
 
-def test_source_includes_everything_without_environment(
-    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_source_includes_everything_without_environment(clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
@@ -205,9 +199,7 @@ def test_source_includes_everything_without_environment(
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
-def test_source_skips_empty_composed_values(
-    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_source_skips_empty_composed_values(clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A present-but-blank composed key is omitted rather than injected blank.
 
     De-stubbed (review finding): the composition with a NO-PASSWORD URL is
@@ -223,18 +215,16 @@ def test_source_skips_empty_composed_values(
     password_free = LauncherSecrets(postgres_password="", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
     monkeypatch.setattr(sf, "load_or_create", lambda _path: password_free)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
     composed = compose_config(_state(), password_free)
-    assert not composed["MODULO_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
+    assert not composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
     resolved = LauncherConfigSource(data_dir)()
     assert "modulo_system_database_url" not in resolved  # blank value omitted, not injected
     assert resolved  # the non-blank composed values are still injected
     assert all(resolved.values())
 
 
-def test_source_settings_roundtrip_honours_priority(
-    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_source_settings_roundtrip_honours_priority(clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from farna.settings import Settings
 
     data_dir = tmp_path / "data"
@@ -290,9 +280,7 @@ def test_write_pinned_env_file_content_and_mode(tmp_path: Path) -> None:
         assert mode == 0o600
 
 
-def test_write_pinned_env_file_warns_when_clobbering_different_content(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_write_pinned_env_file_warns_when_clobbering_different_content(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
     data_dir = tmp_path / "data"
@@ -306,9 +294,7 @@ def test_write_pinned_env_file_warns_when_clobbering_different_content(
     assert "DATABASE_URL=" in rewritten  # the composed content won
 
 
-def test_write_pinned_env_file_no_warning_on_identical_rewrite(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_write_pinned_env_file_no_warning_on_identical_rewrite(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
     data_dir = tmp_path / "data"
@@ -334,9 +320,7 @@ def test_write_pinned_env_file_refuses_symlink_squat(tmp_path: Path) -> None:
     assert victim.read_text(encoding="utf-8") == "innocent"
 
 
-def test_pinned_env_file_feeds_get_settings(
-    clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_pinned_env_file_feeds_get_settings(clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from farna.settings import pin_env_file
 
     data_dir = tmp_path / "data"

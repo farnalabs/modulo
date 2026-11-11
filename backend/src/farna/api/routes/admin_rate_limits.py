@@ -39,10 +39,7 @@ class RateLimitUpdateRequest(BaseModel):
 async def get_rate_limits(
     _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RateLimitStatusResponse:
-    rules = [
-        RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s)
-        for r in RateLimitMiddleware.RULES
-    ]
+    rules = [RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in RateLimitMiddleware.RULES]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,
@@ -60,9 +57,7 @@ async def update_rate_limits(
     req: RateLimitUpdateRequest,
     _current_user: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> RateLimitStatusResponse:
-    new_rules = [
-        RateLimitRule(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in req.rules
-    ]
+    new_rules = [RateLimitRule(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in req.rules]
     if not new_rules:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -70,10 +65,7 @@ async def update_rate_limits(
         )
     RateLimitMiddleware.set_rules(new_rules)
     _log.info("ratelimit.rules_updated", extra={"rules": new_rules})
-    rules = [
-        RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s)
-        for r in RateLimitMiddleware.RULES
-    ]
+    rules = [RateLimitRuleResponse(path_prefix=r.path_prefix, max_requests=r.max_requests, window_s=r.window_s) for r in RateLimitMiddleware.RULES]
     return RateLimitStatusResponse(
         mode="redis" if redis_available else "in_memory",
         rules=rules,

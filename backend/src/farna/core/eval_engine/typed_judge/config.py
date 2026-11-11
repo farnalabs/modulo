@@ -246,10 +246,7 @@ class TypedJudgeConfig(_StrictModel):
         if self.field and not _is_dotted_path(self.field):
             raise ValueError("field must be a dotted path into the output")
         if not self.field and not self.judge_whole_output:
-            raise ValueError(
-                "field is required (a dotted path into the output). Whole-output judging must be "
-                "explicit with 'judge_whole_output': true — otherwise the judged payload is empty"
-            )
+            raise ValueError("field is required (a dotted path into the output). Whole-output judging must be explicit with 'judge_whole_output': true — otherwise the judged payload is empty")
         if not self.judge_whole_output and self.field in self.context_fields:
             raise ValueError("context_fields must not repeat the primary 'field'")
         ids = [question.id for question in self.questions]
@@ -267,9 +264,7 @@ def _derivation_error() -> JudgeConfigWriteError:
     """Build the D17 rejection for a derivation question set."""
     return JudgeConfigWriteError(
         CODE_VERDICT_KIND,
-        "verdict_kind='derivation' is not supported by typed judgment in v1 "
-        "(ADR 066 D17): maths, code and logic correctness must use a deterministic "
-        "check, custom_function or human_set.",
+        "verdict_kind='derivation' is not supported by typed judgment in v1 (ADR 066 D17): maths, code and logic correctness must use a deterministic check, custom_function or human_set.",
         hint="Use a deterministic eval (regex/json_schema/custom_function/human_set) for derivation checks.",
     )
 
@@ -300,8 +295,7 @@ def validate_typed_judge_config(config: Any) -> None:
     if config.get("answer_contract") != TYPED_ANSWER_CONTRACT:
         raise JudgeConfigWriteError(
             CODE_TYPED_REQUIRED,
-            "new model_judge definitions require the typed-questions dialect "
-            f'("answer_contract": "{TYPED_ANSWER_CONTRACT}")',
+            f'new model_judge definitions require the typed-questions dialect ("answer_contract": "{TYPED_ANSWER_CONTRACT}")',
         )
     if config.get("verdict_kind") == "derivation":
         raise _derivation_error()

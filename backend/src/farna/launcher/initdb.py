@@ -46,7 +46,7 @@ GATE_INITDB_PRE_RENAME = "initdb_pre_rename"
 _TMP_DIR_PREFIX = ".initdb-tmp-"
 _PWFILE_PREFIX = ".initdb-pwfile-"
 
-_PAUSE_ENV_VAR = "MODULO_TEST_PAUSE_AT"
+_PAUSE_ENV_VAR = "FARNA_CONTROL_MODULO_TEST_PAUSE_AT"
 
 # Registered pause gates: MODULO_TEST_PAUSE_AT is a test-only seam; any other
 # value is a stale leak from a developer shell and must fail the boot loudly.
@@ -127,16 +127,8 @@ def validate_target_dir(pgdata: Path) -> None:
     if not entries:
         return
     if (pgdata / PG_VERSION_FILE).exists():
-        raise InitdbError(
-            f"Refusing to initdb: {pgdata} already contains an initialised "
-            f"cluster ({PG_VERSION_FILE} present). Upgrades go through the "
-            "pg-upgrade helper; never re-initdb an existing cluster."
-        )
-    raise InitdbError(
-        f"Refusing to initdb: {pgdata} is non-empty but has no {PG_VERSION_FILE} "
-        "— corrupt or interrupted cluster state. Remove the directory manually "
-        "after inspecting it; initdb will never overwrite it."
-    )
+        raise InitdbError(f"Refusing to initdb: {pgdata} already contains an initialised cluster ({PG_VERSION_FILE} present). Upgrades go through the pg-upgrade helper; never re-initdb an existing cluster.")
+    raise InitdbError(f"Refusing to initdb: {pgdata} is non-empty but has no {PG_VERSION_FILE} — corrupt or interrupted cluster state. Remove the directory manually after inspecting it; initdb will never overwrite it.")
 
 
 def initdb_argv(tmp_pgdata: Path, bin_dir: Path, username: str, pwfile: Path) -> list[str]:
@@ -207,10 +199,7 @@ def _validate_pause_env() -> None:
     """
     value = os.environ.get(_PAUSE_ENV_VAR)
     if value is not None and value not in _REGISTERED_GATES:
-        raise InitdbError(
-            f"{_PAUSE_ENV_VAR}={value!r} is not a registered pause gate "
-            f"(registered: {sorted(_REGISTERED_GATES)}) — refusing to bootstrap"
-        )
+        raise InitdbError(f"{_PAUSE_ENV_VAR}={value!r} is not a registered pause gate (registered: {sorted(_REGISTERED_GATES)}) — refusing to bootstrap")
 
 
 def assert_supported_platform() -> None:
@@ -220,10 +209,7 @@ def assert_supported_platform() -> None:
     bundled-Postgres bootstrap still requires installer-host validation.
     """
     if is_windows():
-        raise InitdbError(
-            "Bundled Postgres bootstrap on Windows requires validation with the shipped Windows binary "
-            "and installer test environment (FAR-2229); refusing unvalidated runtime bootstrap"
-        )
+        raise InitdbError("Bundled Postgres bootstrap on Windows requires validation with the shipped Windows binary and installer test environment (FAR-2229); refusing unvalidated runtime bootstrap")
 
 
 def bootstrap_pgdata(
@@ -261,9 +247,7 @@ def bootstrap_pgdata(
     try:
         _run_command(initdb_argv(tmp_pgdata, effective_bin_dir, username, pwfile))
         if not (tmp_pgdata / PG_VERSION_FILE).exists():
-            raise InitdbError(
-                f"initdb reported success but {PG_VERSION_FILE} is missing in {tmp_pgdata} — refusing to promote"
-            )
+            raise InitdbError(f"initdb reported success but {PG_VERSION_FILE} is missing in {tmp_pgdata} — refusing to promote")
         if pause_hook is not None:
             pause_hook(GATE_INITDB_PRE_RENAME)
         else:

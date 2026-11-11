@@ -69,15 +69,11 @@ class DatadogConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Datadog API key validated")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="Invalid Datadog API key")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
                 return HealthResult(ok=False, detail="Invalid Datadog API key")
-            return HealthResult(
-                ok=False, detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200]
-            )
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as exc:

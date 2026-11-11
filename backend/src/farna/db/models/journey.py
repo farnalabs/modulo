@@ -49,9 +49,7 @@ class Journey(OrgScoped):
         ),
     )
 
-    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True
-    )
+    owner_team_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     ref: Mapped[str] = mapped_column(String(255), nullable=False)
     canonical_work_item_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
@@ -60,9 +58,7 @@ class Journey(OrgScoped):
         nullable=True,
         comment=("deliberately NOT a FK — journeys survive the run purge; a future 'fix' into an FK breaks retention"),
     )
-    map_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("lifecycle_maps.id", ondelete="SET NULL"), nullable=True
-    )
+    map_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("lifecycle_maps.id", ondelete="SET NULL"), nullable=True)
     map_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stage_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     stage_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

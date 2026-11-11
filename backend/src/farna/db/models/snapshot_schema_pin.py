@@ -9,18 +9,14 @@ from farna.db.models.base import OrgScoped
 class SnapshotSchemaPin(OrgScoped):
     __tablename__ = "snapshot_schema_pins"
 
-    snapshot_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("pipeline_snapshots.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
     # FAR-644: no FK to nodes.id — ``nodes`` is the deprecated composite-template
     # store; this node id is a JSON-graph id (pipelines.graph_nodes_json) that
     # never materialises as a ``nodes`` row (see migration 0170's correction),
     # so an enforced FK would reject every legitimate pin write.
     node_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
-    schema_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("schemas.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    schema_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schemas.id", ondelete="RESTRICT"), nullable=False, index=True)
     schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
 
     __table_args__ = (

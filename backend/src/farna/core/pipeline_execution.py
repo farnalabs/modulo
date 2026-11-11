@@ -203,9 +203,7 @@ _PHASE_UPDATE_SQL = text(
 #   same way ``DispatchPhaseWriter._write`` does it.
 # * Not monotonic-guarded: a drop can be recorded whether or not a phase
 #   entry landed (the whole point is counting the entries that did NOT).
-_DROP_COUNTER_UPDATE_SQL = text(
-    "UPDATE runs SET dispatch_phase_write_drops=dispatch_phase_write_drops+1 WHERE id=:rid AND organisation_id=:oid"
-)
+_DROP_COUNTER_UPDATE_SQL = text("UPDATE runs SET dispatch_phase_write_drops=dispatch_phase_write_drops+1 WHERE id=:rid AND organisation_id=:oid")
 
 
 class DispatchPhaseWriter:
@@ -584,9 +582,7 @@ _SWEEP_DERIVED_COST_MAX_PER_TICK = 100
 # concatenated onto it by the UPDATE itself (one bind param for the prefix,
 # N row shapes). Names THIS sweep as the writer so provenance is visible in
 # the run's error_detail (the reconcile paths name themselves the same way).
-_SAQ_ZERO_PROGRESS_DETAIL_PREFIX_FMT = (
-    "No node progress within the {age}m age bound (stale_run_recovery zero-progress sweep; "
-)
+_SAQ_ZERO_PROGRESS_DETAIL_PREFIX_FMT = "No node progress within the {age}m age bound (stale_run_recovery zero-progress sweep; "
 
 
 @dataclass(frozen=True)
@@ -668,9 +664,7 @@ def _saq_zero_progress_emission(row: Any, completed_at: datetime) -> _SaqZeroPro
     )
 
 
-def _log_saq_zero_progress_emission(
-    emission: _SaqZeroProgressEmission, *, org_id: uuid.UUID, max_age_minutes: int
-) -> None:
+def _log_saq_zero_progress_emission(emission: _SaqZeroProgressEmission, *, org_id: uuid.UUID, max_age_minutes: int) -> None:
     """Alert-grade, per-run log — same shape as the chokepoint's log so a
     burst is visible with per-run attribution."""
     _log.error(
@@ -865,15 +859,10 @@ def _resolve_claim_cap(claim_cap: int | None) -> int:
 # 10-08→10-12 incident window that ephemeral logs could not reconstruct).
 # One statement, no extra connection, same guaranteed-succeeds write as the
 # floor stamp.
-_CLAIM_HISTORY_APPEND = (
-    "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)"
-    "||jsonb_build_array(jsonb_build_object('phase', 'claimed', 'entered_at', now())) "
-)
+_CLAIM_HISTORY_APPEND = "dispatch_phase_history=coalesce(dispatch_phase_history, '[]'::jsonb)||jsonb_build_array(jsonb_build_object('phase', 'claimed', 'entered_at', now())) "
 _CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
-    + _CLAIM_HISTORY_APPEND
-    + "WHERE id=:rid AND organisation_id=:oid "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -882,9 +871,7 @@ _CLAIM_UPDATE_SQL = text(
 
 _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok, "  # nosec B608  # noqa: S608 - concatenates module constants only (never caller data)
-    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), "
-    + _CLAIM_HISTORY_APPEND
-    + "WHERE id=:rid AND organisation_id=:oid "
+    "dispatch_phase='claimed', dispatch_phase_entered_at=now(), " + _CLAIM_HISTORY_APPEND + "WHERE id=:rid AND organisation_id=:oid "
     "AND (status = 'pending' "
     "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
     "AND claim_count < :claim_cap "
@@ -970,16 +957,8 @@ def _claim_params(
 # Fenced on the claim token + ``status='running'`` like every other
 # claim-scoped writer, so a superseded executor (whose token was rotated by a
 # successor) can never spend the successor's budget.
-_EXECUTION_ATTEMPT_BUMP_SQL = text(
-    "UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 "
-    "WHERE id=:rid AND organisation_id=:oid AND status='running' AND claim_token=:tok "
-    "RETURNING id"
-)
-_EXECUTION_ATTEMPT_BUMP_SQL_NO_TOKEN = text(
-    "UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 "
-    "WHERE id=:rid AND organisation_id=:oid AND status='running' "
-    "RETURNING id"
-)
+_EXECUTION_ATTEMPT_BUMP_SQL = text("UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 WHERE id=:rid AND organisation_id=:oid AND status='running' AND claim_token=:tok RETURNING id")
+_EXECUTION_ATTEMPT_BUMP_SQL_NO_TOKEN = text("UPDATE runs SET execution_attempt_count = execution_attempt_count + 1 WHERE id=:rid AND organisation_id=:oid AND status='running' RETURNING id")
 
 
 async def bump_execution_attempt_count(
@@ -1106,8 +1085,7 @@ async def claim_run_async(
             # it on its next tick once the job hash expires. Non-silent: WARNING
             # with the full exception chain, never a swallowed error.
             _log.warning(
-                "pipeline_execution.claim_lock_timeout run=%s — row-lock wait exceeded "
-                "mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
+                "pipeline_execution.claim_lock_timeout run=%s — row-lock wait exceeded mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
                 run_id,
                 exc_info=True,
             )
@@ -1192,12 +1170,8 @@ async def _read_current_claim_token(aeng: AsyncEngine, run_id: str, org_id: str)
 # ``heartbeat_at``) nor overwrite its terminal state (every terminal writer
 # is status-guarded), so the race has no writer side.
 _HEARTBEAT_ACTIVE_STATUSES = "active_statuses"
-_HEARTBEAT_SQL = text(
-    "UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND status IN :active_statuses RETURNING id"
-).bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
-_HEARTBEAT_TOKEN_FENCED_SQL = text(
-    "UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok AND status IN :active_statuses RETURNING id"
-).bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
+_HEARTBEAT_SQL = text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND status IN :active_statuses RETURNING id").bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
+_HEARTBEAT_TOKEN_FENCED_SQL = text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok AND status IN :active_statuses RETURNING id").bindparams(bindparam(_HEARTBEAT_ACTIVE_STATUSES, expanding=True))
 
 
 async def heartbeat_once(
@@ -1253,9 +1227,7 @@ async def heartbeat_once(
     if updated and job is not None:
         await job.update()
     if claim_token is not None and not updated:
-        raise ClaimSupersededError(
-            f"heartbeat fenced off for run {run_id}: claim token superseded, run already terminal, or row gone"
-        )
+        raise ClaimSupersededError(f"heartbeat fenced off for run {run_id}: claim token superseded, run already terminal, or row gone")
 
 
 async def heartbeat_loop(
@@ -1359,9 +1331,7 @@ async def _heartbeat_round(
             # below. Non-silent: WARNING with the full exception chain every
             # skipped beat.
             _log.warning(
-                "pipeline_execution.heartbeat_lock_timeout run=%s — row-lock wait exceeded "
-                "mutation_row_lock_timeout_ms; beat skipped (not counted toward the fail-closed "
-                "health threshold), re-processed next round",
+                "pipeline_execution.heartbeat_lock_timeout run=%s — row-lock wait exceeded mutation_row_lock_timeout_ms; beat skipped (not counted toward the fail-closed health threshold), re-processed next round",
                 run_id,
                 exc_info=True,
             )
@@ -1561,9 +1531,7 @@ async def _close_attempt_for_terminal_row(
     reason = attempt_terminal_reason(status, error_code)
     if reason is None:
         return
-    await record_attempt_close(
-        engine_session_factory(aeng), run_id, org_id, terminal_reason=reason, error_code=error_code
-    )
+    await record_attempt_close(engine_session_factory(aeng), run_id, org_id, terminal_reason=reason, error_code=error_code)
 
 
 async def _record_executor_outcome_attempt(
@@ -1630,12 +1598,7 @@ async def mark_complete(
                 {"val": org_id},
             )
             result = await c.execute(
-                text(
-                    "UPDATE runs SET status='complete', completed_at=now() "
-                    "WHERE id=:rid AND status='running' AND cancellation_requested = false "
-                    "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
-                    "RETURNING id"
-                ),
+                text("UPDATE runs SET status='complete', completed_at=now() WHERE id=:rid AND status='running' AND cancellation_requested = false AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) RETURNING id"),
                 {"rid": run_id, "tok": claim_token},
             )
             completed = result.fetchone() is not None
@@ -1644,9 +1607,7 @@ async def mark_complete(
     except Exception as exc:
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
             _log.warning(
-                "mark_complete lock timeout for run %s — row-lock wait exceeded "
-                "mutation_row_lock_timeout_ms; completion not written, run left running "
-                "for dispatcher_reconcile's running+stale re-dispatch",
+                "mark_complete lock timeout for run %s — row-lock wait exceeded mutation_row_lock_timeout_ms; completion not written, run left running for dispatcher_reconcile's running+stale re-dispatch",
                 run_id,
                 exc_info=True,
             )
@@ -1760,12 +1721,7 @@ async def fail_run_terminal(
             {"val": org_id},
         )
         result = await c.execute(
-            text(
-                "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
-                "WHERE id=:rid AND status='running' AND cancellation_requested = false "
-                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
-                "RETURNING id"
-            ),
+            text("UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() WHERE id=:rid AND status='running' AND cancellation_requested = false AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) RETURNING id"),
             {
                 "rid": run_id,
                 "code": error_code,
@@ -1963,8 +1919,7 @@ async def _fail_run_terminal_with_retry(
             if attempt < _TERMINAL_WRITE_MAX_ATTEMPTS:
                 delay = _TERMINAL_WRITE_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
                 _log.warning(
-                    "pipeline_execution.terminal_write_retry run=%s attempt=%d/%d "
-                    "exc=%s — retrying the classification write in %.3fs",
+                    "pipeline_execution.terminal_write_retry run=%s attempt=%d/%d exc=%s — retrying the classification write in %.3fs",
                     run_id,
                     attempt,
                     _TERMINAL_WRITE_MAX_ATTEMPTS,
@@ -1973,9 +1928,7 @@ async def _fail_run_terminal_with_retry(
                 )
                 await asyncio.sleep(delay)
     _log.error(
-        "pipeline_execution.terminal_write_retries_exhausted run=%s attempts=%d — "
-        "re-raising the last transient error (classification abandoned; the "
-        "reconciliation sweep remains the backstop)",
+        "pipeline_execution.terminal_write_retries_exhausted run=%s attempts=%d — re-raising the last transient error (classification abandoned; the reconciliation sweep remains the backstop)",
         run_id,
         _TERMINAL_WRITE_MAX_ATTEMPTS,
         exc_info=last_exc,
@@ -2180,9 +2133,7 @@ async def zombie_watchdog(
         _tracker_phase = dispatch_tracker.phase
         _tracker_phase_elapsed = dispatch_tracker.elapsed_in_phase()
     _log.warning(
-        "zombie_watchdog.stalled run=%s elapsed=%.1fs of %ds grace — "
-        "no node dispatched, dispatch_phase=%s dispatch_phase_elapsed=%.1fs, "
-        "cancelling executor and failing run",
+        "zombie_watchdog.stalled run=%s elapsed=%.1fs of %ds grace — no node dispatched, dispatch_phase=%s dispatch_phase_elapsed=%.1fs, cancelling executor and failing run",
         run_id,
         _elapsed,
         grace_seconds,
@@ -2219,8 +2170,7 @@ async def zombie_watchdog(
         # write would LAND and kill a run with budget remaining. Defer: leave
         # the row for the nodeless/age backstop.
         _log.warning(
-            "pipeline_execution.zombie_watchdog_deferred run=%s — fenced reset timed out; "
-            "run left running for the nodeless/age backstop (no terminal fail)",
+            "pipeline_execution.zombie_watchdog_deferred run=%s — fenced reset timed out; run left running for the nodeless/age backstop (no terminal fail)",
             run_id,
         )
         return
@@ -2232,12 +2182,9 @@ async def zombie_watchdog(
         org_id,
         error_code=EXECUTOR_STALLED_ERROR_CODE,
         error_detail=(
-            f"Executor dispatched no node within {grace_seconds}s setup grace "
-            f"(claimed-but-nodeless zombie watchdog); dispatch_phase={_tracker_phase} "
-            f"dispatch_phase_elapsed={_tracker_phase_elapsed:.1f}s"
+            f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog); dispatch_phase={_tracker_phase} dispatch_phase_elapsed={_tracker_phase_elapsed:.1f}s"
             if _tracker_phase is not None
-            else f"Executor dispatched no node within {grace_seconds}s setup grace "
-            "(claimed-but-nodeless zombie watchdog)"
+            else f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog)"
         ),
     )
 
@@ -2340,10 +2287,7 @@ async def _record_node_deadline_watchdog_firing(
                 {"val": org_id},
             )
             await c.execute(
-                text(
-                    "UPDATE runs SET node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1 "
-                    "WHERE id=:rid AND organisation_id=:oid"
-                ),
+                text("UPDATE runs SET node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1 WHERE id=:rid AND organisation_id=:oid"),
                 {"rid": run_id, "oid": org_id},
             )
             await c.commit()
@@ -2698,8 +2642,7 @@ async def _fail_overdue_node(
     if run_done_event.is_set() or exec_task.done():
         return
     _log.warning(
-        "node_deadline_watchdog.exceeded run=%s node=%s exceeded timeout_seconds=%ds — "
-        "cancelling executor and failing run",
+        "node_deadline_watchdog.exceeded run=%s node=%s exceeded timeout_seconds=%ds — cancelling executor and failing run",
         run_id,
         node_id,
         _timeout,
@@ -2732,8 +2675,7 @@ async def _fail_overdue_node(
         raise
     except Exception:
         _log.warning(
-            "pipeline_execution.node_deadline_completion_probe_failed run=%s node=%s — "
-            "terminal-failing without re-dispatch",
+            "pipeline_execution.node_deadline_completion_probe_failed run=%s node=%s — terminal-failing without re-dispatch",
             run_id,
             node_id,
             exc_info=True,
@@ -2747,8 +2689,7 @@ async def _fail_overdue_node(
 
     if not has_completions:
         _log.warning(
-            "pipeline_execution.node_deadline_terminal_no_completions run=%s node=%s — "
-            "no completed nodes in this attempt, terminal-failing without re-dispatch",
+            "pipeline_execution.node_deadline_terminal_no_completions run=%s node=%s — no completed nodes in this attempt, terminal-failing without re-dispatch",
             run_id,
             node_id,
         )
@@ -2760,11 +2701,7 @@ async def _fail_overdue_node(
         # the expected CancelledError is not re-raised here; a cleanup failure or a
         # timed-out cleanup must not stop the terminal write below.
         await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
-        error_detail = (
-            f"Node '{node_id}' did not complete within its configured timeout_seconds "
-            f"({_timeout}s) — node-deadline watchdog ended the dispatch. No node "
-            "completed in this attempt; re-dispatch skipped per FAR-2050."
-        )
+        error_detail = f"Node '{node_id}' did not complete within its configured timeout_seconds ({_timeout}s) — node-deadline watchdog ended the dispatch. No node completed in this attempt; re-dispatch skipped per FAR-2050."
         terminal_written = await fail_run_terminal(
             aeng,
             run_id,
@@ -2809,8 +2746,7 @@ async def _fail_overdue_node(
         # LAND. Defer instead — leave the row for the nodeless/age backstop.
         # No ``redispatched=True`` triage note: nothing was re-dispatched.
         _log.warning(
-            "pipeline_execution.node_deadline_deferred run=%s node=%s — fenced reset timed "
-            "out; run left running for the nodeless/age backstop (no terminal fail)",
+            "pipeline_execution.node_deadline_deferred run=%s node=%s — fenced reset timed out; run left running for the nodeless/age backstop (no terminal fail)",
             run_id,
             node_id,
         )
@@ -2833,12 +2769,7 @@ async def _fail_overdue_node(
     # AFTER the retry consult on purpose: the consult stands down on
     # ``exec_task.done()``, so settling first would disable re-dispatch.
     await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
-    error_detail = (
-        f"Node '{node_id}' did not complete within its configured timeout_seconds "
-        f"({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is "
-        "not asserted here; retained deadline_triage evidence is conditional, not "
-        "guaranteed."
-    )
+    error_detail = f"Node '{node_id}' did not complete within its configured timeout_seconds ({_timeout}s) — node-deadline watchdog ended the dispatch. The cause is not asserted here; retained deadline_triage evidence is conditional, not guaranteed."
     terminal_written = await fail_run_terminal(
         aeng,
         run_id,
@@ -3176,9 +3107,7 @@ async def run_executor_with_watchdog(
     if _watchdog_retry_enabled_for_job(job):
         from farna.core.pipeline_engine.watchdog_retry import create_watchdog_retry_hook
 
-        watchdog_retry_hook, watchdog_retry_outcome = create_watchdog_retry_hook(
-            aeng, rid, uuid.UUID(org_id), executor, exec_task=exec_task
-        )
+        watchdog_retry_hook, watchdog_retry_outcome = create_watchdog_retry_hook(aeng, rid, uuid.UUID(org_id), executor, exec_task=exec_task)
     watchdog_task = asyncio.create_task(
         zombie_watchdog(
             aeng,
@@ -3532,19 +3461,13 @@ async def _handle_executor_failure(
         # NON-terminal.
         if exec_exc.reset_state == "confirmed":
             _log.warning(
-                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts; the fenced pending-reset was "
-                "CONFIRMED, so the run is pending and NOT terminal-failed; "
-                "dispatcher_reconcile will re-dispatch it",
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time admission kept hitting row-lock timeouts; the fenced pending-reset was CONFIRMED, so the run is pending and NOT terminal-failed; dispatcher_reconcile will re-dispatch it",
                 run_id,
                 exec_exc.attempts,
             )
         elif exec_exc.reset_state == "fence_lost":
             _log.warning(
-                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts; the fenced pending-reset matched "
-                "NO row (fence lost), so the run is owned by a successor or has already left "
-                "running and was left untouched; NOT terminal-failed",
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time admission kept hitting row-lock timeouts; the fenced pending-reset matched NO row (fence lost), so the run is owned by a successor or has already left running and was left untouched; NOT terminal-failed",
                 run_id,
                 exec_exc.attempts,
             )
@@ -3576,9 +3499,7 @@ async def _handle_executor_failure(
         # it owns nothing. Deferred (non-terminal) — the successor's own
         # admission (or the cancellation machinery) owns the row's outcome.
         _log.warning(
-            "pipeline_execution.admission_refused_deferred run=%s reason=%s — the "
-            "retry-budget gate refused the execution and its terminal write lost the "
-            "fence; nothing was executed and the run is NOT terminal-failed",
+            "pipeline_execution.admission_refused_deferred run=%s reason=%s — the retry-budget gate refused the execution and its terminal write lost the fence; nothing was executed and the run is NOT terminal-failed",
             run_id,
             exec_exc.reason,
         )
@@ -3586,8 +3507,7 @@ async def _handle_executor_failure(
     if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):
         reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
         _log.warning(
-            "pipeline_execution.resume_capacity_deferred run=%s reset=%s — "
-            "committed decision preserved; dispatcher_reconcile will re-dispatch",
+            "pipeline_execution.resume_capacity_deferred run=%s reset=%s — committed decision preserved; dispatcher_reconcile will re-dispatch",
             run_id,
             reset,
         )
@@ -3751,9 +3671,7 @@ async def _await_watchdog_bounded(
             await task
         return
     _log.warning(
-        "pipeline_execution.watchdog_await_bound_exceeded run=%s watchdog=%s "
-        "bound=%ss — unclassified cancellation: proceeding with stand-down "
-        "instead of waiting out the watchdog's remaining setup grace",
+        "pipeline_execution.watchdog_await_bound_exceeded run=%s watchdog=%s bound=%ss — unclassified cancellation: proceeding with stand-down instead of waiting out the watchdog's remaining setup grace",
         rid,
         label,
         _WATCHDOG_AWAIT_BOUND_SECONDS,
@@ -3841,9 +3759,7 @@ async def _resolve_cancel_outcome(
             run_id,
             org_id,
             error_code=EXECUTOR_HEARTBEAT_LOST_ERROR_CODE,
-            error_detail=(
-                "Heartbeat loop failed fail-closed after 3 consecutive DB/network failures (executor_heartbeat_lost)"
-            ),
+            error_detail=("Heartbeat loop failed fail-closed after 3 consecutive DB/network failures (executor_heartbeat_lost)"),
             claim_token=claim_token,
         )
     elif superseded.is_set():
@@ -3857,8 +3773,7 @@ async def _resolve_cancel_outcome(
         # skipped. Say so, so a $0 cancelled run is explainable rather than
         # looking like the salvage silently failed.
         _log.warning(
-            "pipeline_execution.cancel_cost_salvage_skipped run=%s reason=worker_shutdown "
-            "— post-settle marker salvage is not reached; no cost fabricated",
+            "pipeline_execution.cancel_cost_salvage_skipped run=%s reason=worker_shutdown — post-settle marker salvage is not reached; no cost fabricated",
             rid,
         )
         raise asyncio.CancelledError
@@ -4017,10 +3932,7 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
 _ORPHAN_RECONCILE_GRACE_SECONDS = 60
 
 _ORPHANED_RUN_DETAIL = (
-    "Worker lost: this node-started run carries no SAQ dispatcher identity (so the "
-    "dispatcher-scoped recovery arms cannot see it) and its executor stopped "
-    "heartbeating past the worker-lost window; run terminal-failed without "
-    "re-dispatch (a started node may already have executed side effects)."
+    "Worker lost: this node-started run carries no SAQ dispatcher identity (so the dispatcher-scoped recovery arms cannot see it) and its executor stopped heartbeating past the worker-lost window; run terminal-failed without re-dispatch (a started node may already have executed side effects)."
 )
 
 _SWEEP_ORPHANED_RUNS_SQL = text(
@@ -4227,9 +4139,7 @@ async def _sweep_org_stale_runs(
     # on the SQL constant).
     from farna.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _int_setting
 
-    reconcile_window = RECONCILE_STALE_HEARTBEAT_FACTOR * _int_setting(
-        getattr(get_settings(), "saq_job_heartbeat", None), 300
-    )
+    reconcile_window = RECONCILE_STALE_HEARTBEAT_FACTOR * _int_setting(getattr(get_settings(), "saq_job_heartbeat", None), 300)
     orphan_grace = max(wl_window, reconcile_window + _ORPHAN_RECONCILE_GRACE_SECONDS)
     orphan_now = datetime.now(UTC)
     orphaned_result = await conn.execute(
@@ -4509,9 +4419,7 @@ async def _attribute_swept_run_derived_cost(
         async with factory() as session, session.begin():
             await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, org_uuid)
-            row = (
-                await session.execute(select(Run.status, Run.error_code, Run.error_detail).where(Run.id == run_uuid))
-            ).one_or_none()
+            row = (await session.execute(select(Run.status, Run.error_code, Run.error_detail).where(Run.id == run_uuid))).one_or_none()
             if row is None:
                 _log.info("pipeline_execution.swept_cost_run_missing run=%s", run_id)
                 return
@@ -4767,9 +4675,7 @@ async def stale_run_recovery_sweep(
         derived_cost_deferred = len(committed_cost_ids) - derived_cost_attempted
         if derived_cost_deferred:
             _log.warning(
-                "Stale run recovery: derived-cost attribution deferred for %d of %d "
-                "worker-lost runs this tick (per-tick cap %d); those runs keep their "
-                "pre-FAR-2102 NULL cost — surfaced here, never silently dropped",
+                "Stale run recovery: derived-cost attribution deferred for %d of %d worker-lost runs this tick (per-tick cap %d); those runs keep their pre-FAR-2102 NULL cost — surfaced here, never silently dropped",
                 derived_cost_deferred,
                 len(committed_cost_ids),
                 _SWEEP_DERIVED_COST_MAX_PER_TICK,
@@ -4777,9 +4683,7 @@ async def stale_run_recovery_sweep(
 
         if never_count or lost_count or orphaned_count or queue_expired_count or zero_progress_count or stranded_count:
             _log.info(
-                "Stale run recovery: %d never-dispatched, %d queue-expired, %d worker-lost, "
-                "%d worker-orphaned (no SAQ dispatcher identity), "
-                "%d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
+                "Stale run recovery: %d never-dispatched, %d queue-expired, %d worker-lost, %d worker-orphaned (no SAQ dispatcher identity), %d saq zero-progress runs swept, %d stranded capacity-blocked runs re-dispatched (%s)",
                 never_count,
                 queue_expired_count,
                 lost_count,
@@ -4825,9 +4729,7 @@ async def stale_run_recovery_sweep(
             # failing org's UPDATEs rolled back with it.
             "derived_cost_attempted": 0,
             "derived_cost_deferred": 0,
-            "terminalised_run_ids": [
-                _json_id_pair(run_id, org_id) for run_id, org_id in terminalised_run_ids[:committed_terminalised_len]
-            ],
+            "terminalised_run_ids": [_json_id_pair(run_id, org_id) for run_id, org_id in terminalised_run_ids[:committed_terminalised_len]],
             "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
         }
 
@@ -4997,8 +4899,7 @@ async def claim_resume_run_async(
             # ``dispatcher_reconcile``'s F6a branch re-dispatches the resume on
             # its next tick. Non-silent: WARNING with the full chain.
             _log.warning(
-                "pipeline_execution.resume_claim_lock_timeout run=%s — row-lock wait exceeded "
-                "mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
+                "pipeline_execution.resume_claim_lock_timeout run=%s — row-lock wait exceeded mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
                 run_id,
                 exc_info=True,
             )

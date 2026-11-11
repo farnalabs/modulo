@@ -63,9 +63,7 @@ def _validate_choice(answer: dict[str, Any], response_contract: dict[str, Any]) 
         raise AnswerValidationError("gate response_contract has no options")
     valid_ids: set[str] = {opt["id"] for opt in options if isinstance(opt, dict) and isinstance(opt.get("id"), str)}
     if option_id not in valid_ids:
-        raise AnswerValidationError(
-            f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}"
-        )
+        raise AnswerValidationError(f"option_id {option_id!r} is not a valid option for this gate; valid ids: {sorted(valid_ids)}")
 
 
 def _validate_approval(answer: dict[str, Any]) -> None:
@@ -93,9 +91,7 @@ def _validate_contract_answer(answer: dict[str, Any], response_contract: dict[st
     kind = answer.get("kind")
     declared_kind = response_contract.get("kind")
     if kind != declared_kind:
-        raise AnswerValidationError(
-            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
-        )
+        raise AnswerValidationError(f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}")
 
     if kind == "choice":
         _validate_choice(answer, response_contract)
@@ -125,9 +121,7 @@ async def validate_hitl_answer(
     ``kind: choice`` gate raises. Non-choice gates stay answer-optional.
     """
     if answer is None:
-        if require_answer and await _choice_gate_requires_answer(
-            session, run_id=run_id, review_id=review_id, org_id=org_id
-        ):
+        if require_answer and await _choice_gate_requires_answer(session, run_id=run_id, review_id=review_id, org_id=org_id):
             raise AnswerValidationError("choice gate requires an answer with a non-empty 'option_id'")
         return None
 

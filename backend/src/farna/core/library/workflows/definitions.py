@@ -16,11 +16,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 INCIDENT_TO_DEPLOY: dict[str, Any] = {
     "name": "Incident to Deploy",
-    "description": (
-        "End-to-end incident response pipeline. Ingests an alert or "
-        "incident report, triages severity, proposes a fix, sends the "
-        "fix through code review, and deploys to the target environment."
-    ),
+    "description": ("End-to-end incident response pipeline. Ingests an alert or incident report, triages severity, proposes a fix, sends the fix through code review, and deploys to the target environment."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["incident", "response", "deploy", "remediation", "canonical"],
@@ -65,11 +61,7 @@ INCIDENT_TO_DEPLOY: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 FEATURE_PROPOSAL: dict[str, Any] = {
     "name": "Feature Proposal",
-    "description": (
-        "Guided feature proposal pipeline. Takes an idea description, "
-        "generates a PRD, reviews it against existing requirements, "
-        "reaches approval decisions, and schedules the work."
-    ),
+    "description": ("Guided feature proposal pipeline. Takes an idea description, generates a PRD, reviews it against existing requirements, reaches approval decisions, and schedules the work."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["feature", "proposal", "prd", "planning", "canonical"],
@@ -112,11 +104,7 @@ FEATURE_PROPOSAL: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SCHEMA_INFERENCE_PIPELINE: dict[str, Any] = {
     "name": "Schema Inference Pipeline",
-    "description": (
-        "Automated schema discovery pipeline. Connects to a data source, "
-        "samples records, infers a JSON Schema, validates it against "
-        "existing schemas, and publishes the result."
-    ),
+    "description": ("Automated schema discovery pipeline. Connects to a data source, samples records, infers a JSON Schema, validates it against existing schemas, and publishes the result."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["schema", "inference", "discovery", "data", "canonical"],
@@ -160,11 +148,7 @@ SCHEMA_INFERENCE_PIPELINE: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 REQUIREMENTS_TO_FILE: dict[str, Any] = {
     "name": "Requirements to File",
-    "description": (
-        "Full requirements-to-implementation pipeline. Takes requirements "
-        "text, generates a design, implements the code, runs tests, and "
-        "submits for review."
-    ),
+    "description": ("Full requirements-to-implementation pipeline. Takes requirements text, generates a design, implements the code, runs tests, and submits for review."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["requirements", "implementation", "testing", "sdlc", "canonical"],
@@ -206,11 +190,7 @@ REQUIREMENTS_TO_FILE: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 FULL_SDLC: dict[str, Any] = {
     "name": "Full SDLC",
-    "description": (
-        "Complete software delivery lifecycle pipeline. Covers ideation, "
-        "requirements, design, implementation, testing, review, release "
-        "notes, and deployment in a single end-to-end workflow."
-    ),
+    "description": ("Complete software delivery lifecycle pipeline. Covers ideation, requirements, design, implementation, testing, review, release notes, and deployment in a single end-to-end workflow."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["sdlc", "full-lifecycle", "delivery", "devops", "canonical"],
@@ -278,11 +258,7 @@ FULL_SDLC: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 TICKET_TO_PR: dict[str, Any] = {
     "name": "Ticket to PR",
-    "description": (
-        "Automated ticket-to-pull-request pipeline. Reads a ticket from "
-        "an issue tracker, creates a feature branch, implements the "
-        "changes, runs tests, and opens a PR."
-    ),
+    "description": ("Automated ticket-to-pull-request pipeline. Reads a ticket from an issue tracker, creates a feature branch, implements the changes, runs tests, and opens a PR."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["ticket", "pr", "automation", "github", "gitlab", "canonical"],
@@ -339,11 +315,7 @@ TICKET_TO_PR: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 ADR_WORKFLOW: dict[str, Any] = {
     "name": "ADR Workflow",
-    "description": (
-        "Architecture Decision Record pipeline. Guides the creation, "
-        "review, approval, and storage of ADRs following the standard "
-        "ADR format."
-    ),
+    "description": ("Architecture Decision Record pipeline. Guides the creation, review, approval, and storage of ADRs following the standard ADR format."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["adr", "architecture", "decisions", "documentation", "canonical"],
@@ -386,11 +358,7 @@ ADR_WORKFLOW: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 MEETING_TO_TICKETS: dict[str, Any] = {
     "name": "Meeting to Tickets",
-    "description": (
-        "Meeting action-item extraction pipeline. Takes meeting notes, "
-        "extracts action items and decisions, creates tickets in the "
-        "connected issue tracker."
-    ),
+    "description": ("Meeting action-item extraction pipeline. Takes meeting notes, extracts action items and decisions, creates tickets in the connected issue tracker."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["meetings", "actions", "tickets", "productivity", "canonical"],
@@ -435,11 +403,7 @@ MEETING_TO_TICKETS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 SPRINT_RETROSPECTIVE: dict[str, Any] = {
     "name": "Sprint Retrospective",
-    "description": (
-        "Automated sprint retrospective pipeline. Gathers sprint data "
-        "(completed tickets, velocity, feedback), analyses patterns, "
-        "generates a retrospective report, and shares it with the team."
-    ),
+    "description": ("Automated sprint retrospective pipeline. Gathers sprint data (completed tickets, velocity, feedback), analyses patterns, generates a retrospective report, and shares it with the team."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["sprint", "retrospective", "agile", "metrics", "canonical"],
@@ -490,11 +454,7 @@ SPRINT_RETROSPECTIVE: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 WEEKLY_QUALITY_REPORT: dict[str, Any] = {
     "name": "Weekly Quality Report",
-    "description": (
-        "Automated weekly quality report pipeline. Gathers quality "
-        "metrics from connected tools (SonarQube, Sentry, Snyk, CI), "
-        "analyses trends, generates a report, and notifies stakeholders."
-    ),
+    "description": ("Automated weekly quality report pipeline. Gathers quality metrics from connected tools (SonarQube, Sentry, Snyk, CI), analyses trends, generates a report, and notifies stakeholders."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["quality", "reporting", "metrics", "weekly", "canonical"],
@@ -545,11 +505,7 @@ WEEKLY_QUALITY_REPORT: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 CICD_WORKFLOW: dict[str, Any] = {
     "name": "CI/CD Pipeline",
-    "description": (
-        "Standard CI/CD pipeline template. Runs linting, unit tests, "
-        "build, integration tests, security scan, and deploys on success "
-        "with optional approval gates."
-    ),
+    "description": ("Standard CI/CD pipeline template. Runs linting, unit tests, build, integration tests, security scan, and deploys on success with optional approval gates."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["ci-cd", "automation", "testing", "deploy", "canonical"],
@@ -604,11 +560,7 @@ CICD_WORKFLOW: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 DOGFOODING_PIPELINE: dict[str, Any] = {
     "name": "Dogfooding Pipeline",
-    "description": (
-        "End-to-end dogfooding pipeline where Modulo builds Modulo. Reads a "
-        "GitHub issue, generates a code diff via LLM, validates with tests, "
-        "passes through a human review gate, and creates a PR."
-    ),
+    "description": ("End-to-end dogfooding pipeline where Modulo builds Modulo. Reads a GitHub issue, generates a code diff via LLM, validates with tests, passes through a human review gate, and creates a PR."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["dogfooding", "self-hosted", "issue-to-pr", "github", "canonical"],
@@ -665,11 +617,7 @@ DOGFOODING_PIPELINE: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 RELEASE_CANDIDATE: dict[str, Any] = {
     "name": "Release Candidate",
-    "description": (
-        "Release candidate management pipeline. Versions the build, "
-        "runs full test suite and security scan, deploys to staging, "
-        "runs smoke tests, requests approval, and promotes to production."
-    ),
+    "description": ("Release candidate management pipeline. Versions the build, runs full test suite and security scan, deploys to staging, runs smoke tests, requests approval, and promotes to production."),
     "version": "1.0.0",
     "author": "Modulo",
     "tags": ["release", "candidate", "deploy", "approval", "canonical"],

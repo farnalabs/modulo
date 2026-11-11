@@ -166,9 +166,7 @@ async def get_evidence_retention(
 
 @router.put(
     "",
-    dependencies=[
-        Depends(audited("evidence_retention_updated", "evidence_retention", principal_dep=get_current_tenant_user))
-    ],
+    dependencies=[Depends(audited("evidence_retention_updated", "evidence_retention", principal_dep=get_current_tenant_user))],
     status_code=http_status.HTTP_200_OK,
 )
 @handle_db_errors("admin.evidence_retention.update_evidence_retention")

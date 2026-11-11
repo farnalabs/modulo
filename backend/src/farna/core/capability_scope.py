@@ -289,9 +289,7 @@ def self_scoped_tools() -> frozenset[str]:
     """
     from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
-    return frozenset(
-        tool for tool, permission_key in TOOL_SCOPE_REQUIREMENTS.items() if permission_key.endswith(_SELF_SUFFIX)
-    )
+    return frozenset(tool for tool, permission_key in TOOL_SCOPE_REQUIREMENTS.items() if permission_key.endswith(_SELF_SUFFIX))
 
 
 def validate_no_self_tools(*, node_id: str, allowed_tools: list[str] | None) -> None:

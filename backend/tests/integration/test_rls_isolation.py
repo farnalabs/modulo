@@ -148,20 +148,13 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
             for row in (
                 await conn.execute(
                     text(
-                        "SELECT table_name FROM information_schema.columns "
-                        "WHERE column_name = 'organisation_id' "
-                        "AND table_schema = 'public'",
+                        "SELECT table_name FROM information_schema.columns WHERE column_name = 'organisation_id' AND table_schema = 'public'",
                     ),
                 )
             ).fetchall()
         }
 
-        tables_with_policy = {
-            row[0]
-            for row in (
-                await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_org_isolation'"))
-            ).fetchall()
-        }
+        tables_with_policy = {row[0] for row in (await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_org_isolation'"))).fetchall()}
 
     # organisations table has no organisation_id column — correctly excluded.
     # The team-scoped tables carry rls_team_isolation (org check
@@ -225,17 +218,14 @@ async def test_rls_filters_rows_for_non_superuser(db_engine: AsyncEngine) -> Non
             for oid, name in [(org_a, "RLS-Org-A"), (org_b, "RLS-Org-B")]:
                 await conn.execute(
                     text(
-                        "INSERT INTO organisations (id, name, slug, settings_json) "
-                        "VALUES (:id, :name, :slug, '{}'::json)",
+                        "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
                     ),
                     {"id": str(oid), "name": name, "slug": f"{name}-{oid}"},
                 )
             for eid, oid in [(event_a, org_a), (event_b, org_b)]:
                 await conn.execute(
                     text(
-                        "INSERT INTO audit_events "
-                        "(id, organisation_id, event_type, payload_json) "
-                        "VALUES (:id, :oid, 'test.rls', '{}'::json)",
+                        "INSERT INTO audit_events (id, organisation_id, event_type, payload_json) VALUES (:id, :oid, 'test.rls', '{}'::json)",
                     ),
                     {"id": str(eid), "oid": str(oid)},
                 )
@@ -371,12 +361,7 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
     (FAR-1692, migration 0314), and system_maps (FAR-2236, migration 0341).
     """
     async with db_engine.connect() as conn:
-        tables_with_policy = {
-            row[0]
-            for row in (
-                await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_team_isolation'"))
-            ).fetchall()
-        }
+        tables_with_policy = {row[0] for row in (await conn.execute(text("SELECT tablename FROM pg_policies WHERE policyname = 'rls_team_isolation'"))).fetchall()}
 
     expected = {
         "pipelines",
@@ -432,8 +417,7 @@ async def test_strict_rls_tables_fail_closed_with_empty_org_context(
             )
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
                 ),
                 {
                     "id": str(account_id),
@@ -443,32 +427,25 @@ async def test_strict_rls_tables_fail_closed_with_empty_org_context(
             )
             await conn.execute(
                 text(
-                    "INSERT INTO parameter_schemas (id, organisation_id, name, account_id, parameters) "
-                    "VALUES (:id, :oid, 'schema1', :aid, '[]'::json)",
+                    "INSERT INTO parameter_schemas (id, organisation_id, name, account_id, parameters) VALUES (:id, :oid, 'schema1', :aid, '[]'::json)",
                 ),
                 {"id": str(schema_id), "oid": str(org_id), "aid": str(account_id)},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO parameter_sets "
-                    "(id, parameter_schema_id, organisation_id, version, schema_version, name, account_id, values) "
-                    "VALUES (:id, :sid, :oid, 1, 1, 'set1', :aid, '{}'::json)",
+                    "INSERT INTO parameter_sets (id, parameter_schema_id, organisation_id, version, schema_version, name, account_id, values) VALUES (:id, :sid, :oid, 1, 1, 'set1', :aid, '{}'::json)",
                 ),
                 {"id": str(uuid.uuid4()), "sid": str(schema_id), "oid": str(org_id), "aid": str(account_id)},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO oauth_authorization_codes "
-                    "(code, client_id, organisation_id, account_id, scopes, redirect_uri, expires_at, used) "
-                    "VALUES (:code, 'client1', :oid, :aid, 'read', 'https://x/cb', now() + interval '1 hour', false)",
+                    "INSERT INTO oauth_authorization_codes (code, client_id, organisation_id, account_id, scopes, redirect_uri, expires_at, used) VALUES (:code, 'client1', :oid, :aid, 'read', 'https://x/cb', now() + interval '1 hour', false)",
                 ),
                 {"code": f"code-{org_id.hex[:8]}", "oid": str(org_id), "aid": str(account_id)},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO oauth_token_families "
-                    "(family_id, client_id, organisation_id, max_sequence, is_blacklisted) "
-                    "VALUES (:fid, 'client1', :oid, 0, false)",
+                    "INSERT INTO oauth_token_families (family_id, client_id, organisation_id, max_sequence, is_blacklisted) VALUES (:fid, 'client1', :oid, 0, false)",
                 ),
                 {"fid": str(uuid.uuid4()), "oid": str(org_id)},
             )
@@ -508,10 +485,7 @@ async def test_strict_rls_tables_fail_closed_with_empty_org_context(
             )
             for table in tables:
                 count = (await conn.execute(text(count_queries[table]))).scalar()
-                assert count >= 1, (
-                    f"{table}: org context returned {count} rows — "
-                    "rls_org_isolation policy missing or denying all access"
-                )
+                assert count >= 1, f"{table}: org context returned {count} rows — rls_org_isolation policy missing or denying all access"
     finally:
         # Clean up seeded rows (superuser bypasses RLS) in FK-dependency order.
         async with db_engine.connect() as conn, conn.begin():
@@ -555,12 +529,7 @@ async def _seed_outputs_tenant(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -580,11 +549,7 @@ async def _seed_outputs_tenant(
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :hash, :thread, :tok)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :hash, :thread, :tok)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -609,9 +574,7 @@ async def _cleanup_outputs_tenants(
             await conn.execute(text("DELETE FROM run_node_outputs WHERE run_id = :rid"), {"rid": str(run_id)})
             await conn.execute(text("DELETE FROM runs WHERE id = :rid"), {"rid": str(run_id)})
         for org_id in org_ids:
-            await conn.execute(
-                text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"), {"oid": str(org_id)}
-            )
+            await conn.execute(text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"), {"oid": str(org_id)})
             await conn.execute(text("DELETE FROM pipelines WHERE organisation_id = :oid"), {"oid": str(org_id)})
             await conn.execute(text("DELETE FROM organisations WHERE id = :oid"), {"oid": str(org_id)})
 
@@ -634,10 +597,7 @@ async def test_run_node_outputs_rls_strict_fail_closed(
     try:
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
-                    "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
-                ),
+                text("INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"),
                 {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
             )
 
@@ -691,10 +651,7 @@ async def test_run_node_outputs_null_context_insert_rejected(
             await conn.execute(text("SELECT set_config('app.organisation_id', '', true)"))
             with pytest.raises(ProgrammingError) as excinfo:
                 await conn.execute(
-                    text(
-                        "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
-                        "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
-                    ),
+                    text("INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"),
                     {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
                 )
             err = excinfo.value
@@ -784,10 +741,7 @@ async def test_run_node_outputs_repo_module_org_gates(
             seed_factory = async_sessionmaker(db_engine, expire_on_commit=False)
             async with seed_factory() as session, session.begin():
                 await session.execute(
-                    text(
-                        "INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) "
-                        "VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"
-                    ),
+                    text("INSERT INTO run_node_outputs (run_id, node_id, attempt_key, organisation_id, outputs_json) VALUES (:rid, 'n1', '__final__', :oid, CAST(:oj AS jsonb))"),
                     {"rid": str(run_id), "oid": str(org_id), "oj": '{"a": 1}'},
                 )
             async with seed_factory() as session, session.begin():
@@ -879,17 +833,12 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         body = team_policy_bodies.get(table, "")
         assert body, f"{table} team policy has no USING body (qual)"
         assert "app.organisation_id" in body, f"{table} team policy lost the org check (cross-org leak)"
-        assert "app.execution_context" in body, (
-            f"{table} team policy missing the execution-context escape hatch — "
-            "background machinery (org scope only) cannot read team-private rows"
-        )
+        assert "app.execution_context" in body, f"{table} team policy missing the execution-context escape hatch — background machinery (org scope only) cannot read team-private rows"
 
     for table in org_only_tables:
         assert "rls_org_isolation" in policies.get(table, set()), f"{table} missing org policy"
         assert "rls_team_isolation" not in policies.get(table, set()), (
-            f"{table} is org-only by design but gained a team/account policy. Because PostgreSQL ORs "
-            "permissive policies, such a policy is either dead weight (if rls_org_isolation is kept) or "
-            "a read regression (if it is dropped, since org colleagues would lose access)."
+            f"{table} is org-only by design but gained a team/account policy. Because PostgreSQL ORs permissive policies, such a policy is either dead weight (if rls_org_isolation is kept) or a read regression (if it is dropped, since org colleagues would lose access)."
         )
 
 
@@ -904,22 +853,9 @@ _TEAM_RLS_TEST_TABLES: tuple[str, ...] = ("lifecycle_maps", "eval_datasets", "ev
 # ``content_json`` is a bare '{}' literal so it coerces to whatever json/jsonb
 # type the migration chain left behind.
 _TEST_ROW_INSERTS: dict[str, str] = {
-    "lifecycle_maps": (
-        "INSERT INTO lifecycle_maps "
-        "(id, organisation_id, account_id, name, visibility, owner_team_id, version, content_json, "
-        "created_at, updated_at) "
-        "VALUES (:id, :oid, :aid, :name, :vis, :tid, 1, '{}', current_timestamp, current_timestamp)"
-    ),
-    "eval_datasets": (
-        "INSERT INTO eval_datasets "
-        "(id, organisation_id, name, visibility, owner_team_id, version, created_at, updated_at) "
-        "VALUES (:id, :oid, :name, :vis, :tid, 1, current_timestamp, current_timestamp)"
-    ),
-    "eval_suites": (
-        "INSERT INTO eval_suites "
-        "(id, organisation_id, name, visibility, owner_team_id, created_at, updated_at) "
-        "VALUES (:id, :oid, :name, :vis, :tid, current_timestamp, current_timestamp)"
-    ),
+    "lifecycle_maps": ("INSERT INTO lifecycle_maps (id, organisation_id, account_id, name, visibility, owner_team_id, version, content_json, created_at, updated_at) VALUES (:id, :oid, :aid, :name, :vis, :tid, 1, '{}', current_timestamp, current_timestamp)"),
+    "eval_datasets": ("INSERT INTO eval_datasets (id, organisation_id, name, visibility, owner_team_id, version, created_at, updated_at) VALUES (:id, :oid, :name, :vis, :tid, 1, current_timestamp, current_timestamp)"),
+    "eval_suites": ("INSERT INTO eval_suites (id, organisation_id, name, visibility, owner_team_id, created_at, updated_at) VALUES (:id, :oid, :name, :vis, :tid, current_timestamp, current_timestamp)"),
 }
 
 # Hardcoded SELECT/DELETE per table so the statement text stays a literal
@@ -976,10 +912,7 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
         )
         for idx, account_id in enumerate((account_a, account_b)):
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
                 {
                     "id": str(account_id),
                     "email": f"{slug}-{idx}@example.com",
@@ -987,10 +920,7 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
                 },
             )
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'operator')"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
             )
 
@@ -1036,9 +966,7 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
             await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
             if ctx.get("user_id") is not None:
                 await conn.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": str(ctx["user_id"])})
-                await conn.execute(
-                    text("SELECT set_config('app.org_role', :role, true)"), {"role": str(ctx["org_role"])}
-                )
+                await conn.execute(text("SELECT set_config('app.org_role', :role, true)"), {"role": str(ctx["org_role"])})
             if ctx.get("execution_context"):
                 await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
             table = str(ctx["table"])
@@ -1063,9 +991,7 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
                 user_id=account_a,
                 org_role="operator",
             )
-            assert member_visible == {team_id, org_row_id}, (
-                f"{table}: team member should see both rows, got {sorted(member_visible)}"
-            )
+            assert member_visible == {team_id, org_row_id}, f"{table}: team member should see both rows, got {sorted(member_visible)}"
 
             # 2. Cross-team non-member: team-private denied, org-visible intact.
             non_member_visible = await _visible(
@@ -1074,18 +1000,12 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
                 user_id=account_b,
                 org_role="operator",
             )
-            assert team_id not in non_member_visible, (
-                f"{table}: cross-team read LEAKED a visibility='team' row to a non-member"
-            )
-            assert org_row_id in non_member_visible, (
-                f"{table}: org-visible row disappeared for a non-member — visibility='org' arm broken"
-            )
+            assert team_id not in non_member_visible, f"{table}: cross-team read LEAKED a visibility='team' row to a non-member"
+            assert org_row_id in non_member_visible, f"{table}: org-visible row disappeared for a non-member — visibility='org' arm broken"
 
             # 3. Background execution context (org scope only) reads everything.
             exec_visible = await _visible(rows, table=table, execution_context=True)
-            assert exec_visible == {team_id, org_row_id}, (
-                f"{table}: execution-context read lost rows — background machinery would break"
-            )
+            assert exec_visible == {team_id, org_row_id}, f"{table}: execution-context read lost rows — background machinery would break"
     finally:
         # Cleanup as superuser (bypasses RLS), FK-dependency order.
         async with db_engine.connect() as conn, conn.begin():
@@ -1133,9 +1053,7 @@ async def _create_account(db_engine: AsyncEngine, email: str) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {
                 "id": str(account_id),
@@ -1188,10 +1106,7 @@ async def test_team_memberships_isolated_by_org_rls(
             (account_b, "operator"),
         ):
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:id, :aid, :oid, :role)"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, :role)"),
                 {
                     "id": str(uuid.uuid4()),
                     "aid": str(account_id),
@@ -1276,7 +1191,7 @@ async def test_orm_tenant_filter_select_update_delete(monkeypatch: pytest.Monkey
     from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
     # Force non-Postgres path so tenant filter activates
-    monkeypatch.setenv("MODULO_DB", "sqlite")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DB", "sqlite")
 
     class _TenantTestBase(DeclarativeBase):
         pass

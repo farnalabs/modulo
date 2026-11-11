@@ -50,9 +50,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         # connection never re-resolves the host at connect time (closes the
         # DNS-rebinding window). ``trust_env=False`` stops a proxy from
         # re-resolving the destination server-side and defeating the pin.
-        return pinned_async_client_sync(
-            self._base, base_url=self._base, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
-        )
+        return pinned_async_client_sync(self._base, base_url=self._base, headers=self._headers(), timeout=30, verify=egress_ssl_context(self))
 
     async def health_check(self) -> HealthResult:
         try:
@@ -62,9 +60,7 @@ class AzureKeyVaultConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Azure Key Vault token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Azure Key Vault access token")
-                return HealthResult(
-                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
-                )
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200])
         except asyncio.CancelledError:
             raise
         except Exception as exc:

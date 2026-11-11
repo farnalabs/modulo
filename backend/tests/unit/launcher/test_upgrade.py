@@ -379,16 +379,12 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
                 },
             )
         )
-        stack.enter_context(
-            patch("farna.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"])
-        )
+        stack.enter_context(patch("farna.cli.backup._get_schema_versions", return_value=restore_manifest["schema_versions"]))
         stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
         stack.enter_context(
             patch(
                 "farna.cli.backup._run_pg_dump",
-                side_effect=lambda _url, output, timeout=300: Path(output).write_text(
-                    "-- safety dump", encoding="utf-8"
-                ),
+                side_effect=lambda _url, output, timeout=300: Path(output).write_text("-- safety dump", encoding="utf-8"),
             )
         )
         stack.enter_context(patch("farna.cli.backup._run_psql"))
@@ -574,9 +570,7 @@ def test_perform_upgrade_pg_major_mismatch_refuses(tmp_path, monkeypatch, patche
     manifest_body["components"]["postgres"] = "17"
     new_payload = json.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
     release_fixture.manifest.write_bytes(new_payload)
-    _new_signature = manifest_module.sign_release_bytes(
-        new_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
-    )
+    _new_signature = manifest_module.sign_release_bytes(new_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX)
     release_fixture.signature.write_text(json.dumps(_new_signature), encoding="utf-8")
     with pytest.raises(upgrade_module.UpgradeError, match="major mismatch"):
         upgrade_module.perform_upgrade(
@@ -837,9 +831,7 @@ def _manifest_triple(staging, target_version="1.2.0", *, manifest_release=None):
     manifest_payload = json_module.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
     manifest_path = staging / "RELEASE_MANIFEST.json"
     manifest_path.write_bytes(manifest_payload)
-    signature = manifest_module.sign_release_bytes(
-        manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
-    )
+    signature = manifest_module.sign_release_bytes(manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX)
     signature_path = staging / (manifest_module.MANIFEST_NAME + manifest_module.SIGNATURE_SUFFIX)
     signature_path.write_text(json_module.dumps(signature), encoding="utf-8")
     return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)
@@ -926,9 +918,7 @@ def test_check_no_downgrade_falls_back_to_the_snapshot_when_live_unknown(tmp_pat
     bundle_dir.mkdir()
     snapshot_dir = tmp_path / "pre-upgrade-dump-1"
     snapshot_dir.mkdir()
-    (snapshot_dir / "backup-info.json").write_text(
-        json_module.dumps({"schema_versions": ["3ab2c1d"]}), encoding="utf-8"
-    )
+    (snapshot_dir / "backup-info.json").write_text(json_module.dumps({"schema_versions": ["3ab2c1d"]}), encoding="utf-8")
     upgrade_module.check_no_downgrade(["unknown"], snapshot_dir, bundle_dir)  # falls back: no refusal
     with pytest.raises(upgrade_module.UpgradeError, match="cannot verify the database"):
         upgrade_module.check_no_downgrade(["unknown"], None, bundle_dir)
@@ -1102,9 +1092,7 @@ def test_prune_versions_never_deletes_the_resolved_current_after_swap(tmp_path):
     current_link.symlink_to("versions/0.9.9")
     pruned = upgrade_module.prune_versions(install_root, current_target=stale_bookkeeping)
     assert current_link.resolve(strict=True) == (versions / "0.9.9").resolve(strict=True)
-    assert (versions / "0.9.9").is_dir(), (
-        "retention must never delete the dir `current` now serves (post-swap resolution)"
-    )
+    assert (versions / "0.9.9").is_dir(), "retention must never delete the dir `current` now serves (post-swap resolution)"
     assert "0.9.9" not in pruned
     assert "1.0.0" not in pruned
 
@@ -1279,11 +1267,11 @@ class TestTempOwnerPid:
 
 class TestDefaultInstallRoot:
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("MODULO_INSTALL_ROOT", "/custom/path")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_INSTALL_ROOT", "/custom/path")
         assert upgrade_module.default_install_root() == Path("/custom/path")
 
     def test_env_expands_user(self, monkeypatch):
-        monkeypatch.setenv("MODULO_INSTALL_ROOT", "~/my-modulo")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_INSTALL_ROOT", "~/my-modulo")
         result = upgrade_module.default_install_root()
         assert str(result).endswith("my-modulo")
 
@@ -1294,11 +1282,11 @@ class TestResolvePgBinDir:
         assert upgrade_module._resolve_pg_bin_dir(explicit) == explicit
 
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("MODULO_BUNDLED_BIN_DIR", "/env/bin")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR", "/env/bin")
         assert upgrade_module._resolve_pg_bin_dir(None) == Path("/env/bin")
 
     def test_default_prefix(self, monkeypatch):
-        monkeypatch.delenv("MODULO_BUNDLED_BIN_DIR", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR", raising=False)
         result = upgrade_module._resolve_pg_bin_dir(None)
         assert result == Path(sys.prefix) / "bundled" / "bin"
 
@@ -1439,9 +1427,7 @@ class TestCheckNoDowngradeExtended:
         bundle_dir.mkdir()
         snapshot_dir = tmp_path / "snap"
         snapshot_dir.mkdir()
-        (snapshot_dir / "backup-info.json").write_text(
-            json.dumps({"schema_versions": ["abc123", "future_head"]}), encoding="utf-8"
-        )
+        (snapshot_dir / "backup-info.json").write_text(json.dumps({"schema_versions": ["abc123", "future_head"]}), encoding="utf-8")
         with pytest.raises(UpgradeError, match="DOWNGRADE"):
             upgrade_module.check_no_downgrade(["unknown"], snapshot_dir, bundle_dir)
 
@@ -1482,9 +1468,7 @@ class TestSnapshotSchemaVersions:
     def test_valid_versions(self, tmp_path):
         snap_dir = tmp_path / "snap"
         snap_dir.mkdir()
-        (snap_dir / "backup-info.json").write_text(
-            json.dumps({"schema_versions": ["head1", "head2"]}), encoding="utf-8"
-        )
+        (snap_dir / "backup-info.json").write_text(json.dumps({"schema_versions": ["head1", "head2"]}), encoding="utf-8")
         assert upgrade_module._snapshot_schema_versions(snap_dir) == ["head1", "head2"]
 
 
@@ -1655,8 +1639,7 @@ def _installer_probe(
         source = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
         install_script.write_text(
             source.read_text(encoding="utf-8").replace(
-                'verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" '
-                '"bundle-v${VERSION_NUM}"',
+                'verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"',
                 ": # test bypass: exercise archive extraction gate",
             ),
             encoding="utf-8",
@@ -1692,18 +1675,16 @@ def _installer_probe(
     subprocess.run(  # noqa: S603 - resolved system tar and test-owned paths
         [tar_bin, "-czf", str(archive), "-C", str(tmp_path), *archive_entries], check=True, timeout=30
     )
-    env = {**os.environ, "HOME": str(tmp_path / "home"), "MODULO_INSTALL_ROOT": str(tmp_path / "install")}
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "FARNA_CONTROL_MODULO_INSTALL_ROOT": str(tmp_path / "install")}
     if legacy_shim is not None:
-        env["MODULO_LEGACY_SHIM_PATH"] = str(legacy_shim)
+        env["FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH"] = str(legacy_shim)
     if bypass_manifest:
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (tmp_path / "RELEASE_MANIFEST.json").write_text(
             json.dumps({"release": "bundle-v1.2.3", "artifacts": [{"name": archive.name, "sha256": digest}]}),
             encoding="utf-8",
         )
-        (tmp_path / "RELEASE_MANIFEST.json.sig").write_text(
-            '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '"}', encoding="utf-8"
-        )
+        (tmp_path / "RELEASE_MANIFEST.json.sig").write_text('{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '"}', encoding="utf-8")
         stub_bin = tmp_path / "bin"
         stub_bin.mkdir()
         openssl_stub = stub_bin / "openssl"
@@ -1775,13 +1756,9 @@ def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp
     assert not (tmp_path / "install").exists()
 
 
-@pytest.mark.parametrize(
-    "listed_name", ["foo\\bar", "C:relative/artifact.txt", "C:\\foo", "C:/foo", "\\\\server\\share"]
-)
+@pytest.mark.parametrize("listed_name", ["foo\\bar", "C:relative/artifact.txt", "C:\\foo", "C:/foo", "\\\\server\\share"])
 @pytest.mark.posix_only
-def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(
-    tmp_path: Path, listed_name: str
-) -> None:
+def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(tmp_path: Path, listed_name: str) -> None:
     """The shell verifier must enforce Python's Windows-path policy itself.
 
     The extracted function is run with a deliberately nonexistent bundle root.
@@ -1798,12 +1775,7 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
     manifest.write_text(f"{'a' * 64}  {listed_name}\n", encoding="utf-8")
     harness = tmp_path / "verify.sh"
     harness.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
-        "sha256_of() { die 'sha256_of must not be reached'; }\n"
-        f"{verifier}\n"
-        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        f"#!/usr/bin/env bash\nset -euo pipefail\ndie() {{ printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }}\nsha256_of() {{ die 'sha256_of must not be reached'; }}\n{verifier}\nverify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
         encoding="utf-8",
     )
     harness.chmod(0o755)
@@ -1823,9 +1795,7 @@ def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesyste
     ("listed_name", "relative_path"),
     [("./VERSION", "VERSION"), ("./backend/nested/payload.txt", "backend/nested/payload.txt")],
 )
-def test_shell_checksum_verifier_accepts_native_bundle_leading_dot_paths(
-    tmp_path: Path, listed_name: str, relative_path: str
-) -> None:
+def test_shell_checksum_verifier_accepts_native_bundle_leading_dot_paths(tmp_path: Path, listed_name: str, relative_path: str) -> None:
     """A single leading ``./`` is accepted for root and nested bundle files."""
     source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
     function_start = source.index("verify_sums_in_dir() {")
@@ -1839,12 +1809,7 @@ def test_shell_checksum_verifier_accepts_native_bundle_leading_dot_paths(
     (sums_dir / "SHA256SUMS").write_text(f"{digest}  {listed_name}\n", encoding="utf-8")
     harness = tmp_path / "verify.sh"
     harness.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
-        "sha256_of() { sha256sum \"$1\" | awk '{print $1}'; }\n"
-        f"{verifier}\n"
-        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        f"#!/usr/bin/env bash\nset -euo pipefail\ndie() {{ printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }}\nsha256_of() {{ sha256sum \"$1\" | awk '{{print $1}}'; }}\n{verifier}\nverify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
         encoding="utf-8",
     )
     harness.chmod(0o755)
@@ -2434,11 +2399,7 @@ class TestTerminateBootProcessGroup:
         # REAL constant stays in play and nothing is substituted.
         real_sigkill = getattr(upgrade_module.signal, "SIGKILL", None)
         expected_sigkill = real_sigkill if real_sigkill is not None else object()
-        patch_sigkill = (
-            patch.object(upgrade_module.signal, "SIGKILL", expected_sigkill, create=True)
-            if real_sigkill is None
-            else contextlib.nullcontext()
-        )
+        patch_sigkill = patch.object(upgrade_module.signal, "SIGKILL", expected_sigkill, create=True) if real_sigkill is None else contextlib.nullcontext()
         with (
             patch.object(upgrade_module.os, "getpgid", return_value=12345, create=True),
             patch.object(upgrade_module.os, "killpg", create=True) as mock_killpg,
@@ -2757,11 +2718,7 @@ class TestRestartUnitBestEffort:
         ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
 
-        fallback_errors = [
-            record.getMessage()
-            for record in caplog.records
-            if record.name == "farna.launcher.upgrade" and record.levelno == logging.ERROR
-        ]
+        fallback_errors = [record.getMessage() for record in caplog.records if record.name == "farna.launcher.upgrade" and record.levelno == logging.ERROR]
         assert any("unit_restart_best_effort_failed" in m for m in fallback_errors)
 
 
@@ -2890,9 +2847,7 @@ def test_fetch_release_assets_rejects_unsafe_version(tmp_path, bad_version):
     fetched: list[str] = []
 
     with pytest.raises(upgrade_module.UpgradeError, match="invalid --version"):
-        upgrade_module.fetch_release_assets(
-            bad_version, tmp_path / "downloads", fetch=lambda url, dest: fetched.append(url)
-        )
+        upgrade_module.fetch_release_assets(bad_version, tmp_path / "downloads", fetch=lambda url, dest: fetched.append(url))
     assert not fetched
     assert not (tmp_path / "downloads").exists()
 

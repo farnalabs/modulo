@@ -59,13 +59,13 @@ class TestMultiHostCredentialHelper:
 
     def test_two_hosts_only_matching_token_emitted(self) -> None:
         """Two hosts: only the matching host's token is emitted for a given host."""
-        hosts = {"github.com": "MODULO_GIT_CRED_0", "gitlab.com": "MODULO_GIT_CRED_1"}
+        hosts = {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0", "gitlab.com": "FARNA_CONTROL_MODULO_GIT_CRED_1"}
         script = build_git_multi_host_script(hosts)
 
         # Verify github.com gets CRED_0
-        assert "MODULO_GIT_CRED_0" in script
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_0" in script
         # Verify gitlab.com gets CRED_1
-        assert "MODULO_GIT_CRED_1" in script
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_1" in script
         # Verify the case statement structure
         assert 'case "$host" in' in script
         assert '"github.com")' in script
@@ -73,7 +73,7 @@ class TestMultiHostCredentialHelper:
 
     def test_unknown_host_gets_nothing(self) -> None:
         """A third, unknown host gets NOTHING (deny)."""
-        hosts = {"github.com": "MODULO_GIT_CRED_0"}
+        hosts = {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0"}
         script = build_git_multi_host_script(hosts)
         # The script only has a case arm for github.com — an unknown host
         # falls through to nothing (no credential).
@@ -81,7 +81,7 @@ class TestMultiHostCredentialHelper:
 
     def test_token_isolation(self) -> None:
         """Host A never receives host B's token."""
-        hosts = {"github.com": "MODULO_GIT_CRED_0", "gitlab.com": "MODULO_GIT_CRED_1"}
+        hosts = {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0", "gitlab.com": "FARNA_CONTROL_MODULO_GIT_CRED_1"}
         script = build_git_multi_host_script(hosts)
 
         # Each host's case arm only references its OWN env var.
@@ -91,17 +91,17 @@ class TestMultiHostCredentialHelper:
 
         # Extract the github.com arm (between its start and the gitlab start)
         github_arm = script[github_arm_start:gitlab_arm_start]
-        assert "MODULO_GIT_CRED_0" in github_arm
-        assert "MODULO_GIT_CRED_1" not in github_arm
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_0" in github_arm
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_1" not in github_arm
 
         # Extract the gitlab.com arm (from its start to the esac)
         gitlab_arm = script[gitlab_arm_start:]
-        assert "MODULO_GIT_CRED_1" in gitlab_arm
-        assert "MODULO_GIT_CRED_0" not in gitlab_arm
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_1" in gitlab_arm
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_0" not in gitlab_arm
 
     def test_exact_literal_match_no_globs(self) -> None:
         """Matching is by exact literal equality — no glob patterns."""
-        hosts = {"github.com": "MODULO_GIT_CRED_0"}
+        hosts = {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0"}
         script = build_git_multi_host_script(hosts)
         # The case arm uses a quoted literal string, not a glob pattern.
         # The * in "host=*)" is shell case syntax for "any host= value",
@@ -111,18 +111,18 @@ class TestMultiHostCredentialHelper:
     def test_per_host_env_var_naming(self) -> None:
         """Each host's token comes from its own per-host env var."""
         hosts = {
-            "github.com": "MODULO_GIT_CRED_0",
-            "gitlab.com": "MODULO_GIT_CRED_1",
-            "bitbucket.org": "MODULO_GIT_CRED_2",
+            "github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0",
+            "gitlab.com": "FARNA_CONTROL_MODULO_GIT_CRED_1",
+            "bitbucket.org": "FARNA_CONTROL_MODULO_GIT_CRED_2",
         }
         script = build_git_multi_host_script(hosts)
-        assert "MODULO_GIT_CRED_0" in script
-        assert "MODULO_GIT_CRED_1" in script
-        assert "MODULO_GIT_CRED_2" in script
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_0" in script
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_1" in script
+        assert "FARNA_CONTROL_MODULO_GIT_CRED_2" in script
 
     def test_wrapper_structure(self) -> None:
         """The wrapper installs the helper and registers it in the agent config."""
-        hosts = {"github.com": "MODULO_GIT_CRED_0"}
+        hosts = {"github.com": "FARNA_CONTROL_MODULO_GIT_CRED_0"}
         script = build_git_multi_host_script(hosts)
         # Must start with set -e
         assert script.startswith("set -e\n")

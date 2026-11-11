@@ -137,9 +137,7 @@ def test_matrix_records_every_required_transition(tmp_path: Path) -> None:
         "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification\n",
         encoding="utf-8",
     )
-    assert "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification" in (
-        evidence.directory / "RESULT"
-    ).read_text(encoding="utf-8")
+    assert "PASS clean-install -> upgrade -> intentionally failed upgrade -> rollback -> rollback verification" in (evidence.directory / "RESULT").read_text(encoding="utf-8")
 
 
 def test_evidence_redacts_secret_literals(tmp_path: Path) -> None:
@@ -174,7 +172,7 @@ def test_credential_redaction_keeps_operator_tags_and_port(tmp_path: Path) -> No
         "COMPOSE_FILE": "/bundle/docker-compose.prod.yml",
         "SECRET_KEY": "super-secret-value",
         "POSTGRES_PASSWORD": "db-password",
-        "MODULO_USERS": "admin@example.com:admin-password",
+        "FARNA_CONTROL_MODULO_USERS": "admin@example.com:admin-password",
     }
     secrets = module._secret_values(env)
     assert secrets == {"super-secret-value", "db-password"}
@@ -185,11 +183,7 @@ def test_credential_redaction_keeps_operator_tags_and_port(tmp_path: Path) -> No
             "compose-config",
             ("docker", "compose", "config", "http://127.0.0.1:18080/healthz/ready"),
             0,
-            (
-                "image: ghcr.io/farnalabs/modulo:v1.1.0\n"
-                "SECRET_KEY: super-secret-value\n"
-                "POSTGRES_PASSWORD: db-password\n"
-            ),
+            ("image: ghcr.io/farnalabs/modulo:v1.1.0\nSECRET_KEY: super-secret-value\nPOSTGRES_PASSWORD: db-password\n"),
             "",
         ),
         outcome="success",

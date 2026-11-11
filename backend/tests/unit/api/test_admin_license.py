@@ -60,11 +60,7 @@ def _make_settings() -> Settings:
 def _sign_license_payload(payload: Mapping[str, object], private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -234,20 +230,14 @@ class TestParseAndVerify:
         payload = _make_valid_payload()
         key = _sign_license_payload(payload)
         parts = key.split(".")
-        tampered_payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
+        tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
         tampered_key = f"{tampered_payload_b64}.{parts[1]}"
         result = parse_and_verify(tampered_key)
         assert result.valid is False
         assert "Signature" in (result.error or "")
 
     def test_rejects_expired_license(self) -> None:
-        payload = _make_valid_payload(
-            expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
-        )
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat())
         key = _sign_license_payload(payload)
         result = parse_and_verify(key)
         assert result.valid is False
@@ -301,9 +291,7 @@ class TestResolveEffectiveLicense:
         assert status.tier == "community"
 
     def test_invalid_org_key_resolves_to_no_license(self) -> None:
-        status = admin_license._resolve_effective_license(
-            _make_settings(), _mock_org({"license_key": "not-a-valid-key"})
-        )
+        status = admin_license._resolve_effective_license(_make_settings(), _mock_org({"license_key": "not-a-valid-key"}))
         assert status.has_license is False
         assert status.tier == "community"
 
@@ -390,9 +378,7 @@ class TestGetLicense:
         assert resp.status_code == 200
         assert resp.json()["tier"] == "community"
 
-    def test_a_system_admin_below_org_admin_can_read_the_licence(
-        self, system_admin_operator_client: TestClient
-    ) -> None:
+    def test_a_system_admin_below_org_admin_can_read_the_licence(self, system_admin_operator_client: TestClient) -> None:
         """The read is system-OR-org admin, matching /auth/permissions' floor."""
         org = _mock_org(settings_json=None)
         with patch("farna.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
@@ -450,9 +436,7 @@ class TestDeriveLicenceState:
             pytest.param(-timedelta(days=1), -1, admin_license.LICENCE_STATE_GRACE, id="grace-1d-past"),
             pytest.param(-timedelta(days=13), -13, admin_license.LICENCE_STATE_GRACE, id="grace-13d-past"),
             # grace ↔ lapsed at expires_at + LICENCE_GRACE_DAYS.
-            pytest.param(
-                -timedelta(days=LICENCE_GRACE_DAYS), -14, admin_license.LICENCE_STATE_GRACE, id="grace-at-14d-past"
-            ),
+            pytest.param(-timedelta(days=LICENCE_GRACE_DAYS), -14, admin_license.LICENCE_STATE_GRACE, id="grace-at-14d-past"),
             pytest.param(
                 -timedelta(days=LICENCE_GRACE_DAYS, seconds=1),
                 -15,
@@ -474,9 +458,7 @@ class TestDeriveLicenceState:
         assert state == expected_state
 
     def test_days_round_down_so_the_countdown_never_overstates(self) -> None:
-        days, state = admin_license.derive_licence_state(
-            _expiry_from(timedelta(days=13, hours=23, minutes=59)), now=_STATE_NOW
-        )
+        days, state = admin_license.derive_licence_state(_expiry_from(timedelta(days=13, hours=23, minutes=59)), now=_STATE_NOW)
         assert days == 13
         assert state == admin_license.LICENCE_STATE_RENEWAL_DUE
 
@@ -521,9 +503,7 @@ class TestDeriveLicenceState:
             ),
         ],
     )
-    def test_naive_expiry_hits_the_same_boundaries(
-        self, offset: timedelta, expected_days: int, expected_state: str
-    ) -> None:
+    def test_naive_expiry_hits_the_same_boundaries(self, offset: timedelta, expected_days: int, expected_state: str) -> None:
         """An ``expires_at`` with no UTC offset must not shift any boundary.
 
         This drives the PRODUCTION path (no ``now`` argument), where the naive
@@ -738,9 +718,7 @@ class TestUploadLicense:
         assert "anchor mismatch" in body["detail"].lower()
         assert body["hint"]
 
-    def test_rejects_production_key_under_dev_anchor_with_actionable_error(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_rejects_production_key_under_dev_anchor_with_actionable_error(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The customer-facing failure: a real key, no MODULO_LICENSE_PUBLIC_KEY set."""
         monkeypatch.setattr("farna.core.license._configured_public_key_hex", None)
         kp = generate_keypair()
@@ -751,13 +729,11 @@ class TestUploadLicense:
         assert resp.status_code == 422
         body = resp.json()
         assert body["reason"] == "anchor_mismatch"
-        assert "MODULO_LICENSE_PUBLIC_KEY" in body["detail"]
+        assert "FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY" in body["detail"]
         assert "anchor mismatch" in body["detail"].lower()
 
     def test_rejects_expired_license(self, client: TestClient) -> None:
-        payload = _make_valid_payload(
-            expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat()
-        )
+        payload = _make_valid_payload(expires_at=(datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat())
         key = _sign_license_payload(payload)
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422
@@ -866,7 +842,7 @@ class TestIssueLicense:
         body = resp.json()
         assert body["reason"] == "signature_mismatch"
         assert "anchor mismatch" in body["detail"].lower()
-        assert "MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
+        assert "FARNA_CONTROL_MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
 
     def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
         with patch("farna.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
@@ -981,9 +957,7 @@ class TestLicenseCacheInvalidationSystemChange:
         assert json.loads(fresh)["tier"] == "team"
         assert probe.get(other_key) is None
 
-    def test_upload_returns_success_when_invalidation_fails(
-        self, cached_client: tuple[TestClient, FakeRedis], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_upload_returns_success_when_invalidation_fails(self, cached_client: tuple[TestClient, FakeRedis], monkeypatch: pytest.MonkeyPatch) -> None:
         client, _ = cached_client
 
         def _raise(*_args: object, **_kwargs: object) -> None:
@@ -1265,9 +1239,7 @@ class TestSystemLicencePersistence:
         assert persist.await_args.kwargs["updated_by"] == _TEST_ACCOUNT_ID
         assert get_license() is not None
 
-    def test_upload_reports_a_parked_successor_to_the_persister(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_upload_reports_a_parked_successor_to_the_persister(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         persist = AsyncMock()
         monkeypatch.setattr(admin_license, "persist_installed_system_license", persist)
         payload = _make_valid_payload(
@@ -1296,9 +1268,7 @@ class TestSystemLicencePersistence:
         clear.assert_awaited_once()
         assert get_license() is None
 
-    def test_status_refreshes_the_persisted_licence_before_resolving(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_status_refreshes_the_persisted_licence_before_resolving(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         refresh = AsyncMock(return_value=False)
         monkeypatch.setattr(admin_license, "refresh_persisted_system_license", refresh)
 
@@ -1423,9 +1393,7 @@ class TestLicenceStartsAtStatus:
 
         assert data["successor"]["gap_days"] is None
 
-    def test_a_due_successor_becomes_active_through_the_status_surface(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_due_successor_becomes_active_through_the_status_surface(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """No operator action: reading the status after the start promotes it."""
         now = datetime.now(UTC)
         start = now + timedelta(days=1)

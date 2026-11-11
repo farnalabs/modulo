@@ -336,9 +336,7 @@ async def _authenticate_credentials(
     return account
 
 
-def _resolve_login_org_context(
-    memberships: list[OrgMembership], account: Account
-) -> tuple[uuid.UUID | None, str | None]:
+def _resolve_login_org_context(memberships: list[OrgMembership], account: Account) -> tuple[uuid.UUID | None, str | None]:
     """Pick the primary org + role for a login, denying accounts with none.
 
     ``memberships`` is the ACTIVE-membership list (``deactivated_at IS NULL``
@@ -1245,9 +1243,7 @@ async def refresh(
     bind_audit_org(request, claims.org_id)
 
     try:
-        live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(
-            session, claims, settings
-        )
+        live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(session, claims, settings)
     except IntegrityError:
         _log.exception(_CODE_AUTH_REFRESH)
         raise HTTPException(
@@ -1605,11 +1601,7 @@ def _effective_permission_names(org_role: str | None, *, is_system_admin: bool) 
     if level < 0:
         return []
     unreachable = frozenset() if is_system_admin else _SYSTEM_ONLY_PERMISSIONS
-    return [
-        name
-        for name, min_role in sorted(PERMISSIONS.items())
-        if org_role_level(min_role) <= level and name not in unreachable
-    ]
+    return [name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= level and name not in unreachable]
 
 
 @router.get("/permissions")

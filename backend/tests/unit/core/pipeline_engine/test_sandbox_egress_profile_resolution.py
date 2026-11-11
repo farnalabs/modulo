@@ -140,9 +140,7 @@ class TestProfileNetworkPolicyEgressResolution:
 
         create_mock.assert_awaited_once()
         kwargs = create_mock.await_args.kwargs
-        assert kwargs["allow_internet_access"] is False, (
-            "profile network_policy='none' must deny internet when node egress_policy is unset"
-        )
+        assert kwargs["allow_internet_access"] is False, "profile network_policy='none' must deny internet when node egress_policy is unset"
 
     async def test_profile_outbound_allows_internet(self):
         """When egress_policy is unset and profile network_policy='outbound', internet is allowed."""
@@ -169,7 +167,7 @@ class TestProfileNetworkPolicyEgressResolution:
 
     async def test_node_level_value_wins_over_profile(self, monkeypatch):
         """When node egress_policy is explicitly set, the profile is ignored."""
-        monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
         node_def = _script_node_def(egress_policy="deny_all")
         fn = make_sandbox_agent_fn(node_def, session_factory=_SESSION_FACTORY_MOCK)
         sandbox = _make_sandbox_mock()
@@ -189,9 +187,7 @@ class TestProfileNetworkPolicyEgressResolution:
             await fn(_run_state())
 
         create_mock.assert_awaited_once()
-        assert create_mock.await_args.kwargs["allow_internet_access"] is False, (
-            "node-level egress_policy must override profile network_policy"
-        )
+        assert create_mock.await_args.kwargs["allow_internet_access"] is False, "node-level egress_policy must override profile network_policy"
 
     async def test_no_profile_keeps_default_behavior(self):
         """When no profile is bound (route provider_type='none'), the default is allow."""

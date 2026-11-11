@@ -108,10 +108,7 @@ def _column_meta(bind: Connection, column_name: str) -> dict | None:
     upgrade chain are always visible.
     """
     row = bind.execute(
-        text(
-            "SELECT is_nullable, column_default FROM information_schema.columns "
-            "WHERE table_schema = 'public' AND table_name = :table AND column_name = :col"
-        ),
+        text("SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = :table AND column_name = :col"),
         {"table": _TABLE, "col": column_name},
     ).fetchone()
     if row is None:
@@ -136,12 +133,7 @@ def _backfill(bind: Connection, col: str, tmp: str, cast: str) -> None:
     runs_tbl = table(_TABLE, column("ctid"), column(col), column(tmp), schema=_SCHEMA)
     pending = runs_tbl.c[tmp].is_(None) & runs_tbl.c[col].isnot(None)
     ctid_subq = select(runs_tbl.c.ctid).where(pending).limit(_BATCH_SIZE)
-    stmt = (
-        update(runs_tbl)
-        .where(pending)
-        .where(runs_tbl.c.ctid.in_(ctid_subq))
-        .values({tmp: runs_tbl.c[col].cast(_cast_type(cast))})
-    )
+    stmt = update(runs_tbl).where(pending).where(runs_tbl.c.ctid.in_(ctid_subq)).values({tmp: runs_tbl.c[col].cast(_cast_type(cast))})
     while True:
         result = bind.execute(stmt)
         if result.rowcount == 0:

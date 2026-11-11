@@ -45,29 +45,12 @@ _INFER_TIMEOUT = 60.0
 # single source of truth for connector type ids.
 _CONNECTOR_CATEGORY_GUIDANCE: dict[str, str] = {
     "issue-tracker": (
-        "This sample data comes from an issue-tracker tool (e.g. Jira, Linear). "
-        "Propose fields from issue metadata: summary/title, description, priority, "
-        "status, assignee, and labels. Suggest enum constraints for constrained "
-        "fields like status, priority, and issue_type where values repeat."
+        "This sample data comes from an issue-tracker tool (e.g. Jira, Linear). Propose fields from issue metadata: summary/title, description, priority, status, assignee, and labels. Suggest enum constraints for constrained fields like status, priority, and issue_type where values repeat."
     ),
-    "git-host": (
-        "This sample data comes from a git host (e.g. GitHub, GitLab). "
-        "Propose fields from repository and pull-request metadata: repo name, "
-        "branch, PR title, PR description, and file paths. Treat PR bodies as "
-        "string fields."
-    ),
-    "ci-runner": (
-        "This sample data comes from a CI runner. Propose fields from pipeline and "
-        "job metadata: pipeline ID, status, branch, commit SHA, and duration."
-    ),
-    "chat": (
-        "This sample data comes from a chat tool (e.g. Slack). Propose fields "
-        "derived from message and channel metadata."
-    ),
-    "document-store": (
-        "This sample data comes from a document store (e.g. Notion, Confluence). "
-        "Infer page structure; collapse block types to string fields."
-    ),
+    "git-host": ("This sample data comes from a git host (e.g. GitHub, GitLab). Propose fields from repository and pull-request metadata: repo name, branch, PR title, PR description, and file paths. Treat PR bodies as string fields."),
+    "ci-runner": ("This sample data comes from a CI runner. Propose fields from pipeline and job metadata: pipeline ID, status, branch, commit SHA, and duration."),
+    "chat": ("This sample data comes from a chat tool (e.g. Slack). Propose fields derived from message and channel metadata."),
+    "document-store": ("This sample data comes from a document store (e.g. Notion, Confluence). Infer page structure; collapse block types to string fields."),
     "generic": ("This connector has no specialised schema. Return a minimal field set: id, name, and type."),
 }
 
@@ -106,9 +89,7 @@ _CONNECTOR_TYPE_CATEGORY: dict[ConnectorType, str] = {
 # Single source of truth for which connector type ids admit schema inference
 # (PRD §8.16). Derived from ``_CONNECTOR_TYPE_CATEGORY`` so the route-level
 # admission allowlist and the category map can never drift apart.
-SUPPORTED_INFERENCE_TYPES: frozenset[str] = frozenset(
-    connector_type.value for connector_type in _CONNECTOR_TYPE_CATEGORY
-)
+SUPPORTED_INFERENCE_TYPES: frozenset[str] = frozenset(connector_type.value for connector_type in _CONNECTOR_TYPE_CATEGORY)
 
 
 def connector_category(connector_type: str | None) -> str:
@@ -176,19 +157,10 @@ def _build_infer_prompt(
     sample_text = _escape_block_markers(_safe_json_dumps(display))
     rare_fields = flag_rare_fields(sanitised)
     if rare_fields:
-        rare_note = (
-            f"\n\nRarely-used fields (present in fewer than {_RARE_FIELD_THRESHOLD:.0%} "
-            f"of the {len(sanitised)} samples; exclude from the draft by default): "
-            f"{', '.join(rare_fields)}"
-        )
+        rare_note = f"\n\nRarely-used fields (present in fewer than {_RARE_FIELD_THRESHOLD:.0%} of the {len(sanitised)} samples; exclude from the draft by default): {', '.join(rare_fields)}"
     else:
         rare_note = ""
-    message_text = (
-        f"Sample data ({len(display)} records):\n"
-        f"{_SAMPLE_BLOCK_START}\n{sample_text}\n{_SAMPLE_BLOCK_END}\n"
-        "Return ONLY the JSON Schema object."
-        f"{rare_note}"
-    )
+    message_text = f"Sample data ({len(display)} records):\n{_SAMPLE_BLOCK_START}\n{sample_text}\n{_SAMPLE_BLOCK_END}\nReturn ONLY the JSON Schema object.{rare_note}"
     category = connector_category(connector_type)
     system = system_prompt or _INFERENCE_SYSTEM_PROMPT
     if connector_type:

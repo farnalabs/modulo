@@ -380,9 +380,7 @@ async def _persist_eval_outcome(
                 score=eval_result.score,
                 judge_result_json=verdict.to_json() if verdict is not None else None,
                 judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None else None),
-                error_code=(
-                    verdict.error_code.value if verdict is not None and verdict.error_code is not None else None
-                ),
+                error_code=(verdict.error_code.value if verdict is not None and verdict.error_code is not None else None),
                 detail=eval_result.detail,
             )
             session.add(eval_result_row)

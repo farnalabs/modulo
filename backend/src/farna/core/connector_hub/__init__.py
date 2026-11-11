@@ -195,9 +195,7 @@ def _handle_settings_read_failure(exc: Exception, org_id: str | None) -> None:
             "Settings could not be read on the tenant path — fail-closed (no local-bucket fallback)",
             exc_info=exc,
         )
-        raise SharedBudgetUnavailableError(
-            f"settings could not be read to wire the shared rate-limit budget: {exc}"
-        ) from exc
+        raise SharedBudgetUnavailableError(f"settings could not be read to wire the shared rate-limit budget: {exc}") from exc
     logger.warning(
         "Unable to read settings for the shared Redis rate limiter — using the local bucket",
         exc_info=exc,
@@ -226,9 +224,7 @@ def _build_shared_redis_client(settings: Any) -> Any:
         logger.exception(
             "Shared Redis client construction failed — fail-closed (no local-bucket fallback)",
         )
-        raise SharedBudgetUnavailableError(
-            f"shared rate-limit Redis client is configured but could not be constructed: {exc}"
-        ) from exc
+        raise SharedBudgetUnavailableError(f"shared rate-limit Redis client is configured but could not be constructed: {exc}") from exc
 
 
 class ConnectorHub:
@@ -350,9 +346,7 @@ class ConnectorHub:
         degrade).
         """
         if self._redis_error is not None:
-            raise SharedBudgetUnavailableError(
-                f"shared rate-limit Redis client is configured but could not be constructed: {self._redis_error}"
-            ) from self._redis_error
+            raise SharedBudgetUnavailableError(f"shared rate-limit Redis client is configured but could not be constructed: {self._redis_error}") from self._redis_error
         if self._shared_redis is not None or self._redis_attempted:
             return self._shared_redis
         self._redis_attempted = True
@@ -796,9 +790,7 @@ class _TracedConnector(ConnectorBase):
                 self._inner.query,
                 q,
                 extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: q.resource, "connector.limit": q.limit},
-                post_span=lambda span, result: (
-                    span.set_attribute("connector.result_total", result.total) if result.total is not None else None
-                ),
+                post_span=lambda span, result: span.set_attribute("connector.result_total", result.total) if result.total is not None else None,
                 acl_operation=ACL_OPERATION_BY_CONNECTOR_METHOD["query"],
             ),
         )
@@ -1346,9 +1338,7 @@ def _build_connector(
         case "pagerduty":
             return PagerDutyConnector(token=_get_cred(creds, "token", type_id))
         case "grafana":
-            return GrafanaConnector(
-                token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", _LOCALHOST_3000)
-            )
+            return GrafanaConnector(token=_get_cred(creds, "token", type_id), base_url=config.get("base_url", _LOCALHOST_3000))
         case "microsoft_teams":
             return MicrosoftTeamsConnector(token=_get_cred(creds, "token", type_id))
         case "discord":

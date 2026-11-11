@@ -80,7 +80,7 @@ def _run_ordered_pytest(extra_flags: list[str], timeout: float) -> subprocess.Co
     env = os.environ.copy()
     # Determinism: the scoped run of the test-style scanner must not constrain
     # the child, and no inherited ad-hoc pytest args may reshuffle collection.
-    env.pop("MODULO_TEST_STYLE_SCOPE", None)
+    env.pop("FARNA_CONTROL_MODULO_TEST_STYLE_SCOPE", None)
     env.pop("PYTEST_ADDOPTS", None)
     env.pop("PYTEST_PLUGINS", None)
 
@@ -108,10 +108,7 @@ def _run_ordered_pytest(extra_flags: list[str], timeout: float) -> subprocess.Co
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        pytest.fail(
-            f"child pytest run (FAR-1597 order, flags={extra_flags}) hung past {timeout:.0f}s without "
-            f"concluding; stdout tail:\n{(exc.stdout or b'')[-4000:]!r}"
-        )
+        pytest.fail(f"child pytest run (FAR-1597 order, flags={extra_flags}) hung past {timeout:.0f}s without concluding; stdout tail:\n{(exc.stdout or b'')[-4000:]!r}")
 
 
 def _slack_plan_nodes(plan_output: str) -> list[str]:
@@ -136,21 +133,12 @@ def test_provisioned_system_engine_fixture_holds_under_detour_order() -> None:
     registration stayed green, see the module docstring.)
     """
     completed = _run_ordered_pytest(["--setup-plan"], timeout=240)
-    assert completed.returncode == 0, (
-        "child pytest --setup-plan (FAR-1597 order) itself failed - collection is broken "
-        "before the fixture probe can be judged. stdout tail:\n" + completed.stdout[-4000:]
-    )
+    assert completed.returncode == 0, "child pytest --setup-plan (FAR-1597 order) itself failed - collection is broken before the fixture probe can be judged. stdout tail:\n" + completed.stdout[-4000:]
     slack_nodes = _slack_plan_nodes(completed.stdout)
-    assert slack_nodes, (
-        "no Slack-module nodes found in the setup-plan output; the plan probe cannot "
-        "judge fixture presence. stdout tail:\n" + completed.stdout[-4000:]
-    )
+    assert slack_nodes, "no Slack-module nodes found in the setup-plan output; the plan probe cannot judge fixture presence. stdout tail:\n" + completed.stdout[-4000:]
     missing = [line.split("(")[0].strip() for line in slack_nodes if "_provisioned_system_engine" not in line]
-    assert not missing, (
-        "the provisioned-system-engine fixture is MISSING from the setup plan of the\n"
-        "Slack module under the incident argv order — the api-conftest autouse\n"
-        "fixtures are being dropped for late-section modules again (FAR-1597).\n"
-        "First nodes lacking the fixture:\n  " + "\n  ".join(missing[:5])
+    assert not missing, "the provisioned-system-engine fixture is MISSING from the setup plan of the\nSlack module under the incident argv order — the api-conftest autouse\nfixtures are being dropped for late-section modules again (FAR-1597).\nFirst nodes lacking the fixture:\n  " + "\n  ".join(
+        missing[:5]
     )
 
 
@@ -166,7 +154,4 @@ def test_slack_module_passes_after_unit_detour_order() -> None:
     ``test_provisioned_system_engine_fixture_holds_under_detour_order`` above.
     """
     completed = _run_ordered_pytest(["-x"], timeout=240)
-    assert completed.returncode == 0, (
-        "child pytest run (FAR-1597 order) FAILED — the Slack module no longer holds\n"
-        "a provisioned system engine across the unit detour. stdout tail:\n" + completed.stdout[-4000:]
-    )
+    assert completed.returncode == 0, "child pytest run (FAR-1597 order) FAILED — the Slack module no longer holds\na provisioned system engine across the unit detour. stdout tail:\n" + completed.stdout[-4000:]

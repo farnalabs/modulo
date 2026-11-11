@@ -86,37 +86,16 @@ _EVAL_RESULTS_TABLE = "eval_results"
 _TABLE_OID_SQL = "SELECT to_regclass('public.\"eval_definitions\"')::oid"
 
 # Rows whose id has NO live ``evals`` twin — the fail-closed gate of step 1.
-_ORPHAN_COUNT_SQL = (
-    "SELECT COUNT(*) FROM public.eval_definitions legacy "
-    "LEFT JOIN public.evals live ON live.id = legacy.id "
-    "WHERE live.id IS NULL"
-)
-_ORPHAN_SAMPLE_SQL = (
-    "SELECT legacy.id FROM public.eval_definitions legacy "
-    "LEFT JOIN public.evals live ON live.id = legacy.id "
-    "WHERE live.id IS NULL "
-    "ORDER BY legacy.id LIMIT 10"
-)
+_ORPHAN_COUNT_SQL = "SELECT COUNT(*) FROM public.eval_definitions legacy LEFT JOIN public.evals live ON live.id = legacy.id WHERE live.id IS NULL"
+_ORPHAN_SAMPLE_SQL = "SELECT legacy.id FROM public.eval_definitions legacy LEFT JOIN public.evals live ON live.id = legacy.id WHERE live.id IS NULL ORDER BY legacy.id LIMIT 10"
 
 # Inbound foreign keys — enumerated, never name-assumed (0294 renamed the old
 # ``eval_results_eval_id_fkey`` to the composite ``fk_eval_results_eval_org``).
-_INBOUND_FK_SQL = (
-    "SELECT c.conname, c.conrelid::regclass::text "
-    "FROM pg_constraint c "
-    "WHERE c.contype = 'f' AND c.confrelid = :legacy_oid "
-    "ORDER BY c.conname"
-)
+_INBOUND_FK_SQL = "SELECT c.conname, c.conrelid::regclass::text FROM pg_constraint c WHERE c.contype = 'f' AND c.confrelid = :legacy_oid ORDER BY c.conname"
 
 # Triggers on OTHER tables whose definition still resolves the legacy table.
 _LEGACY_POINTING_TRIGGER_SQL = (
-    "SELECT t.tgname, c.relname "
-    "FROM pg_trigger t "
-    "JOIN pg_class c ON c.oid = t.tgrelid "
-    "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
-    "  AND t.tgrelid <> :legacy_oid "
-    "  AND pg_get_triggerdef(t.oid) LIKE '%eval_definitions%' "
-    "ORDER BY t.tgname"
+    "SELECT t.tgname, c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal   AND t.tgrelid <> :legacy_oid   AND pg_get_triggerdef(t.oid) LIKE '%eval_definitions%' ORDER BY t.tgname"
 )
 
 # Ordered drop-and-recreate for any trigger that still targets the legacy table.
@@ -151,25 +130,13 @@ END $$;
 
 # The eval_results tenant trigger must resolve ``evals`` before the drop.
 _EVAL_RESULTS_TRIGGER_RESOLVES_EVALS_SQL = (
-    "SELECT COUNT(*) FROM pg_trigger t "
-    "JOIN pg_class c ON c.oid = t.tgrelid "
-    "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
-    "  AND c.relname = 'eval_results' "
-    "  AND pg_get_triggerdef(t.oid) LIKE '%enforce_same_organisation(''evals''%'"
+    "SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal   AND c.relname = 'eval_results'   AND pg_get_triggerdef(t.oid) LIKE '%enforce_same_organisation(''evals''%'"
 )
 
 # Catalogue enumerations of the drop set (all keyed on the legacy table's oid).
 _ATTACHED_CONSTRAINTS_SQL = "SELECT conname, contype FROM pg_constraint WHERE conrelid = :legacy_oid ORDER BY conname"
-_ATTACHED_INDEXES_SQL = (
-    "SELECT c.relname FROM pg_index i "
-    "JOIN pg_class c ON c.oid = i.indexrelid "
-    "WHERE i.indrelid = :legacy_oid "
-    "ORDER BY c.relname"
-)
-_ATTACHED_TRIGGERS_SQL = (
-    "SELECT tgname FROM pg_trigger WHERE tgrelid = :legacy_oid AND NOT tgisinternal ORDER BY tgname"
-)
+_ATTACHED_INDEXES_SQL = "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = :legacy_oid ORDER BY c.relname"
+_ATTACHED_TRIGGERS_SQL = "SELECT tgname FROM pg_trigger WHERE tgrelid = :legacy_oid AND NOT tgisinternal ORDER BY tgname"
 _ATTACHED_POLICIES_SQL = "SELECT polname FROM pg_policy WHERE polrelid = :legacy_oid ORDER BY polname"
 
 # Post-drop verification. Scoped by the legacy table's oid, never by object
@@ -211,11 +178,7 @@ def _assert_every_row_has_a_live_twin() -> None:
     orphans = _scalar(_ORPHAN_COUNT_SQL)
     if orphans:
         sample = [str(row[0]) for row in _rows(_ORPHAN_SAMPLE_SQL)]
-        msg = (
-            f"FAR-1962 purge abort: {orphans} {_LEGACY_TABLE} row(s) have no "
-            f"{_LIVE_TABLE} twin with the same id — nothing deleted, nothing dropped. "
-            f"Sample ids: {sample}"
-        )
+        msg = f"FAR-1962 purge abort: {orphans} {_LEGACY_TABLE} row(s) have no {_LIVE_TABLE} twin with the same id — nothing deleted, nothing dropped. Sample ids: {sample}"
         logger.error(msg)
         raise RuntimeError(msg)
     logger.info(
@@ -228,12 +191,7 @@ def _assert_no_inbound_foreign_keys(legacy_oid: int) -> None:
     inbound = _rows(_INBOUND_FK_SQL, {"legacy_oid": legacy_oid})
     if inbound:
         detail = ", ".join(f"{name} on {table}" for name, table in inbound)
-        msg = (
-            f"FAR-1962 purge abort: {len(inbound)} foreign key(s) still reference "
-            f"{_LEGACY_TABLE} ({detail}). Repoint them onto {_LIVE_TABLE} in an earlier "
-            "slice; this migration never assumes a constraint name and never drops a "
-            "referenced table."
-        )
+        msg = f"FAR-1962 purge abort: {len(inbound)} foreign key(s) still reference {_LEGACY_TABLE} ({detail}). Repoint them onto {_LIVE_TABLE} in an earlier slice; this migration never assumes a constraint name and never drops a referenced table."
         logger.error(msg)
         raise RuntimeError(msg)
     logger.info("eval_definitions purge: no inbound foreign keys reference the legacy table.")
@@ -254,19 +212,13 @@ def _repoint_and_verify_legacy_triggers(legacy_oid: int) -> None:
     pointing = _rows(_LEGACY_POINTING_TRIGGER_SQL, {"legacy_oid": legacy_oid})
     unrepairable = [(name, table) for name, table in pointing if table != _EVAL_RESULTS_TABLE]
     if unrepairable:
-        msg = (
-            f"FAR-1962 purge abort: {len(unrepairable)} trigger(s) on table(s) other than "
-            f"{_EVAL_RESULTS_TABLE} still resolve {_LEGACY_TABLE} "
-            f"({', '.join(f'{name} on {table}' for name, table in unrepairable)}). "
-            "Repoint them in an earlier slice."
-        )
+        msg = f"FAR-1962 purge abort: {len(unrepairable)} trigger(s) on table(s) other than {_EVAL_RESULTS_TABLE} still resolve {_LEGACY_TABLE} ({', '.join(f'{name} on {table}' for name, table in unrepairable)}). Repoint them in an earlier slice."
         logger.error(msg)
         raise RuntimeError(msg)
 
     if pointing:
         logger.warning(
-            "eval_definitions purge: %d trigger(s) still resolve the legacy table (%s) — "
-            "dropping and recreating them against %s, in that order.",
+            "eval_definitions purge: %d trigger(s) still resolve the legacy table (%s) — dropping and recreating them against %s, in that order.",
             len(pointing),
             ", ".join(f"{name} on {table}" for name, table in pointing),
             _LIVE_TABLE,
@@ -275,20 +227,13 @@ def _repoint_and_verify_legacy_triggers(legacy_oid: int) -> None:
 
     still_pointing = _rows(_LEGACY_POINTING_TRIGGER_SQL, {"legacy_oid": legacy_oid})
     if still_pointing:
-        msg = (
-            f"FAR-1962 purge abort: {len(still_pointing)} trigger(s) still resolve "
-            f"{_LEGACY_TABLE} after the repoint attempt "
-            f"({', '.join(name for name, _ in still_pointing)})."
-        )
+        msg = f"FAR-1962 purge abort: {len(still_pointing)} trigger(s) still resolve {_LEGACY_TABLE} after the repoint attempt ({', '.join(name for name, _ in still_pointing)})."
         logger.error(msg)
         raise RuntimeError(msg)
 
     resolving = _scalar(_EVAL_RESULTS_TRIGGER_RESOLVES_EVALS_SQL)
     if not resolving:
-        msg = (
-            "FAR-1962 purge abort: no eval_results tenant trigger resolves "
-            f"{_LIVE_TABLE} — the same-organisation guard would be lost by the drop."
-        )
+        msg = f"FAR-1962 purge abort: no eval_results tenant trigger resolves {_LIVE_TABLE} — the same-organisation guard would be lost by the drop."
         logger.error(msg)
         raise RuntimeError(msg)
     logger.info("eval_definitions purge: the eval_results tenant trigger resolves evals.")
@@ -303,8 +248,7 @@ def _enumerate_drop_set(legacy_oid: int) -> dict[str, list[str]]:
         "policies": [str(row[0]) for row in _rows(_ATTACHED_POLICIES_SQL, {"legacy_oid": legacy_oid})],
     }
     logger.info(
-        "eval_definitions purge: drop set enumerated from the catalogue — "
-        "constraints=%s indexes=%s triggers=%s policies=%s",
+        "eval_definitions purge: drop set enumerated from the catalogue — constraints=%s indexes=%s triggers=%s policies=%s",
         inventory["constraints"],
         inventory["indexes"],
         inventory["triggers"],
@@ -321,15 +265,11 @@ def _delete_proven_redundant_rows() -> int:
     if deleted != before:
         # A concurrent writer would mean the cutover was incomplete — fail
         # closed rather than report a count that does not describe the act.
-        msg = (
-            f"FAR-1962 purge abort: deleted {deleted} row(s) but the pre-delete count "
-            f"was {before} — a concurrent writer reached the legacy table."
-        )
+        msg = f"FAR-1962 purge abort: deleted {deleted} row(s) but the pre-delete count was {before} — a concurrent writer reached the legacy table."
         logger.error(msg)
         raise RuntimeError(msg)
     logger.info(
-        "eval_definitions purge: deleted %d proven-redundant row(s) (each verified to have "
-        "a live evals twin); the legacy table is now empty.",
+        "eval_definitions purge: deleted %d proven-redundant row(s) (each verified to have a live evals twin); the legacy table is now empty.",
         deleted,
     )
     return deleted

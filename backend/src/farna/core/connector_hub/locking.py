@@ -151,9 +151,7 @@ class AdvisoryLockService:
             )
             released: bool = result.scalar_one()
             if not released:
-                logger.warning(
-                    "Lock on resource %s was not held by this session — possible double-release", resource_id
-                )
+                logger.warning("Lock on resource %s was not held by this session — possible double-release", resource_id)
             else:
                 logger.info("Released lock on resource %s", resource_id)
         except (TimeoutError, SQLAlchemyError) as exc:
@@ -169,8 +167,7 @@ class AdvisoryLockService:
     async def __aexit__(self, *_: object) -> None:
         if self._owner_task_id is not None and self._resource_id is not None:
             logger.warning(
-                "AdvisoryLockService exiting context with held lock on resource %s "
-                "(owner task %s) — will NOT auto-release; release in session scope",
+                "AdvisoryLockService exiting context with held lock on resource %s (owner task %s) — will NOT auto-release; release in session scope",
                 self._resource_id,
                 self._owner_task_id,
             )

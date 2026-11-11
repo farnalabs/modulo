@@ -106,9 +106,7 @@ def _escape_block_markers(text: str) -> str:
     marker from terminating the sample-data block early (prompt-injection
     hardening, defence in depth on top of the system-prompt instruction).
     """
-    return text.replace(_SAMPLE_BLOCK_END, "\\" + _SAMPLE_BLOCK_END).replace(
-        _SAMPLE_BLOCK_START, "\\" + _SAMPLE_BLOCK_START
-    )
+    return text.replace(_SAMPLE_BLOCK_END, "\\" + _SAMPLE_BLOCK_END).replace(_SAMPLE_BLOCK_START, "\\" + _SAMPLE_BLOCK_START)
 
 
 def sanitise_sample_records(records: Any) -> Any:

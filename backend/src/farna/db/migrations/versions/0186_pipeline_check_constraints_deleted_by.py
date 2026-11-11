@@ -88,11 +88,7 @@ def _preflight_violation_check(name: str, expr: str) -> None:
         .scalar_one()
     )
     if violation_count:
-        raise RuntimeError(
-            f"Cannot add CHECK constraint {name}: {violation_count} existing row(s) "
-            f"in {_TABLE} violate `{expr}`. Quarantine or fix these rows before "
-            f"deploying this migration."
-        )
+        raise RuntimeError(f"Cannot add CHECK constraint {name}: {violation_count} existing row(s) in {_TABLE} violate `{expr}`. Quarantine or fix these rows before deploying this migration.")
 
 
 def upgrade() -> None:

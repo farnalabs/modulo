@@ -197,18 +197,12 @@ class TrelloTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 raw_cards = resp.json()
             except httpx.HTTPStatusError as e:
-                raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
-                ) from None
+                raise ValueError(f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}") from None
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
         if ticket_filter and ticket_filter.search:
-            raw_cards = [
-                c
-                for c in raw_cards
-                if ticket_filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()
-            ]
+            raw_cards = [c for c in raw_cards if ticket_filter.search.lower() in (c.get("name", "") + (c.get("desc") or "")).lower()]
 
         tickets = [self._to_ticket(c) for c in raw_cards]
 
@@ -237,9 +231,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
-                raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
-                ) from None
+                raise ValueError(f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}") from None
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
@@ -276,9 +268,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
-                raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
-                ) from None
+                raise ValueError(f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}") from None
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
@@ -308,9 +298,7 @@ class TrelloTicketTracker(TicketTrackerBase):
                 resp.raise_for_status()
                 return self._to_ticket(resp.json())
             except httpx.HTTPStatusError as e:
-                raise ValueError(
-                    f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}"
-                ) from None
+                raise ValueError(f"Trello API error: {e.response.status_code} - {self._redact(e.response.text)}") from None
             except httpx.RequestError as e:
                 raise ValueError(f"Trello network error: {self._redact(str(e))}") from None
 
@@ -330,11 +318,7 @@ class TrelloTicketTracker(TicketTrackerBase):
             status="closed" if raw.get("closed") else "open",
             priority=None,
             ticket_type="task",
-            labels=(
-                [label.get("name", "") for label in labels if isinstance(label, dict)]
-                if isinstance(labels, list)
-                else []
-            ),
+            labels=([label.get("name", "") for label in labels if isinstance(label, dict)] if isinstance(labels, list) else []),
             url=raw.get("url") or raw.get("shortUrl"),
             created_at=None,
             updated_at=_safe_datetime(raw.get("dateLastActivity")),

@@ -172,13 +172,7 @@ async def _page_by_offset(
 
     offset = (page - 1) * page_size
     try:
-        items_stmt = (
-            select(LibraryPrimitive)
-            .where(*conditions)
-            .order_by(LibraryPrimitive.created_at.desc())
-            .offset(offset)
-            .limit(page_size)
-        )
+        items_stmt = select(LibraryPrimitive).where(*conditions).order_by(LibraryPrimitive.created_at.desc()).offset(offset).limit(page_size)
         items = list((await session.execute(items_stmt)).scalars())
     except SQLAlchemyError:
         logger.exception("items query failed")
@@ -333,32 +327,18 @@ async def list_primitives_by_version_group(
     session: AsyncSession,
     version_group_id: uuid.UUID,
 ) -> list[LibraryPrimitive]:
-    stmt = (
-        select(LibraryPrimitive)
-        .where(LibraryPrimitive.version_group_id == version_group_id)
-        .order_by(LibraryPrimitive.created_at.desc())
-    )
+    stmt = select(LibraryPrimitive).where(LibraryPrimitive.version_group_id == version_group_id).order_by(LibraryPrimitive.created_at.desc())
     result = await session.execute(stmt)
     return list(result.scalars())
 
 
 async def soft_delete_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
-    result = await session.execute(
-        update(LibraryPrimitive)
-        .where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_(None))
-        .values(deleted_at=func.now())
-        .returning(LibraryPrimitive)
-    )
+    result = await session.execute(update(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_(None)).values(deleted_at=func.now()).returning(LibraryPrimitive))
     await session.flush()
     return result.scalar_one_or_none()
 
 
 async def restore_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
-    result = await session.execute(
-        update(LibraryPrimitive)
-        .where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_not(None))
-        .values(deleted_at=None)
-        .returning(LibraryPrimitive)
-    )
+    result = await session.execute(update(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id, LibraryPrimitive.deleted_at.is_not(None)).values(deleted_at=None).returning(LibraryPrimitive))
     await session.flush()
     return result.scalar_one_or_none()

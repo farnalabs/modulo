@@ -158,8 +158,7 @@ def _repo_parts(repo_ref: str, *, label: str) -> tuple[str, str]:
     for part in (owner, name):
         if part in {".", ".."} or _SLUG_SEGMENT_RE.fullmatch(part) is None:
             raise ValueError(
-                f"Invalid {label}: {repo_ref!r} (repository segment {part!r} is not a valid "
-                "Gitea/Forgejo owner or repository name)",
+                f"Invalid {label}: {repo_ref!r} (repository segment {part!r} is not a valid Gitea/Forgejo owner or repository name)",
             )
     return owner, name
 
@@ -445,9 +444,7 @@ class WoodpeckerCIRunner(CIRunnerBase):
                     # id the next get_run_status would reject must never be
                     # handed back while the caller believes a job is queued.
                     raise ValueError(
-                        f"Woodpecker accepted the pipeline request for {slug!r} but created no "
-                        "pipeline (HTTP 204) — refusing to return an unusable run id; "
-                        "check the repository's branch configuration",
+                        f"Woodpecker accepted the pipeline request for {slug!r} but created no pipeline (HTTP 204) — refusing to return an unusable run id; check the repository's branch configuration",
                     )
                 r.raise_for_status()
                 data = r.json()
@@ -460,8 +457,7 @@ class WoodpeckerCIRunner(CIRunnerBase):
                 # an id the next call rejects while the pipeline already runs.
                 if run.id.count("/") != 2:
                     raise ValueError(
-                        f"Woodpecker accepted the pipeline request for {slug!r} but the response "
-                        "did not yield a consumable run id — refusing to return an unusable run id",
+                        f"Woodpecker accepted the pipeline request for {slug!r} but the response did not yield a consumable run id — refusing to return an unusable run id",
                     )
                 return run
         except httpx.HTTPStatusError as exc:
@@ -493,18 +489,13 @@ class WoodpeckerCIRunner(CIRunnerBase):
                 repo_id = self._repo_id(await self._lookup_repo(client, slug))
                 pipeline = await self._get_pipeline(client, repo_id, number)
                 steps = _step_tree(pipeline)
-                if (
-                    not steps
-                    and "workflows" not in pipeline
-                    and str(pipeline.get("status") or "") in (_TERMINAL_STATUSES)
-                ):
+                if not steps and "workflows" not in pipeline and str(pipeline.get("status") or "") in (_TERMINAL_STATUSES):
                     # A terminal pipeline with no step tree is a payload shape
                     # we did not expect (the API embeds it on every terminal
                     # read) — empty logs are legal for a PENDING run, but not
                     # silently for a finished one.
                     logger.warning(
-                        "Woodpecker pipeline %s is %s but carries no workflow/step tree — "
-                        "returning an empty log rather than guessing steps",
+                        "Woodpecker pipeline %s is %s but carries no workflow/step tree — returning an empty log rather than guessing steps",
                         run_id,
                         pipeline.get("status"),
                     )

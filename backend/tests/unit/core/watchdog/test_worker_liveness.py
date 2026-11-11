@@ -421,9 +421,7 @@ class TestWorkerLivenessWatchdog:
 
         send.assert_not_awaited()
         assert wl._ALERT_STATE_KEY not in fake._data  # the alert edge still claims nothing
-        suppressed = [
-            record for record in caplog.records if "watchdog.alert_suppressed_environment" in record.getMessage()
-        ]
+        suppressed = [record for record in caplog.records if "watchdog.alert_suppressed_environment" in record.getMessage()]
         assert len(suppressed) == 1
         assert "ALERT_ENVIRONMENTS" in suppressed[0].getMessage()
 
@@ -438,9 +436,7 @@ class TestWorkerLivenessWatchdog:
         it (silently, until the state TTL) to the stale claim."""
         fake = _FakeWatchdogRedis()
         # An incident claim left over from an "included" window.
-        fake._data[wl._ALERT_STATE_KEY] = json.dumps(
-            {"conditions": ["no live SAQ worker on any queue for 200s"], "started_at": time.time() - 500}
-        )
+        fake._data[wl._ALERT_STATE_KEY] = json.dumps({"conditions": ["no live SAQ worker on any queue for 200s"], "started_at": time.time() - 500})
         excluded = _make_settings(
             MODULO_ENV="staging",
             ALERT_ENVIRONMENTS="production",
@@ -479,8 +475,8 @@ class TestWorkerLivenessWatchdog:
         fan-out still fires on every channel."""
         fake = _FakeWatchdogRedis()
         for overrides in (
-            {"MODULO_ENV": "staging"},  # allowlist unset
-            {"MODULO_ENV": "staging", "ALERT_ENVIRONMENTS": "production,staging"},  # env included
+            {"FARNA_CONTROL_MODULO_ENV": "staging"},  # allowlist unset
+            {"FARNA_CONTROL_MODULO_ENV": "staging", "ALERT_ENVIRONMENTS": "production,staging"},  # env included
         ):
             settings = _make_settings(
                 **overrides,
@@ -1102,9 +1098,7 @@ class TestWebhookErrorPaths:
     async def test_blocked_webhook_url_is_not_contacted_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings(ALERT_WEBHOOK_URL="http://169.254.169.254/latest/meta-data")
         with (
-            patch.object(
-                wl, "pinned_async_client", AsyncMock(side_effect=ValueError("blocked private address"))
-            ) as pin,
+            patch.object(wl, "pinned_async_client", AsyncMock(side_effect=ValueError("blocked private address"))) as pin,
             patch.object(wl.httpx, "AsyncClient", side_effect=AssertionError("raw client must not be used")),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
@@ -1712,7 +1706,7 @@ def _webhook_context_settings(*, email: bool = True) -> Settings:
     overrides: dict[str, Any] = {
         "ALERT_WEBHOOK_URL": "https://hooks.slack.com/services/T/X/B",
         "ALERT_TEAMS_WEBHOOK_URL": "https://outlook.office.com/webhook/abc",
-        "MODULO_ENV": "staging",
+        "FARNA_CONTROL_MODULO_ENV": "staging",
         "ALERT_CONTEXT": "runbook: https://example.com/runbook\npage the on-call",
     }
     if email:

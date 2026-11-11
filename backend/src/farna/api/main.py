@@ -464,9 +464,7 @@ async def _assert_single_alembic_head(settings: Settings) -> None:
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception(
-            "startup.alembic_head_check_failed — guard could not run; multiple-head detection is NOT enforced"
-        )
+        logger.exception("startup.alembic_head_check_failed — guard could not run; multiple-head detection is NOT enforced")
 
 
 async def _assert_no_owner_rows(settings: Settings) -> None:
@@ -608,9 +606,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
 
         from farna.db.models.organisation import Organisation
 
-        org = (
-            await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))
-        ).scalar_one_or_none()
+        org = (await session.execute(select(Organisation).order_by(Organisation.created_at).limit(1))).scalar_one_or_none()
         if org is None:
             logger.warning("startup.sso_provider_seed_no_organisation")
             return
@@ -624,9 +620,7 @@ async def _seed_sso_providers(settings: Settings) -> None:
         required_fields = ("provider_id", "client_id", "client_secret", "discovery_url")
         for entry in entries:
             if not isinstance(entry, dict) or any(key not in entry for key in required_fields):
-                safe_entry = (
-                    {k: v for k, v in entry.items() if k != "client_secret"} if isinstance(entry, dict) else entry
-                )
+                safe_entry = {k: v for k, v in entry.items() if k != "client_secret"} if isinstance(entry, dict) else entry
                 logger.warning("startup.sso_provider_skipped", extra={"entry": str(safe_entry)})
                 continue
 
@@ -686,9 +680,7 @@ async def _seed_system_schemas(settings: Settings) -> None:
         orgs = (await session.execute(select(Organisation).order_by(Organisation.created_at))).scalars().all()
         org_ids = [org.id for org in orgs]
 
-        admin = (
-            await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))
-        ).scalar_one_or_none()
+        admin = (await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))).scalar_one_or_none()
 
         system_account_id: _uuid.UUID | None = None
         if admin is not None:
@@ -755,9 +747,7 @@ async def _seed_environment_profiles(settings: Settings) -> None:
             logger.info("startup.env_profile_modulo_dev_exists")
             return
 
-        admin_result = await session.execute(
-            select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1)
-        )
+        admin_result = await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))
         admin = admin_result.scalar_one_or_none()
         if admin is None:
             admin_result = await session.execute(select(Account).order_by(Account.created_at).limit(1))
@@ -878,10 +868,7 @@ def _configure_license_and_otel(settings: Settings) -> None:
         logger.warning("startup.sqlite_mode")
 
     if not settings.redis_url:
-        raise RuntimeError(
-            "REDIS_URL is required. Modulo uses Redis for event coordination, rate limiting, "
-            "caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml."
-        )
+        raise RuntimeError("REDIS_URL is required. Modulo uses Redis for event coordination, rate limiting, caching, and session state. Provision Upstash Redis and set REDIS_URL in fly.toml.")
     setup_otel(
         service_name=settings.modulo_otel_service_name,
         telemetry_enabled=is_telemetry_enabled(),
@@ -1211,9 +1198,7 @@ async def _seed_tier_catalog() -> None:
         # violation and crash application boot. Idempotent: the predicate is a
         # pure function of the code registry.
         prune = await session.execute(
-            text("DELETE FROM feature_flag_catalog WHERE name NOT IN :names").bindparams(
-                bindparam("names", expanding=True)
-            ),
+            text("DELETE FROM feature_flag_catalog WHERE name NOT IN :names").bindparams(bindparam("names", expanding=True)),
             {"names": [flag["name"] for flag in FLAGS]},
         )
         # Observability: report the swept count so a 0-row prune is
@@ -1455,8 +1440,8 @@ app.openapi = _openapi_schema  # type: ignore[method-assign]
 # (launcher.entry._serve_api); the middleware constants here stay in parity
 # with the nginx values above.
 
-_SERVE_SPA_ENV = "MODULO_SERVE_SPA"
-_FRONTEND_DIST_ENV = "MODULO_FRONTEND_DIST"
+_SERVE_SPA_ENV = "FARNA_CONTROL_MODULO_SERVE_SPA"
+_FRONTEND_DIST_ENV = "FARNA_CONTROL_MODULO_FRONTEND_DIST"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _ASSETS_PREFIX = "/assets/"
 # Matches modulo.api.routes.library._MAX_UPLOAD_SIZE (50 MB) — the native

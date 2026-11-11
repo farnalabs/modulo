@@ -71,10 +71,7 @@ def validate_ongoing_config(
     if max_concurrent_runs > pipeline_max_concurrent_runs:
         raise HTTPException(
             status_code=422,
-            detail=(
-                "ongoing trigger target max_concurrent_runs cannot exceed the pipeline's "
-                f"max_concurrent_runs ({pipeline_max_concurrent_runs})"
-            ),
+            detail=(f"ongoing trigger target max_concurrent_runs cannot exceed the pipeline's max_concurrent_runs ({pipeline_max_concurrent_runs})"),
         )
     try:
         scan_interval = int((config_json or {}).get("scan_interval_seconds") or 60)

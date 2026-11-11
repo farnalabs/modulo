@@ -58,9 +58,7 @@ def _backfill_sqlite(bind: Any) -> None:
     GLOBAL ``(provider_id)`` collision exists anywhere in the table (dedupe
     across ALL orgs, matching the global partial unique index).
     """
-    rows = bind.execute(
-        sa.text("SELECT id, organisation_id, name FROM sso_providers WHERE provider_id IS NULL")
-    ).fetchall()
+    rows = bind.execute(sa.text("SELECT id, organisation_id, name FROM sso_providers WHERE provider_id IS NULL")).fetchall()
     for row in rows:
         base = _slugify(row.name)
         candidate = base
@@ -113,10 +111,7 @@ def upgrade() -> None:
         _backfill_sqlite(bind)
 
     if is_pg:
-        op.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sso_providers_provider_id "
-            "ON sso_providers (provider_id) WHERE provider_id IS NOT NULL"
-        )
+        op.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_sso_providers_provider_id ON sso_providers (provider_id) WHERE provider_id IS NOT NULL")
     else:
         op.create_index(
             "uq_sso_providers_provider_id",

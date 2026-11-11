@@ -132,12 +132,7 @@ def check_migration_divergence(applied_revisions: set[str]) -> DivergenceCheckRe
             detail="All applied revisions are present in the repo migration tree",
         )
 
-    detail = (
-        f"Migration divergence detected: DB has applied revision(s) "
-        f"not present in the repo tree: {', '.join(sorted(orphaned))}. "
-        f"DB revisions: {', '.join(sorted(applied_revisions))}. "
-        f"Repo head revisions: {', '.join(sorted(repo_revisions))}"
-    )
+    detail = f"Migration divergence detected: DB has applied revision(s) not present in the repo tree: {', '.join(sorted(orphaned))}. DB revisions: {', '.join(sorted(applied_revisions))}. Repo head revisions: {', '.join(sorted(repo_revisions))}"
     _log.error("migration_divergence_detected %s", detail)
     return DivergenceCheckResult(
         diverged=True,

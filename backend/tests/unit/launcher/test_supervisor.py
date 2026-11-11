@@ -196,9 +196,7 @@ class Harness:
             degraded_context=degraded_context,
             wall_clock=wall_clock if wall_clock is not None else (lambda: 1720000000.0),
         )
-        self.supervisor.add(
-            spec if spec is not None else ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"])
-        )
+        self.supervisor.add(spec if spec is not None else ChildSpec(name="postgres", argv_builder=lambda: ["postgres-child"]))
 
     def _spawn(self, argv: list[str], env: dict[str, str] | None) -> FakeProc:
         self.spawned_argv.append(argv)
@@ -785,9 +783,7 @@ def test_request_stop_treats_dead_recorded_holder_as_stopped(tmp_path: Path) -> 
 
 
 @requires_posix
-def test_request_stop_reports_unverifiable_holder_still_locking(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_request_stop_reports_unverifiable_holder_still_locking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy lock file (no starttime) + held lock → still verified via flock."""
     from farna.launcher import supervisor as supervisor_module
 
@@ -925,9 +921,9 @@ def test_record_runtime_degraded_preserves_extra(tmp_path: Path) -> None:
 
 
 def test_knobs_from_env_overrides_and_ignores_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_LAUNCHER_TICK_SECONDS", "0.5")
-    monkeypatch.setenv("MODULO_LAUNCHER_CRASH_CAP", "9")
-    monkeypatch.setenv("MODULO_LAUNCHER_CRASH_WINDOW_SECONDS", "not-a-number")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_TICK_SECONDS", "0.5")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_CRASH_CAP", "9")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_CRASH_WINDOW_SECONDS", "not-a-number")
     knobs = knobs_from_env()
     assert knobs.tick_seconds == 0.5
     assert knobs.crash_cap == 9
@@ -935,10 +931,10 @@ def test_knobs_from_env_overrides_and_ignores_garbage(monkeypatch: pytest.Monkey
 
 
 def test_knobs_from_env_rejects_nonfinite_and_out_of_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODULO_LAUNCHER_TICK_SECONDS", "nan")
-    monkeypatch.setenv("MODULO_LAUNCHER_SHUTDOWN_GRACE_SECONDS", "1e999")
-    monkeypatch.setenv("MODULO_LAUNCHER_CRASH_CAP", "100000")
-    monkeypatch.setenv("MODULO_LAUNCHER_RESTART_BACKOFF_INITIAL", "-3")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_TICK_SECONDS", "nan")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_SHUTDOWN_GRACE_SECONDS", "1e999")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_CRASH_CAP", "100000")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_LAUNCHER_RESTART_BACKOFF_INITIAL", "-3")
     knobs = knobs_from_env()
     assert knobs.tick_seconds == 1.0
     assert knobs.shutdown_grace_seconds == 10.0

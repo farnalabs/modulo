@@ -26,9 +26,7 @@ class _MinimalProvider(RuntimeProvider):
     async def create_workspace(self, spec: WorkspaceSpec) -> str:
         return "ws"
 
-    async def exec_command(
-        self, provider_ref: str, command: list[str], *, cmd_timeout: int | None = None
-    ) -> ExecResult:
+    async def exec_command(self, provider_ref: str, command: list[str], *, cmd_timeout: int | None = None) -> ExecResult:
         raise NotImplementedError
 
     async def destroy_workspace(self, provider_ref: str) -> None:
@@ -40,11 +38,11 @@ class _MinimalProvider(RuntimeProvider):
 
 class TestBuildHub:
     def test_registers_local_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_KUBERNETES_ENABLED", raising=False)
 
         hub = build_hub()
 
@@ -54,28 +52,28 @@ class TestBuildHub:
         assert hub.get("kubernetes") is None
 
     def test_default_local_concurrency_is_two(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_DOCKER_HOST", raising=False)
 
         hub = build_hub()
 
         assert cast(LocalRuntimeProvider, hub.get("local"))._max_concurrency == 2
 
     def test_clamps_invalid_concurrency(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_DOCKER_HOST", raising=False)
 
         hub = create_default_hub(max_local_concurrency=0)
 
         assert cast(LocalRuntimeProvider, hub.get("local"))._max_concurrency == 2
 
     def test_registers_e2b_when_api_key_env_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
 
         hub = build_hub()
@@ -85,8 +83,8 @@ class TestBuildHub:
         assert provider._api_key == "test-key"
 
     def test_registers_runner_docker_when_host_env_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
 
         hub = build_hub()
@@ -94,9 +92,9 @@ class TestBuildHub:
         assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
 
     def test_registers_runner_docker_when_modulo_docker_host_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
         hub = build_hub()
 
@@ -104,29 +102,29 @@ class TestBuildHub:
 
     def test_does_not_register_docker_on_unrelated_runner_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-996: an unrelated MODULO_RUNNER_* variable must not register Docker."""
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.setenv("MODULO_RUNNER_TEMPLATE_ID", "opencode")
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_TEMPLATE_ID", "opencode")
 
         hub = build_hub()
 
         assert hub.get("runner_docker") is None
 
     def test_no_runner_docker_without_any_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_RUNNER_DOCKER_HOST", raising=False)
-        monkeypatch.delenv("MODULO_RUNNER_TEMPLATE_ID", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_TEMPLATE_ID", raising=False)
 
         hub = build_hub()
 
         assert hub.get("runner_docker") is None
 
     def test_skips_e2b_on_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.setenv("FARNA_CONTROL_MODULO_E2B_API_KEY", "test-key")
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
 
         real_import = cast(Any, __import__)
@@ -143,7 +141,7 @@ class TestBuildHub:
         assert isinstance(hub.get("local"), LocalRuntimeProvider)
 
     def test_skips_docker_on_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
         monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
 
         real_import = cast(Any, __import__)
@@ -209,11 +207,11 @@ def test_create_default_hub_is_build_hub_alias() -> None:
 @pytest.mark.parametrize(
     ("provider_type", "env_var"),
     [
-        ("e2b", "MODULO_E2B_API_KEY"),
-        ("runner_docker", "MODULO_DOCKER_HOST"),
-        ("docker", "MODULO_DOCKER_HOST"),
-        ("local_docker", "MODULO_DOCKER_HOST"),
-        ("kubernetes", "MODULO_KUBERNETES_ENABLED"),
+        ("e2b", "FARNA_CONTROL_MODULO_E2B_API_KEY"),
+        ("runner_docker", "FARNA_CONTROL_MODULO_DOCKER_HOST"),
+        ("docker", "FARNA_CONTROL_MODULO_DOCKER_HOST"),
+        ("local_docker", "FARNA_CONTROL_MODULO_DOCKER_HOST"),
+        ("kubernetes", "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"),
     ],
 )
 def test_documented_env_var_actually_registers_provider(
@@ -227,9 +225,9 @@ def test_documented_env_var_actually_registers_provider(
     the implemented build_hub gate must agree: a profile whose provider_type
     maps to ``env_var`` MUST resolve once only that var is set.
     """
-    for var in ("MODULO_E2B_API_KEY", "MODULO_DOCKER_HOST", "DOCKER_HOST", "MODULO_KUBERNETES_ENABLED"):
+    for var in ("FARNA_CONTROL_MODULO_E2B_API_KEY", "FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST", "FARNA_CONTROL_MODULO_KUBERNETES_ENABLED"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.delenv("MODULO_RUNNER_TEMPLATE_ID", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_RUNNER_TEMPLATE_ID", raising=False)
     monkeypatch.setenv(env_var, "registration-signal")
 
     hub = build_hub()
@@ -245,10 +243,10 @@ def test_retry_failure_signal_alone_registers_runner_docker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Parity pin: MODULO_DOCKER_HOST signal registers the provider."""
-    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://localhost:2375")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DOCKER_HOST", "tcp://localhost:2375")
 
     hub = build_hub()
     assert isinstance(hub.get("runner_docker"), DockerRuntimeProvider)
@@ -261,8 +259,8 @@ def test_retry_failure_signal_alone_registers_runner_docker(
 
 class TestUnknownProviderType:
     def test_resolve_raises_unknown_type_for_bogus_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
 
         hub = build_hub()
@@ -280,8 +278,8 @@ class TestUnknownProviderType:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """e2b is a known type but not registered (env var not set) — should be ProviderNotConfiguredError."""
-        monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
-        monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_E2B_API_KEY", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_MODULO_DOCKER_HOST", raising=False)
         monkeypatch.delenv("DOCKER_HOST", raising=False)
 
         hub = build_hub()
@@ -291,7 +289,7 @@ class TestUnknownProviderType:
             hub.resolve(profile)
 
         assert exc_info.value.provider_type == "e2b"
-        assert exc_info.value.env_var == "MODULO_E2B_API_KEY"
+        assert exc_info.value.env_var == "FARNA_CONTROL_MODULO_E2B_API_KEY"
 
     def test_initialise_raises_unknown_type_for_bogus_type(self) -> None:
         hub = RuntimeProviderHub()

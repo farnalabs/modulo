@@ -84,14 +84,8 @@ def _subfield_properties(spec: dict[Any, Any]) -> tuple[dict[str, Any], list[str
     ``required`` collects sub-specs that declare ``"required": true`` so the
     nested object schema carries the same required list as the seed.
     """
-    properties: dict[str, Any] = {
-        str(name): _definition_from_field_spec(sub) for name, sub in spec.items() if name != "required"
-    }
-    required = [
-        str(name)
-        for name, sub in spec.items()
-        if name != "required" and isinstance(sub, dict) and sub.get("required", False)
-    ]
+    properties: dict[str, Any] = {str(name): _definition_from_field_spec(sub) for name, sub in spec.items() if name != "required"}
+    required = [str(name) for name, sub in spec.items() if name != "required" and isinstance(sub, dict) and sub.get("required", False)]
     return properties, required
 
 
@@ -223,17 +217,13 @@ async def _resolve_pin(
     version-mismatched primitive.
     """
     for primitive_type in _PIN_TYPE_ORDER:
-        prim = await get_primitive_by_slug(
-            session, org_id, primitive_type, slug, explicit_org_filter=org_id, version=version
-        )
+        prim = await get_primitive_by_slug(session, org_id, primitive_type, slug, explicit_org_filter=org_id, version=version)
         if prim is None:
             continue
         if prim.deleted_at is not None:
             continue
         if prim.version != version:
-            raise PinResolutionError(
-                f"Pin '{slug}@{version}' does not match the visible primitive version '{prim.version}'"
-            )
+            raise PinResolutionError(f"Pin '{slug}@{version}' does not match the visible primitive version '{prim.version}'")
         return prim
     raise PinResolutionError(f"Pin '{slug}@{version}' does not resolve to a visible primitive in this organisation")
 
@@ -289,11 +279,7 @@ def _clone_builtin(prim: LibraryPrimitive) -> LibraryPrimitive:
 
 def _collection_content_differs(row: LibraryPrimitive, prim: LibraryPrimitive) -> bool:
     """Compare the content-bearing columns of a persisted row against the registry."""
-    return (
-        row.content_json != prim.content_json
-        or row.manifest_pins != prim.manifest_pins
-        or row.checksum != prim.checksum
-    )
+    return row.content_json != prim.content_json or row.manifest_pins != prim.manifest_pins or row.checksum != prim.checksum
 
 
 def _resync_collection_row(row: LibraryPrimitive, prim: LibraryPrimitive) -> None:
@@ -348,11 +334,7 @@ async def _persist_collection_row(
     try:
         org_row = await session.get(Organisation, MODULO_ORG_ID)
         if org_row is None:
-            raise CollectionInstallError(
-                "The Modulo sentinel organisation is missing from the database. "
-                "It is created by migration 0232_seed_modulo_sentinel_organisation — "
-                "run `alembic upgrade head` and retry the install."
-            )
+            raise CollectionInstallError("The Modulo sentinel organisation is missing from the database. It is created by migration 0232_seed_modulo_sentinel_organisation — run `alembic upgrade head` and retry the install.")
         existing = (
             await session.execute(
                 select(LibraryPrimitive).where(
@@ -446,10 +428,7 @@ def _build_bundle_from_pins(
         elif ptype == "agent":
             _append_agent_pin(pin, agents, graph_nodes, schema_ids_by_slug)
         else:
-            raise CollectionInstallError(
-                f"Collection pin '{pin.name}' (slug '{pin.slug}') has unsupported primitive "
-                f"type '{ptype}' for installation"
-            )
+            raise CollectionInstallError(f"Collection pin '{pin.name}' (slug '{pin.slug}') has unsupported primitive type '{ptype}' for installation")
 
     return {
         "format_version": BUNDLE_FORMAT_VERSION,
@@ -584,9 +563,7 @@ def _append_template_nodes(
 ) -> dict[str, str]:
     """Append the template's graph nodes; return the old->new node id map."""
     node_id_map = {node.get("id", ""): str(uuid.uuid4()) for node in template_nodes}
-    graph_nodes.extend(
-        _template_node_entry(node, node_id_map, export_agent_ids, schema_ids_by_slug) for node in template_nodes
-    )
+    graph_nodes.extend(_template_node_entry(node, node_id_map, export_agent_ids, schema_ids_by_slug) for node in template_nodes)
     return node_id_map
 
 
@@ -894,9 +871,7 @@ def _map_pin_entity_ids(
         if pin.primitive_type in ("schema", "agent"):
             _map_standalone_pin(pin, schemas_map, agents_map, _add)
         elif pin.primitive_type in ("workflow", "pipeline_template"):
-            agent_cursor, schema_cursor = _map_embedded_pin_entities(
-                pin, agent_pool, schema_pool, agent_cursor, schema_cursor, _add
-            )
+            agent_cursor, schema_cursor = _map_embedded_pin_entities(pin, agent_pool, schema_pool, agent_cursor, schema_cursor, _add)
     return out
 
 
@@ -950,9 +925,7 @@ async def install_collection(
     if collection.primitive_type != "library_collection":
         raise CollectionInstallError(f"Primitive {collection_id} is not a collection")
     if collection.status != "published":
-        raise CollectionNotPublishedError(
-            f"Collection '{collection.name}' must be published before installing (current status: {collection.status})"
-        )
+        raise CollectionNotPublishedError(f"Collection '{collection.name}' must be published before installing (current status: {collection.status})")
 
     # 2. Resolve manifest pins
     # Local org collections carry the pins on the ``manifest_pins`` column;
@@ -960,12 +933,7 @@ async def install_collection(
     # The legacy ``content_json["pins"]`` key (written by an earlier version of
     # the API routes) is accepted as a last resort so already-persisted rows
     # keep resolving; the ``manifest_pins`` COLUMN stays the first source.
-    manifest_pins = (
-        collection.manifest_pins
-        or (collection.content_json or {}).get("manifest_pins")
-        or (collection.content_json or {}).get("pins")
-        or []
-    )
+    manifest_pins = collection.manifest_pins or (collection.content_json or {}).get("manifest_pins") or (collection.content_json or {}).get("pins") or []
     resolved_pins: list[LibraryPrimitive] = []
     for pin in manifest_pins:
         slug = pin.get("slug", "")

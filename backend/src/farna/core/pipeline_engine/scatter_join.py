@@ -271,9 +271,7 @@ def aggregate_join_results(
     """
     if spec.kind == "custom_function":
         # Deferred in P3 (design §4 B). Fall back to concat and surface the note.
-        raise JoinAggregateUnsupportedError(
-            "custom_function aggregate is deferred in P3 (follow-up). Use concat | merge_by_key | map."
-        )
+        raise JoinAggregateUnsupportedError("custom_function aggregate is deferred in P3 (follow-up). Use concat | merge_by_key | map.")
 
     if not collected:
         # Design: empty-collection → typed empty result.

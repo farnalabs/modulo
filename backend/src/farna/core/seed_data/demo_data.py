@@ -136,10 +136,7 @@ async def _seed_demo_admin_account(
         )
     )
     if member_result.scalar_one_or_none() is None:
-        raise ValueError(
-            f"demo org email {admin_email!r} collides with an existing account "
-            f"— refusing to attach (use a dedicated demo email)"
-        )
+        raise ValueError(f"demo org email {admin_email!r} collides with an existing account — refusing to attach (use a dedicated demo email)")
     _log.info("demo_account.exists", extra={"email": admin_email})
     return account
 
@@ -237,9 +234,7 @@ async def seed_demo_org(
     """
     private_key = get_settings().modulo_license_private_key or ""
     if not private_key:
-        raise LicenseSigningError(
-            f"No license signing private key configured for demo org {slug!r} (set MODULO_LICENSE_PRIVATE_KEY)."
-        )
+        raise LicenseSigningError(f"No license signing private key configured for demo org {slug!r} (set MODULO_LICENSE_PRIVATE_KEY).")
 
     org = await _seed_demo_org_entity(session, slug)
     account = await _seed_demo_admin_account(session, admin_email=admin_email, admin_password=admin_password, org=org)

@@ -47,14 +47,8 @@ down_revision: str | None = "0164_add_missing_foreign_keys"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
-_RUN_TRIGGER_TYPE = (
-    "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention')"
-)
-_RUN_STATUS = (
-    "status IN ('pending','running','awaiting_human','claimed','unknown','complete',"
-    "'failed','cancelled','eval_failed','stalled','budget_exceeded',"
-    "'router_no_match','compensation_failed','cost_ceiling_exceeded')"
-)
+_RUN_TRIGGER_TYPE = "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention')"
+_RUN_STATUS = "status IN ('pending','running','awaiting_human','claimed','unknown','complete','failed','cancelled','eval_failed','stalled','budget_exceeded','router_no_match','compensation_failed','cost_ceiling_exceeded')"
 
 
 # (table, constraint_name, check_expression) — added NOT VALID then VALIDATE-d.

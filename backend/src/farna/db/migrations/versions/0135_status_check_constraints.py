@@ -53,9 +53,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        text(
-            "ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"
-        )
-    )
+    op.execute(text("ALTER TABLE public.notification_delivery_log DROP CONSTRAINT IF EXISTS ck_notification_delivery_log_status"))
     op.execute(text("ALTER TABLE public.connector_instances DROP CONSTRAINT IF EXISTS ck_connector_instances_status"))

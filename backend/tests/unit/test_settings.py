@@ -303,7 +303,7 @@ def test_instance_identity_never_reads_platform_env(monkeypatch: pytest.MonkeyPa
     label (docs/configuration-reference.md) — neither may leak into
     instance identity (ADR 043 Decision 5)."""
     monkeypatch.setenv("FLY_MACHINE_ID", "fly-machine-xyz")
-    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "runner-deployment-label")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "runner-deployment-label")
     monkeypatch.delenv("HOSTNAME", raising=False)
     assert resolve_instance_identity() == socket.gethostname()
     assert resolve_instance_identity() != "fly-machine-xyz"
@@ -327,9 +327,7 @@ def test_instance_identity_reads_env_at_call_time(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_hitl_cancel_grace_falls_back_to_deprecated_env(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_hitl_cancel_grace_falls_back_to_deprecated_env(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When only the deprecated ``HITL_GATE_CANCEL_GRACE_SECONDS`` is set, its
     value is used and a deprecation warning is emitted."""
     monkeypatch.delenv("HITL_REVIEW_CANCEL_GRACE_SECONDS", raising=False)
@@ -342,9 +340,7 @@ def test_hitl_cancel_grace_falls_back_to_deprecated_env(
     assert "HITL_GATE_CANCEL_GRACE_SECONDS is deprecated" in caplog.text
 
 
-def test_hitl_cancel_grace_new_env_wins_over_deprecated(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_hitl_cancel_grace_new_env_wins_over_deprecated(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The new ``HITL_REVIEW_CANCEL_GRACE_SECONDS`` takes precedence and no
     deprecation warning is emitted when both are present."""
     monkeypatch.setenv("HITL_REVIEW_CANCEL_GRACE_SECONDS", "900")
@@ -361,18 +357,18 @@ def test_hitl_cancel_grace_new_env_wins_over_deprecated(
 # FAR-1500 populate_by_name — constructor keys accept the field NAME as well
 # as the alias. Without it, a name-keyed kwarg for an ALIASED field was
 # silently dropped by extra="ignore": Settings(environment="staging") kept the
-# default while Settings(MODULO_ENV="staging") worked, with no error either way.
+# default while Settings(FARNA_CONTROL_MODULO_ENV="staging") worked, with no error either way.
 # ---------------------------------------------------------------------------
 
 
 def test_environment_accepts_the_env_alias_key() -> None:
     """The alias key (the env-var spelling) keeps working unchanged."""
-    assert _make(MODULO_ENV="staging").environment == "staging"
+    assert _make(FARNA_CONTROL_MODULO_ENV="staging").environment == "staging"
 
 
 def test_environment_accepts_the_field_name_key() -> None:
     """FAR-1500: a ``environment=`` kwarg now populates the field instead of
-    being silently ignored (it does NOT case-fold onto the ``MODULO_ENV``
+    being silently ignored (it does NOT case-fold onto the ``FARNA_CONTROL_MODULO_ENV``
     alias, which is why this key was dropped before ``populate_by_name``)."""
     assert _make(environment="staging").environment == "staging"
 
@@ -400,7 +396,7 @@ def test_the_alias_key_wins_when_both_keys_are_supplied() -> None:
     """Aliases stay authoritative: a field supplied under BOTH its alias and
     its name resolves to the alias value (the env-var spelling is unambiguous,
     the name-keyed duplicate never shadows it)."""
-    settings = _make(MODULO_ENV="production", environment="staging")
+    settings = _make(FARNA_CONTROL_MODULO_ENV="production", environment="staging")
     assert settings.environment == "production"
 
 
@@ -409,8 +405,8 @@ def test_populate_by_name_also_widens_env_var_matching_to_the_field_name(
 ) -> None:
     """Side effect worth pinning: ``populate_by_name`` widens ENV-var matching
     too, so ``ENVIRONMENT`` (the field name) is now read where only
-    ``MODULO_ENV`` was before."""
-    monkeypatch.delenv("MODULO_ENV", raising=False)
+    ``FARNA_CONTROL_MODULO_ENV`` was before."""
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_ENV", raising=False)
     monkeypatch.setenv("ENVIRONMENT", "host-generic-var")
     assert _make().environment == "host-generic-var"
 
@@ -419,7 +415,7 @@ def test_the_env_alias_still_outranks_a_field_name_env_var(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The widening cannot shadow the documented spelling: when BOTH
-    ``MODULO_ENV`` and a generic ``ENVIRONMENT`` are set, the alias wins."""
+    ``FARNA_CONTROL_MODULO_ENV`` and a generic ``ENVIRONMENT`` are set, the alias wins."""
     monkeypatch.setenv("ENVIRONMENT", "host-generic-var")
-    monkeypatch.setenv("MODULO_ENV", "staging")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_ENV", "staging")
     assert _make().environment == "staging"
