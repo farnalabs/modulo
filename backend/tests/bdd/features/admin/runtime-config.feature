@@ -11,13 +11,13 @@ Feature: Admin Runtime Configuration
 
   Scenario: Admin can override a config key
     Given I am authenticated as an admin
-    When I PUT /api/v1/admin/runtime-config with override for "MODULO_LOG_LEVEL"
+    When I PUT /api/v1/admin/runtime-config with override for "FARNA_CONTROL_MODULO_LOG_LEVEL"
     Then the response status is 200
     And the response includes the updated config items
 
   Scenario: Admin can clear an override
     Given I am authenticated as an admin
-    When I PUT /api/v1/admin/runtime-config with clear for "MODULO_LOG_LEVEL"
+    When I PUT /api/v1/admin/runtime-config with clear for "FARNA_CONTROL_MODULO_LOG_LEVEL"
     Then the response status is 200
     And the response includes the updated config items
 

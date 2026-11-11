@@ -56,7 +56,7 @@ Feature: Runtime provider platform matrix (ADR 044 / ADR 029)
     And an environment profile with provider_type "e2b" and no provider_hint
     When I resolve the profile against the hub
     Then resolve fails with ProviderNotConfiguredError for provider_type "e2b"
-    And the error's env_var is "MODULO_E2B_API_KEY"
+    And the error's env_var is "FARNA_CONTROL_MODULO_E2B_API_KEY"
 
   Scenario: Unknown provider types name the valid vocabulary instead of guessing
     Given a hub with only the "local" provider registered
