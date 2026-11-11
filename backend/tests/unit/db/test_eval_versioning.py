@@ -35,7 +35,7 @@ _MIGRATION_PATH = (
     Path(__file__).parents[4]
     / "backend"
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

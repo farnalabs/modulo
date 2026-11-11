@@ -64,22 +64,22 @@ def _entry_tree() -> ast.Module:
     return ast.parse(source)
 
 
-def _top_level_modulo_imports(tree: ast.Module) -> list[str]:
+def _top_level_farna_imports(tree: ast.Module) -> list[str]:
     names: list[str] = []
     for node in tree.body:
         if isinstance(node, ast.Import):
-            names.extend(alias.name for alias in node.names if alias.name.startswith("modulo"))
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and node.module.startswith("modulo"):
+            names.extend(alias.name for alias in node.names if alias.name.startswith("farna"))
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and node.module.startswith("farna"):
             names.extend(f"{node.module}.{alias.name}" if alias.name != "*" else node.module for alias in node.names)
     return names
 
 
-def test_entry_first_modulo_import_is_env_safety() -> None:
+def test_entry_first_farna_import_is_env_safety() -> None:
     tree = _entry_tree()
-    imports = _top_level_modulo_imports(tree)
+    imports = _top_level_farna_imports(tree)
     # Pins BOTH halves of the module docstring's import-order contract:
-    # env_safety must be the FIRST top-level modulo import AND no other
-    # top-level modulo import may appear (the exact set). The forbidden-prefix
+    # env_safety must be the FIRST top-level farna import AND no other
+    # top-level farna import may appear (the exact set). The forbidden-prefix
     # policy (settings/cli/api/db) is owned separately by
     # test_entry_has_no_top_level_settings_or_cli_imports.
     assert imports == ["farna.launcher.env_safety"]
