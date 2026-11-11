@@ -2,12 +2,12 @@
 
 Covers the three layers the purge spans:
 
-* ``purge_expired_dedup_hashes`` (``modulo.core.cleanup_jobs.webhook_dedup_cleanup``)
+* ``purge_expired_dedup_hashes`` (``farna.core.cleanup_jobs.webhook_dedup_cleanup``)
   — one batched pass that delegates to ``TriggerEngine.cleanup_expired_dedup_hashes``
   (reusing its Postgres advisory lock, key=20250601) and commits.
 * the ``limit`` batching extension on the engine method itself.
 * the ``expired_webhook_dedup_purge`` SAQ system cron in
-  ``modulo.core.saq_worker`` — on PostgreSQL it must drain on the SYSTEM
+  ``farna.core.saq_worker`` — on PostgreSQL it must drain on the SYSTEM
   session factory (cross-org purge: the org-scoped RLS policy on
   ``webhook_dedup_hashes`` makes a plain-factory session silently match zero
   rows), on other backends the plain factory. The system factory is

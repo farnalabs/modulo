@@ -139,24 +139,24 @@ class TestPredicateRendering:
 #: resolve_role_from_membership). Status values follow the plan's pinned set:
 #: 401 / 403 / 422 / 409 / 503 / deny / fold.
 ROLE_RESOLUTION_SITES: dict[str, str] = {
-    "modulo/api/dependencies.py": "403 — require_target_org_role: non-member denied (assert_org_role fail-closed)",
-    "modulo/api/mcp_server.py": "401/403 — fail-closed live-role deny (JWT + API-key role clamp)",
-    "modulo/api/routes/api_keys.py": "403 — mint-cap deny (live role is None)",
-    "modulo/api/routes/service_accounts.py": "403 — service-account key mint-cap deny (live role is None)",
-    "modulo/api/routes/auth.py": "401 — refresh / ws-token / me deny (OrganisationMembershipNotFound)",
-    "modulo/auth/dependencies.py": "401 — _verify_identity deny (OrganisationMembershipNotFound)",
-    "modulo/auth/oauth.py": "401 — InvalidGrantError on OAuth token/refresh",
-    "modulo/db/crud/hitl_review_guard.py": "deny — HitlReviewWeakeningDenied (fail-closed)",
+    "farna/api/dependencies.py": "403 — require_target_org_role: non-member denied (assert_org_role fail-closed)",
+    "farna/api/mcp_server.py": "401/403 — fail-closed live-role deny (JWT + API-key role clamp)",
+    "farna/api/routes/api_keys.py": "403 — mint-cap deny (live role is None)",
+    "farna/api/routes/service_accounts.py": "403 — service-account key mint-cap deny (live role is None)",
+    "farna/api/routes/auth.py": "401 — refresh / ws-token / me deny (OrganisationMembershipNotFound)",
+    "farna/auth/dependencies.py": "401 — _verify_identity deny (OrganisationMembershipNotFound)",
+    "farna/auth/oauth.py": "401 — InvalidGrantError on OAuth token/refresh",
+    "farna/db/crud/hitl_review_guard.py": "deny — HitlReviewWeakeningDenied (fail-closed)",
 }
 
 MEMBERSHIP_LOOKUP_SITES: dict[str, str] = {
-    "modulo/api/routes/admin.py": "fold — membership lookup only (deactivation/authz checks), no role grant",
-    "modulo/api/routes/admin_orgs.py": "fold — membership lookup only, no role grant",
-    "modulo/api/routes/scim.py": "fold — membership lookup only (SCIM deactivate), no role grant",
-    "modulo/api/routes/teams.py": "fold — membership lookup only (team ops), no role grant",
-    "modulo/auth/sso.py": "fold — membership lookup only (SSO), no role grant",
-    "modulo/cli/migrate.py": "fold — membership lookup only (import), no role grant",
-    "modulo/db/crud/scim.py": "fold — membership lookup only (SCIM CRUD), no role grant",
+    "farna/api/routes/admin.py": "fold — membership lookup only (deactivation/authz checks), no role grant",
+    "farna/api/routes/admin_orgs.py": "fold — membership lookup only, no role grant",
+    "farna/api/routes/scim.py": "fold — membership lookup only (SCIM deactivate), no role grant",
+    "farna/api/routes/teams.py": "fold — membership lookup only (team ops), no role grant",
+    "farna/auth/sso.py": "fold — membership lookup only (SSO), no role grant",
+    "farna/cli/migrate.py": "fold — membership lookup only (import), no role grant",
+    "farna/db/crud/scim.py": "fold — membership lookup only (SCIM CRUD), no role grant",
 }
 
 _IMPORT_MODULES = ("farna.auth.dependencies", "farna.db.crud.org_membership")
@@ -174,7 +174,7 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
     lookup_sites: set[str] = set()
     for path, source in iter_source_text(_SRC_MODULO):
         rel = path.relative_to(_SRC_ROOT).as_posix()
-        if rel == "modulo/db/crud/org_membership.py":
+        if rel == "farna/db/crud/org_membership.py":
             continue
         try:
             tree = ast.parse(source)

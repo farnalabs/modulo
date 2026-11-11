@@ -1,4 +1,4 @@
-"""Direct unit tests for the run_sync helper in modulo.core.secrets_backend.
+"""Direct unit tests for the run_sync helper in farna.core.secrets_backend.
 
 The AWS and Vault backends rely on run_sync for every external call, so its
 contract (thread offload, *args/**kwargs forwarding, timeout enforcement,

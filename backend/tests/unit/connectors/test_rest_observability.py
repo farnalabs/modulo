@@ -1,9 +1,9 @@
 """Unit tests for REST connector observability (FAR-413) + shared rate-limit budget (FAR-439).
 
-FAR-413 observability: covers ``modulo.connectors.rest.rest_metrics`` (OTel
+FAR-413 observability: covers ``farna.connectors.rest.rest_metrics`` (OTel
 instrument registration + record helpers), the connector's metric wiring (that a
 real request emits the exact metric names/attributes), and
-``modulo.connectors.rest.rest_rollback`` (threshold evaluator + cause-code
+``farna.connectors.rest.rest_rollback`` (threshold evaluator + cause-code
 classification).
 
 FAR-439 shared budget: covers the SHARED Redis-backed per-destination rate

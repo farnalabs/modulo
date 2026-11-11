@@ -461,7 +461,7 @@ end;
 { Records the deferred Windows service seam in the install transcript. Alpha
   installs a Start Menu shortcut that runs `modulo.exe start` in the foreground;
   no Windows service is registered because the launcher has no service mode yet
-  (TODO(P3) in backend/src/modulo/launcher/entry.py). This is a documented
+  (TODO(P3) in backend/src/farna/launcher/entry.py). This is a documented
   limitation, not a failure: nothing was attempted that could fail. }
 procedure WriteServiceModeNotice;
 begin

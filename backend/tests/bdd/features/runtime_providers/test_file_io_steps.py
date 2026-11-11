@@ -1,6 +1,6 @@
 """BDD step definitions: runtime provider file-I/O primitives (feat-core-runtime-provider-core).
 
-Wires ``file_io.feature`` to the REAL ``modulo.core.runtime_provider`` exec-based
+Wires ``file_io.feature`` to the REAL ``farna.core.runtime_provider`` exec-based
 file-I/O defaults (FAR-1050 R2a) — network-free and DB-free. A real
 ``LocalRuntimeProvider`` (whose ``exec_command`` runs actual subprocesses with
 the host temp-dir workspace as ``cwd``) drives the ABC's ``read_file`` /

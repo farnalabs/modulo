@@ -27,7 +27,7 @@ _TRIGGER_ID = uuid.uuid4()
 _PIPELINE_ID = uuid.uuid4()
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 # FAR-1732: the conftest FERNET_KEY is not a valid Fernet key, so at-rest
-# encryption assertions patch ``modulo.api.routes.triggers.get_settings``
+# encryption assertions patch ``farna.api.routes.triggers.get_settings``
 # with a fake carrying a REAL key through this helper.
 _VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
 

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.mcp_tool_registry — MCP tool-definition cache.
+"""Unit tests for farna.api.mcp_tool_registry — MCP tool-definition cache.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the module that is
 the single source of truth for OpenAI-compatible tool definitions. The assistant

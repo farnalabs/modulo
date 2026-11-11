@@ -276,7 +276,7 @@ class TestKnownFlags:
 class TestDbCatalogTeamTierFlags:
     """Flags upserted into the DB catalog (FAR-114) must enable on team tier.
 
-    Regression: the seed ``FLAGS`` in ``modulo.core.seed_data.catalog`` was
+    Regression: the seed ``FLAGS`` in ``farna.core.seed_data.catalog`` was
     missing ``runtime_config`` / ``rate_limits`` / ``error_tracking``, so
     ``load_from_db()`` dropped them from the registry and the pages 402'd even
     on the team tier.

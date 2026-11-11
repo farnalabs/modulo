@@ -688,7 +688,7 @@ def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password(
 def test_as_asyncpg_url_describes_a_roleless_url_without_inventing_one() -> None:
     """FAR-2021: a URL with no userinfo is described by scheme only."""
     with pytest.raises(click.ClickException) as excinfo:
-        backup_mod._as_asyncpg_url("sqlite:///var/lib/modulo.db")
+        backup_mod._as_asyncpg_url("sqlite:///var/lib/farna.db")
     assert "sqlite://" in excinfo.value.message
     assert "(role " not in excinfo.value.message
 

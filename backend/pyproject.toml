@@ -633,7 +633,7 @@ parallel = true
 concurrency = ["thread", "greenlet"]
 source = ["src/farna"]
 # `_far252_dead_probe.py` is a TRANSIENT fixture: the vulture gate tests write it
-# into `src/modulo` and unlink it in a `finally`. Coverage's un-executed-source
+# into `src/farna` and unlink it in a `finally`. Coverage's un-executed-source
 # scan (`find_possibly_unexecuted_files`) walks every `.py` under `source` when a
 # worker saves its data, so if one xdist worker saves while another is running a
 # probe test the probe is touched into the data with no lines - and the combine
@@ -734,7 +734,7 @@ dev = [
     "pip-audit>=2.9.0",
     "types-jsonschema>=4.26.0",
     # Real Lua VM used by the unit test that compile-checks the Redis rate-limit
-    # Lua script (_CONSUME_LUA in modulo.connectors._rate_bucket). Without a real
+    # Lua script (_CONSUME_LUA in farna.connectors._rate_bucket). Without a real
     # Lua parser, a syntax defect (e.g. a duplicate `end`) can only surface at
     # runtime as a Redis compile error (FAR-439 fail-closed regression).
     "lupa>=2.0",

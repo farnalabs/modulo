@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.loop_intercept (FAR-211 T3).
+"""Unit tests for farna.core.guardrails.loop_intercept (FAR-211 T3).
 
 Covers the agent-loop interior tool-call interception bridge: config
 validation, glob pattern matching, event serialisation caps, block/warn/redact/

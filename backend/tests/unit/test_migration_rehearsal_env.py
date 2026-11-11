@@ -1,6 +1,6 @@
 """Unit tests for env.py's rehearsal-mode helpers (FAR-717).
 
-Importing :mod:`modulo.db.migrations.env` outside an alembic run is safe:
+Importing :mod:`farna.db.migrations.env` outside an alembic run is safe:
 its module-level config block detects the unset context and skips the
 online/offline execution entirely, so the rehearsal guard helpers are
 testable without a database. Container-backed rehearsal behaviour (real

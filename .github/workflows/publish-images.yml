@@ -145,7 +145,7 @@ jobs:
         run: |
           IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
           echo "Checking image: $IMAGE"
-          docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+          docker run --rm --entrypoint python "$IMAGE" -c "import farna; print(farna.__file__)"
 
       - name: Smoke check — nginx -t
         shell: bash
@@ -262,7 +262,7 @@ jobs:
         run: |
           IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
           echo "Checking image: $IMAGE"
-          docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+          docker run --rm --entrypoint python "$IMAGE" -c "import farna; print(farna.__file__)"
 
   # ---------------------------------------------------------------------------
   # Frontend image — consumed by the Helm chart (FAR-1052, stacked PR).

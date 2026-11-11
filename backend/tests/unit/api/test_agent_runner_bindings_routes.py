@@ -1,6 +1,6 @@
 """Route-level tests for per-agent Model Backend runner bindings (FAR-592 / D6).
 
-Covers the three HTTP endpoints in ``modulo.api.routes.agents``:
+Covers the three HTTP endpoints in ``farna.api.routes.agents``:
 
 * ``GET    /api/v1/agents/{agent_id}/bindings``
 * ``PUT    /api/v1/agents/{agent_id}/bindings``

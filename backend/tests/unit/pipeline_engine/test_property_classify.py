@@ -1,6 +1,6 @@
 """Hypothesis property-based tests for the pure run-classification cores.
 
-Targets (all from ``modulo.core.pipeline_engine.classify``):
+Targets (all from ``farna.core.pipeline_engine.classify``):
 
 * ``_is_valid_pr_url`` -- URL validity predicate
 * ``collect_pr_urls`` -- deduplicated PR-URL collection

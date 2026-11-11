@@ -92,7 +92,7 @@ def _params_of(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
 
 
 def _parse_sources() -> list[tuple[Path, ast.Module]]:
-    """Parse every ``src/modulo`` module, skipping migrations (which only hardcode DDL)."""
+    """Parse every ``src/farna`` module, skipping migrations (which only hardcode DDL)."""
     sources: list[tuple[Path, ast.Module]] = []
     for path, source in iter_source_text(SRC):
         if "migrations" in path.parts:
@@ -201,7 +201,7 @@ def _resolve_write_expression(
 
 
 def _collect_write_sites() -> list[_WriteSite]:
-    """Statically resolve every ``validation_result`` value written in ``src/modulo``."""
+    """Statically resolve every ``validation_result`` value written in ``src/farna``."""
     sources = _parse_sources()
     functions = _collect_functions(sources)
     sink_params = _discover_helper_params(sources, functions)

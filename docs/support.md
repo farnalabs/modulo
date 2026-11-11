@@ -93,7 +93,7 @@ kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/component=saq-system --tail=40
 
 # 3. Build the bundle inside the backend pod and copy it out.
 POD=$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=backend -o jsonpath='{.items[0].metadata.name}')
-kubectl -n "$NAMESPACE" exec "$POD" -- python -m modulo.support.bundle --out /tmp/modulo-support.zip
+kubectl -n "$NAMESPACE" exec "$POD" -- python -m farna.support.bundle --out /tmp/modulo-support.zip
 kubectl -n "$NAMESPACE" cp "$POD":/tmp/modulo-support.zip ./modulo-support.zip
 ```
 
@@ -237,9 +237,9 @@ which is why you should read it first.
    container already has it:
 
    ```bash
-   docker compose exec -T backend python -m modulo.support.bundle --out /tmp/modulo-support.zip
-   docker compose exec -T backend python -m modulo.support.bundle --out /tmp/modulo-support.zip --list
-   docker compose exec -T backend python -m modulo.support.bundle --out /tmp/modulo-support.zip --show settings.txt
+   docker compose exec -T backend python -m farna.support.bundle --out /tmp/modulo-support.zip
+   docker compose exec -T backend python -m farna.support.bundle --out /tmp/modulo-support.zip --list
+   docker compose exec -T backend python -m farna.support.bundle --out /tmp/modulo-support.zip --show settings.txt
    ```
 
    The first command builds an app-only bundle inside the container (Docker

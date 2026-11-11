@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.error_tracking`` (PR #97).
+``farna.core.error_tracking`` (PR #97).
 """
 
 from __future__ import annotations

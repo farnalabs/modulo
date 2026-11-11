@@ -87,7 +87,7 @@ class TestIssuedRunCredentialProvenance:
 
 
 class TestCoerceUuid:
-    """The issuer coerces identifiers via ``modulo.util.uuid.coerce_uuid``.
+    """The issuer coerces identifiers via ``farna.util.uuid.coerce_uuid``.
 
     The module must NOT re-implement its own UUID coercion (the shared helper
     is dependency-free and strictly more capable); these cases pin both the

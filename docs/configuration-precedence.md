@@ -23,7 +23,7 @@ pinned `config.env`, which carries all six keys.
 
 Implementation: `backend/src/farna/launcher/config_source.py`
 (`compose_config`, `write_pinned_env_file`). The pin lands through
-`modulo.settings.pin_env_file`, so every `get_settings()` call in the API,
+`farna.settings.pin_env_file`, so every `get_settings()` call in the API,
 the SAQ children, and the CLI sees the bundled endpoints.
 
 ### Precedence order
@@ -37,7 +37,7 @@ the SAQ children, and the CLI sees the bundled endpoints.
    values derive from `state.json` (ports) + `secrets.json` (passwords).
    Editing `state.json` ports or rotating `secrets.json` changes these
    on the NEXT boot.
-3. **Field defaults** in `modulo.settings` sit below the pinned file.
+3. **Field defaults** in `farna.settings` sit below the pinned file.
 
 Practical consequence: exporting `DATABASE_URL` in your shell says
 "ignore the bundled Postgres and use mine" (`PG*` client vars are scrubbed

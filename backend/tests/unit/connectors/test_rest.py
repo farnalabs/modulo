@@ -414,7 +414,7 @@ def test_validate_credentials_rejects_masked_secret() -> None:
     (guaranteed runtime auth failure). All three secret-bearing auth_modes are
     covered (FAR-504)."""
     # The connector's local mirror of the mask sentinel must stay in sync with the
-    # canonical value (the connector cannot import ``modulo.core`` per the
+    # canonical value (the connector cannot import ``farna.core`` per the
     # import-linter contract, so it mirrors the string — a drift here silently
     # defeats the masked-rejection guard).
     assert _SENSITIVE_VALUE_MASK == SENSITIVE_VALUE_MASK
@@ -1543,7 +1543,7 @@ def test_fanout_failure_redacts_failed_item():
 
 
 def _real_ssrf_guard() -> SecurityGuard:
-    """A guard bound to the real ``modulo.core.ssrf`` validator (as the hub does)."""
+    """A guard bound to the real ``farna.core.ssrf`` validator (as the hub does)."""
     from farna.core.ssrf import validate_outbound_url_async
 
     async def validate_url(url: str) -> None:

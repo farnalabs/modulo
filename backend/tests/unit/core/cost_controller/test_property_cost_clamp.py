@@ -1,9 +1,9 @@
 """Hypothesis property-based tests for the cost clamping and token coercion cores.
 
 Targets:
-* ``clamp_reported`` from ``modulo.core.cost_controller.breakdown.aggregate``
+* ``clamp_reported`` from ``farna.core.cost_controller.breakdown.aggregate``
   -- self-reported model cost clamping (defense-in-depth at enrichment).
-* ``coerce_reported_token`` from ``modulo.core.cost_controller.breakdown.params``
+* ``coerce_reported_token`` from ``farna.core.cost_controller.breakdown.params``
   -- tri-state reported-token coercion (the ONE shared rule, FAR-491).
 
 Properties assert INVARIANTS:

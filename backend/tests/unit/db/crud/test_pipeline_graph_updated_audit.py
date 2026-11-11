@@ -579,7 +579,7 @@ class TestRollbackGraphUpdatedAudit:
 # the whole replace *and* an inline audit append (which itself takes the
 # per-org audit-chain-head lock). The append is DELIBERATELY kept inside the
 # write transaction (full rationale: the FAR-1824 comment above the append in
-# ``modulo.db.crud.pipeline.replace_pipeline_graph``). These tests pin the two
+# ``farna.db.crud.pipeline.replace_pipeline_graph``). These tests pin the two
 # properties that make the nesting safe, so a future refactor cannot silently
 # invert either:
 #

@@ -172,7 +172,7 @@ def user_attempts_claim(username: str, review_id: str, run_name: str, request) -
     """Claim a run's HITL gate through the REAL ``POST /api/v1/runs/.../hitl/claim`` route.
 
     The route's permission floor (``hitl.claim``), the ``human_only`` gate
-    pre-checks and :mod:`modulo.core.hitl_manager`'s claim body run unpatched.
+    pre-checks and :mod:`farna.core.hitl_manager`'s claim body run unpatched.
     The reads that decide the outcome are shaped in route-decision order:
     the pending gate, the awaiting_human run, a re-read of the gate inside
     the claim transaction, and a membership read that reports NO row. That

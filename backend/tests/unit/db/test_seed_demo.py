@@ -1,4 +1,4 @@
-"""Unit tests for the FAR-535 demo auto-login seed (modulo.db.seed_demo).
+"""Unit tests for the FAR-535 demo auto-login seed (farna.db.seed_demo).
 
 Hermetic in-memory SQLite (mirrors tests/unit/db/test_seed.py — no Postgres
 required). Locks the seed contract: env-gated no-op when the demo trio is not

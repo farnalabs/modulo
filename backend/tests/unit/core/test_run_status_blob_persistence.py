@@ -5,8 +5,8 @@ Contract split (per-node telemetry alongside outputs) was originally pinned
 against the legacy ``runs.outputs_json`` / ``runs.node_telemetry_json`` ORM
 columns. B1 (FAR-583) cut those columns' ORM mapping — the ``run_node_outputs``
 per-node store is now the ONLY store, written by the REPLACE write
-(:func:`modulo.db.crud.run_node_outputs.replace_run_node_outputs`) that
-:func:`modulo.db.crud.run.update_run_status` performs INSIDE the status-write
+(:func:`farna.db.crud.run_node_outputs.replace_run_node_outputs`) that
+:func:`farna.db.crud.run.update_run_status` performs INSIDE the status-write
 transaction. The invariants this file pins survived the cut:
 
 * a blobs-carrying status write persists BOTH sides (outputs + telemetry)

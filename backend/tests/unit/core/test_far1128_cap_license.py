@@ -1,9 +1,9 @@
 """FAR-1128 cap-license: real signed licence artefacts through the production path.
 
 Generates Ed25519 keypairs and signs licence payloads with the same crypto
-used in production (``modulo.core.registry.crypto`` +
-``modulo.core.license_signing``), then runs them through
-``modulo.core.license.parse_and_verify`` / the in-memory licence store and
+used in production (``farna.core.registry.crypto`` +
+``farna.core.license_signing``), then runs them through
+``farna.core.license.parse_and_verify`` / the in-memory licence store and
 ``LicenseKeyTier`` feature gating — no mocks. Covers the four operational
 outcomes: valid, expired, tampered signature, wrong tier.
 """

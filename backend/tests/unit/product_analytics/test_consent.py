@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.product_analytics — consent and settings model."""
+"""Unit tests for farna.core.product_analytics — consent and settings model."""
 
 from __future__ import annotations
 

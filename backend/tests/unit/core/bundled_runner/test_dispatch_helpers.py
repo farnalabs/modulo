@@ -1,7 +1,7 @@
 """Unit tests for the Bundled Runner dispatch helpers (FAR-590 D4).
 
 Covers the provider-backed file IO helpers and the pure timeout/uuid
-validators in ``modulo.core.bundled_runner.runner_dispatch`` that are not
+validators in ``farna.core.bundled_runner.runner_dispatch`` that are not
 exercised by the route-resolution or streaming suites.
 """
 

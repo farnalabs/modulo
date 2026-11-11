@@ -1,4 +1,4 @@
-"""Unit tests for the Fernet key-rotation service (modulo.core.fernet_rotation).
+"""Unit tests for the Fernet key-rotation service (farna.core.fernet_rotation).
 
 Applies QA lenses (correctness, bugs, maintainability) to the rotation module,
 which re-encrypts every Fernet-encrypted data store with a new key while

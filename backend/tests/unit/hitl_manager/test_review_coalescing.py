@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.hitl_manager.gate_coalescing (FAR-604 D4).
+"""Unit tests for farna.core.hitl_manager.gate_coalescing (FAR-604 D4).
 
 Mock/fake based — no Postgres. Covers the gate-raise coalescing decision:
 

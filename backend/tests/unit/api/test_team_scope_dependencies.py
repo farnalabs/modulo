@@ -1,8 +1,8 @@
 """Unit tests for the single-sourced team-gate matrix (FAR-1513).
 
-``modulo.api.team_scope.evaluate_team_gate`` is ONE body shared by:
+``farna.api.team_scope.evaluate_team_gate`` is ONE body shared by:
   - the REST dependency ``require_team_membership_or_admin[_any_credential]``
-    (``modulo.api.dependencies``), and
+    (``farna.api.dependencies``), and
   - the MCP per-row pipeline/trigger guards (``mcp_server._pipeline_team_gate``),
     which evaluate it against team-blind-resolved rows.
 

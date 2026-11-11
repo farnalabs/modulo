@@ -10,7 +10,7 @@ class TestGetOrCreateEngine:
     """Test engine creation with pool config.
 
     Since dist/cleanup-engine-unify, ``get_or_create_engine`` delegates to
-    ``modulo.db.session.get_shared_engine`` — the assertions below exercise the
+    ``farna.db.session.get_shared_engine`` — the assertions below exercise the
     REAL unified path (get_or_create_engine -> get_shared_engine ->
     _build_engine -> create_async_engine) instead of a separate API-local
     factory.
@@ -26,7 +26,7 @@ class TestGetOrCreateEngine:
     def teardown_method(self):
         """Never leak a patched engine singleton into the rest of the suite.
 
-        ``get_or_create_engine`` caches through ``modulo.db.session.get_shared_engine``,
+        ``get_or_create_engine`` caches through ``farna.db.session.get_shared_engine``,
         so a test that builds an engine while ``create_async_engine`` is patched
         would otherwise leave that auto ``MagicMock`` in the process-global
         singleton. A later test that drives the REAL ``create_run`` then runs

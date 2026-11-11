@@ -437,8 +437,8 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     # max_concurrent_runs is enforced at DISPATCH, not at the manual-trigger
     # route: the trigger ACCEPTS the run (202) and the executor's capacity gate
     # then parks it back to ``pending`` carrying the ``pipeline_capacity`` marker
-    # (modulo/core/pipeline_engine/executor.py::_capacity_decline; the marker
-    # constant is ERROR_CODE_PIPELINE_CAPACITY in modulo/db/crud/run.py). It is
+    # (farna/core/pipeline_engine/executor.py::_capacity_decline; the marker
+    # constant is ERROR_CODE_PIPELINE_CAPACITY in farna/db/crud/run.py). It is
     # NOT the rate-limit constraint, so ``create_run`` never raises
     # ``RateLimitConflictError`` for an over-capacity trigger and the route never
     # returns 429. We model the post-dispatch observable state (a pending run
@@ -520,7 +520,7 @@ def all_nodes_complete(request: pytest.FixtureRequest) -> None:
     """Simulate every node completing successfully.
 
     A fully-successful run terminalizes on ``complete`` (the success member of
-    ``modulo.db.models.run.TERMINAL_STATUSES``) — not ``completed``, and there is
+    ``farna.db.models.run.TERMINAL_STATUSES``) — not ``completed``, and there is
     no ``final_state`` field on a Run.
     """
     mock_run = getattr(request.node, "_mock_run", None)
@@ -878,7 +878,7 @@ def check_run_reached_terminal_state(request: pytest.FixtureRequest) -> None:
     """Assert the run carries a real terminal status.
 
     A Run has a terminal ``status`` — there is no ``final_state`` field
-    (modulo/db/models/run.py). Reads the real produced payload: the API
+    (farna/db/models/run.py). Reads the real produced payload: the API
     response body when the scenario drove a route, otherwise the run object the
     transition step holds.
     """
@@ -899,9 +899,9 @@ def check_run_parked_for_capacity(request: pytest.FixtureRequest, marker: str) -
     """An over-capacity manual run is ACCEPTED then parked on pipeline capacity.
 
     The ``max_concurrent_runs`` cap is enforced in the executor's dispatch-time
-    capacity gate (modulo/core/pipeline_engine/executor.py::_capacity_decline),
+    capacity gate (farna/core/pipeline_engine/executor.py::_capacity_decline),
     which demotes the run back to ``pending`` carrying the ``pipeline_capacity``
-    marker (ERROR_CODE_PIPELINE_CAPACITY in modulo/db/crud/run.py). It is not a
+    marker (ERROR_CODE_PIPELINE_CAPACITY in farna/db/crud/run.py). It is not a
     rate-limit refusal, so the manual-trigger route returns 202, never 429.
 
     The observation is the CALLER-OBSERVABLE HTTP payload the trigger route
@@ -1199,7 +1199,7 @@ def pipeline_with_hitl_review(review_id: str, request: pytest.FixtureRequest) ->
 def run_reaches_gate(review_id: str, request: pytest.FixtureRequest) -> None:
     """A HITL gate interrupts the run, parking it on ``awaiting_human``.
 
-    ``awaiting_human`` is the real paused status (modulo/db/models/run.py);
+    ``awaiting_human`` is the real paused status (farna/db/models/run.py);
     there is no ``waiting_for_approval`` status.
     """
     mock_run = getattr(request.node, "_mock_run", None)
@@ -1263,7 +1263,7 @@ def run_continues(request: pytest.FixtureRequest) -> None:
 @then('the run status becomes "awaiting_human"')
 def run_status_awaiting_human(request: pytest.FixtureRequest) -> None:
     """A HITL gate parks the run on ``awaiting_human`` — the real paused status
-    (modulo/db/models/run.py). There is no ``waiting_for_approval`` status.
+    (farna/db/models/run.py). There is no ``waiting_for_approval`` status.
 
     Asserts the run object the gate step produced, rather than restating a value
     this step set itself.

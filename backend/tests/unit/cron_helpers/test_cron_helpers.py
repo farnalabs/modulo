@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.cron_helpers (plan F1) -” fire_due_triggers,
+"""Unit tests for farna.core.cron_helpers (plan F1) -” fire_due_triggers,
 atomic next_fire_at advance, per-item fire jobs, report backoff/deactivate.
 
 Mock/fake based (no real Postgres/Redis). The multi-worker race is covered at

@@ -1,7 +1,7 @@
 """Unit tests for the promoted migration-head predicate (FAR-671).
 
-``modulo.db.health_checks.db_is_at_migration_head`` is the single
-implementation of the boot fast-path check; ``modulo.api.main`` keeps a thin
+``farna.db.health_checks.db_is_at_migration_head`` is the single
+implementation of the boot fast-path check; ``farna.api.main`` keeps a thin
 wrapper as its test seam. Both fail-safe branches (head unresolvable, query
 error, ScriptDirectory failure) and the true/mismatch paths are locked here,
 plus the module-relative alembic.ini resolution.
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
-# Minimal env so importing ``modulo.api.main`` (which builds the lazy engine
+# Minimal env so importing ``farna.api.main`` (which builds the lazy engine
 # from Settings at import time) works outside the tests/unit/api conftest.
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)

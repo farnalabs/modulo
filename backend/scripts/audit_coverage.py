@@ -47,9 +47,9 @@ BASELINE_PATH = BACKEND_DIR / "tests" / "architecture" / "audit_coverage_baselin
 MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
 
 #: Audit annotations the ratchet accepts. ``audited`` is the route dependency
-#: from ``modulo.core.audit_coverage``; ``audited_system`` is its actor-less
+#: from ``farna.core.audit_coverage``; ``audited_system`` is its actor-less
 #: sibling for routes with no principal (system actor); ``mcp_audited`` is the
-#: MCP tool decorator from ``modulo.api.mcp_audit``.
+#: MCP tool decorator from ``farna.api.mcp_audit``.
 AUDITED_CALL_NAMES = frozenset({"audited", "audited_system", "mcp_audited"})
 
 #: Verb prefixes that mark an MCP tool as mutating (the ``@mcp.tool`` surface

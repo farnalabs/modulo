@@ -123,7 +123,7 @@ def _isolate_settings_caches() -> Generator[None, None, None]:
 
     ``work_item_refs_cap`` and ``get_settings`` are ``lru_cache``d for the life
     of the worker process. A test in another module that patches
-    ``modulo.settings.get_settings`` (e.g. with a ``MagicMock``) and then
+    ``farna.settings.get_settings`` (e.g. with a ``MagicMock``) and then
     exercises a refs path caches ``int(MagicMock()) == 1`` in
     ``work_item_refs_cap``; that cached cap OUTLIVES the patch, so an unpinned
     test co-located in the same xdist shard silently drops the agent ref it
@@ -795,7 +795,7 @@ def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("farna.core.cost_controller.finalize.load_live_components", _fake_components)
     # ``finalize_cost`` resolves ``get_settings`` from ITS OWN module namespace
     # (``from farna.settings import get_settings``), so patch the name there —
-    # stubbing ``modulo.settings.get_settings`` does not reach it. The stub
+    # stubbing ``farna.settings.get_settings`` does not reach it. The stub
     # carries the default unified refs cap because ``work_item_refs_cap`` reads
     # settings too; a bare ``MagicMock`` coerces to ``1`` (``int(MagicMock)``)
     # and would shrink the cap, silently dropping refs the merge assertions

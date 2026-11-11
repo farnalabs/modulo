@@ -451,7 +451,7 @@ def _periodic_root_names() -> set[str]:
 
 
 def _call_graph() -> dict[str, set[str]]:
-    """Module-level function name -> the names its body calls (all of src/modulo)."""
+    """Module-level function name -> the names its body calls (all of src/farna)."""
     graph: dict[str, set[str]] = {}
     for path, source in iter_source_text(SRC_DIR):
         if "migrations" in path.parts:
@@ -706,7 +706,7 @@ def _path_violations(
     for path in record.paths:
         rel_path, marker = path.evidence
         if not function_exists(path.function):
-            violations.append(f"{label}: path function {path.function!r} not found in src/modulo")
+            violations.append(f"{label}: path function {path.function!r} not found in src/farna")
         if not is_wired(path.function):
             violations.append(f"{label}: path {path.function!r} is not reachable from a periodic path")
         if not marker_present(rel_path, marker):
@@ -1047,7 +1047,7 @@ def test_synthetic_unwired_terminaliser_fails_the_path_check() -> None:
         marker_present=_evidence_present,
         label="status:synthetic",
     )
-    assert any("not found in src/modulo" in v for v in violations)
+    assert any("not found in src/farna" in v for v in violations)
     assert any("not reachable from a periodic path" in v for v in violations)
 
 

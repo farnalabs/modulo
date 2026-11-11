@@ -199,7 +199,7 @@ backend:
       memory: 1Gi
       ephemeralStorage: 2Gi
 
-  # Health checks derived from backend src/modulo/api/routes/health.py.
+  # Health checks derived from backend src/farna/api/routes/health.py.
   #
   # Liveness MUST use /healthz (shallow — returns {"status":"ok"} immediately).
   # /healthz/ready is the DEEP readiness gate that checks database, redis,

@@ -251,7 +251,7 @@ unrelated writer or is held across non-lock work.
 > **D9 is retired (FAR-1833).** The org spend-ceiling gate
 > (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`) no longer takes
 > an SQLAlchemy row lock: it serializes on the per-org cost-state advisory lock
-> (`modulo.core.runner_capacity.lock_org_cost_state`, a `pg_advisory_xact_lock`)
+> (`farna.core.runner_capacity.lock_org_cost_state`, a `pg_advisory_xact_lock`)
 > and reads/writes `organisation_cost_state` instead of the `organisations` row.
 > The D-numbering is retained so the other rows keep their §5/§6/§7 references;
 > there is no D9 in the post-cutover inventory.
@@ -570,7 +570,7 @@ endpoints' org-row write was the D9 deadlock the audit's §7 risk #2 flagged.
 
 FAR-1833 moved the per-run ceiling, spend ceiling and cumulative total off the
 `organisations` row onto the dedicated `organisation_cost_state` row and replaced the
-row lock with a per-org **advisory** lock (`modulo.core.runner_capacity.lock_org_cost_state`
+row lock with a per-org **advisory** lock (`farna.core.runner_capacity.lock_org_cost_state`
 → `pg_advisory_xact_lock`). An advisory lock is transaction-scoped and is NOT a row lock, so
 it does not belong in this row-lock inventory; D9 is retired from §3/§5 and the row-lock
 counts drop by one. On the finalize path the gate takes NO *cost-column* read or write on the

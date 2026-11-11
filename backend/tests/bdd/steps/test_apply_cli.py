@@ -1,6 +1,6 @@
 """BDD step definitions: ``modulo apply`` declarative configuration CLI (feat-apply).
 
-Drives the REAL ``modulo.cli.apply`` seams network-free and DB-free:
+Drives the REAL ``farna.cli.apply`` seams network-free and DB-free:
 
 - **loading** goes through the real ``loader.parse_apply_documents`` and the
   real ``models.ApplyConfig`` validators (duplicate-name / api_version /

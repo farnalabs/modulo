@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.saq_worker (plan F1/F2/F5).
+"""Unit tests for farna.core.saq_worker (plan F1/F2/F5).
 
 Covers: functions lists wired (runs + system), fail-closed auth, explicit cron
 knobs, worker metadata hostname, the SAQ execute/resume wrappers, startup
@@ -48,7 +48,7 @@ def _settings(**overrides: object) -> MagicMock:
     return MagicMock(**base)
 
 
-# Minimal env so ``modulo.db.session`` can be imported in a worktree (no .env):
+# Minimal env so ``farna.db.session`` can be imported in a worktree (no .env):
 # its module-level ``engine = _build_engine()`` constructs ``Settings()``, which
 # requires DATABASE_URL/SECRET_KEY/FERNET_KEY. On main these come from .env.
 _MIN_ENV = {
@@ -144,7 +144,7 @@ class TestFunctionsWiring:
 
     def test_health_readiness_alert_delegates_to_core_check(self) -> None:
         """The cron wrapper is a thin delegate — all logic lives in
-        ``modulo.core.health_alerts.run_health_alert_check`` (FAR-1446)."""
+        ``farna.core.health_alerts.run_health_alert_check`` (FAR-1446)."""
         expected = {"status": "healthy", "action": "none"}
         with patch(
             "farna.core.health_alerts.run_health_alert_check",

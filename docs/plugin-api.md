@@ -8,9 +8,9 @@ Farna Control's plugin system extends the platform with **connector types** and 
 Plugin package          Farna Control Core
     │                       │
     ├─ entry_point ─────────┤
-    │  modulo.connectors     │  PluginRegistry.discover_plugins()
+    │  farna.connectors     │  PluginRegistry.discover_plugins()
     │  or                   │       │
-    │  modulo.model_backends │       ├─ ConnectorHub (fallback)
+    │  farna.model_backends │       ├─ ConnectorHub (fallback)
     │                       │       └─ ModelBackendHub (fallback)
     │                       │
     ├─ builder function ────┤  Called at runtime with config/creds
@@ -24,8 +24,8 @@ Plugins are **discovered at startup**: all builder functions are loaded from ins
 
 | Group | Purpose | Builder signature | Status |
 |---|---|---|---|
-| `modulo.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` | Implemented |
-| `modulo.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` | Implemented |
+| `farna.connectors` | Third-party connector types | `(config: dict, creds: dict) -> ConnectorBase` | Implemented |
+| `farna.model_backends` | Third-party model backends | `(api_key: str, model_id: str, **params) -> ModelBackendBase` | Implemented |
 | `modulo.evals` | Custom eval functions | `(config: dict) -> Any` | Loaded, never resolved |
 | `modulo.schema_types` | Custom schema field types | `(config: dict) -> Any` | Loaded, never resolved |
 
@@ -65,7 +65,7 @@ Runtime health status for a plugin:
 The central registry. Accessed via the module-level singleton:
 
 ```python
-from modulo.core.plugin_registry import get_plugin_registry
+from farna.core.plugin_registry import get_plugin_registry
 
 registry = get_plugin_registry()
 ```
@@ -76,7 +76,7 @@ registry = get_plugin_registry()
 def discover_plugins(self) -> list[PluginManifest]
 ```
 
-Iterates all registered entry point groups (`modulo.connectors`, `modulo.model_backends`, `modulo.evals`, `modulo.schema_types`), loads each entry point, and stores its builder. Returns a list of discovered manifests. Plugins whose entry points fail to load are still recorded (appear in listings) but marked unhealthy.
+Iterates all registered entry point groups (`farna.connectors`, `farna.model_backends`, `modulo.evals`, `modulo.schema_types`), loads each entry point, and stores its builder. Returns a list of discovered manifests. Plugins whose entry points fail to load are still recorded (appear in listings) but marked unhealthy.
 
 #### Builder lookup
 
@@ -120,7 +120,7 @@ Verifies that the plugin's distribution package is still importable via `importl
 ### Singleton
 
 ```python
-from modulo.core.plugin_registry import get_plugin_registry
+from farna.core.plugin_registry import get_plugin_registry
 ```
 
 The module-level `get_plugin_registry()` returns a lazily-initialized singleton. All consumers (the API layer, `ConnectorHub`, `ModelBackendHub`) share the same instance.
@@ -191,7 +191,7 @@ Create a Python package that implements either `ConnectorBase` or `ModelBackendB
 # my_plugin/connector.py
 from typing import Any
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -241,14 +241,14 @@ def build_my_connector(config: dict, creds: dict) -> MyConnector:
 Add to your `pyproject.toml`:
 
 ```toml
-[project.entry-points."modulo.connectors"]
+[project.entry-points."farna.connectors"]
 my_connector = "my_plugin:build_my_connector"
 ```
 
 For model backends:
 
 ```toml
-[project.entry-points."modulo.model_backends"]
+[project.entry-points."farna.model_backends"]
 my_provider = "my_plugin:build_my_backend"
 ```
 
@@ -262,7 +262,7 @@ my_eval = "my_plugin:build_my_eval"
 ```python
 # my_plugin/__init__.py
 def build_my_eval(config: dict) -> "EvalDefinition":
-    # Return an EvalDefinition (see modulo.core.eval_engine.EvalDefinition) or
+    # Return an EvalDefinition (see farna.core.eval_engine.EvalDefinition) or
     # any consumer-defined eval object. The registry stores the BUILDER callable
     # (not its result) under the entry-point name, and nothing invokes it, so
     # this return value is never produced at run time.
@@ -283,7 +283,7 @@ def build_my_field(config: dict) -> "SchemaField":
     # eval group above, the registry stores the builder, not the built object,
     # and has no consumer. Note there is no SchemaField class in Farna Control today:
     # only the API response models SchemaFieldResponse / SchemaFieldListResponse
-    # in modulo.api.routes.schemas.
+    # in farna.api.routes.schemas.
     ...
 ```
 
@@ -306,7 +306,7 @@ A complete plugin that adds a "Slack notify" connector type:
 
 from typing import Any
 
-from modulo.connectors.base import (
+from farna.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
     ConnectorQuery,
@@ -363,7 +363,7 @@ name = "modulo-connector-slack"
 version = "0.1.0"
 description = "Slack notification connector for Farna Control"
 
-[project.entry-points."modulo.connectors"]
+[project.entry-points."farna.connectors"]
 slack_notify = "modulo_connector_slack:build_slack_connector"
 ```
 
@@ -402,7 +402,7 @@ RUN pip install modulo-connector-slack==0.1.0
 ### What happens at startup
 
 1. On application startup, `PluginRegistry.discover_plugins()` is called if `MODULO_PLUGIN_DISCOVERY` is `true`.
-2. The registry iterates all four entry point groups (`modulo.connectors`, `modulo.model_backends`, `modulo.evals`, `modulo.schema_types`).
+2. The registry iterates all four entry point groups (`farna.connectors`, `farna.model_backends`, `modulo.evals`, `modulo.schema_types`).
 3. For each entry point, it reads distribution metadata and loads the builder function.
 4. Successful loads are stored keyed by entry point name; failed loads are recorded as unhealthy.
 5. The singleton is shared across `ConnectorHub`, `ModelBackendHub`, and the REST API.
@@ -426,7 +426,7 @@ A dedicated plugin volume approach will be required for SaaS (hosted environment
 Unit tests use mocked entry points via `unittest.mock.patch`:
 
 ```python
-from modulo.core.plugin_registry import PluginRegistry, PluginManifest
+from farna.core.plugin_registry import PluginRegistry, PluginManifest
 
 
 def test_manual_registration():

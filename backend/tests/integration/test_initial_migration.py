@@ -185,7 +185,7 @@ _NO_ORM_MODEL_TABLES: frozenset[str] = frozenset(
         "_migration_0191_repoint_state",
         # FAR-795 per-org agent-mint budget tally (migration 0242): written
         # exclusively via a single atomic raw-SQL upsert in
-        # modulo.core.runtime_config.mint_budget (the migration comment states
+        # farna.core.runtime_config.mint_budget (the migration comment states
         # the module has no ORM model to fall back on), never via the ORM.
         # permanent (documented repo divergence)
         "org_mint_budget_usage",

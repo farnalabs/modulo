@@ -1,7 +1,7 @@
 """Exhaustive error-branch coverage for parameter schema & set MCP tools.
 
 Targets the exception handlers and not-found branches inside the 13 CRUD MCP
-tools so that every new production line in ``modulo.api.mcp_server`` is covered.
+tools so that every new production line in ``farna.api.mcp_server`` is covered.
 These are pure unit tests (backend/tests/** is excluded from the SonarCloud
 analysis scope, so they exercise the source without counting against the
 new-code duplication/coverage gate as source).

@@ -321,7 +321,7 @@ its data across a port change; but any external references to the old port
 
 | Environment | Log Source | Location |
 |---|---|---|
-| Docker (local) | Backend stdout | `uv run uvicorn modulo.api.main:app --reload --port 8000` (terminal that runs the backend) |
+| Docker (local) | Backend stdout | `uv run uvicorn farna.api.main:app --reload --port 8000` (terminal that runs the backend) |
 | Docker (local) | Postgres | `docker compose -f docker-compose.local.yml logs -f db-local` |
 | Docker (local) | Redis | `docker compose -f docker-compose.local.yml logs -f redis-local` |
 | Production | Backend (JSON structured) | `journalctl` or log file per deployment config |

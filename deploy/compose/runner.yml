@@ -16,7 +16,7 @@
 #      documented operator override, not the default.
 #   2. bundled-runner — the pinned first-party runner image BUILD target
 #      (deploy/docker/runner-opencode.Dockerfile). The *published* image is
-#      pinned by digest in backend/src/modulo/core/bundled_runner/profile.py;
+#      pinned by digest in backend/src/farna/core/bundled_runner/profile.py;
 #      this target exists so self-hosters can build their own copy.
 #   3. modulo-runner-workspace — the dedicated bridge network workspace
 #      containers attach to at create-time (NetworkingConfig; no /networks/*
@@ -108,7 +108,7 @@ services:
 
   bundled-runner:
     # Network-reference holder + pinned build target. The published image is
-    # pinned in backend/src/modulo/core/bundled_runner/profile.py; building
+    # pinned in backend/src/farna/core/bundled_runner/profile.py; building
     # here is for operators who self-build the pinned version:
     #   docker compose -f deploy/compose/runner.yml --profile runner build bundled-runner
     build:

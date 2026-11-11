@@ -1,6 +1,6 @@
 """Unit tests for plan-context resolution and feature-flag override paths.
 
-Covers previously-untested code paths in ``modulo.core.feature_flags``:
+Covers previously-untested code paths in ``farna.core.feature_flags``:
   - ``CommunityTier`` / ``LicenseKeyTier`` / ``DbPlanContext`` plan-context classes
   - ``resolve_plan_context`` resolution order and failure fall-through
   - ``FeatureFlagRegistry.resolve_flag`` override precedence

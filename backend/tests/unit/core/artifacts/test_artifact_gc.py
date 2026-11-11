@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.artifacts.gc (FAR-811).
+"""Unit tests for farna.core.artifacts.gc (FAR-811).
 
 Tests delete_orphaned_run_artifacts: orphan detection, batched DB lookups,
 best-effort error handling, and the iter_run_ids / delete_run integration.

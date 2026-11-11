@@ -1,4 +1,4 @@
-"""Tests for modulo.api.main._verify_db_connectivity retry logic.
+"""Tests for farna.api.main._verify_db_connectivity retry logic.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the startup DB
 connectivity probe. The probe must never block application startup: it retries

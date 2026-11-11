@@ -133,7 +133,7 @@ and sign your own Team licenses. Run these commands in a checkout of the source.
    ```bash
    cd backend
    uv run python -c "
-   from modulo.core.registry.crypto import generate_keypair
+   from farna.core.registry.crypto import generate_keypair
    import json
    print(json.dumps(generate_keypair(), indent=2))
    "
@@ -157,7 +157,7 @@ and sign your own Team licenses. Run these commands in a checkout of the source.
    ```bash
    cd backend
    uv run python -c "
-   from modulo.core.license_signing import generate_team_license
+   from farna.core.license_signing import generate_team_license
    print(generate_team_license(
        'Your Organisation',
        term_months=12,

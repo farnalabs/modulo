@@ -4,7 +4,7 @@ Two independent proofs the pre-PR QA gate demanded:
 
 * **C1 (real Postgres)** — apply the REAL ``guardrail_override`` to a
   node-started (``first_node_dispatched``) eval-blocked run, then call the
-  REAL :func:`modulo.core.pipeline_execution.claim_resume_run_async` against
+  REAL :func:`farna.core.pipeline_execution.claim_resume_run_async` against
   the same throwaway Postgres and assert a claim token IS returned. Before
   the fix the flip left a FRESH block-time ``heartbeat_at``, so the claim's
   stale-running arm (``heartbeat_at < now() - run_claim_stale_seconds``)

@@ -10,11 +10,11 @@
 # path; backend/tests/unit/tools/test_gate0_paths.py asserts the critical
 # modules stay covered, so removing one of the patterns below without a
 # matching test update fails the unit suite.
-backend/src/modulo/db/**
-backend/src/modulo/settings.py
-backend/src/modulo/db/url_utils.py
-backend/src/modulo/api/main.py
-backend/src/modulo/launcher/service.py
+backend/src/farna/db/**
+backend/src/farna/settings.py
+backend/src/farna/db/url_utils.py
+backend/src/farna/api/main.py
+backend/src/farna/launcher/service.py
 backend/tests/unit/launcher/test_service.py
 deploy/fly/**
 scripts/macos/**

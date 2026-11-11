@@ -1,4 +1,4 @@
-"""Tests for modulo.core.license_signing — team license generation."""
+"""Tests for farna.core.license_signing — team license generation."""
 
 import base64
 import json

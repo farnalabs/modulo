@@ -76,7 +76,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     config.addinivalue_line(
         "markers",
-        "real_verify_identity: run the real modulo.auth.dependencies._verify_identity "
+        "real_verify_identity: run the real farna.auth.dependencies._verify_identity "
         "instead of the BDD-scope AsyncMock shim",
     )
 

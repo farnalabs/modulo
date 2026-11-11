@@ -5,7 +5,7 @@ the strict introspection tests need to assert the route guards
 (``test_route_introspection.py``). Two kinds of metadata are collected:
 
 * a **permission tag** — a ``Depends`` built by one of the ``require_*``
-  factories in ``modulo.api.dependencies`` (``_tagged_dep`` stamps
+  factories in ``farna.api.dependencies`` (``_tagged_dep`` stamps
   ``permission`` / ``permission_kind`` / ``min_role`` on it). A tag may be
   declared on the endpoint signature, on the route decorator, merged from an
   ``APIRouter(dependencies=[...])`` / ``include_router(..., dependencies=[...])``,

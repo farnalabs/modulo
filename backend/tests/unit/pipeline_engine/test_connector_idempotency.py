@@ -351,7 +351,7 @@ class TestConnectorWriteGate:
     async def test_fails_open_when_killswitch_missing(self) -> None:
         """MAJOR 2: the connector gate uses its OWN opt-in flag
         (``modulo_connector_write_gate_enabled``) which defaults to ``False`` in
-        ``modulo.settings`` — so at runtime the gate is GENUINELY opt-in and a
+        ``farna.settings`` — so at runtime the gate is GENUINELY opt-in and a
         settings object WITHOUT the attribute (or with it ``False``) must NOT
         enable the gate: the write proceeds (no suppression)."""
         applied = _applied_key({"name": "n1"})
@@ -520,7 +520,7 @@ class TestConnectorWriteGateOnUnknown:
 
 class TestOnUnknownModeSetSingleSource:
     """The ``on_unknown`` mode set and default are defined ONCE — in
-    ``modulo.connectors.base`` (a stdlib-only leaf) — and both the REST
+    ``farna.connectors.base`` (a stdlib-only leaf) — and both the REST
     connector's config validation and the pipeline engine's gate read import
     them. No local redefinition may drift from the shared set."""
 
@@ -546,7 +546,7 @@ class TestOnUnknownModeSetSingleSource:
 
 
 class _FakeConnectorRun:
-    """Stand-in for ``modulo.db.models.run.Run`` used by ``_write_raw_output_marker``."""
+    """Stand-in for ``farna.db.models.run.Run`` used by ``_write_raw_output_marker``."""
 
     def __init__(self, markers: dict, idempotency_key: str | None) -> None:
         self.id = "run-123"

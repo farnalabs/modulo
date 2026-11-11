@@ -394,7 +394,7 @@ def test_diff_non_member_is_denied_403() -> None:
 def test_diff_in_txn_denial_overrides_a_passing_request_time_gate() -> None:
     """The request-time gate PASSES, the in-txn re-check DENIES -> still 403.
 
-    The dependency resolves membership through ``modulo.api.dependencies``'
+    The dependency resolves membership through ``farna.api.dependencies``'
     own import (the session answers a membership row), while the in-txn
     re-check resolves it through the one imported into ``routes.pipelines`` -
     patched here to deny, exactly as an ownership flip inside the

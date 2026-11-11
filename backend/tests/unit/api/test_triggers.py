@@ -1,6 +1,6 @@
 """Unit tests for the trigger config merge (masked round-trip guard).
 
-Covers :func:`modulo.api.routes.triggers._merge_trigger_config`, which merges a
+Covers :func:`farna.api.routes.triggers._merge_trigger_config`, which merges a
 PATCH ``config_json`` into the stored trigger config without persisting the DOM
 mask. The trigger GET emits a RECURSIVE mask (``mask_config_json`` on nested
 ``headers`` / ``operations`` / list values), so the PATCH merge must skip masked

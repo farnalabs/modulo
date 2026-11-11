@@ -1,7 +1,7 @@
 """FAR-1688: the per-eval policy-gate advisory lock has ONE derivation.
 
-The declarative graph writer (``modulo.db.crud.pipeline``) and the in-product
-authoring routes (``modulo.api.routes.evals``) must serialise on the SAME
+The declarative graph writer (``farna.db.crud.pipeline``) and the in-product
+authoring routes (``farna.api.routes.evals``) must serialise on the SAME
 transaction-scoped advisory lock. Before this change each module carried its
 own copy of the key/SQL, so an edit to one would silently desynchronise the
 shared lock key. These tests pin the single derivation both layers import.

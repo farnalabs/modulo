@@ -72,10 +72,10 @@ def _make_db_session(*, in_transaction: bool = False, async_in_transaction: bool
 
 @contextlib.contextmanager
 def _fake_crud_module(module: str, **attrs) -> contextlib.AbstractContextManager[None]:
-    """Install a fake ``modulo.db.crud.*`` / ``modulo.api.dependencies`` module.
+    """Install a fake ``farna.db.crud.*`` / ``farna.api.dependencies`` module.
 
     The real modules cannot always be imported in this sandbox (the shared
-    ``modulo.db.crud.base`` uses PEP 695 generics, Python >= 3.12), and the
+    ``farna.db.crud.base`` uses PEP 695 generics, Python >= 3.12), and the
     functions under test import them lazily at call time — so a ``sys.modules``
     injection is sufficient and works on every interpreter version.
     """

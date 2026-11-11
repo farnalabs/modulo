@@ -1,5 +1,5 @@
 """Unit tests for the modulo_system engine selection and worker-sizing math
-in modulo.core.saq_worker.
+in farna.core.saq_worker.
 
 Proves that _get_system_async_engine creates an engine from
 MODULO_SYSTEM_DATABASE_URL when set, and FAILS CLOSED (raises RuntimeError +

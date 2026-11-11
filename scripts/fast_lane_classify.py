@@ -822,13 +822,14 @@ def _fetch_pr_paths(
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-        # GitHub's pulls.diff endpoint returns HTTP 406 ("diff exceeded the
-        # maximum number of lines (20000)") for very large PRs, which made
+        # GitHub's pulls.diff endpoint returns HTTP 406 for very large PRs —
+        # either "diff exceeded the maximum number of lines (20000)" or
+        # "diff exceeded the maximum number of files (300)" — which made
         # `gh pr diff` fail. A PR that large can never be class-A
         # test-infra work, so report it ineligible (rc=1, neutral) rather
         # than a classifier error (rc=2, red check).
-        if "exceeded the maximum number of lines" in stderr:
-            print(f"PR #{pr_number} is class-B — diff too large to classify (>20000 lines) — not fast-lane eligible")
+        if "exceeded the maximum number of" in stderr:
+            print(f"PR #{pr_number} is class-B — diff too large to classify — not fast-lane eligible")
             return None, 1
         print(
             f"::error::fast-lane: could not fetch PR diff: {stderr}",

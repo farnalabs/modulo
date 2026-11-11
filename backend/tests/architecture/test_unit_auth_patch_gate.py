@@ -14,7 +14,7 @@ import — or, worse, an auth-exercising test loses its patch. These tests pin:
 - the PATCH path via a ``sys.modules`` marker (stack already loaded);
 - the PATCH path via source mention (the lazy in-body-import shape);
 - ``_provisioned_system_engine``'s skip path (its body imports
-  ``modulo.api.dependencies``, which executes ``modulo.auth.dependencies``);
+  ``farna.api.dependencies``, which executes ``farna.auth.dependencies``);
 - the source-scan helper itself: token read from the module's own file and
   cached per ``(path, token)``.
 
@@ -133,7 +133,7 @@ def test_provisioned_engine_gate_skips_without_hint(
 
     ``_provisioned_system_engine``'s body does
     ``from farna.api import dependencies`` — which executes
-    ``modulo.auth.dependencies`` — so a skip must leave BOTH markers out of
+    ``farna.auth.dependencies`` — so a skip must leave BOTH markers out of
     ``sys.modules`` (otherwise a pure-logic session regains the import via
     this fixture even with ``_patch_verify_identity`` gated).
     """
@@ -151,7 +151,7 @@ def test_gate_predicate_is_conservative_on_mention(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A comment/docstring mention still counts — false positives are safe."""
-    source = "# touches modulo.api in comments only\nvalue = 1\n"
+    source = "# touches farna.api in comments only\nvalue = 1\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_stack_markers(monkeypatch)
 

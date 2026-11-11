@@ -23,10 +23,10 @@ from farna.db.models.trigger_event import TriggerEvent
 from farna.db.rls import set_rls_org
 
 _POLL_PKG = "farna.core.trigger_engine.polling"
-# The fire logic lives in ``modulo.core.cron_helpers.fire_polling_trigger``
+# The fire logic lives in ``farna.core.cron_helpers.fire_polling_trigger``
 # (polling.py re-exports it). Settings are read there via
 # ``cron_helpers.get_settings`` and the secrets backend is constructed via
-# ``modulo.core.secrets_backend.create_secrets_backend``.
+# ``farna.core.secrets_backend.create_secrets_backend``.
 _CRON_PKG = "farna.core.cron_helpers"
 _SECRETS_PKG = "farna.core.secrets_backend"
 

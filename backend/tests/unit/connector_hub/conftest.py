@@ -1,6 +1,6 @@
 """Shared fixtures for the connector-hub unit tests.
 
-Pins ``modulo.settings.get_settings`` to a settings read with the shared
+Pins ``farna.settings.get_settings`` to a settings read with the shared
 Redis budget unconfigured. The hub's tenant path (``org_id`` set) is
 settings-reading AND fail-closed (FAR-439): without this pin a bare tenant
 fixture would raise ``SharedBudgetUnavailableError`` in any environment

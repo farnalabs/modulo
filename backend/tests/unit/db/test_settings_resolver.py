@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.settings_resolver — the org/system setting resolver.
+"""Unit tests for farna.db.settings_resolver — the org/system setting resolver.
 
 Covers the org-wide trigger-pause gate (fail-closed) and the
 org.settings_json → SystemConfig → default resolution chain:

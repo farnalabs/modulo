@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.exception_handlers.
+"""Unit tests for farna.api.exception_handlers.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the three handlers
 registered in ``api/main.py`` that shape every error response in the API:

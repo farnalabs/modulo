@@ -2,7 +2,7 @@
 
 Locks: the env > state.json(+secrets) > defaults priority (both via the
 pydantic-settings source class and via the pinned dotenv file), the import
-hygiene rule (no ``modulo.settings`` import at module import time), the
+hygiene rule (no ``farna.settings`` import at module import time), the
 0600 pinned-config write with symlink rejection, and the un-bootstrapped
 refusal.
 """
@@ -74,7 +74,7 @@ def test_no_settings_import_at_module_time_by_ast() -> None:
 
 def test_no_settings_module_loaded_after_import_by_subprocess() -> None:
     result = subprocess.run(
-        [sys.executable, "-c", "import sys, modulo.launcher.config_source; print('farna.settings' in sys.modules)"],
+        [sys.executable, "-c", "import sys, farna.launcher.config_source; print('farna.settings' in sys.modules)"],
         capture_output=True,
         text=True,
         timeout=120,

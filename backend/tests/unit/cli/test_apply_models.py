@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.models (FAR-681 slice 1)."""
+"""Unit tests for farna.cli.apply.models (FAR-681 slice 1)."""
 
 from __future__ import annotations
 
@@ -893,7 +893,7 @@ class TestSensitiveKeyTwin:
         """Drift alarm: the CLI runs WITHOUT server settings, so it cannot
         import the FastAPI/DB-heavy mask middleware — the local pattern set
         must stay byte-identical to the canonical set the middleware re-exports
-        (``modulo.core.secret_patterns``)."""
+        (``farna.core.secret_patterns``)."""
         from farna.cli.apply import models
         from farna.core.secret_patterns import _SENSITIVE_KEY_PATTERNS
 

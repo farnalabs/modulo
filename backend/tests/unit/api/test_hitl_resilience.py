@@ -1829,8 +1829,8 @@ class TestSessionContractErrorIs500Not503:
         FAR-1464: the key is now emitted by the SHARED guard
         (``db_error_handling.raise_session_contract_error`` -> the classifier's
         ``InvalidRequestError`` arm), so the records carry the
-        ``modulo.api.db_error_handling`` logger instead of the old
-        ``modulo.api.routes.hitl`` local helper — same message key, one source
+        ``farna.api.db_error_handling`` logger instead of the old
+        ``farna.api.routes.hitl`` local helper — same message key, one source
         of truth. That presence assertion is the control for the
         ``db_error_reporting`` absence below: it proves caplog actually
         captured this request's logging, so "no service_unavailable record"

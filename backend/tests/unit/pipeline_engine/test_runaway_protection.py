@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_engine.runaway_protection — the runaway run guards.
+"""Unit tests for farna.core.pipeline_engine.runaway_protection — the runaway run guards.
 
 QA lens pass (correctness, bugs, edge cases) on the circuit breaker that guards
 every pipeline run: ``PipelineExecutor`` constructs a ``RunawayGuard`` per run

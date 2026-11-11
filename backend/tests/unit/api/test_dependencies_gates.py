@@ -1,4 +1,4 @@
-"""QA lens pass on ``modulo.api.dependencies`` — the API-key credential gate,
+"""QA lens pass on ``farna.api.dependencies`` — the API-key credential gate,
 the feature-availability gate, and the dependency-tagging contract.
 
 ``require_permission_any_credential`` is the CI/CD credential path (PRD §5.2):

@@ -578,7 +578,7 @@ class TestAgentMintFlagHydration:
 
     Exercises the REAL ``_hydrate_journeys`` path (no mocks of the function
     under test); the org flag is read through the mirrored reader in
-    ``modulo.db.crud.run`` exactly as production does.
+    ``farna.db.crud.run`` exactly as production does.
     """
 
     _FLAG_KEY = "work_item_agent_minting_enabled"

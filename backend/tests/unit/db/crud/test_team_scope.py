@@ -1,6 +1,6 @@
-"""Unit tests for ``modulo.db.crud.team_scope`` (FAR-1515).
+"""Unit tests for ``farna.db.crud.team_scope`` (FAR-1515).
 
-The connector re-scope gate (``modulo.api.routes.connectors``) locates the
+The connector re-scope gate (``farna.api.routes.connectors``) locates the
 pipelines that bind a connector through ``pipelines_binding_connector``. That
 helper is a cheap text-contains prefilter read through ``team_blind_org_scope``;
 off Postgres there is no team RLS policy, so the scope helper issues no SQL and

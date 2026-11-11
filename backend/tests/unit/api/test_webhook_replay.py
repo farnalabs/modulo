@@ -920,7 +920,7 @@ def test_replay_webhook_undecryptable_token_secret_fails_closed(
     hmac_secret that CANNOT be decrypted under the configured key is refused
     (500) — the ciphertext is NEVER used as the HMAC key. The REAL decode
     helper raises ``DecryptionError``; the settings patch targets
-    ``modulo.api.routes.webhooks.get_settings``, the name the route binds."""
+    ``farna.api.routes.webhooks.get_settings``, the name the route binds."""
     import base64
     import logging as _logging
 

@@ -1,8 +1,8 @@
 """Evidence append-only carve-out gate (FAR-961 chunk 9a, spec §2.4).
 
-``modulo.core.evidence_retention`` is the SINGLE sanctioned deletion path
+``farna.core.evidence_retention`` is the SINGLE sanctioned deletion path
 for the ``evidence`` table.  This scanner fails the suite when any other
-module under ``src/modulo`` deletes evidence rows — via the ORM
+module under ``src/farna`` deletes evidence rows — via the ORM
 (``delete(Evidence)``, ``session.delete(Evidence...)``), via the Table API
 (``Evidence.__table__.delete``), or via raw SQL (``DELETE FROM evidence``).
 
@@ -65,7 +65,7 @@ def test_scanner_flags_orm_deletion_outside_sanctioned_module(tmp_path: Path) ->
         {
             "core/evidence_retention.py": "",
             "api/routes/evidence.py": (
-                "from sqlalchemy import delete\nfrom modulo.db.models.evidence import Evidence\n\n\n"
+                "from sqlalchemy import delete\nfrom farna.db.models.evidence import Evidence\n\n\n"
                 "def wipe(session):\n    session.execute(delete(Evidence))\n"
             ),
         },
@@ -118,7 +118,7 @@ def test_scanner_clears_the_sanctioned_module(tmp_path: Path) -> None:
                 "async def batch(session, ids):\n"
                 "    await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))\n"
             ),
-            "api/other.py": "from sqlalchemy import delete\nfrom modulo.db.models.pipeline import Pipeline\n\n\n"
+            "api/other.py": "from sqlalchemy import delete\nfrom farna.db.models.pipeline import Pipeline\n\n\n"
             "def wipe(session):\n    session.execute(delete(Pipeline))\n",
         },
     )

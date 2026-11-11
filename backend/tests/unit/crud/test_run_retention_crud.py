@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.crud.run_retention (FAR-427).
+"""Unit tests for farna.db.crud.run_retention (FAR-427).
 
 Mock/fake based — no Postgres. Focuses on the safety-critical purge cascade:
 

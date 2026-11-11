@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.pipeline_engine.node_runner`` (PR #97).
+``farna.core.pipeline_engine.node_runner`` (PR #97).
 """
 
 from __future__ import annotations

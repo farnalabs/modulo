@@ -13,7 +13,7 @@ Convention: the resolver key is the model's ``__tablename__`` (e.g.
 
 When adding a new team-scoped model:
 
-1. Add the resolver to ``modulo.api.team_scope`` (``resolve_<name>_team_scope``).
+1. Add the resolver to ``farna.api.team_scope`` (``resolve_<name>_team_scope``).
 2. Add it to ``TEAM_SCOPED_RESOLVERS`` keyed by ``__tablename__``.
 3. The tests below pick it up automatically from the model's columns.
 

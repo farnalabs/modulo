@@ -1,9 +1,9 @@
-"""Unit tests for modulo.api.models.team_visibility.TeamVisibilityMixin.
+"""Unit tests for farna.api.models.team_visibility.TeamVisibilityMixin.
 
 QA lens pass (correctness, bugs, maintainability) on the shared team-visibility
 mixin. It is composed into every team-scoped request schema (model backends,
 connectors, library primitives, lifecycle maps, pipelines — see
-``modulo.api.routes.*``), so its single invariant — ``visibility: team``
+``farna.api.routes.*``), so its single invariant — ``visibility: team``
 requires an ``owner_team_id`` — must be locked down here. Route-level tests
 exercise the invariant through the HTTP API; this file pins the mixin contract
 directly and confirms it still composes with concrete subclasses.

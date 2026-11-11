@@ -1,7 +1,7 @@
 """FAR-147: legacy run-group classification backfill + legacy agent verdict tests.
 
 The backfill tests call the PRODUCTION code in
-``modulo.db.migrations.versions.0348_far147_legacy_run_group_backfill`` (the
+``farna.db.migrations.versions.0348_far147_legacy_run_group_backfill`` (the
 portable ``_backfill_non_postgres`` traversal and ``classify_legacy_child``),
 not a reimplementation. The PostgreSQL recursive CTE is covered by the
 testcontainers integration module

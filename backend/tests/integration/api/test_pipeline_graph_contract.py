@@ -406,7 +406,7 @@ def _assert_semantic_node_eq(a: dict[str, Any], b: dict[str, Any], *, path: str 
         assert a.get(key) == b.get(key), f"{path}.{key}: {a.get(key)!r} != {b.get(key)!r}"
 
 
-# Six-bullet sentinel from ``modulo.api.middleware.sensitive_mask``
+# Six-bullet sentinel from ``farna.api.middleware.sensitive_mask``
 # (``SENSITIVE_VALUE_MASK``); pinned here so a response-layer mask change is caught.
 _MASK = "\u2022\u2022\u2022\u2022\u2022\u2022"
 

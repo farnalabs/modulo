@@ -9,7 +9,7 @@
   remediation: Modulo AUTHORS the policy as a Helm-rendered manifest and the
   customer's CNI enforces it. The egress posture Modulo records for this is
   `declared` (see `EgressPosture` in
-  backend/src/modulo/core/pipeline_engine/egress.py) — Modulo declares the
+  backend/src/farna/core/pipeline_engine/egress.py) — Modulo declares the
   policy; it never observes the substrate's traffic.
 
   Scope:

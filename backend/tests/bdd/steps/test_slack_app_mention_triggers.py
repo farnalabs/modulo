@@ -1,7 +1,7 @@
 """BDD step definitions: Slack ``app_mention`` triggers.
 
 Covers the Slack Events API ``app_mention`` trigger surface
-(``modulo/core/trigger_engine/slack_app_mention.py``): Slack signed-request
+(``farna/core/trigger_engine/slack_app_mention.py``): Slack signed-request
 verification (``X-Slack-Signature`` HMAC-SHA256 over ``v0:<timestamp>:<body>``
 plus the ±300s ``X-Slack-Request-Timestamp`` replay window), the
 ``url_verification`` challenge handshake, envelope parsing and payload

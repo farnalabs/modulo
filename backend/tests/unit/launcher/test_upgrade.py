@@ -95,8 +95,8 @@ def _enter_fake_run(stack: contextlib.ExitStack, **kwargs: Any) -> MagicMock:
 
 
 def _settings_env_ready() -> bool:
-    """The restore e2e imports ``modulo.cli.backup``; the ``modulo.cli`` package
-    transitively imports ``modulo.db.session``, which builds its module-global
+    """The restore e2e imports ``farna.cli.backup``; the ``farna.cli`` package
+    transitively imports ``farna.db.session``, which builds its module-global
     engine from ``Settings`` at import time. ``Settings`` requires
     ``DATABASE_URL`` / ``SECRET_KEY`` / ``FERNET_KEY`` — the CI test jobs export
     them, but a bare developer checkout may not — so probe the env instead of

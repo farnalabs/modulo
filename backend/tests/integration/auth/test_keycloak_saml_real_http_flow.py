@@ -169,7 +169,7 @@ async def _get_sso_subject(engine: AsyncEngine, account_id: Any) -> dict[str, An
     """Read the SSO subject binding the ACS JIT-provision wrote to the account.
 
     The real storage is ``accounts.sso_subject`` + ``accounts.auth_provider``
-    (see ``modulo.auth.sso._upsert_sso_identity``) — there is no separate
+    (see ``farna.auth.sso._upsert_sso_identity``) — there is no separate
     identities table.
     """
     async with engine.connect() as conn:

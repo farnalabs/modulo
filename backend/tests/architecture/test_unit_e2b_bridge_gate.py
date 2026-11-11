@@ -3,7 +3,7 @@
 ``tests/unit/conftest.py``'s autouse ``_e2b_provider_bridge`` fixture installs
 the mock-sandbox bridge over the four ``node_runner`` provider seams. Its body
 calls ``install_bridge``, which imports
-``modulo.core.pipeline_engine.node_runner`` — a ~4.5 s chain measured
+``farna.core.pipeline_engine.node_runner`` — a ~4.5 s chain measured
 2026-10-13 — and paying that on the FIRST setup of every unit session pinned
 pure-logic packages onto the dispatch stack they never touch. The install is
 now gated by ``_e2b_bridge_needed``.

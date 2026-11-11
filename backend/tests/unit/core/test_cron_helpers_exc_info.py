@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.cron_helpers`` (PR #97).
+``farna.core.cron_helpers`` (PR #97).
 """
 
 from __future__ import annotations

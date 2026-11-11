@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.run_admission — FAR-604 admission healing.
+"""Unit tests for farna.core.run_admission — FAR-604 admission healing.
 
 Mock/fake based — no Postgres, no Redis. Covers:
   * D1 slot reconciliation sweep: stale ``running`` rows are released with the

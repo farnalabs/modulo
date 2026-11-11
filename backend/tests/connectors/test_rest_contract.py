@@ -411,7 +411,7 @@ class TestRestAllowedHosts:
 
         Exercises the ``SSRF_ALLOW_PRIVATE_RANGES`` exemption set by the
         ``rest_test_server`` fixture end-to-end — no ``ssrf_validator`` seam, so
-        the real ``modulo.core`` guard runs and the request goes over a real
+        the real ``farna.core`` guard runs and the request goes over a real
         socket.
         """
         from farna.core.connector_hub import _core_security_guard

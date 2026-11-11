@@ -7,7 +7,7 @@ equivalent. The product map tracked the gap in the ``feat-sso`` deferrals
 ("OIDC SSO flows ... are covered by unit tests only; equivalent multi-org
 real-DB (RLS) integration regression not yet written") — this file closes it.
 
-The OIDC pre-auth resolver (``modulo.auth.sso._resolve_oidc_provider``) reads
+The OIDC pre-auth resolver (``farna.auth.sso._resolve_oidc_provider``) reads
 provider config through the same two-leg resolution the SAML routes use:
 
 - the ``modulo_system`` role (BYPASSRLS) resolves the slug instance-globally —

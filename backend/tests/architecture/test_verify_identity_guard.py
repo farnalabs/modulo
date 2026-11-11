@@ -2,7 +2,7 @@
 
 ``tests/conftest.py`` installs a root-level autouse guard that fails a test's
 setup when a leaked fixture has replaced
-``modulo.auth.dependencies._verify_identity`` with anything other than the
+``farna.auth.dependencies._verify_identity`` with anything other than the
 real function. The real function is captured LAZILY by an import hook — the
 moment the auth module body executes, before any importer can patch it —
 never by importing the module at conftest load (that eager import cost every

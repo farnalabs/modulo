@@ -417,7 +417,7 @@ break-glass roles can, and every grant is re-applied.
   restore` exits non-zero and names the failing check. The data is already
   restored at that point, but the cluster must not serve traffic until the
   posture is fixed: correct the reported problem, then run
-  `uv run python -m modulo.db.bootstrap_role` (with `DATABASE_ADMIN_URL` and
+  `uv run python -m farna.db.bootstrap_role` (with `DATABASE_ADMIN_URL` and
   `DATABASE_URL` set) before starting the application.
 - **A restore into a cluster that uses a different app role** needs
   `--app-db-url` pointing at that role's connection URL.

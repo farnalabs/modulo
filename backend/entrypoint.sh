@@ -2,7 +2,7 @@
 set -e
 
 echo "=== Bootstrapping modulo_app role ==="
-python -m modulo.db.bootstrap_role
+python -m farna.db.bootstrap_role
 
 echo "Running database migrations..."
 
@@ -19,7 +19,7 @@ alembic upgrade heads
 
 echo "Migrations complete. Starting uvicorn..."
 
-exec uvicorn modulo.api.main:app \
+exec uvicorn farna.api.main:app \
     --host 0.0.0.0 --port 8000 \
     --timeout-keep-alive 30 \
     --timeout-graceful-shutdown 30 \

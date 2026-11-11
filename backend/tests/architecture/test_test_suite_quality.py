@@ -1,7 +1,7 @@
 """Architecture test: QA lenses over the test suite.
 
 The tests in this file apply the same AST-scanning discipline the rest of
-``tests/architecture/`` applies to ``src/modulo``, but pointed at the test
+``tests/architecture/`` applies to ``src/farna``, but pointed at the test
 packages themselves. Each lens guards against a class of test-quality
 regression that silently weakens the suite:
 
@@ -90,7 +90,7 @@ regression that silently weakens the suite:
   is not wrapped in ``asyncio.wait_for(...)``. A child process with no bound
   can hang CI indefinitely, and the failure is opaque (the runner just stops)
   instead of surfacing a bound violation the way ``requests_without_timeout``
-  already does for HTTP in ``src/modulo``.
+  already does for HTTP in ``src/farna``.
 - unbounded worker-thread joins — ``thread.join()``/``Thread.join()`` without
   a ``timeout=`` bound, the in-process sibling of the unbounded-subprocess
   hazard. A worker that deadlocks (e.g. waits on a ``Barrier`` a sibling never
@@ -3949,7 +3949,7 @@ def test_no_unbounded_subprocess_calls():
     CI run) down with it, and the failure is opaque: the runner simply stops
     instead of reporting which bound was exceeded. This is the test-suite twin
     of the ``requests_without_timeout`` rule that already guards HTTP in
-    ``src/modulo``."""
+    ``src/farna``."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)

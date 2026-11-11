@@ -135,7 +135,7 @@ async def _seed_eval(
 async def _live_gates(session: AsyncSession) -> list[PolicyGate]:
     # State the soft-delete predicate EXPLICITLY instead of depending on the
     # app-wide soft-delete filter, which is an ORM event listener registered
-    # only by ``modulo.db.session`` — a module this test's import chain never
+    # only by ``farna.db.session`` — a module this test's import chain never
     # loads, so a bare ``select(PolicyGate)`` would return soft-deleted rows
     # whenever this file runs in isolation. ``populate_existing`` re-reads the
     # returned rows against the server's view (a gate mutated in-session is

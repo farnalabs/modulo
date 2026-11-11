@@ -1,4 +1,4 @@
-"""Unit tests for OAuth 2.0 authorization code flow (modulo.auth.oauth)."""
+"""Unit tests for OAuth 2.0 authorization code flow (farna.auth.oauth)."""
 
 import logging
 import uuid

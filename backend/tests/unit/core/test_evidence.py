@@ -54,7 +54,7 @@ def test_e1_model_exposes_no_mutation_helper(forbidden_name: str) -> None:
 
 
 def test_e1_no_production_call_site_builds_update_or_delete_against_evidence() -> None:
-    """No module under ``src/modulo`` builds an UPDATE or DELETE statement
+    """No module under ``src/farna`` builds an UPDATE or DELETE statement
     with the ``Evidence`` model — with one reviewed carve-out.
 
     DELETE is sanctioned only in the retention sweep

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.util leaf helpers.
+"""Unit tests for farna.util leaf helpers.
 
 Locks the behaviour of the dependency-free utilities that the DB, core and API
 layers import, with a focus on the S5145 log-injection fix
@@ -112,7 +112,7 @@ class TestCoerceUuid:
 
 
 class TestBackwardCompatShim:
-    """The deprecated ``modulo.utils`` package must keep re-exporting ``coerce_uuid``."""
+    """The deprecated ``farna.utils`` package must keep re-exporting ``coerce_uuid``."""
 
     def test_utils_package_re_exports_coerce_uuid(self) -> None:
         from farna.utils import coerce_uuid as shim_pkg

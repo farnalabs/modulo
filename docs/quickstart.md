@@ -93,7 +93,7 @@ uv run alembic upgrade heads
 ## 3. Start the backend
 
 ```bash
-uv run uvicorn modulo.api.main:app --reload --port 8000
+uv run uvicorn farna.api.main:app --reload --port 8000
 ```
 
 The API is now live at `http://localhost:8000`. OpenAPI docs at `http://localhost:8000/docs`.
@@ -114,10 +114,10 @@ Then start the host workers:
 
 ```bash
 # Runs worker: executes run jobs (queue: runs)
-uv run python -m saq modulo.core.saq_worker.runs_settings
+uv run python -m saq farna.core.saq_worker.runs_settings
 
 # System worker: scheduler (fire_due_triggers) + reconcile + system crons
-SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq_worker
+SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m farna.core.saq_worker
 ```
 
 Notes:

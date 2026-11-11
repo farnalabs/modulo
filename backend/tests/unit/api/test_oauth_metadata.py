@@ -11,7 +11,7 @@ with ``content-type: text/html``. These tests pin:
   ``application/json`` and the exact documented key set and values;
 * ``registration_endpoint`` is ABSENT — there is deliberately no RFC 7591
   dynamic client registration, clients pass an explicit ``--client-id``;
-* ``scopes_supported`` is sourced from ``modulo.auth.oauth.VALID_SCOPES``
+* ``scopes_supported`` is sourced from ``farna.auth.oauth.VALID_SCOPES``
   (never a second hand-written list) and is sorted for determinism;
 * the endpoints are reachable with NO ``Authorization`` header (a harness
   reads them *before* it holds a credential);

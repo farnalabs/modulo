@@ -357,7 +357,7 @@ def test_sanitize_sk_pattern_keeps_short_innocuous_strings():
 
 def test_sanitize_redacts_slack_rotateable_token_shape():
     """The ``xox`` Slack pattern is aligned with the canonical shared list in
-    ``modulo.core.secret_patterns`` (``xox[baprs]-``) — the ``r`` (rotateable)
+    ``farna.core.secret_patterns`` (``xox[baprs]-``) — the ``r`` (rotateable)
     shape had drifted out of the sanitizer's char class."""
     sanitized = sanitize_error_text("token xoxr-abcdefghij1234 here")
     assert "<redacted>" in sanitized

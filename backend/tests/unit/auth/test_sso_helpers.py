@@ -1,7 +1,7 @@
-"""Focused unit tests for isolated ``modulo.auth.sso`` helper functions.
+"""Focused unit tests for isolated ``farna.auth.sso`` helper functions.
 
 These target low-level helpers (RLS scoping, provider lookups, group-mapping
-application, JSON-object validation) to keep ``modulo.auth`` package coverage
+application, JSON-object validation) to keep ``farna.auth`` package coverage
 above the 90% gate without touching the network-bound OIDC/SAML flows.
 """
 

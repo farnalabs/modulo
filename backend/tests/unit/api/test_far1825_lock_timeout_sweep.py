@@ -96,7 +96,7 @@ _C_SITE_LOCK_COUNTS: dict[str, int] = {
     "core/assistant/context_source_service.py": 2,  # C22/C23 _upsert_context_source
 }
 
-# EVERY file under src/modulo that takes a row lock (AST-detected: a
+# EVERY file under src/farna that takes a row lock (AST-detected: a
 # ``.with_for_update(...)`` call or a ``with_for_update=`` keyword), across all
 # categories. This is the inventory allowlist: a NEW file that takes a row lock
 # must be added here AND given an inventory row (and, if category C, a bound).
@@ -904,21 +904,21 @@ def test_swept_helper_resolver_handles_every_import_shape() -> None:
         import farna.db.crud.account
 
         async def handler(session):
-            await modulo.db.crud.account.update_account_preferences(session)
+            await farna.db.crud.account.update_account_preferences(session)
         """
     )
     module = ast.parse(source)
     function = _iter_functions(module)[0]
     assert _swept_helper_calls(function, module) == {"farna.db.crud.account.update_account_preferences"}
 
-    # 3b. Same bare import: a call through the root alone (`modulo.helper()`)
-    #     resolves to owner "modulo", which is not a swept module — no hit.
+    # 3b. Same bare import: a call through the root alone (`farna.helper()`)
+    #     resolves to owner "farna", which is not a swept module — no hit.
     source = textwrap.dedent(
         """
         import farna.db.crud.account
 
         async def handler(session):
-            await modulo.update_account_preferences(session)
+            await farna.update_account_preferences(session)
         """
     )
     module = ast.parse(source)

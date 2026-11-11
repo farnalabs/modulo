@@ -15,7 +15,7 @@ from tests.unit.api.mock_session import make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
-# FAR-1732: the tests patch ``modulo.api.mcp_server.get_settings`` (the MCP
+# FAR-1732: the tests patch ``farna.api.mcp_server.get_settings`` (the MCP
 # conftest's default FERNET_KEY is not a valid Fernet key), so they need a
 # REAL one to round-trip tokens through.
 _VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()

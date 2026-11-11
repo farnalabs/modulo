@@ -391,7 +391,7 @@ def _suite_run_entry_point_names(*, sources: list[Path] | None = None) -> set[st
     must classify, not as an invisible side entrance to the SAQ seam.
 
     *sources* overrides the scanned files (test seam) — production callers
-    pass nothing and get the whole ``src/modulo`` tree.
+    pass nothing and get the whole ``src/farna`` tree.
     """
     if sources is None:
         scanned = list(iter_source_text(SRC_DIR))

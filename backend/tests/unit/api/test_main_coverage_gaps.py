@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.main`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.main`` (FAR-573).
 
 Complements test_main.py (which covers ``_verify_db_connectivity``) by
 exercising the boot path the existing suite leaves uncovered: the migration
@@ -907,7 +907,7 @@ async def test_run_migrations_bootstraps_even_when_already_at_head(monkeypatch: 
     The head fast-path skips the alembic run and the migration lock — but the
     bootstrap sits BEFORE it so a warm boot that later adds
     MODULO_SYSTEM_DATABASE_URL reconciles the modulo_system password without a
-    manual ``python -m modulo.db.bootstrap_role`` step.
+    manual ``python -m farna.db.bootstrap_role`` step.
     """
     monkeypatch.setattr(main, "_db_is_at_migration_head", AsyncMock(return_value=True))
     bootstrap = AsyncMock()

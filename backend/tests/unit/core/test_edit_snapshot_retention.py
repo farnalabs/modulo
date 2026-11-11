@@ -1,7 +1,7 @@
 """FAR-1815: the edit-snapshot retention sweep is enumerable like its siblings.
 
 The sweep's selection is the registered housekeeping category
-``edit_snapshot_retention`` (``modulo.core.housekeeping``); ``scan_all`` — the
+``edit_snapshot_retention`` (``farna.core.housekeeping``); ``scan_all`` — the
 exact surface ``GET /api/v1/admin/housekeeping`` and the MCP ``list_housekeeping``
 tool call — must enumerate it like every other category, with the standard
 ``pipeline_snapshot`` cleanup entity stamped on its candidates.

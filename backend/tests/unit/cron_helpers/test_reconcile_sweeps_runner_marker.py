@@ -1,6 +1,6 @@
 """Coverage for the runner-marker block inside ``_run_reconcile_sweeps``.
 
-``modulo.core.cron_helpers._run_reconcile_sweeps`` runs seven best-effort
+``farna.core.cron_helpers._run_reconcile_sweeps`` runs seven best-effort
 compensating sweeps. The runner-marker block (the D8 FAR-594 reconciliation)
 has three arms — a partial-failure arm (``except RunnerMarkerSweepError``), a
 success arm (``else``), and a generic fail-open arm — and none of the

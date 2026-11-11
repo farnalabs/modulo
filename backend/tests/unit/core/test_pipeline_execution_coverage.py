@@ -1,4 +1,4 @@
-"""Coverage boost for ``modulo.core.pipeline_execution`` (FAR-835).
+"""Coverage boost for ``farna.core.pipeline_execution`` (FAR-835).
 
 Targets uncovered paths identified by the baseline coverage report.
 """

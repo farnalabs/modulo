@@ -776,7 +776,7 @@ class _RlsAwareDb:
 
 
 def _patch_db(monkeypatch: pytest.MonkeyPatch, db: _RlsAwareDb) -> None:
-    # ``modulo.db.session`` builds its engine from settings at import time, so
+    # ``farna.db.session`` builds its engine from settings at import time, so
     # it cannot be imported in a bare unit-test environment; inject a fake
     # module for it (the function under test imports ``AsyncSessionLocal``
     # lazily at call time, so sys.modules wins). The other two imports resolve

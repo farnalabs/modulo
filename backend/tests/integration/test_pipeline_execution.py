@@ -1,4 +1,4 @@
-"""Integration tests for modulo.core.pipeline_execution (real Postgres).
+"""Integration tests for farna.core.pipeline_execution (real Postgres).
 
 These use the session-scoped Testcontainers Postgres + ``db_engine`` from
 ``tests/integration/conftest.py`` and are marked ``integration`` so they are

@@ -5,7 +5,7 @@ Usage:
 
 Requires DATABASE_URL env var or a running modulo instance with settings loaded.
 
-The tier/flag definitions are imported from ``modulo.core.seed_data.catalog``
+The tier/flag definitions are imported from ``farna.core.seed_data.catalog``
 — the same source the application boot seed (``main._seed_tier_catalog``) uses
 — so this standalone script can never drift from the runtime catalog. Seeding
 is idempotent: re-running on an already seeded database is a no-op

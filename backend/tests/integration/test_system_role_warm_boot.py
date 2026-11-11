@@ -9,7 +9,7 @@ Upgrade-in-place drift, reproduced against a real Postgres:
    fast-path BEFORE ``_run_bootstrap``, so the warm boot reconciled nothing —
    every system cron failed with ``password authentication failed for user
    "modulo_system"`` until an operator ran ``python -m
-   modulo.db.bootstrap_role`` by hand.
+   farna.db.bootstrap_role`` by hand.
 
 Each "boot" here is the real startup step under fix (``main._run_migrations``)
 against a DB that is ALREADY at the alembic head — i.e. the warm path, with no

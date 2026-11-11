@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.security_headers.SecurityHeadersMiddleware.
+"""Unit tests for farna.api.middleware.security_headers.SecurityHeadersMiddleware.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the security
 headers middleware. The happy-path headers were already covered; this pass

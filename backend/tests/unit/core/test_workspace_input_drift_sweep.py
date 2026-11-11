@@ -1,6 +1,6 @@
 """Unit tests for the FAR-801 workspace-input drift compensating sweep.
 
-Covers ``_sweep_workspace_input_drift_flags`` in ``modulo.core.cron_helpers``:
+Covers ``_sweep_workspace_input_drift_flags`` in ``farna.core.cron_helpers``:
 
 * a terminal run whose audit row reports drift is corrected (flag -> True);
 * a terminal run whose audit row reports NO drift is written definitive

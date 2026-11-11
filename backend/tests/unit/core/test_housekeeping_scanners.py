@@ -1,4 +1,4 @@
-"""Unit tests for the individual housekeeping scanners (modulo.core.housekeeping).
+"""Unit tests for the individual housekeeping scanners (farna.core.housekeeping).
 
 Each scanner executes a real SQL query against an in-memory SQLite database so
 the WHERE clauses and JOINs are actually exercised (no ORM tenant-filter

@@ -1,7 +1,7 @@
 """Tests for FAR-151 per-signal ingestion, seeded default alert rules, tombstones,
 fire-once retry alerts, and alert_resolved lifecycle events.
 
-Exercise the service layer in ``modulo.core.error_tracking`` with mocked
+Exercise the service layer in ``farna.core.error_tracking`` with mocked
 sessions/DB helpers (unit, no DB). SQLAlchemy objects are built from the real
 models so column wiring (``signal``, ``is_default``) is covered.
 """

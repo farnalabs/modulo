@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.saq_worker`` (PR #97).
+``farna.core.saq_worker`` (PR #97).
 """
 
 from __future__ import annotations

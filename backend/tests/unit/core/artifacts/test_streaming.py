@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.artifacts.streaming (FAR-811).
+"""Unit tests for farna.core.artifacts.streaming (FAR-811).
 
 Tests StreamingArtifactWriter: incremental SHA256, byte-cap enforcement,
 finalize round-trip, cleanup, context manager, and edge cases.

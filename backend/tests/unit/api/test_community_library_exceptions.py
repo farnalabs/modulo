@@ -15,7 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from tests.unit.api.mock_session import configure_mock_session
 
-# Logger of ``modulo.api.routes.community_library`` (the teardown guard's log key).
+# Logger of ``farna.api.routes.community_library`` (the teardown guard's log key).
 _COMMUNITY_LIBRARY_LOGGER = "farna.api.routes.community_library"
 
 

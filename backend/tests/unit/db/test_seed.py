@@ -1,8 +1,8 @@
-"""Unit tests for modulo.db.seed — the system-schema seeding routine.
+"""Unit tests for farna.db.seed — the system-schema seeding routine.
 
 ``seed_system_schemas`` is invoked on organisation creation
-(``modulo.db.crud.organisation``) and again at startup for every existing
-organisation (``modulo.api.main._seed_system_schemas``). These tests lock the
+(``farna.db.crud.organisation``) and again at startup for every existing
+organisation (``farna.api.main._seed_system_schemas``). These tests lock the
 contract of that routine against a real (hermetic, in-memory SQLite) async
 session:
 

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.error_forwarder_config.
+"""Unit tests for farna.api.models.error_forwarder_config.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the forwarder-config
 schemas. The API routes are exercised by ``tests/unit/api/test_error_forwarder_config.py``;

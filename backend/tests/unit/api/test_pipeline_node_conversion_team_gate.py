@@ -300,7 +300,7 @@ def test_in_txn_team_gate_denial_overrides_a_passing_request_time_gate() -> None
     """TOCTOU close: dependency says member, the locked row says otherwise.
 
     The request-time dependency resolves membership through
-    ``modulo.api.dependencies``' own import (the session answers a membership
+    ``farna.api.dependencies``' own import (the session answers a membership
     row), while the in-txn re-check resolves it through the one imported into
     ``routes.pipelines`` - patched here to deny, exactly as an ownership flip
     inside the request -> mutation window would behave. The endpoint must

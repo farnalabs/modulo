@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.trigger_secrets (FAR-1735 bounded resolver).
+"""Unit tests for farna.core.trigger_secrets (FAR-1735 bounded resolver).
 
 The shared resolution policy for the five delivery-time trigger-secret
 readers: non-token values are legacy plaintext accepted with a LOUD dated

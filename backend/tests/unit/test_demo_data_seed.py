@@ -50,7 +50,7 @@ def _patch_get_settings(monkeypatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _use_test_license_key() -> Generator[None, None, None]:
-    # The license public key is global module state in modulo.core.license and is
+    # The license public key is global module state in farna.core.license and is
     # clobbered by other test modules' autouse fixtures (e.g. stripe fulfilment
     # resets it to the builtin dev key). Pin it per-test so this module's signed
     # licenses always verify against the matching test public key, regardless of

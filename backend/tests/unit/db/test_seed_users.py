@@ -1,11 +1,11 @@
 """Unit tests for the promoted MODULO_USERS seeder (FAR-671).
 
-``modulo.db.seed.seed_modulo_users`` / ``seed_modulo_user`` /
+``farna.db.seed.seed_modulo_users`` / ``seed_modulo_user`` /
 ``rehash_existing_user`` are the single implementation (promoted verbatim from
-``modulo.api.main``); the API keeps thin aliases as its boot-path/test seam.
+``farna.api.main``); the API keeps thin aliases as its boot-path/test seam.
 These tests exercise the promoted functions directly through the
-``modulo.api.dependencies`` seams — the same seam shape the pre-promotion
-tests patched. ``modulo.api.main`` is imported lazily inside the tests that
+``farna.api.dependencies`` seams — the same seam shape the pre-promotion
+tests patched. ``farna.api.main`` is imported lazily inside the tests that
 need it (Settings is constructed at import time): the minimal env is provided
 by an autouse monkeypatch fixture, so the mutation is scoped to each test and
 reverted instead of leaking into the whole pytest process.
@@ -28,7 +28,7 @@ _FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 @pytest.fixture(autouse=True)
 def _scoped_bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Minimal env so a lazy ``modulo.api.main`` import can build Settings.
+    """Minimal env so a lazy ``farna.api.main`` import can build Settings.
 
     Scoped + reverted per test (the former module-level
     ``os.environ.setdefault`` leaked a synthetic DATABASE_URL into every test

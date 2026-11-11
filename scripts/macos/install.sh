@@ -96,7 +96,7 @@ cp -R "$APP" "$TARGET"
 # the supervisor with the same clean environment used by launchd children.
 env -u PYTHONPATH -u PYTHONHOME \
   "$TARGET/Contents/Resources/bundle/runtime/bin/python3" \
-  -c 'import modulo.launcher.supervisor'
+  -c 'import farna.launcher.supervisor'
 mkdir -p "$HOME/Library/LaunchAgents"
 PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
 DATA_DIR="${MODULO_DATA_DIR:-$HOME/Library/Application Support/Modulo/data}"

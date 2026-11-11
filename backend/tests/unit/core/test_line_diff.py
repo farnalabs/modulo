@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.line_diff.
+"""Unit tests for farna.core.line_diff.
 
 The shared diff walk backs the prompt-version and node-output diff endpoints,
 so these tests lock content, ordering, and 1-based line-number accounting per

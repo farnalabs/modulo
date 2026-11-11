@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.workflow_import_export — the portable workflow-bundle
+"""Unit tests for farna.core.workflow_import_export — the portable workflow-bundle
 import/export service (v1 ZIP bundles + v2 YAML bundles).
 
 Covers the service's pure helper contracts, the archive/name/retry-policy

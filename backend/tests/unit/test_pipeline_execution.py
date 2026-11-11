@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_execution.
+"""Unit tests for farna.core.pipeline_execution.
 
 Tests are mock/fake based — no Postgres required. Real Postgres concurrency
 behaviour (two concurrent claims -> exactly one) lives in

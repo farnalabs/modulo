@@ -1,4 +1,4 @@
-"""Unit tests for ``modulo.db.crud.row_lock`` (FAR-1592 connection seam).
+"""Unit tests for ``farna.db.crud.row_lock`` (FAR-1592 connection seam).
 
 ``set_mutation_row_lock_timeout`` historically accepted only an
 ``AsyncSession``. FAR-1592's periodic sweeps in ``core.run_admission`` drive

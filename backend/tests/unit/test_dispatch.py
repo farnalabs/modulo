@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.dispatch — dispatch_run routing (plan F3e/F6).
+"""Unit tests for farna.core.dispatch — dispatch_run routing (plan F3e/F6).
 
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)

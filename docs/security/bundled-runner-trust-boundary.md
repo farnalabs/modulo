@@ -115,7 +115,7 @@ The deny-list explicitly rejects: `host` (host network namespace),
 bridge), `none` (opt-in via `egress_policy` instead), and `default` (Docker
 alias for `bridge`). Only plain deployment-owned bridge network names are
 accepted. The validation function `validate_workspace_network` lives in
-`modulo.util` and is the single source of truth.
+`farna.util` and is the single source of truth.
 
 **Host-published ports are loopback-bound (enforced).** The default compose
 rebinds all host-published ports to `127.0.0.1:` (FAR-1035). An
@@ -209,7 +209,7 @@ image tag is a manual operator step:
 (the release job asserts the seed/docs digest constant matches the latest
 `released-<minor>` tag) is likewise a GA/CI item; until it exists, digest
 advances are manual and the pinned digests in `deploy/compose/runner.yml` +
-`modulo/db/bundled_runner_template.py` are the source of truth. The CI
+`farna/db/bundled_runner_template.py` are the source of truth. The CI
 rig's proxy pin in `deploy/compose/runner-ci.yml` is ALIGNED to production's
 digest – digest bumps must move the two compose files together, asserted by
 the harness composition guard

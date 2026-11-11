@@ -1,4 +1,4 @@
-"""Unit tests for ``modulo.db.crud.run_attempts`` (FAR-2078, storage slice).
+"""Unit tests for ``farna.db.crud.run_attempts`` (FAR-2078, storage slice).
 
 Behaviour is exercised against a REAL file-backed SQLite database, not mocks:
 the ``attempt_index`` contract (0-based, per run, contiguous, unique) and the

@@ -230,7 +230,7 @@ _DATA_ACCESS_PREFIXES = (
 
 
 def _tree_sources() -> list[tuple[str, str]]:
-    """Every in-scope ``(relpath, source)`` under ``src/modulo``."""
+    """Every in-scope ``(relpath, source)`` under ``src/farna``."""
     sources: list[tuple[str, str]] = []
     for path, source in iter_source_text(SRC_DIR):
         rel = path.relative_to(SRC_DIR).as_posix()

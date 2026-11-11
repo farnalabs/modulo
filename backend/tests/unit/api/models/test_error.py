@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.error.
+"""Unit tests for farna.api.models.error.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the error-ingestion
 and error-dashboard schemas in ``api/models/error.py``. These schemas sit on

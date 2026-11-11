@@ -1,7 +1,7 @@
 """Unit tests for the analytics facts writer + metrics + maintenance (ADR 020).
 
 The live writer (``record_run_facts``), the facts metric inventory
-(``modulo.core.analytics.metrics``) and the maintenance pass (backfill /
+(``farna.core.analytics.metrics``) and the maintenance pass (backfill /
 reconcile / retention) previously had unit coverage only through the Postgres
 integration suite. These tests cover the fail-open contract, the lazy metric
 handles, the cooldown-keyed alert path and the maintenance loops with mocked
@@ -147,7 +147,7 @@ def _autonomy_read_result(level: str | None = None) -> SimpleNamespace:
 
 
 # ---------------------------------------------------------------------------
-# Facts writer (modulo.core.analytics.__init__)
+# Facts writer (farna.core.analytics.__init__)
 # ---------------------------------------------------------------------------
 
 
@@ -735,7 +735,7 @@ class TestRecordFactForTerminalFailedRun:
 
 
 # ---------------------------------------------------------------------------
-# Metrics (modulo.core.analytics.metrics)
+# Metrics (farna.core.analytics.metrics)
 # ---------------------------------------------------------------------------
 
 
@@ -879,7 +879,7 @@ class TestRecorders:
 
 
 # ---------------------------------------------------------------------------
-# Maintenance (modulo.core.analytics.maintenance)
+# Maintenance (farna.core.analytics.maintenance)
 # ---------------------------------------------------------------------------
 
 

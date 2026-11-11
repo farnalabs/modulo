@@ -6,7 +6,7 @@ test makes each of them structurally impossible to reintroduce.
 Guard 1 — a route that hard-deletes its organisation must not carry ``audited()``
 ---------------------------------------------------------------------------
 ``audited()`` appends its coarse event POST-COMMIT on a FRESH session (see
-``modulo.core.audit_coverage``), while ``audit_events.organisation_id`` FKs
+``farna.core.audit_coverage``), while ``audit_events.organisation_id`` FKs
 ``organisations.id``. On a handler that hard-deletes the organisation, that
 append can never satisfy the FK, so it fails open and records nothing. FAR-1517
 moved ``admin.confirm_org_deletion``, ``admin.delete_org_immediate`` and
@@ -85,10 +85,10 @@ ROUTES_DIR = SRC_DIR / "api" / "routes"
 #: Decorator attributes that register a FastAPI route handler.
 _ROUTE_METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put"})
 
-#: The coarse audit dependency factories from ``modulo.core.audit_coverage``.
+#: The coarse audit dependency factories from ``farna.core.audit_coverage``.
 _AUDITED_CALL_NAMES = frozenset({"audited", "audited_system"})
 
-#: Inline chain appends from ``modulo.core.audit_logger``. Deliberately excludes
+#: Inline chain appends from ``farna.core.audit_logger``. Deliberately excludes
 #: ``append_system_audit_event`` — that writes the org-independent ledger.
 _INLINE_APPEND_NAMES = frozenset({"append_audit_event", "append_audit_event_isolated"})
 
@@ -104,7 +104,7 @@ _MAX_CALL_DEPTH = 4
 _ORG_MODEL_NAME = "Organisation"
 
 #: Org-model suffix that identifies a resolved symbol as the Organisation class
-#: (``modulo.db.models.organisation.Organisation``).
+#: (``farna.db.models.organisation.Organisation``).
 _ORG_MODEL_SUFFIX = "." + _ORG_MODEL_NAME
 
 
@@ -128,7 +128,7 @@ _SYNTHETIC: dict[str, _ModuleInfo] = {}
 
 
 def _module_name_for_path(path: Path) -> str:
-    """``.../api/routes/admin.py`` -> ``modulo.api.routes.admin``."""
+    """``.../api/routes/admin.py`` -> ``farna.api.routes.admin``."""
     parts = list(path.relative_to(SRC_DIR).with_suffix("").parts)
     if parts[-1] == "__init__":
         parts.pop()

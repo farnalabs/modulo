@@ -3,12 +3,12 @@
 ADR 043 (Decision 5, FAR-1158/FAR-1194): platform awareness is a curation
 layer, never a correctness dependency, and **no platform-specific env var may
 be read for identity**. After FAR-1194 every instance-identity site routes
-through the one exported resolver, ``modulo.settings.resolve_instance_identity()``
+through the one exported resolver, ``farna.settings.resolve_instance_identity()``
 (platform hostname / ``socket.gethostname()``), so ``backend/src`` contains
 zero ``FLY_*`` env reads — the coupling is grep-able and testable.
 
 This lens flags any actual ``os.environ`` / ``os.getenv`` read of a ``FLY_*``
-key anywhere under ``src/modulo`` outside an explicitly-declared platform
+key anywhere under ``src/farna`` outside an explicitly-declared platform
 adapter. Docstring and comment mentions of ``FLY_*`` names (e.g. historical
 notes in health.py) are not reads and are not flagged.
 
@@ -29,7 +29,7 @@ from tests.unit._source_scan import iter_source_text
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 
 # Explicitly-declared platform adapters permitted to read FLY_* env vars,
-# as POSIX-style paths relative to src/modulo (e.g. "core/platform/fly.py").
+# as POSIX-style paths relative to src/farna (e.g. "core/platform/fly.py").
 # Empty by design — ADR 043 Rule 6 defers platform adapters.
 PLATFORM_ADAPTER_MODULES: frozenset[str] = frozenset()
 
@@ -97,7 +97,7 @@ def test_no_platform_env_reads_outside_declared_adapters():
                 violations.append(f"  {rel}:{getattr(node, 'lineno', '?')}  reads {key!r}")
     assert not violations, (
         f"Found {len(violations)} platform (FLY_*) env read(s) outside a declared platform adapter.\n"
-        "Instance/platform identity must route through modulo.settings.resolve_instance_identity()\n"
+        "Instance/platform identity must route through farna.settings.resolve_instance_identity()\n"
         "(ADR 043 Decision 5); a genuinely platform-specific read belongs in an adapter whose path\n"
         "is declared in PLATFORM_ADAPTER_MODULES.\n" + "\n".join(violations)
     )

@@ -96,8 +96,8 @@ mode = "block"
 [[plugin]]
 name = "bandit"
 # Match the repo's pre-commit bandit invocation: -r backend/src/ -ll
-# (medium+high severity only) -x backend/src/modulo/model_backends/stub/
-args = ["-r", "backend/src/", "-ll", "-x", "backend/src/modulo/model_backends/stub/"]
+# (medium+high severity only) -x backend/src/farna/model_backends/stub/
+args = ["-r", "backend/src/", "-ll", "-x", "backend/src/farna/model_backends/stub/"]
 
 [[plugin]]
 name = "eslint"

@@ -1,4 +1,4 @@
-"""QA lens tests for ``modulo.core.error_tracking.alert_dispatcher``.
+"""QA lens tests for ``farna.core.error_tracking.alert_dispatcher``.
 
 Covers the dispatch routing matrix (in_app / email / webhook / unknown),
 the email SMTP resolution and admin-recipient queries, the Slack-aware

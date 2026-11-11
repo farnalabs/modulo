@@ -1,7 +1,7 @@
 """FAR-771: org-scoped active-workspace count backing the Runners profile detail.
 
 Mock/fake based — no Postgres. The count
-(``modulo.db.crud.run.count_active_runner_dispatches_for_org``) is a SQL
+(``farna.db.crud.run.count_active_runner_dispatches_for_org``) is a SQL
 SELECT over ``runs`` with the live-marker / status / org predicates applied.
 These tests pin the POPULATION contract that FAR-771's count shares with the
 D8 capacity reader:

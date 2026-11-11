@@ -1,15 +1,15 @@
 """Architecture gate: every model with a ``deleted_at`` column must inherit SoftDeleteMixin.
 
 The global soft-delete filter (``do_orm_execute`` listener in
-``modulo.db.soft_delete``) only covers models that inherit
-:class:`~modulo.db.models.base.SoftDeleteMixin`.  A model that declares its own
+``farna.db.soft_delete``) only covers models that inherit
+:class:`~farna.db.models.base.SoftDeleteMixin`.  A model that declares its own
 ``deleted_at`` column *without* the mixin escapes the global filter — the column
 exists in the DB but the ``WHERE deleted_at IS NULL`` injection never fires,
 creating a silent divergence between models that are filtered and those that are
 not.
 
 This test enumerates every mapper registered against the app
-:class:`~modulo.db.models.base.Base` and asserts that any mapped class with a
+:class:`~farna.db.models.base.Base` and asserts that any mapped class with a
 ``deleted_at`` column is also a subclass of ``SoftDeleteMixin``.  If this test
 fails, the offending model must either:
 

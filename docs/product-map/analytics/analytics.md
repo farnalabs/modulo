@@ -138,7 +138,7 @@ reports resolve against a consistent fact model.
   dedicated BDD feature files for `/analytics`" gap. Registered
   `analytics/query.feature` into the executing BDD suite from the colocated
   `features/analytics/test_analytics_query_steps.py`, driving the REAL
-  `modulo/api/routes/analytics.py` routes with only the four service functions
+  `farna/api/routes/analytics.py` routes with only the four service functions
   patched: the `/query` envelope + freshness indicators, the repeated
   `pipeline_id` A/B composition (both ids asserted to reach the service) and
   dimension echo, FastAPI-level validation (malformed date / `limit` bound →

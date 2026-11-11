@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.session — the one-engine-per-process async engine factory.
+"""Unit tests for farna.db.session — the one-engine-per-process async engine factory.
 
 QA lens pass (correctness, bugs, edge cases) on the process-global engine
 factory. Every DB consumer gets its engine from here — the API via

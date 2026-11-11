@@ -1,4 +1,4 @@
-"""Unit tests for modulo.util.one_time_token (FAR-461 / MCP setup handoff)."""
+"""Unit tests for farna.util.one_time_token (FAR-461 / MCP setup handoff)."""
 
 import hashlib
 import string

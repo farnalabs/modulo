@@ -2,7 +2,7 @@
 surface an ``InvalidRequestError`` (a client-side session-contract violation)
 as HTTP 500, never the arm's own 503 ``db_transient``.
 
-The PR sweeps ~430 arms across the ``modulo.api`` route layer.  A handful of
+The PR sweeps ~430 arms across the ``farna.api`` route layer.  A handful of
 representative arms are exercised end-to-end in
 ``test_far1464_session_contract_guard.py``; this module drives the REMAINING
 converted arms so the changed-lines coverage gate measures the new guard call

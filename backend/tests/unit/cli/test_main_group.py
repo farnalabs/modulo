@@ -106,8 +106,8 @@ def test_published_backup_surface_keeps_inherited_libpq_variables(
 def test_console_script_scrubs_before_any_project_import() -> None:
     """The published entry point scrubs BEFORE importing psycopg/settings.
 
-    The console script is ``modulo.cli.main:cli``: its module-level import
-    graph (``modulo.cli.backup`` -> settings, apply, psycopg) loads before
+    The console script is ``farna.cli.main:cli``: its module-level import
+    graph (``farna.cli.backup`` -> settings, apply, psycopg) loads before
     any command runs, so the scrub must be the module's first action —
     verified here on the REAL import path in a fresh subprocess.
     """

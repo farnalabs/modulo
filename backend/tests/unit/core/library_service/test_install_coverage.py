@@ -1,6 +1,6 @@
-"""Unit tests lifting new-code coverage on modulo.core.library_service.install.
+"""Unit tests lifting new-code coverage on farna.core.library_service.install.
 
-The backend unit suite (pytest tests/unit/ --cov=src/modulo) is what feeds
+The backend unit suite (pytest tests/unit/ --cov=src/farna) is what feeds
 backend/coverage.xml to SonarCloud, and SonarCloud's new-code quality gate is
 computed from exactly those lines.  The installed-collection install path is
 integration-tested (tests/integration/test_library_collection_lifecycle.py) but

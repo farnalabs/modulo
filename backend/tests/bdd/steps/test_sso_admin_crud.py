@@ -1,7 +1,7 @@
 """Step definitions for the SSO provider admin CRUD BDD scenarios (PRD 9.4).
 
 Wires the scenarios in ``sso_admin_crud.feature`` to the real
-``/api/v1/admin/sso`` routes (``modulo/api/routes/admin_sso.py``) through the
+``/api/v1/admin/sso`` routes (``farna/api/routes/admin_sso.py``) through the
 shared TestClient pattern of the BDD conftest. Only the DB CRUD, RLS and
 outbound-network seams are patched at their route use-site: the routing,
 ``require_feature("sso")`` plan gate (through the real ``get_plan_context``

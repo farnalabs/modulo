@@ -1,4 +1,4 @@
-"""Unit tests for modulo.db.bootstrap_role — the break-glass role bootstrap.
+"""Unit tests for farna.db.bootstrap_role — the break-glass role bootstrap.
 
 Hermetic suite: no Postgres required. A fake asyncpg connection routes
 responses by SQL shape — role-existence probes, to_regclass guards,

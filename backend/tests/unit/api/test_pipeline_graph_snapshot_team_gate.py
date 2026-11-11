@@ -31,9 +31,9 @@ Tests (mocked session, real FastAPI dependency stack):
   proving the in-txn layer is wired and is not a no-op behind a passing
   dependency.
 
-The in-txn half patches ``modulo.api.routes.pipelines.team_membership_exists``
+The in-txn half patches ``farna.api.routes.pipelines.team_membership_exists``
 ONLY: the request-time dependency resolves membership through its own import
-(``modulo.api.dependencies`` -> ``modulo.api.team_scope``), so a patch on the
+(``farna.api.dependencies`` -> ``farna.api.team_scope``), so a patch on the
 routes module can never short-circuit the dependency.
 """
 
@@ -393,7 +393,7 @@ def test_save_edit_snapshot_in_txn_denial_overrides_a_passing_request_time_gate(
     """TOCTOU close: dependency says member, the locked row says otherwise.
 
     The request-time dependency resolves membership through
-    ``modulo.api.dependencies``' own import (the session answers a membership
+    ``farna.api.dependencies``' own import (the session answers a membership
     row), while the in-txn re-check resolves it through the one imported into
     ``routes.pipelines`` - patched here to deny, exactly as an ownership flip
     inside the request -> mutation window would behave. The endpoint must still

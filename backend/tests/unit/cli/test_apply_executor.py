@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.executor (FAR-681 slice 1).
+"""Unit tests for farna.cli.apply.executor (FAR-681 slice 1).
 
 HTTP mocked via respx. Round-trip payloads are validated against the REAL
 API pydantic models (contract round-trip), not hand-built response fixtures.

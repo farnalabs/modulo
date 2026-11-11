@@ -1,4 +1,4 @@
-"""Unit tests for modulo.auth.secret_storage: encrypted secret helpers."""
+"""Unit tests for farna.auth.secret_storage: encrypted secret helpers."""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock

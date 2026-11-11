@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.models.error_notification_rule.
+"""Unit tests for farna.api.models.error_notification_rule.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the notification-rule
 schemas. Basic create/update validation is exercised by

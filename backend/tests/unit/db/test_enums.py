@@ -1,4 +1,4 @@
-"""Tests for modulo.db.enums — ModelBackendProvider enum."""
+"""Tests for farna.db.enums — ModelBackendProvider enum."""
 
 from sqlalchemy import CheckConstraint
 

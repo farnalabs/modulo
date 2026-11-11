@@ -1,4 +1,4 @@
-"""Residual unit coverage for modulo.core.cron_helpers (FAR-619).
+"""Residual unit coverage for farna.core.cron_helpers (FAR-619).
 
 Edge branches the existing suites leave uncovered: cron-iteration timezone/DST
 boundaries, the fire-job skip paths (backpressure / paused / shared-budget

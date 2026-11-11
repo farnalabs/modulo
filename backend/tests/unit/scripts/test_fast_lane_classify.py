@@ -303,6 +303,36 @@ class TestMainExitCode:
         assert rc == 1, "diff-too-large must exit 1 (neutral), not 2 (failure)"
 
     @patch("fast_lane_classify.subprocess.run")
+    def test_diff_file_cap_exits_nonzero(self, mock_run: MagicMock) -> None:
+        """A PR whose diff exceeds GitHub's 300-file cap is ineligible (rc=1).
+
+        ``gh pr diff`` fails with an HTTP 406 reporting the maximum number of
+        FILES for a mass rename; that must also be class-B/neutral rather than
+        a classifier error (rc=2), exactly like the line cap.
+        """
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "could not find pull request diff: HTTP 406: Sorry, the diff "
+                "exceeded the maximum number of files (300)."
+            ),
+        )
+        rc = classify_main(
+            [
+                "--pr-number",
+                "3086",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 1, "diff-file-cap must exit 1 (neutral), not 2 (failure)"
+
+    @patch("fast_lane_classify.subprocess.run")
     def test_unexpected_fetch_error_still_fails_closed(self, mock_run: MagicMock) -> None:
         """A genuine fetch error (not the diff-size cap) still returns rc=2."""
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")

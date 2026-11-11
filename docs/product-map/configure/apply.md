@@ -285,7 +285,7 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
 - 2026-09-19: **product-map review pass** – closed the
   "No BDD feature file" gap. Registered `cli/apply.feature` into the executing
   BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
-  `modulo.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
+  `farna.cli.apply` seams network-free and DB-free: the loader / `ApplyConfig`
   validators (single + multi-document YAML merge, duplicate names within and
   across documents, empty config, trigger forward-references), refs-only
   secrets (`resolve_secret_refs`: env-ref resolution, missing-var and

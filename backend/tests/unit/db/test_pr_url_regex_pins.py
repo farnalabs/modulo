@@ -3,7 +3,7 @@
 The GitHub-PR-URL grammar is deliberately duplicated across layers, because
 a single shared definition cannot serve every consumer:
 
-* ``modulo.db`` may not import ``modulo.core`` (import-linter contract
+* ``farna.db`` may not import ``farna.core`` (import-linter contract
   ``db-does-not-import-core``), so ``db.crud.run`` cannot reuse the
   extractor's constant;
 * ``sandbox_policy`` must stay dependency-free (no LangGraph, no DB), so it

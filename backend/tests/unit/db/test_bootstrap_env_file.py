@@ -1,6 +1,6 @@
 """Direct tests for the promoted bootstrap env-file writer (FAR-671).
 
-``modulo.db.bootstrap._write_env_file`` is the exclusive-create +
+``farna.db.bootstrap._write_env_file`` is the exclusive-create +
 symlink-rejecting 0600 writer used by the container entrypoint AND (since
 the promotion) by the native launcher's pinned config file
 (``launcher.config_source.write_pinned_env_file``). These tests lock the

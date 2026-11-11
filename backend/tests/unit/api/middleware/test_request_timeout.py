@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.request_timeout.RequestTimeoutMiddleware.
+"""Unit tests for farna.api.middleware.request_timeout.RequestTimeoutMiddleware.
 
 QA lens pass (correctness, maintainability) on the request-timeout middleware.
 Previously untested, this suite locks the full contract:

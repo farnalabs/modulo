@@ -1,7 +1,7 @@
 """Unit tests for the library contribution flow — draft, review, publish,
 versioning, import notification, and the version/parse helpers.
 
-Targets the contribution lifecycle in ``modulo.core.library_service``:
+Targets the contribution lifecycle in ``farna.core.library_service``:
   - ``contribute_fixture`` / ``contribute_primitive`` draft creation
   - ``submit_contribution_for_review`` status transitions
   - ``publish_contribution`` community cache + importer notification

@@ -47,7 +47,7 @@ pytestmark = pytest.mark.integration
 # Uninstall SOFT-deletes the ``CollectionInstall`` row (0308), so every claim
 # this module makes about a retired install — hidden from plain reads, able to
 # coexist with a reinstall — depends on the global ``deleted_at IS NULL``
-# listener being registered. In the app that happens at ``modulo.db.session``
+# listener being registered. In the app that happens at ``farna.db.session``
 # import; this module never imports it, so register it explicitly here (the
 # same house pattern as test_soft_delete_filter.py / test_viewmodel_soft_deleted_team.py).
 register_soft_delete_filter()

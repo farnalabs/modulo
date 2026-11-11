@@ -1,7 +1,7 @@
 """Unit tests for SpendAnomaly CRUD operations.
 
-``modulo.db.crud.spend_anomaly`` was the only CRUD module with no direct test
-coverage: the admin costs router (``modulo.api.routes.costs``) tests mock
+``farna.db.crud.spend_anomaly`` was the only CRUD module with no direct test
+coverage: the admin costs router (``farna.api.routes.costs``) tests mock
 ``list_anomalies``/``dismiss_anomaly``, so the SQL itself — the org-scoping
 WHERE clause, the ``dismissed`` filter, the date ordering, and the rowcount
 semantics — was never exercised. These tests run the real statements against

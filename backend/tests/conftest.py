@@ -30,7 +30,7 @@ os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 #
 # pytest-cov starts coverage during ``pytest_load_initial_conftests``, BEFORE
 # this conftest is imported. When coverage is started with a single-module
-# source spec (e.g. ``--cov=modulo.core.library_service.community``),
+# source spec (e.g. ``--cov=farna.core.library_service.community``),
 # coverage.py's ``InOrOut.set_matchers_depending_on_syspath()`` resolves the
 # module via ``find_spec`` — which executes the target's parent packages —
 # inside ``sys_modules_saved()``, and ``SysModuleSaver.restore()`` then
@@ -148,7 +148,7 @@ _AUTH_DEPS_MODULE = "farna.auth.dependencies"
 
 #: Snapshot of the real ``_verify_identity`` — the function object the auth
 #: module body bound when it executed. Captured LAZILY (never at conftest
-#: load): importing ``modulo.auth.dependencies`` costs ~2 s of session
+#: load): importing ``farna.auth.dependencies`` costs ~2 s of session
 #: startup, which is pure overhead for pure-logic sessions that never touch
 #: auth. The capture points, in order of likelihood:
 #:
@@ -260,7 +260,7 @@ def _assert_real_verify_identity() -> None:
     """Fail fast when a leaked patch has replaced ``_verify_identity``.
 
     Regression guard for the FAR-1631 leak class: two fixtures patching the
-    SAME symbol (``modulo.auth.dependencies._verify_identity``) with DIFFERENT
+    SAME symbol (``farna.auth.dependencies._verify_identity``) with DIFFERENT
     mechanisms (``unittest.mock.patch`` vs ``monkeypatch.setattr``) unwind their
     restores out of order, so ``monkeypatch``'s undo (it is a shared fixture
     torn down last) overwrites the real function with a *stale* mock. That
@@ -328,7 +328,7 @@ def _guard_real_verify_identity() -> None:
     set up strictly after it, so it observes the state left by the *previous*
     test's teardown. A leaked replacement is caught here on the next test
     instead of silently changing its behaviour. When
-    ``modulo.auth.dependencies`` was never imported in this session the check
+    ``farna.auth.dependencies`` was never imported in this session the check
     is a no-op (see :func:`_assert_real_verify_identity`).
     """
     _assert_real_verify_identity()
@@ -342,7 +342,7 @@ def _allow_test_hostnames(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
     ``tests/`` so it applies to every sub-suite (unit, connectors, model
     backends, BDD). Do not copy it into a per-directory conftest.
 
-    The SSRF guard (``modulo.core.ssrf``) performs real DNS resolution, which is
+    The SSRF guard (``farna.core.ssrf``) performs real DNS resolution, which is
     unavailable in CI sandboxes. Every backend test mocks the HTTP layer (respx
     or a patched ``AsyncClient``) against ``example.com`` / ``localhost`` hosts,
     so the guard fails closed on absent DNS and breaks the suite.

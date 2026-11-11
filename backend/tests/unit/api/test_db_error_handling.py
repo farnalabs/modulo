@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.db_error_handling — the ``handle_db_errors`` decorator.
+"""Unit tests for farna.api.db_error_handling — the ``handle_db_errors`` decorator.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the decorator that
 490+ call sites across the route layer rely on to translate DB/validation

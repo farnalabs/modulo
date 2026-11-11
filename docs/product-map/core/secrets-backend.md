@@ -105,7 +105,7 @@ rather than in the manifest registry.
   BDD feature files" gap. Registered ``backend/tests/bdd/features/infra/
   secrets_backend.feature`` into the executing BDD suite from
   ``steps/test_secrets_backend.py``, driving the REAL
-  ``modulo.core.secrets_backend`` seams network-free and DB-free - the
+  ``farna.core.secrets_backend`` seams network-free and DB-free - the
   ``FernetSecretsBackend`` persists/reads real rows in an in-memory aiosqlite
   engine (round-trip, in-place upsert, delete, whitespace-normalized keys),
   organization scoping via the real ``WHERE organisation_id = :oid`` SQL the

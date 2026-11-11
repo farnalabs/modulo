@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin_orgs`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin_orgs`` (FAR-573).
 
 Complements test_admin_orgs.py by exercising the endpoints and branches the
 existing suite leaves uncovered: org listing (orphan hidden), org deletion,

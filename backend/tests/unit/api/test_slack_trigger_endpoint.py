@@ -996,7 +996,7 @@ def _fake_settings_with_key(fernet_key: str) -> MagicMock:
 async def test_verify_slack_delivery_encrypted_signing_secret_verifies() -> None:
     """FAR-1732/1735: a Fernet-token signing_secret decrypts via the shared
     bounded resolver with the REAL decode helper (no decode mock — the
-    patch target is ``modulo.api.routes.slack.get_settings``, the name the
+    patch target is ``farna.api.routes.slack.get_settings``, the name the
     route actually binds, so the fail-closed/decrypt plumbing is genuinely
     exercised) and the signature check runs against the DECRYPTED secret —
     never against the raw ciphertext blob."""

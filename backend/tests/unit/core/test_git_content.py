@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_engine.git_content (FAR-220).
+"""Unit tests for farna.core.pipeline_engine.git_content (FAR-220).
 
 Covers the git-sourced content ref form (``git+<repo>[@<ref>]#<path>``):
 parsing + fail-closed rejection, resolution against ``git ls-remote`` output,
@@ -45,7 +45,7 @@ def _allow_all_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
 
     REAL DNS resolution must never run in unit tests (offline-stable), so all
     hostname-bearing flows patch the gate; the gate itself carries dedicated
-    literal-IP tests that exercise the real ``modulo.core.ssrf`` path
+    literal-IP tests that exercise the real ``farna.core.ssrf`` path
     (deterministic, no DNS).
     """
 
@@ -898,7 +898,7 @@ def test_validate_agent_git_content_values_rejects_ref_among_several_commands() 
 
 
 # ---------------------------------------------------------------------------
-# SSRF host gate (modulo.core.ssrf parity) — real path, literal-IP only (no DNS)
+# SSRF host gate (farna.core.ssrf parity) — real path, literal-IP only (no DNS)
 # ---------------------------------------------------------------------------
 
 

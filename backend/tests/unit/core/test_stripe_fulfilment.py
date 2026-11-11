@@ -1,4 +1,4 @@
-"""Tests for modulo.core.stripe_fulfilment — idempotent purchase fulfilment."""
+"""Tests for farna.core.stripe_fulfilment — idempotent purchase fulfilment."""
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta

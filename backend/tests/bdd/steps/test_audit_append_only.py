@@ -1,7 +1,7 @@
 """BDD step definitions: audit append-only enforcement.
 
 Drives the REAL application-layer append-only guard
-(``modulo.core.audit_logger.append_only``) — registration plus the
+(``farna.core.audit_logger.append_only``) — registration plus the
 SQLAlchemy ``before_update`` / ``before_delete`` listeners — against actual
 ORM rows in an in-memory engine, so the immutability claim (``feat-audit``,
 "Append-only enforcement is defense-in-depth") is pinned by executing BDD

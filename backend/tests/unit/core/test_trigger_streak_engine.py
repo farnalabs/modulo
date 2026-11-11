@@ -1,6 +1,6 @@
 """Unit tests for the FAR-190 no-delivery streak engine (ongoing + FAR-1387 cron).
 
-Covers the streak engine in ``modulo.core.trigger_streak``:
+Covers the streak engine in ``farna.core.trigger_streak``:
 
 * ``_streak_config`` — per-trigger threshold (``max_no_delivery_streak`` with
   the legacy ``max_consecutive_failures`` fallback) + wall-clock window, with

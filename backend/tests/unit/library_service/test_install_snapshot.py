@@ -1,7 +1,7 @@
 """Unit tests for the FAR-759 install-time provenance snapshot helpers.
 
 Covers ``compute_entity_fingerprint``, ``snapshot_entity_fingerprints`` and
-``_map_pin_entity_ids`` in ``modulo.core.library_service.install`` — the
+``_map_pin_entity_ids`` in ``farna.core.library_service.install`` — the
 snapshot the collection upgrade flow consumes.  Unit tier: no DB.
 """
 

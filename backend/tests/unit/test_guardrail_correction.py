@@ -1,6 +1,6 @@
 """Unit tests for the FAR-210 T2b single-node self-correction path.
 
-Covers the genuinely-new bounded correction engine (``modulo.core.guardrails.correction``):
+Covers the genuinely-new bounded correction engine (``farna.core.guardrails.correction``):
 
   * correction definition validation: redact+correct HARD-BLOCK, different-family
     enforcement, restricted-backend validation, model_judge backend split;

@@ -1,6 +1,6 @@
 """One-off backfill: repair legacy lifecycle-map content blocked by FAR-175 validation.
 
-FAR-175 tightened ``normalize_content`` (``modulo.core.lifecycle_map.validation``)
+FAR-175 tightened ``normalize_content`` (``farna.core.lifecycle_map.validation``)
 to reject dangling edges and duplicate stage/edge ids with a 422. Maps whose
 ``content_json`` predates that validation now fail EVERY content edit --
 including graduation -- because ``save_map_version`` and ``graduate_stage``
@@ -171,7 +171,7 @@ def _junction_row(
 def _reproject_junction(conn: Any, row: Any, content: dict[str, Any], *, dialect_name: str) -> None:
     """Replace the map's junction projection rows with rows derived from content.
 
-    Mirrors ``derive_lifecycle_map_stages`` in ``modulo.core.lifecycle_map.service``:
+    Mirrors ``derive_lifecycle_map_stages`` in ``farna.core.lifecycle_map.service``:
     delete + re-insert, skipping non-dict stages and non-UUID pipeline ids
     (content_json remains the source of truth). The generated ``id`` is
     stringified on SQLite, whose driver cannot bind raw ``uuid.UUID`` objects.

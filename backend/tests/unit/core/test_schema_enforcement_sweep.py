@@ -28,7 +28,7 @@ from farna.db.models.run_node_outputs import RunNodeOutput
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
-    / "modulo"
+    / "farna"
     / "db"
     / "migrations"
     / "versions"

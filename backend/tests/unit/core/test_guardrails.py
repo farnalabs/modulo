@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails — ingestion-edge guardrail machinery.
+"""Unit tests for farna.core.guardrails — ingestion-edge guardrail machinery.
 
 Covers the pure detection, masks-only redaction, static path resolution,
 two-phase pass, block semantics, allowlist, and conformance derivation.

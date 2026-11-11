@@ -23,7 +23,7 @@ from farna.core import cron_helpers as ch
 from farna.db.soft_delete import register_soft_delete_filter
 
 # FAR-2076 / soft-delete semantics: the global filter is installed by an IMPORT
-# SIDE EFFECT (``modulo.db.session``). Assert the precondition in the module that
+# SIDE EFFECT (``farna.db.session``). Assert the precondition in the module that
 # depends on it — otherwise the soft-deleted-pipeline test below runs in a
 # process where the filter was never registered and asserts the OPPOSITE of
 # production behaviour (a false pass).

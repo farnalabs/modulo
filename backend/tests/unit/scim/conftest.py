@@ -1,7 +1,7 @@
 """Test configuration for SCIM unit tests.
 
 Sets minimal env vars so ``get_settings()`` (called by module-level imports
-in ``modulo.api.main``) can construct a ``Settings`` instance. Shared
+in ``farna.api.main``) can construct a ``Settings`` instance. Shared
 constants and factories live in ``helpers.py``; the SCIM ``audited()`` seams
 and the dependency-override lifecycle live here so every SCIM test module
 gets them exactly once.

@@ -57,7 +57,7 @@ authenticated API route through `auth/dependencies.py`.
 None acknowledged: the token-utility contract (mint/decode, purpose isolation,
 rotation propagation, claim-token scoping) is now locked by the executing
 `jwt_auth_crypto.feature` BDD surface (added 2026-09-18) driving the real
-`modulo.auth.jwt` seams, and the API-level login/refresh/logout/tamper flows are
+`farna.auth.jwt` seams, and the API-level login/refresh/logout/tamper flows are
 covered by `jwt_security.feature`.
 
 ## QA History
@@ -65,7 +65,7 @@ covered by `jwt_security.feature`.
 - 2026-09-18: **product-map review pass** - closed the
   "No standalone BDD feature file" gap. Registered
   `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
-  `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
+  `steps/test_jwt_auth_crypto.py`, driving the real `farna.auth.jwt` seams
   network-free and DB-free: access-token mint/decode round-trip (identity, role,
   tenant org, `client_kind`), wrong-secret / tampered-signature / expired /
   `alg=none` / missing-subject rejections, the purpose-isolation matrix (access /

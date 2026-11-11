@@ -56,7 +56,7 @@ def _isolated_audit_session(
 
     GATED (same shape as ``_patch_verify_identity``'s auth-stack gate): the
     STRING target ``install_audit_session_double`` resolves by importing
-    ``modulo.core.audit_coverage`` (fastapi + sqlalchemy + db.models; ~1.8-3.8
+    ``farna.core.audit_coverage`` (fastapi + sqlalchemy + db.models; ~1.8-3.8
     s measured 2026-10-13), and paying that for every unit test dragged
     pure-logic packages onto the app import stack they never touch. The
     install now runs only when the test can actually reach the audit path;
@@ -97,7 +97,7 @@ def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.M
 
     GATED (same shape as ``_far681_any_credential_default``'s FAR-1678 app
     import gate): the STRING target below resolves by importing
-    ``modulo.auth.dependencies`` (~5 s measured 2026-10-13), and paying that
+    ``farna.auth.dependencies`` (~5 s measured 2026-10-13), and paying that
     for every unit test dragged pure-logic packages onto the auth stack they
     never touch — PR #1730 made the root conftest's import lazy, but this
     fixture's string setattr re-introduced the eager import for every unit
@@ -136,7 +136,7 @@ def _e2b_provider_bridge(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     GATED by ``_e2b_bridge_needed`` (same conservative-predicate shape as
     ``_patch_verify_identity`` / ``_provisioned_system_engine`` / the
     ``_far681`` app gate): ``install_bridge`` imports
-    ``modulo.core.pipeline_engine.node_runner`` — a ~4.5 s chain measured
+    ``farna.core.pipeline_engine.node_runner`` — a ~4.5 s chain measured
     2026-10-13 — and paying that on the first setup of every unit session
     dragged pure-logic packages onto the dispatch stack they never touch.
     The gate skips ONLY the install; the ``E2B_API_KEY`` seed stays
@@ -155,7 +155,7 @@ def _e2b_provider_bridge(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 class _ProvisionedSystemSettings:
     """Settings stub presenting a provisioned system database URL.
 
-    ``modulo.api.dependencies`` resolves its settings via the module-level
+    ``farna.api.dependencies`` resolves its settings via the module-level
     ``get_settings`` name, so tests can present a provisioned reading without
     touching the lru-cached real :class:`Settings`.
     """
@@ -191,16 +191,16 @@ def _provisioned_system_engine(request: pytest.FixtureRequest, monkeypatch: pyte
 
     GATED by the same conservative predicate as ``_patch_verify_identity``
     (``_verify_identity_patch_needed``). The body below imports
-    ``modulo.api.dependencies``, which itself executes
-    ``modulo.auth.dependencies`` at module level (measured 2026-10-13) — so
+    ``farna.api.dependencies``, which itself executes
+    ``farna.auth.dependencies`` at module level (measured 2026-10-13) — so
     running it for every unit test is what pins pure-logic sessions onto the
     auth/app import stack even when the ``_verify_identity`` patch is gated.
-    A test can only OBSERVE this stub by touching ``modulo.api.dependencies``
+    A test can only OBSERVE this stub by touching ``farna.api.dependencies``
     (the object being patched), and every such test either already has it in
     ``sys.modules`` (module-level import, resolved before fixture setup) or
-    names ``modulo.api`` / ``modulo.auth`` in its source (lazy in-body
+    names ``farna.api`` / ``farna.auth`` in its source (lazy in-body
     import; the only other chains into ``api.dependencies`` verified in the
-    test corpus — ``modulo.auth.scim_auth`` — carry the ``modulo.auth``
+    test corpus — ``farna.auth.scim_auth`` — carry the ``farna.auth``
     token too). Skip cannot strand a consumer; it only spares tests that
     never load the module being patched.
     """
@@ -212,7 +212,7 @@ def _provisioned_system_engine(request: pytest.FixtureRequest, monkeypatch: pyte
 
 
 #: The module whose import constructs the FastAPI application singleton
-#: (``modulo.api.main.app``). Loading it costs ~10 s of CPU-bound route and
+#: (``farna.api.main.app``). Loading it costs ~10 s of CPU-bound route and
 #: pydantic-model construction (measured 2026-10-11, FAR-1678), so the unit
 #: suite must only load it when a test can actually reach the app.
 _APP_MODULE = "farna.api.main"
@@ -224,17 +224,17 @@ _APP_MODULE = "farna.api.main"
 _AUTH_DEPS_MODULE = "farna.auth.dependencies"
 
 #: ``sys.modules`` markers meaning "this session has already loaded the
-#: auth/app stack". ``modulo.api.dependencies`` is included because it
-#: executes ``modulo.auth.dependencies`` at module level, so its presence
+#: auth/app stack". ``farna.api.dependencies`` is included because it
+#: executes ``farna.auth.dependencies`` at module level, so its presence
 #: means the expensive import is paid regardless — patching then costs only
 #: the (cheap) setattr.
 _AUTH_STACK_MARKERS: tuple[str, ...] = (_AUTH_DEPS_MODULE, "farna.api.dependencies")
 
 #: Source tokens whose appearance in a test module marks it as able to reach
 #: the auth/app stack INSIDE its body (a lazy ``from farna.api... import`` /
-#: ``from farna.auth... import`` is a string in its source). ``modulo.api``
-#: is deliberately one hop wide: any ``modulo.api.*`` import transitively
-#: executes ``modulo.auth.dependencies``, so catching only ``_AUTH_DEPS_MODULE``
+#: ``from farna.auth... import`` is a string in its source). ``farna.api``
+#: is deliberately one hop wide: any ``farna.api.*`` import transitively
+#: executes ``farna.auth.dependencies``, so catching only ``_AUTH_DEPS_MODULE``
 #: would miss e.g. an in-body ``from farna.api.main import app``. A false
 #: positive (token in a comment/docstring) costs only the already-cached
 #: import — a performance no-op for a module that names the stack, never a
@@ -295,13 +295,13 @@ def _test_module_mentions(node: object, token: str) -> bool:
 #: pulls a ~4.5 s chain (measured 2026-10-13), so the autouse
 #: ``_e2b_provider_bridge`` fixture only installs when a test can actually
 #: reach the dispatch. ``executor`` and ``graph_cache`` import ``node_runner``
-#: at module level, so ANY ``modulo.core.pipeline_engine`` load — package
+#: at module level, so ANY ``farna.core.pipeline_engine`` load — package
 #: ``__init__`` included — puts this marker in ``sys.modules``.
 _E2B_BRIDGE_MARKER = "farna.core.pipeline_engine.node_runner"
 
 #: Source tokens whose appearance in a test module marks it as able to reach
 #: the dispatch INSIDE its body: an in-body ``from
-#: modulo.core.pipeline_engine... import`` / ``from ...node_runner import`` /
+#: farna.core.pipeline_engine... import`` / ``from ...node_runner import`` /
 #: a ``monkeypatch.setattr("farna.core.pipeline_engine.node_runner....")``
 #: string target is literally in the module's source, and the fixture decides
 #: BEFORE the body runs — so ``sys.modules`` alone would miss it. A comment
@@ -332,7 +332,7 @@ def _e2b_bridge_needed(request: pytest.FixtureRequest) -> bool:
 
     Returns True (install the bridge) when EITHER:
 
-    1. ``sys.modules`` already holds ``modulo.core.pipeline_engine.node_runner``
+    1. ``sys.modules`` already holds ``farna.core.pipeline_engine.node_runner``
        — a module-level import in the test module, a conftest, or the app
        (``import farna.api.main`` loads the executor chain), all resolved
        during collection BEFORE fixture setup; the import is already paid, so
@@ -372,11 +372,11 @@ def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
 
     Returns True (install the patch/stub) when EITHER:
 
-    1. ``sys.modules`` already holds ``modulo.auth.dependencies`` or
-       ``modulo.api.dependencies`` — a module-level import in the test
+    1. ``sys.modules`` already holds ``farna.auth.dependencies`` or
+       ``farna.api.dependencies`` — a module-level import in the test
        module or any earlier-loaded conftest, resolved before fixture setup;
        or
-    2. the test module's source mentions ``modulo.api`` or ``modulo.auth``
+    2. the test module's source mentions ``farna.api`` or ``farna.auth``
        — the lazy in-body-import shape, where the import happens during the
        test body, AFTER this fixture has already decided.
 
@@ -386,7 +386,7 @@ def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
     or written literally in the test module's source (condition 2). The
     corpus check behind condition 2: no test module under ``tests/unit/``
     that lacks both tokens has an in-body import whose chain reaches
-    ``modulo.api.dependencies`` / ``modulo.auth.dependencies``. An
+    ``farna.api.dependencies`` / ``farna.auth.dependencies``. An
     under-patch fails LOUDLY anyway (the real ``_verify_identity`` queries a
     live DB -> 401/503), never as a silently-wrong green. Pinned by
     ``tests/architecture/test_unit_auth_patch_gate.py``.
@@ -397,14 +397,14 @@ def _verify_identity_patch_needed(request: pytest.FixtureRequest) -> bool:
 
 
 #: ``sys.modules`` markers meaning "this session has already loaded a surface
-#: that can dial the audit factory". ``modulo.core.audit_coverage`` is the
+#: that can dial the audit factory". ``farna.core.audit_coverage`` is the
 #: primary marker: every audited REST route module (~70 files under
-#: ``modulo/api/routes/``) imports ``audited`` from it at MODULE level, so
-#: loading any of them — including via ``modulo.api.main``'s router
-#: collection and via ``modulo.api.mcp_server`` (which imports route modules
+#: ``farna/api/routes/``) imports ``audited`` from it at MODULE level, so
+#: loading any of them — including via ``farna.api.main``'s router
+#: collection and via ``farna.api.mcp_server`` (which imports route modules
 #: at module level) — puts it in ``sys.modules`` before any fixture runs. A
 #: test that imports ``audit_coverage`` directly lands here too. The three
-#: ``modulo.api.*`` entries are belt-and-braces for the MCP surface in case
+#: ``farna.api.*`` entries are belt-and-braces for the MCP surface in case
 #: its module-level import chain ever stops pulling the route modules in
 #: (``mcp_audit._fresh_session`` itself lazy-imports ``audit_session`` only
 #: at call time): ``mcp_server`` defines the ``mcp_audited`` tools,
@@ -420,8 +420,8 @@ _AUDIT_SURFACE_MARKERS: tuple[str, ...] = (
 #: the audited surface INSIDE its body (a lazy ``from farna.api... import`` /
 #: ``from farna.core.audit_coverage import ...`` / an
 #: ``importlib.import_module("farna.api...")`` literal — all are strings in
-#: its source). ``modulo.api`` is deliberately one hop wide: any
-#: ``modulo.api.*`` module either is an audited surface or transitively loads
+#: its source). ``farna.api`` is deliberately one hop wide: any
+#: ``farna.api.*`` module either is an audited surface or transitively loads
 #: one. A false positive (token in a comment/docstring) costs only the
 #: already-cached import — a performance no-op for a module that names the
 #: surface, never a behaviour change. A false negative can be SILENT (a
@@ -439,16 +439,16 @@ def _audit_session_double_needed(request: pytest.FixtureRequest) -> bool:
     1. ``sys.modules`` already holds one of ``_AUDIT_SURFACE_MARKERS`` — a
        module-level import in the test module, a conftest, or any
        earlier-loaded helper, resolved before fixture setup; or
-    2. the test module's source mentions ``modulo.api`` or
-       ``modulo.core.audit_coverage`` — the lazy in-body-import shape, where
+    2. the test module's source mentions ``farna.api`` or
+       ``farna.core.audit_coverage`` — the lazy in-body-import shape, where
        the import happens during the test body, AFTER this fixture has
        already decided.
 
     Conservative by construction: a test can only dial
     ``_shared_session_factory`` (the symbol the double replaces) by running
     an ``audited(...)`` route dependency or an ``mcp_audited`` tool — both of
-    which require a module under ``modulo.api`` (REST routes / ``main`` /
-    ``mcp_server``) or ``modulo.core.audit_coverage`` itself to be imported,
+    which require a module under ``farna.api`` (REST routes / ``main`` /
+    ``mcp_server``) or ``farna.core.audit_coverage`` itself to be imported,
     and every such import is either already done (condition 1) or written
     literally in the test module's source (condition 2). The corpus check
     behind condition 2 (enumerated 2026-10-13): of ~1460 files under
@@ -503,7 +503,7 @@ def _far681_any_credential_default(request: pytest.FixtureRequest) -> None:
     singleton, and importing it cost every unit-test module — including pure
     logic packages that never touch the app — ~10 s of process startup. The
     install now runs only when the app is (or will be) loaded anyway: either
-    ``modulo.api.main`` is already in ``sys.modules`` (a module-level import
+    ``farna.api.main`` is already in ``sys.modules`` (a module-level import
     in the test module or a conftest, resolved at collection time), or the
     test module's source mentions it (the lazy in-body import case). A
     pure-logic module pays neither cost, and its tests cannot observe the

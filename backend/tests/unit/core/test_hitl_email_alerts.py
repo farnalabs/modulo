@@ -27,7 +27,7 @@ from farna.core.hitl_email_alerts import (
 
 # The lazy ``patch("farna.db.session.get_shared_engine")`` in
 # test_dispatch_session_factory_builds_on_the_shared_engine imports
-# modulo.db.session at TEST time; its module-level ``_build_engine()`` needs
+# farna.db.session at TEST time; its module-level ``_build_engine()`` needs
 # Settings. There is no ``.env`` in worktrees, so provide the minimum env the
 # same way as tests/unit/tools/conftest.py — setdefault so explicit CI values
 # always win. (Module-level imports above do not touch db.session; only the

@@ -73,7 +73,7 @@ services:
       - path: .env
         required: false
     # Every name below is one the application actually reads: a Settings field
-    # (backend/src/modulo/settings.py - pydantic-settings derives the env name
+    # (backend/src/farna/settings.py - pydantic-settings derives the env name
     # from the field name, `secret_key` -> `SECRET_KEY`, or from the field's
     # alias) or a name read straight from os.environ. A name Settings does not
     # read is silently ignored; a REQUIRED Settings field left unsatisfied is a
@@ -183,7 +183,7 @@ services:
       # hard-stop stays inert there until an operator sets DB_CAPACITY_SOURCE=env
       # with DB_CAPACITY_BYTES. Use those two to override with an explicit size,
       # or DB_CAPACITY_SOURCE=disabled to turn detection off entirely.
-      DB_CAPACITY_PATH: ${DB_CAPACITY_PATH:-/var/lib/modulo/db-volume}
+      DB_CAPACITY_PATH: ${DB_CAPACITY_PATH:-/var/lib/farna/db-volume}
     depends_on:
       postgres:
         condition: service_healthy
@@ -199,7 +199,7 @@ services:
       # If the container user cannot traverse the mount the probe fails open
       # (capacity "none", stop inert) rather than erroring - detection never
       # blocks a run by accident.
-      - postgres_data:/var/lib/modulo/db-volume:ro
+      - postgres_data:/var/lib/farna/db-volume:ro
     restart: unless-stopped
 
   # Health watchdog (Gatus) - same image and config as the root

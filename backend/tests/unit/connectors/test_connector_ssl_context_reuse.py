@@ -11,9 +11,9 @@ process.
 These tests pin the fix: ONE TLS context per connector instance across any
 number of client constructions, actually used by the pinned transport, with
 ``SSRF_TRUST_PROXY``-driven CA-bundle selection kept in lock-step with
-``modulo.core.ssrf``.
+``farna.core.ssrf``.
 
-The ``modulo.connectors._egress`` imports are function-local so the
+The ``farna.connectors._egress`` imports are function-local so the
 construction-count test below still runs (and still fails for the right
 reason) on a tree where the fix does not exist.
 """
@@ -126,7 +126,7 @@ def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, 
     """``connectors._egress`` shares the ONE ``core.ssrf`` trust-env resolver.
 
     ``connectors._egress`` imports the shared resolver from
-    ``modulo.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
+    ``farna.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
     ``connectors-do-not-import-core`` contract carries a deliberate per-module
     allowance for this shared security primitive). Pinning the bound name to
     the SSRF module's function OBJECT is what stops drift: a future edit that

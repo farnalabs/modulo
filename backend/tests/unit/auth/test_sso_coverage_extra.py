@@ -1,4 +1,4 @@
-"""Extra coverage for ``modulo.auth.sso`` to keep ``modulo.auth`` above its 90% gate.
+"""Extra coverage for ``farna.auth.sso`` to keep ``farna.auth`` above its 90% gate.
 
 These target pure-logic branches and network/error paths that the happy-path
 SSO tests never exercise (SSRF rejections, malformed discovery/token JSON,

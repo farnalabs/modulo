@@ -3,7 +3,7 @@
 Locks the Settings-side contract of the native launcher: the pinned env_file
 (never the CWD ``.env``) and the first-boot ambient-URL refusal hook firing
 at Settings construction. These mutate module-level state in
-``modulo.settings`` — every test restores the pin/guard and the
+``farna.settings`` — every test restores the pin/guard and the
 ``get_settings`` cache via the autouse fixture.
 """
 

@@ -34,7 +34,7 @@ from farna.api.mcp_server import (
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
-# A pipeline list page shaped like ``modulo.db.crud.base.PageResult``.
+# A pipeline list page shaped like ``farna.db.crud.base.PageResult``.
 _PAGE = SimpleNamespace(items=[], total=0, next_cursor=None, has_more=False)
 _PIPELINE_ID = "11111111-1111-1111-1111-111111111111"
 _RUN_ID = "33333333-3333-3333-3333-333333333333"

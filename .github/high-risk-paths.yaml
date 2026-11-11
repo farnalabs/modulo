@@ -14,14 +14,14 @@
 #   3. Fail closed — if main's registry is missing/unreadable/unparseable, the PR is
 #      treated as high-risk (gated); never default to "no high-risk paths".
 #
-# NOTE: the original design listed backend/src/modulo/{rbac,tenancy,billing,security}
+# NOTE: the original design listed backend/src/farna/{rbac,tenancy,billing,security}
 # directories, but those do not exist in this repo. The globs below are adjusted to
 # the REAL layout where those concerns actually live:
-#   auth/rbac    -> backend/src/modulo/auth/** (team_rbac.py, permissions.py, sso.py, ...)
-#   tenancy/RLS  -> backend/src/modulo/db/rls.py
-#   security     -> backend/src/modulo/core/hitl_manager/**, core/audit_logger/**, auth/**
-#   connectors  -> backend/src/modulo/connectors/** (external system trust boundary)
-#   pipeline     -> backend/src/modulo/core/pipeline_engine/** (execution + gating)
+#   auth/rbac    -> backend/src/farna/auth/** (team_rbac.py, permissions.py, sso.py, ...)
+#   tenancy/RLS  -> backend/src/farna/db/rls.py
+#   security     -> backend/src/farna/core/hitl_manager/**, core/audit_logger/**, auth/**
+#   connectors  -> backend/src/farna/connectors/** (external system trust boundary)
+#   pipeline     -> backend/src/farna/core/pipeline_engine/** (execution + gating)
 #
 # The router ALSO treats test-file DELETIONS and skip/xfail additions anywhere in the
 # diff as high-risk even though they are not simple path globs — with one exemption:
@@ -35,12 +35,12 @@
 
 high_risk_paths:
   - ".github/workflows/**"
-  - "backend/src/modulo/auth/**"
-  - "backend/src/modulo/db/rls.py"
-  - "backend/src/modulo/core/hitl_manager/**"
-  - "backend/src/modulo/core/audit_logger/**"
-  - "backend/src/modulo/connectors/**"
-  - "backend/src/modulo/core/pipeline_engine/**"
+  - "backend/src/farna/auth/**"
+  - "backend/src/farna/db/rls.py"
+  - "backend/src/farna/core/hitl_manager/**"
+  - "backend/src/farna/core/audit_logger/**"
+  - "backend/src/farna/connectors/**"
+  - "backend/src/farna/core/pipeline_engine/**"
 
 # This file is ALWAYS high-risk: any change to it forces the gate.
 registry_file: ".github/high-risk-paths.yaml"

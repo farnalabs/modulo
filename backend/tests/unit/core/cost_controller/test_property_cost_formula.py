@@ -1,6 +1,6 @@
 """Hypothesis property-based tests for the cost formula engine.
 
-Target: ``modulo.core.cost_controller.breakdown.formula`` -- the 4-operator
+Target: ``farna.core.cost_controller.breakdown.formula`` -- the 4-operator
 formula parser and evaluator.
 
 Properties assert safety invariants:

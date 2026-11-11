@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin_sso`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin_sso`` (FAR-573).
 
 Complements test_admin_sso.py by exercising the error-mapping branches the
 existing suite leaves uncovered (DB errors on every endpoint, the 400

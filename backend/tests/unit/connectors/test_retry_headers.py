@@ -1,6 +1,6 @@
 """Unit tests for the shared connector retry-header helper module.
 
-The helper lives at ``modulo.connectors._retry_headers`` and is consumed by
+The helper lives at ``farna.connectors._retry_headers`` and is consumed by
 GitHub, GitLab, Jira, Linear and Slack connectors. These tests cover it
 directly (including the detail/metadata formatters that have no other direct
 coverage) so the shared contract stays locked down regardless of per-connector

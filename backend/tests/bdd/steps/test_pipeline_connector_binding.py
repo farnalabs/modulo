@@ -4,11 +4,11 @@ Wires ``features/connectors/swappable_binding.feature`` into the executing
 BDD suite by driving the REAL
 binding surfaces the pipeline save path uses:
 
-- ``modulo.core.team_visibility.extract_connector_bindings`` — the pure
+- ``farna.core.team_visibility.extract_connector_bindings`` — the pure
   extraction that turns per-node ``connector_binding`` objects into snapshot
   ``connector_bindings_json``. Swapping a node's binding swaps the extracted
   binding without touching the graph topology; an unbound node extracts nothing.
-- ``modulo.core.graph_validator.GraphValidator.validate_definition`` — the
+- ``farna.core.graph_validator.GraphValidator.validate_definition`` — the
   save-time connector-capability check (``_check_connector_bindings``) that
   rejects a binding to a missing instance (``CONNECTOR_NOT_FOUND``) or one
   whose allowed operations do not cover the ACL operation the node's routed

@@ -37,7 +37,7 @@ requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="restore tak
 
 
 def _settings_env_ready() -> bool:
-    """``modulo.cli`` builds Settings at import; the CI jobs export these."""
+    """``farna.cli`` builds Settings at import; the CI jobs export these."""
     return all(os.environ.get(name) for name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"))
 
 

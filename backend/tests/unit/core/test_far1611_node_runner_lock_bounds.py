@@ -50,7 +50,7 @@ _RUN_ID = "run-1"
 def _lock_timeout_error(statement: str) -> OperationalError:
     """Simulated row-lock contention: asyncpg's real ``LockNotAvailableError``
     (SQLSTATE 55P03) wrapped exactly the way SQLAlchemy surfaces it — the shape
-    ``modulo.db.sqlstates.is_row_lock_timeout`` recognises."""
+    ``farna.db.sqlstates.is_row_lock_timeout`` recognises."""
     from asyncpg import exceptions as asyncpg_exceptions
 
     driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")

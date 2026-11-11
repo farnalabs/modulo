@@ -1,13 +1,13 @@
 """FAR-512: outbound connectors + model backends migrated to the pinned-IP transport.
 
 Before FAR-512, a ``base_url``-bearing connector validated its egress target
-(:func:`modulo.core.ssrf.validate_outbound_url`) and then built its own
+(:func:`farna.core.ssrf.validate_outbound_url`) and then built its own
 ``httpx.AsyncClient`` — a validate-then-connect pattern. A hostname under
 attacker DNS control could answer public at validation time and internal
 (169.254.169.254) at connect time (DNS rebinding), escaping the gate.
 
 These tests prove the migration actually pins: a connector's ``_client()`` now
-builds a :class:`modulo.core.ssrf.PinnedAsyncHTTPTransport` whose pin map is
+builds a :class:`farna.core.ssrf.PinnedAsyncHTTPTransport` whose pin map is
 ``{hostname: validated_ip}``, so the connection goes to the VALIDATED address
 and never re-resolves the host. The resolver is stubbed to FLIP from the
 validated public address to the cloud-metadata address between validation and

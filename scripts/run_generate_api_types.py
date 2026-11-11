@@ -5,7 +5,7 @@ Replaces `frontend/scripts/generate-api-types.ps1` (invoked via
 `pnpm run generate:api` and CI's schema-freshness job).
 
 Behaviour (mirrors the `schema-freshness` job in `.github/workflows/ci.yml`):
-1. Writes a temp Python script that imports ``modulo.api.main`` and dumps
+1. Writes a temp Python script that imports ``farna.api.main`` and dumps
    ``app.openapi()`` to a temp JSON file, with DATABASE_URL / SECRET_KEY /
    FERNET_KEY / MODULO_CSRF_ENABLED set to template values (so no real backend
    or DB is needed to build the schema - same template env CI uses).

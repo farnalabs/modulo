@@ -1,5 +1,5 @@
 """Unit tests for the HITL-gate weakening guard primitive
-(modulo.db.crud.hitl_review_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
+(farna.db.crud.hitl_review_guard — hitl-gate-removal-guard-plan.md v19 §1/§3/§7)."""
 
 from __future__ import annotations
 

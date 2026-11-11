@@ -63,7 +63,7 @@ def pipeline_has_approval_gate(pipeline_name: str, node_id: str, ctx):
 @when(parsers.parse('the run reaches the "{node_id}" node'))
 def run_reaches_approval_gate(node_id: str, ctx):
     """A HITL gate parks the run on ``awaiting_human`` — the real paused status
-    (modulo/db/models/run.py). There is no ``waiting_for_approval`` status."""
+    (farna/db/models/run.py). There is no ``waiting_for_approval`` status."""
     ctx["run_status"] = "awaiting_human"
     ctx["current_node"] = node_id
 
@@ -217,7 +217,7 @@ def run_status_unchanged(ctx):
     """Verify the run stayed parked at the HITL gate after a failed action.
 
     A gate waiting on a human leaves the run on ``awaiting_human`` — there is no
-    ``waiting_for_approval`` status (modulo/db/models/run.py).
+    ``waiting_for_approval`` status (farna/db/models/run.py).
     """
     assert ctx.get("run_status") == "awaiting_human", f"Status unexpectedly changed to {ctx.get('run_status')}"
 

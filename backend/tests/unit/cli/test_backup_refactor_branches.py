@@ -1,4 +1,4 @@
-"""Focused coverage for the S3776 decomposition helpers in ``modulo.cli.backup``.
+"""Focused coverage for the S3776 decomposition helpers in ``farna.cli.backup``.
 
 These exercise the branches that only became separate functions during the
 complexity decomposition: an absent TLS dir, an unreadable launcher state file,

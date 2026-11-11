@@ -398,7 +398,7 @@ class TestCheckpointAutovacuumTwin:
     migration is a frozen historical artefact and may not import application
     constants (the rule documented inline in migrations 0192/0193/0215), and
     import-linter's ``db-does-not-import-core`` contract forbids a
-    ``modulo.db`` module importing ``modulo.core`` anyway. This class is what
+    ``farna.db`` module importing ``farna.core`` anyway. This class is what
     makes the duplication safe — it pins the copies equal, so an edit to one
     side alone fails here rather than shipping divergent tuning. The VALUES
     themselves are pinned against real Postgres by

@@ -41,7 +41,7 @@ SRC = Path(__file__).resolve().parent.parent.parent / "src" / "farna"
 COLUMNS = ("outputs_json", "node_telemetry_json", "raw_output_markers")
 
 # Whole-file allowlist — every reference in these files is sanctioned:
-# (path-relative-to-src/modulo, reason).
+# (path-relative-to-src/farna, reason).
 _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
     "db/crud/run_node_outputs.py": (
         "the repo module — the single blob chokepoint: the new-table columns "

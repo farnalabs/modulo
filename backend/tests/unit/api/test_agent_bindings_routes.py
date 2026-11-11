@@ -1,6 +1,6 @@
 """Route-level coverage tests for the per-agent runner bindings endpoints (FAR-592 / D6).
 
-Covers the list / replace / delete binding routes in ``modulo.api.routes.agents``:
+Covers the list / replace / delete binding routes in ``farna.api.routes.agents``:
 happy paths, agent-not-found (404), org-mismatch (404), the replace IntegrityError
 -> 409 mapping, and the list SQLAlchemyError -> 503 mapping.
 

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.openapi.
+"""Unit tests for farna.api.openapi.
 
 The OpenAPI document must describe the body this API actually sends. FastAPI
 auto-declares a ``422`` response shaped like its own ``HTTPValidationError``

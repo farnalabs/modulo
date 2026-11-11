@@ -1,7 +1,7 @@
 """Unit tests for the FAR-152 evidence & no-op detection machinery.
 
 Covers the §15.3/§15.14 surface implemented in
-``modulo.core.pipeline_engine.evidence``: tri-state ``EvidenceResult`` and the
+``farna.core.pipeline_engine.evidence``: tri-state ``EvidenceResult`` and the
 no-op gate input, the concrete ``SandboxEvidenceProvider`` probed against tiny
 real git repos and real directories, the bounded ``run_evidence_probe`` runner,
 the §15.14 metric fires-when contracts, and the bounded reconciliation sweep.

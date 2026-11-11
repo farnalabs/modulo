@@ -1,4 +1,4 @@
-"""FAR-592 (D6): unit tests for ``modulo.core.runner_bindings.resolve_agent_bindings``.
+"""FAR-592 (D6): unit tests for ``farna.core.runner_bindings.resolve_agent_bindings``.
 
 The sandbox integration suite patches ``resolve_agent_bindings`` wholesale (it
 only asserts the NODE merges the returned dict), so the real function body was

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.correlation_id.CorrelationIdMiddleware.
+"""Unit tests for farna.api.middleware.correlation_id.CorrelationIdMiddleware.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the correlation-id
 middleware. The happy-path behaviour (UUID v4 generation, response header,

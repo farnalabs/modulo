@@ -1002,7 +1002,7 @@ async def _execute_with_capacity(
         patch.object(executor, "_read_org_sandbox_cap_full", AsyncMock(return_value=(None, False, "all"))),
         patch.object(executor, "_read_org_run_concurrency_limit", AsyncMock(return_value=None)),
         # The executor binds these names at module import, so patch THEM there
-        # (patching ``modulo.db.crud.run`` would leave the bound names intact).
+        # (patching ``farna.db.crud.run`` would leave the bound names intact).
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=active_runs)),
         patch.object(ex, "get_run", AsyncMock(return_value=run)),
         patch.object(executor, "_claim_run_and_audit", AsyncMock(return_value=run)),

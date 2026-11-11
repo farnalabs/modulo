@@ -40,7 +40,7 @@ def _make_client(mock_session: Any = None):
 
 # ── Real-route harness helpers ───────────────────────────────────────────
 #
-# These drive the REAL production route objects (modulo.api.main.app +
+# These drive the REAL production route objects (farna.api.main.app +
 # assistant routes) with dependency overrides for the seams the BDD
 # scenario owns (auth + engine db), and use-site-only seams patched at
 # the engine call. Nothing in production is reimplemented here.

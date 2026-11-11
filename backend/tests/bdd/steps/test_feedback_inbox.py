@@ -2,7 +2,7 @@
 
 Wires the scenarios in ``feedback_inbox.feature`` to the real
 ``/api/v1/feedback/inbox``, ``/api/v1/feedback/proposals``, review,
-detect-gap and publish routes (``modulo/api/routes/feedback.py``) through the
+detect-gap and publish routes (``farna/api/routes/feedback.py``) through the
 shared TestClient + mock-session pattern used by the nearby feedback /
 dashboard step modules. The FeedbackManager CRUD seams are patched at their
 route use-site while the routing, permission gating (``require_permission``

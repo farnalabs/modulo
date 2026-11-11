@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.request_id — legacy wrapper.
+"""Unit tests for farna.api.middleware.request_id — legacy wrapper.
 
 QA lens pass (maintainability, deps) on the backward-compat alias. The wrapper
 exists so pre-existing imports of ``RequestIdMiddleware`` keep working after the

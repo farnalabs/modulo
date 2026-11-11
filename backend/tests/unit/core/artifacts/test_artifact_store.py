@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.artifacts.store (FAR-582).
+"""Unit tests for farna.core.artifacts.store (FAR-582).
 
 Tests the LocalArtifactStore: append, finalize, read_bytes, delete_run, delete_node.
 """

@@ -44,7 +44,7 @@ jobs:
           # mutmut 3.x has no --paths-to-mutate/--runner flags: the runner comes from
           # [tool.mutmut] in pyproject.toml and scoping is done with mutant-name
           # wildcards (the module prefix of each generated mutant key).
-          uv run --no-build --no-sync mutmut run "modulo.core.graph_validator*" "modulo.db.rls*"
+          uv run --no-build --no-sync mutmut run "farna.core.graph_validator*" "farna.db.rls*"
       - name: Generate mutation report
         if: always()
         run: |

@@ -1,4 +1,4 @@
-"""Unit tests for modulo.api.middleware.catch_all.CatchAllMiddleware.
+"""Unit tests for farna.api.middleware.catch_all.CatchAllMiddleware.
 
 QA lens pass (correctness, maintainability, dead-code removal) on the catch-all
 middleware. Previously untested, this suite locks the full contract:

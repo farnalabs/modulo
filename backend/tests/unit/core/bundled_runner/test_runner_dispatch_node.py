@@ -85,7 +85,7 @@ class _FakeOutput:
 
 
 def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace every ``modulo.core.pipeline_engine.node_runner`` symbol that
+    """Replace every ``farna.core.pipeline_engine.node_runner`` symbol that
     ``runner_dispatch`` imports with a deterministic test double."""
     import farna.core.pipeline_engine.node_runner as nrm
 

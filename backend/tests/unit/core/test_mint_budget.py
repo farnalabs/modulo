@@ -1,6 +1,6 @@
 """FAR-795 unit tests: atomic per-org agent-mint budget primitive.
 
-Covers the :mod:`modulo.core.runtime_config.mint_budget` contract on SQLite
+Covers the :mod:`farna.core.runtime_config.mint_budget` contract on SQLite
 (``aiosqlite``): within-budget allowance + recording, denial WITHOUT
 recording, window rollover, fail-open on a guard error, and the
 no-oversubscription guarantee with interleaved independent sessions (SQLite

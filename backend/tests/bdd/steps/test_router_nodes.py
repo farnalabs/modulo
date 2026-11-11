@@ -15,7 +15,7 @@ The scenarios drive the real shipped seams end to end:
 - ``PipelineExecutor._stream_operational_outcome`` — the executor mapping that
   turns a runtime ``RouterNoMatchError`` into the terminal ``router_no_match``
   run status (distinct from ``failed``), backed by the ``TERMINAL_STATUSES``
-  contract in ``modulo.db.models.run``.
+  contract in ``farna.db.models.run``.
 """
 
 from __future__ import annotations

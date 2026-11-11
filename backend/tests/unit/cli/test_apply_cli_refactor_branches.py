@@ -1,4 +1,4 @@
-"""Focused coverage for the S3776 decomposition of ``modulo.cli.apply``."""
+"""Focused coverage for the S3776 decomposition of ``farna.cli.apply``."""
 
 from pathlib import Path
 

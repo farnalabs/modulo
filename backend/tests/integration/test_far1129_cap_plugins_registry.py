@@ -107,25 +107,25 @@ def plugin_site(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     _write_plugin(
         site,
         _PLUGIN_NAME,
-        f"[modulo.connectors]\n{_CONNECTOR_TYPE} = {_PLUGIN_NAME.replace('-', '_')}:build_connector\n",
+        f"[farna.connectors]\n{_CONNECTOR_TYPE} = {_PLUGIN_NAME.replace('-', '_')}:build_connector\n",
         _CONNECTOR_PLUGIN_SRC,
     )
     _write_plugin(
         site,
         "modulo-broken-plugin",
-        "[modulo.connectors]\nbroken_connector = modulo_broken_plugin:build_connector\n",
+        "[farna.connectors]\nbroken_connector = modulo_broken_plugin:build_connector\n",
         _BROKEN_PLUGIN_SRC,
     )
     _write_plugin(
         site,
         "modulo-raising-plugin",
-        "[modulo.connectors]\nraising_connector = modulo_raising_plugin:build_connector\n",
+        "[farna.connectors]\nraising_connector = modulo_raising_plugin:build_connector\n",
         "def build_connector(config, creds):\n    raise RuntimeError('builder misbehaving')\n",
     )
     _write_plugin(
         site,
         "modulo-callable-object-plugin",
-        "[modulo.connectors]\ncallable_object_connector = modulo_callable_object_plugin:build_connector\n",
+        "[farna.connectors]\ncallable_object_connector = modulo_callable_object_plugin:build_connector\n",
         _CALLABLE_OBJECT_PLUGIN_SRC,
     )
 

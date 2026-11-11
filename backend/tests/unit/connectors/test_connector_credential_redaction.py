@@ -2,7 +2,7 @@
 
 Covers three layers:
 
-1. The shared ``modulo.connectors.security`` helpers — ``credential_values``,
+1. The shared ``farna.connectors.security`` helpers — ``credential_values``,
    ``redact_text``, ``redact_exc``, ``CredentialRedactor`` and the ``redacting``
    decorator (value-based redaction mirroring ``RestConnector._redact``).
 2. Defense-in-depth: ``sanitize_error_text``'s vendor credential patterns.

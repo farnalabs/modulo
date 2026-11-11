@@ -1,4 +1,4 @@
-"""Unit tests for OIDC ID token verification (modulo.auth.oidc_verify)."""
+"""Unit tests for OIDC ID token verification (farna.auth.oidc_verify)."""
 
 import base64
 import json

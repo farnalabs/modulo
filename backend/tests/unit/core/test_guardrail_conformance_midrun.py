@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.conformance — mid-run capability re-check.
+"""Unit tests for farna.core.guardrails.conformance — mid-run capability re-check.
 
 Covers the pure decision layer (reusing the T1 ``derive_conformance_state``),
 the live-manifest reader (present/absent/unreadable), and the node-start

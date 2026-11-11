@@ -1,7 +1,7 @@
 """Architecture test: the unit suite's audit-session-double autouse gate actually gates.
 
 ``tests/unit/conftest.py``'s ``_isolated_audit_session`` installs a double over
-``modulo.core.audit_coverage._shared_session_factory`` through a STRING
+``farna.core.audit_coverage._shared_session_factory`` through a STRING
 ``monkeypatch.setattr`` target — resolving it imports the audit/app stack
 (fastapi + sqlalchemy + db.models, ~1.8-3.8 s measured 2026-10-13) on EVERY
 unit test, including pure-logic packages that never touch an ``audited(...)``
@@ -194,7 +194,7 @@ def test_gate_predicate_is_conservative_on_mention(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A comment/docstring mention still counts — false positives are safe."""
-    source = "# touches modulo.api in comments only\nvalue = 1\n"
+    source = "# touches farna.api in comments only\nvalue = 1\n"
     request = _fake_request(tmp_path, monkeypatch, source)
     _drop_audit_markers(monkeypatch)
 

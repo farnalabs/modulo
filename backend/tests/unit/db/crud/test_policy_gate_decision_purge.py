@@ -1,6 +1,6 @@
 """Decision-record purge + FK-classification helpers (FAR-1102 chunk 4).
 
-Unit tests for ``modulo.db.crud.policy_gate_decision`` and the wiring of
+Unit tests for ``farna.db.crud.policy_gate_decision`` and the wiring of
 ``purge_org_decision_records`` into both org-deletion paths:
 
 - ``is_policy_gate_decision_fk_error`` classification (exact constraint names,

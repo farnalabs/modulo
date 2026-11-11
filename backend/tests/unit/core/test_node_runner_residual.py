@@ -1,4 +1,4 @@
-"""Residual unit coverage for modulo.core.pipeline_engine.node_runner (FAR-619).
+"""Residual unit coverage for farna.core.pipeline_engine.node_runner (FAR-619).
 
 Edge branches the existing suites leave uncovered: egress allowlist resolution,
 sandbox log-tail diagnostics, the connector-write idempotency helper branches,

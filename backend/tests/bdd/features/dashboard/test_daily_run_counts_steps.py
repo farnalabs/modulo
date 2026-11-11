@@ -2,7 +2,7 @@
 
 Wires the scenarios in ``daily_run_counts.feature`` to the real
 ``GET /api/v1/dashboard/daily-run-counts`` route
-(``modulo/api/routes/dashboard.py``) through the shared TestClient +
+(``farna/api/routes/dashboard.py``) through the shared TestClient +
 mock-session pattern. The mock session returns ``(day, status, count)`` rows
 for the route's single grouping query, so the scenarios assert the actual
 API contract — day/status keying, cross-status accumulation, the default 30

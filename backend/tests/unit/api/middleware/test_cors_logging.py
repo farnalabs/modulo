@@ -1,7 +1,7 @@
-"""Unit tests for modulo.api.middleware.cors_logging.CorsLoggingMiddleware.
+"""Unit tests for farna.api.middleware.cors_logging.CorsLoggingMiddleware.
 
 QA lens pass (correctness, bugs, maintainability, deps) on the CORS
-middleware subclass. The module has a single consumer (``modulo.api.main``)
+middleware subclass. The module has a single consumer (``farna.api.main``)
 and previously had no dedicated unit test file — the CORS allow/reject
 behaviour and the added logging (preflight DEBUG, rejected-origin WARNING)
 were only exercised indirectly. These tests lock the Starlette CORS contract

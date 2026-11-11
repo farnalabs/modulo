@@ -7,7 +7,7 @@ FAR-168's Deploy pre-deploy integration tests failed at collection with::
 
 when ``tests/integration/bdd/test_agent_signal.py`` imported
 ``fire_agent_signal`` FIRST. agent_signal imported
-``sanitize_error_text`` from ``modulo.core.pipeline_engine.error_codes`` at
+``sanitize_error_text`` from ``farna.core.pipeline_engine.error_codes`` at
 module level; importing error_codes loads the ``pipeline_engine`` package
 ``__init__``, which eagerly imports ``executor``, which imports
 ``fire_agent_signal`` back out of the partially-initialized agent_signal

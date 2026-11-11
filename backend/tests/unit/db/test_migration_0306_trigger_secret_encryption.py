@@ -16,7 +16,7 @@ Structural + behavioural contract (no Postgres needed — the bind is mocked):
   instead of silently persisting (half-encrypted secrets are never ok).
 * **Vocabulary parity** — the migration's secret-key set is pinned equal to
   the canonical write-path helper's set
-  (``modulo.api.routes.triggers._SECRET_CONFIG_KEYS``) so the two cannot
+  (``farna.api.routes.triggers._SECRET_CONFIG_KEYS``) so the two cannot
   drift.
 * **No downgrade** — ``downgrade()`` does nothing: un-encrypting secrets
   into plaintext on rollback would be a security regression.

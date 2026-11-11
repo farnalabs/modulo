@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.packs.soc2 — SOC 2 TSC pack content.
+"""Unit tests for farna.core.guardrails.packs.soc2 — SOC 2 TSC pack content.
 
 Covers the pack's CI readiness (every control mapped to a schema-valid
 guardrail), instantiation into a valid GuardrailConfigSet, the gap report

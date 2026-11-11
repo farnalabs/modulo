@@ -1,6 +1,6 @@
 """Unit tests for the FAR-583 run-outputs failure orchestration.
 
-Covers the core-side surface (:mod:`modulo.core.run_outputs_dualwrite`) and the
+Covers the core-side surface (:mod:`farna.core.run_outputs_dualwrite`) and the
 extended ``saq_hooks._mark_run_failed`` primitive:
 
 * ``orchestrate_dual_write_failure`` — the separate-session terminalize with
@@ -954,7 +954,7 @@ class TestOrgLessRaiseNotSkip:
 
 
 class TestSqlstateExtraction:
-    """qa iteration 2 (Major 2): the shared :mod:`modulo.db.sqlstates`
+    """qa iteration 2 (Major 2): the shared :mod:`farna.db.sqlstates`
     extractor — PG fidelity for the savepoint failure chain.
 
     On Postgres, a transaction-aborting failure INSIDE a savepoint makes the

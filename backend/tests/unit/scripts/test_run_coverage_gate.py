@@ -2770,7 +2770,7 @@ class TestBranchParserIntegration:
     def test_compute_branch_coverage_matches_python_source_root_relative_key(self, tmp_path):
         """coverage.py emits Cobertura filenames relative to its source root.
 
-        This repo runs ``--cov=src/modulo`` from ``backend/``, so a changed
+        This repo runs ``--cov=src/farna`` from ``backend/``, so a changed
         ``backend/src/farna/core/foo.py`` appears in the report as
         ``core/foo.py``.  Before the path-alignment fix the lookup was a plain
         dict get on the repo-relative key, so every branch record was

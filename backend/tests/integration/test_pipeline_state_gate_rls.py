@@ -1,6 +1,6 @@
 """Integration tests for the pipeline-state gate's VISIBILITY semantics (FAR-1528).
 
-The gate (``modulo.db.crud.run._enforce_pipeline_state_gate``) reads
+The gate (``farna.db.crud.run._enforce_pipeline_state_gate``) reads
 ``archived_at``/``deleted_at`` with a raw ``text()`` statement. On Postgres
 that read is scoped by the ``rls_team_isolation`` policy on ``pipelines``
 (migration 0124 dropped the org-only policy on team-scoped tables, so the

@@ -2,7 +2,7 @@
 
 The unit-level ``_far681_any_credential_default`` autouse fixture
 (``tests/unit/conftest.py``) imports the entire FastAPI application
-(``modulo.api.main``) on first use. No test under ``tests/unit/cron_helpers/``
+(``farna.api.main``) on first use. No test under ``tests/unit/cron_helpers/``
 touches the app or its dependency overrides -- they exercise cron scheduling /
 dispatcher-reconcile logic entirely against mocks -- so for this package that
 import is pure overhead: ~13-25 s of CPU-bound pydantic model construction,
@@ -15,7 +15,7 @@ dot is printed -- the shape that reads as a hang. Overriding the fixture with a
 no-op for this package removes the app import; behaviour is unchanged because
 no module here resolves a FastAPI dependency (verified: the whole
 ``tests/unit/cron_helpers/`` tree has zero references to ``get_current_user``,
-``dependency_overrides``, ``TestClient`` or ``modulo.api``).
+``dependency_overrides``, ``TestClient`` or ``farna.api``).
 
 Caveat (FAR-1229): pytest keys a conftest's autouse-fixture names to the exact
 ``Package`` node current when that conftest was parsed, so an argv that detours

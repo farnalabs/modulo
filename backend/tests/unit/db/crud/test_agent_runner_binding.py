@@ -1,4 +1,4 @@
-"""Unit tests for ``modulo.db.crud.agent_runner_binding`` (FAR-592 / D6).
+"""Unit tests for ``farna.db.crud.agent_runner_binding`` (FAR-592 / D6).
 
 Uses an AsyncMock session (no real DB) to cover the save-time validation
 surfaces, the wholesale-replace semantics, and the teardown/delete inventory

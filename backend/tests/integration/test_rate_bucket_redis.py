@@ -3,7 +3,7 @@
 The unit suite (``tests/unit/connectors/test_rest_observability.py``) exercises
 the bucket semantics through an in-process ``_FakeRedis`` that re-implements the
 token-bucket Lua in Python — so a defect in the *real* Lua script
-(``_CONSUME_LUA`` in ``modulo.connectors._rate_bucket``) can never fail a unit
+(``_CONSUME_LUA`` in ``farna.connectors._rate_bucket``) can never fail a unit
 test. The atomicity / quota guarantee of the shared limiter lives entirely in
 that script (server-side ``TIME`` refill, atomic check-and-decrement, PEXPIRE
 reclaim), so this module drives it against a real ``redis.asyncio`` server.

@@ -1,6 +1,6 @@
 """Structural validation tests for canonical library agent primitives.
 
-Every agent primitive exported by ``modulo.core.library.agents`` must be a
+Every agent primitive exported by ``farna.core.library.agents`` must be a
 well-formed definition: it carries the expected metadata, exposes valid
 input/output JSON Schemas, and its prompt template only references
 placeholders that exist on the input schema.  No DB — pure data checks.
@@ -64,7 +64,7 @@ def test_all_agents_exported() -> None:
 
 
 def test_package_reexports_every_agent() -> None:
-    """The ``modulo.core.library`` package re-exports every agent primitive."""
+    """The ``farna.core.library`` package re-exports every agent primitive."""
     import farna.core.library as library_package
 
     for name in agent_exports:

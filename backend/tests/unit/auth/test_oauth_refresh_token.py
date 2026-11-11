@@ -1,4 +1,4 @@
-"""Unit tests for OAuth refresh-token JWT lifecycle (modulo.auth.oauth).
+"""Unit tests for OAuth refresh-token JWT lifecycle (farna.auth.oauth).
 
 Covers ``create_oauth_refresh_token`` / ``decode_oauth_refresh_token`` and the
 ADR 047 live-role re-check (``verify_live_role_covers_scopes``) that guards the

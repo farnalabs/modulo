@@ -98,10 +98,10 @@ contribute) — a submitted mask sentinel is refused 422 with the same issue
 code, never persisted.
 **CLI hashing parity (FAR-1232).** The declarative `modulo apply` CLI compares
 its YAML declarations against the API's MASKED reads, so the CLI carries its own
-redaction (`strip_secret_shaped_graph` in `modulo/cli/apply/models.py`): pipeline
+redaction (`strip_secret_shaped_graph` in `farna/cli/apply/models.py`): pipeline
 graph node env vars, context files, composite parameter values and parameter
 overrides pass through the identical mask tiers (`is_sensitive_env_key` + the
-canonical `modulo.core.secret_patterns` value patterns + deep-dict masking).
+canonical `farna.core.secret_patterns` value patterns + deep-dict masking).
 Because re-redacting already-redacted content is idempotent, the declared and the
 stored-masked sides hash equal whenever the declaration matches stored state (no
 phantom re-send per plan run). The same redaction runs on BOTH plan sides, so a
@@ -323,7 +323,7 @@ If you add a new API response model that includes a sensitive field, annotate
 the field with the `SensitiveValue` type from `sensitive_mask.py`:
 
 ```python
-from modulo.api.middleware.sensitive_mask import SensitiveValue
+from farna.api.middleware.sensitive_mask import SensitiveValue
 
 
 class MyResponse(BaseModel):
@@ -341,8 +341,8 @@ Sensitive key patterns are defined in three places:
 
 ### API response masking and library export stripping
 
-File: `backend/src/modulo/core/secret_patterns.py` — re-exported by
-`backend/src/modulo/api/middleware/sensitive_mask.py`, which is where API-layer
+File: `backend/src/farna/core/secret_patterns.py` — re-exported by
+`backend/src/farna/api/middleware/sensitive_mask.py`, which is where API-layer
 callers import it from. It lives in `core` so core export paths
 (`workflow_import_export`, §6) can share the exact same classifier without the
 API layer being imported from `core`.
@@ -373,7 +373,7 @@ are `MODULO_USERS`, `DATABASE_URL` and `PYPI_TOKEN`.
 
 ### Log redaction
 
-File: `backend/src/modulo/core/logging_config.py`
+File: `backend/src/farna/core/logging_config.py`
 
 ```python
 _SENSITIVE_KEYS: frozenset[str] = frozenset(
@@ -405,7 +405,7 @@ as a substring. This prevents over-redaction of benign fields.
 
 ### Prompt text masking
 
-File: `backend/src/modulo/api/routes/runs.py`, function `_mask_prompt_text()`
+File: `backend/src/farna/api/routes/runs.py`, function `_mask_prompt_text()`
 
 Regex patterns are defined for each sensitive key prefix. When adding a new
 pattern, add both the regex and the replacement.

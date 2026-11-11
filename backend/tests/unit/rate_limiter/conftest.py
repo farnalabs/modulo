@@ -35,7 +35,7 @@ def auth_redis() -> MagicMock:
 
 @pytest.fixture
 def frozen_time(monkeypatch: pytest.MonkeyPatch) -> float:
-    """Freeze ``time.time`` inside ``modulo.core.rate_limiter``.
+    """Freeze ``time.time`` inside ``farna.core.rate_limiter``.
 
     Sliding-window assertions compare an exact cutoff/score; with the real
     clock they can only assert a multi-second tolerance, which hides window

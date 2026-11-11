@@ -2,8 +2,8 @@
 
 The org-enumeration query in ``seed_cost_components`` used to run WITHOUT an
 active transaction. The production session factories
-(``modulo.api.dependencies.get_or_create_session_factory`` and
-``modulo.db.session.AsyncSessionLocal``) are created with ``autobegin=False``,
+(``farna.api.dependencies.get_or_create_session_factory`` and
+``farna.db.session.AsyncSessionLocal``) are created with ``autobegin=False``,
 so that query raised ``InvalidRequestError: Autobegin is disabled on this
 Session`` at startup, the exception was swallowed by the lifespan
 try/except, and NO org ever got default cost components — every run then
@@ -47,7 +47,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 @pytest.fixture
 def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
-    # modulo.api.dependencies.get_or_create_session_factory).
+    # farna.api.dependencies.get_or_create_session_factory).
     return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 

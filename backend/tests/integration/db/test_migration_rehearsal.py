@@ -297,7 +297,7 @@ def test_rehearsal_failure_rolls_back_and_reraises(
     NOTE: the original test monkeypatched ``do_run_migrations`` to inject a
     failure, but alembic loads ``env.py`` as a *fresh* module during
     ``command.upgrade`` (``util.load_python_file`` builds a brand-new module
-    object, never ``modulo.db.migrations.env``), so a monkeypatch on the
+    object, never ``farna.db.migrations.env``), so a monkeypatch on the
     imported module could never reach the code alembic actually ran. The failure
     is therefore triggered through the real DB, which exercises the same
     rollback + re-raise + report contract against the genuine run.

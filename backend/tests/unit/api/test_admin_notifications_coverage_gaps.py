@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin_notifications`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin_notifications`` (FAR-573).
 
 Complements test_admin_notifications_webhooks.py (team scoping) by exercising
 every webhook CRUD endpoint, the delivery-log listers (filters + cursor

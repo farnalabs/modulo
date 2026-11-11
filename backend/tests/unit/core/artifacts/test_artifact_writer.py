@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.artifacts.writer (FAR-582).
+"""Unit tests for farna.core.artifacts.writer (FAR-582).
 
 Tests the ArtifactWriter: append, flush, finalize, no-op when disabled.
 """

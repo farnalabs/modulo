@@ -114,7 +114,7 @@ def _get_node_output(request, node):
     """Drive the REAL ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` route.
 
     Only the route module's DB seams are patched — ``set_rls_org``,
-    ``get_run`` and ``read_run_blobs`` (imported into ``modulo.api.routes.runs``
+    ``get_run`` and ``read_run_blobs`` (imported into ``farna.api.routes.runs``
     at runs.py:2521-2527) — so the route body, its response model, the
     derived-telemetry fallback and its 404 all run for real.
     """
@@ -184,7 +184,7 @@ def check_response_terminal_status(request):
     A Run has a terminal ``status`` (and, on failure, an ``error_detail``) —
     this asserts the real payload the ``GET /runs/{id}`` route produced, read
     against ``TERMINAL_STATUSES`` from the Run model
-    (modulo/db/models/run.py), rather than a value the step itself set.
+    (farna/db/models/run.py), rather than a value the step itself set.
     """
     from farna.db.models.run import TERMINAL_STATUSES
 

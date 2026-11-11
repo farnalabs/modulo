@@ -8,7 +8,7 @@ wider vocabulary so a future CHECK value cannot silently ship without a
 provider mapping.
 
 The vocabulary itself has a single source of truth — ``PROVIDER_TYPES`` in
-``modulo.db.models.environment_profile`` (FAR-595). This module derives its
+``farna.db.models.environment_profile`` (FAR-595). This module derives its
 expectation from that constant and asserts the CHECK text stays in parity
 with it (CHECK <-> constant <-> scanner).
 """

@@ -1,6 +1,6 @@
 """FAR-1128 cap-notifications: real SMTP delivery over a loopback transport.
 
-Runs ``modulo.core.email_service.send_email`` against a real, TLS-capable SMTP
+Runs ``farna.core.email_service.send_email`` against a real, TLS-capable SMTP
 server bound to 127.0.0.1 (a raw threaded socketserver with a self-signed
 certificate) — and against a genuinely refused/closed loopback port. No
 ``aiosmtpd``, no smtplib mocks. This pins the production code's real

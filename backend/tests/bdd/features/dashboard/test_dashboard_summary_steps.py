@@ -1,7 +1,7 @@
 """Step definitions for Home Dashboard Summary BDD scenarios (PRD §8.20).
 
 Wires the scenarios in ``dashboard_summary.feature`` to the real
-``GET /api/v1/dashboard/summary`` route (``modulo/api/routes/dashboard.py``)
+``GET /api/v1/dashboard/summary`` route (``farna/api/routes/dashboard.py``)
 through the shared TestClient + mock-session pattern used by
 ``test_hitl_trends_steps.py``. The session dispatches the route's org
 aggregation queries (active pipelines, status counts, teams, eval stats,

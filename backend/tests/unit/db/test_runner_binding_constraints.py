@@ -1,4 +1,4 @@
-"""Tests for modulo.db.runner_binding_constraints — save-time binding rules.
+"""Tests for farna.db.runner_binding_constraints — save-time binding rules.
 
 Covers the FAR-592 / D6 new code in ``db/runner_binding_constraints.py`` that had
 no unit coverage: reserved-var detection, target/source validation, and the

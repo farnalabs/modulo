@@ -1594,7 +1594,7 @@ class TestUserTeamPrivateDenial:
 
     The user-JWT leg of ``_pipeline_team_gate`` denies a user principal that is
     not a member of the team owning a team-private pipeline. The matrix lives
-    in ``modulo.api.team_scope.evaluate_team_gate`` (the pipeline graph gate
+    in ``farna.api.team_scope.evaluate_team_gate`` (the pipeline graph gate
     shares it), so the denial scenarios are asserted against that helper
     directly. It must fail closed: an unrecognised visibility value or a
     degraded (unset) user context is a denial, never a bypass.

@@ -2,7 +2,7 @@
 # One-shot mutation testing container for the backend
 # Build from repo root: docker build -t modulo-mutmut -f backend/Dockerfile.mutation .
 # Run: docker run --rm modulo-mutmut
-# With custom paths: docker run --rm modulo-mutmut uv run mutmut run --paths-to-mutate "src/modulo/auth/" "src/modulo/db/rls.py"
+# With custom paths: docker run --rm modulo-mutmut uv run mutmut run --paths-to-mutate "src/farna/auth/" "src/farna/db/rls.py"
 
 FROM python:3.14-slim
 

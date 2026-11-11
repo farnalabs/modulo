@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pricing."""
+"""Unit tests for farna.core.pricing."""
 
 import pytest
 

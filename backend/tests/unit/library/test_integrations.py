@@ -1,6 +1,6 @@
 """Structural validation tests for canonical library integration primitives.
 
-Every integration primitive exported by ``modulo.core.library.integrations``
+Every integration primitive exported by ``farna.core.library.integrations``
 must be a well-formed definition: expected metadata, a default config, and
 credential fields each describing a type, a description, and whether they are
 required.  No DB — pure data checks.

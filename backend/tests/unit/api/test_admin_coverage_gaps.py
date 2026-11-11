@@ -1,4 +1,4 @@
-"""Targeted coverage tests for ``modulo.api.routes.admin`` (FAR-573).
+"""Targeted coverage tests for ``farna.api.routes.admin`` (FAR-573).
 
 Complements test_admin.py by exercising endpoints and error branches the
 existing suite leaves uncovered: org profile, regenerate-api-key, user
@@ -739,7 +739,7 @@ def test_reset_password_success(api: tuple[TestClient, AsyncMock], monkeypatch: 
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
     monkeypatch.setattr(admin, "list_families_for_account", AsyncMock(return_value=[]))
     # Patch the name ``admin`` actually calls (it is imported into the route
-    # module), not the defining module: patching only ``modulo.core.audit_logger``
+    # module), not the defining module: patching only ``farna.core.audit_logger``
     # left the real audit append running, where ``async with
     # session.begin_nested()`` on the AsyncMock session raised (swallowed by the
     # route's fail-open audit guard) and orphaned the begin_nested coroutine.

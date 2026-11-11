@@ -1,4 +1,4 @@
-"""Unit tests for the shared last-admin guard (modulo.db.crud.last_admin_guard).
+"""Unit tests for the shared last-admin guard (farna.db.crud.last_admin_guard).
 
 Covers the counting semantics with a fake session, the two-int4 MD5 advisory
 lock key parity with the SQL expression used by the SECURITY DEFINER, and the

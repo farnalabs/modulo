@@ -1,7 +1,7 @@
 """Unit tests for the create_api_key / list_api_keys / revoke_api_key MCP tools.
 
 Exercises the real MCP tool functions against a mocked DB session so the real
-``modulo.auth.api_key`` CRUD path (key generation, hashing, serialisation,
+``farna.auth.api_key`` CRUD path (key generation, hashing, serialisation,
 org-scoped revoke) is covered — the tools are not mocked.
 """
 

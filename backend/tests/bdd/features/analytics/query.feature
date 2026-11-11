@@ -9,7 +9,7 @@ Feature: Analytics Query Surface
   `analytics_page`. `/concurrency` reports slot utilisation,
   `/guardrails` an advisory guardrail scorecard, and `/export` streams raw
   fact rows as JSON or CSV. The route is a thin adapter over
-  `modulo.core.analytics.service` and maps the service's typed errors to
+  `farna.core.analytics.service` and maps the service's typed errors to
   HTTP status codes.
 
   Background:

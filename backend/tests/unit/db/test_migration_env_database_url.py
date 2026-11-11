@@ -17,7 +17,7 @@ These tests pin the replacement contract:
 * ``DATABASE_ADMIN_URL`` remains the documented owner-role override;
 * logged/refusal text never leaks a password.
 
-They call :func:`modulo.db.migrations.env.resolve_migration_url` directly with
+They call :func:`farna.db.migrations.env.resolve_migration_url` directly with
 an injected environment mapping, so neither a database nor a mutation of the
 process environment is required.
 """

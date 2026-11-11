@@ -162,7 +162,7 @@ class _EntrypointHarness:
         # makes. BOTH SAQ workers become a long-lived sleep (or, for the
         # bounded test, a TERM-ignoring sleep) — matching production, where
         # neither worker exits on its own. The system worker is launched as
-        # ``python3 -m modulo.core.saq_worker``, so its case must be matched
+        # ``python3 -m farna.core.saq_worker``, so its case must be matched
         # too: falling through to the no-op branch would make it exit
         # immediately and re-register a new PID every second, leaving the
         # drain loop racing a churning (sometimes dead) PID file.
@@ -181,9 +181,9 @@ class _EntrypointHarness:
         python_stub = f"""#!/bin/bash
 if [ "$1" = "-m" ]; then
   case "$2" in
-    modulo.launcher.policy)
+    farna.launcher.policy)
       echo "SLIDING_WINDOW_S=300"; echo "SLIDING_CRASH_LIMIT=5"; echo "SLIDING_RESTART_SLEEP_S=1"; exit 0;;
-    saq|modulo.core.saq_worker)
+    saq|farna.core.saq_worker)
       {saq_command};;
     *) exit 0;;
   esac

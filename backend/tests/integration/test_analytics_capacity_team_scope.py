@@ -4,7 +4,7 @@ Real Postgres (Testcontainers). The leak this pins lives entirely in the SQL
 ``_team_scope`` applies -- the pure report function never sees a foreign row
 once the query excludes it -- so a pure unit test cannot exercise it.
 
-The global soft-delete filter (``modulo.db.soft_delete``) injects
+The global soft-delete filter (``farna.db.soft_delete``) injects
 ``pipelines.deleted_at IS NULL`` into the ON clause of the capacity query's
 OUTER JOIN, so a soft-deleted pipeline yields NULL pipeline columns. The
 pre-fix predicate (``Pipeline.owner_team_id IS NULL OR IN (caller teams)``)
@@ -43,7 +43,7 @@ from farna.core.analytics.capacity import (
 from farna.db.soft_delete import _apply_soft_delete_filter, register_soft_delete_filter
 
 # The soft-delete filter is installed by an IMPORT SIDE EFFECT of
-# ``modulo.db.session``; this module asserts its behaviour, so it registers
+# ``farna.db.session``; this module asserts its behaviour, so it registers
 # explicitly and checks the precondition rather than relying on import order
 # (2026-10-14 lesson: an unregistered filter silently asserts the inverse).
 register_soft_delete_filter()

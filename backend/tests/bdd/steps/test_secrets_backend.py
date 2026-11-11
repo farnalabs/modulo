@@ -1,6 +1,6 @@
 """BDD step definitions: at-rest secret storage (feat-core-secrets-backend).
 
-Drives the REAL ``modulo.core.secrets_backend`` seams network-free and
+Drives the REAL ``farna.core.secrets_backend`` seams network-free and
 DB-free — the ``FernetSecretsBackend`` persists and reads real rows in an
 in-memory aiosqlite engine (the community-tier default store), organisation
 scoping goes through the real ``WHERE organisation_id = :oid`` SQL the backend

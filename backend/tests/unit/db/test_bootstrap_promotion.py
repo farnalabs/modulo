@@ -1,4 +1,4 @@
-"""Promotion tests for modulo.db.bootstrap (FAR-671).
+"""Promotion tests for farna.db.bootstrap (FAR-671).
 
 Locks that the promoted module behaves identically to the pre-promotion
 deploy/fly/bootstrap_db.py: the deploy file is now a thin importing shim and
@@ -182,8 +182,8 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
     """FAR-1469: the interim bootstrap copy is folded into url_utils.
 
     Grep-audit guard: ``def split_postgres_sslmode`` must appear exactly once
-    under ``backend/src`` (in ``modulo/db/url_utils.py``), and the name
-    reachable via ``modulo.db.bootstrap`` must BE that shared helper — not a
+    under ``backend/src`` (in ``farna/db/url_utils.py``), and the name
+    reachable via ``farna.db.bootstrap`` must BE that shared helper — not a
     private reimplementation.
     """
     src_root = _REPO_ROOT / "backend" / "src"
@@ -192,7 +192,7 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
         for path, source in iter_source_text(src_root)
         if "def split_postgres_sslmode" in source
     )
-    assert hits == ["modulo/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
+    assert hits == ["farna/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
     assert bootstrap_module.split_postgres_sslmode is split_postgres_sslmode
 
 

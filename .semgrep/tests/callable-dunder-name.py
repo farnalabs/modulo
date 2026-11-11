@@ -28,7 +28,7 @@ def unsafe_annotated_qualname(fn: Callable[..., Any]) -> str:
 
 def safe_annotated_uses_label(fn: Callable[..., Any]) -> str:
     # ok: callable-annotated-dunder-name
-    from modulo.util import callable_label
+    from farna.util import callable_label
 
     return callable_label(fn)
 

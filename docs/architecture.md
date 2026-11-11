@@ -68,7 +68,7 @@ Farna Control is a self-hosted Delivery Governance Platform: govern the software
 
 ## Key Components
 
-### API Layer (`modulo/api/`)
+### API Layer (`farna/api/`)
 
 FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern: every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
 
@@ -88,7 +88,7 @@ Includes:
 - OTel instrumentation middleware
 - MCP server adapter (HTTP + SSE transport)
 
-### Pipeline Engine (`modulo/core/pipeline_engine/`)
+### Pipeline Engine (`farna/core/pipeline_engine/`)
 
 Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), `join` (fan-in for scatter/gather patterns), `dispatch` (fires a CI-runner operation through a connector binding, FAR-1141), and `connector` (an API-authorable node type whose whole job is its `connector_binding`: the binding is routed to the bound connector by `make_connector_fn`, FAR-2089). Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
@@ -158,7 +158,7 @@ The `graph_cache` module (`backend/src/farna/core/pipeline_engine/graph_cache.py
 
 See `backend/src/farna/core/pipeline_engine/graph_cache.py` for implementation.
 
-### Eval Engine (`modulo/core/eval_engine/`)
+### Eval Engine (`farna/core/eval_engine/`)
 
 Post-node automated quality checks. Runs before any HITL gate check on the same edge. Supports six eval types (see `docs/evals.md` for the full contract, including which types are trustworthy for correctness claims):
 
@@ -175,7 +175,7 @@ Each eval has a pass threshold and failure behavior: `warn` (soft – run contin
 
 **Reviewer Independence Note (FAR-2031):** `model_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `model_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
 
-### HITL Manager (`modulo/core/hitl_manager/`)
+### HITL Manager (`farna/core/hitl_manager/`)
 
 Manages Human-in-the-Loop gates using LangGraph's `interrupt()`. Atomic claim semantics via `SELECT ... FOR UPDATE` on `hitl_claims` table. Claim tokens are opaque random strings (alpha) or short-lived JWTs (v1).
 
@@ -200,7 +200,7 @@ Interrupt payloads carry the same identity: the gate node interrupts with its `r
 
 **Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalized `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery routes it through the gate's reject route when one is configured. With no reject route (and no explicit `on_reject: proceed`) the old run now ENDS `rejected` with `error_code=hitl.superseded` (FAR-1487, labelled "Superseded by a newer version" and never counted as a human reject), while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
-### Connector Hub (`modulo/connectors/`)
+### Connector Hub (`farna/connectors/`)
 
 Abstraction over external tool integrations. Each connector has a concrete `ConnectorType` id (e.g. `github`, `shell`, `slack`); the table below groups them by family for readability. ConnectorInstance is a configured, authenticated binding. ConnectorHub decrypts credentials once at run-start into a run-scoped context object – credentials never enter LangGraph state, checkpoints, OTel spans, or logs.
 
@@ -248,7 +248,7 @@ Abstraction over external tool integrations. Each connector has a concrete `Conn
 | `SharePointConnector` | `documentation` | read/write files and pages |
 | `CodeClimateConnector` | `quality` | query code quality metrics |
 
-There are 41 concrete connectors; the `ConnectorType` enum has 43 members, including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`. See `modulo/connectors/`.
+There are 41 concrete connectors; the `ConnectorType` enum has 43 members, including the provider-dispatched `ci-runner` / `ticket-tracker` families and `custom`. See `farna/connectors/`.
 
 #### SSRF-safe Outbound Egress Guard
 
@@ -302,7 +302,7 @@ Every connector type and model backend provider resolves to a validation level: 
 
 The baseline (ceiling) for each integration type is defined in a static map in `core/validation_level.py`. The current level is written to the DB by the health/canary sweep (`core/connector_hub/health_sweep.py`), which mirrors the `last_health_check_at` pattern: a successful canary writes the baseline level, while a failed canary degrades the level one step below. The level is surfaced on `get_integration_status` (MCP tool), the connectors REST API, and the model-backends REST API.
 
-### Model Backend Hub (`modulo/model_backends/`)
+### Model Backend Hub (`farna/model_backends/`)
 
 Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.
 
@@ -336,27 +336,27 @@ Model backends stay first-class for Runner nodes too (ADR 029): once D6 lands, a
 | LocalAI | V1 |
 | Jan | V1 |
 | OpenCode | V1 |
-| *(26 production providers plus the `stub` test double (27 directories); see `modulo/model_backends/`)* | |
+| *(26 production providers plus the `stub` test double (27 directories); see `farna/model_backends/`)* | |
 
-### Trigger Engine (`modulo/core/trigger_engine/`)
+### Trigger Engine (`farna/core/trigger_engine/`)
 
 Accepts manual, webhook, cron, polling, and agent_signal trigger types. Creates Run records and initiates pipeline execution. Webhook flood protection via Postgres `SELECT ... FOR UPDATE SKIP LOCKED`. Payload deduplication via `webhook_dedup_hashes` table with configurable window.
 
-### Audit Logger (`modulo/core/audit_logger/`)
+### Audit Logger (`farna/core/audit_logger/`)
 
 Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`. An export can be emitted as **offline-verifiable evidence**: an Ed25519-signed canonical manifest over the exported files and the re-derived chain result, publishable with the org's verification key and checkable with only the artifact + key; see [`docs/offline-verifiable-evidence.md`](offline-verifiable-evidence.md).
 
-### Compliance Control Mapping (`modulo/compliance/`)
+### Compliance Control Mapping (`farna/compliance/`)
 
 Maps Farna Control's controls and evidence to the frameworks buyers actually test - SOC 2 Trust Services Criteria (CC6, CC7, CC8 plus the evidence layer), ISO/IEC 42001 clauses touching change approval, oversight and traceability, and the EU AI Act obligations that apply to a system changing software under human oversight. The mapping content is versioned YAML shipped in the product (`backend/src/farna/compliance/mappings/`, `pack_version` + a deterministic content hash), not a website document, so it moves with the release it describes. Coverage is attributed per row and per framework (`satisfied` / `supported` / `customer-responsibility` / `gap`) and every row states the provenance of its evidence (`observed` / `derived` / `customer-supplied`); the loader rejects a pack that claims everything, presents a customer control as Farna Control's, or drops a required SOC 2 clause.
 
 `GET /api/v1/compliance/evidence-index` (permission `compliance.evidence_index.read`, admin) generates the per-instance evidence index: the audit chain, run snapshots, HITL decisions (including human-only approvals), eval results, autonomy promotions and demotions, the release SBOM and the build identity - each keyed to the mapping rows it satisfies, each with its identifiers, location and provenance. A mapped artifact with no records is reported `absent` with a reason and named in `missing_artifact_types`; it is never omitted. The index records the pack version and content hash that produced it. See [`docs/security/compliance-control-mapping.md`](security/compliance-control-mapping.md).
 
-### Notification System (`modulo/core/notifier/`)
+### Notification System (`farna/core/notifier/`)
 
 Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-signed delivery with 3 retries and dead-letter logging. Endpoints auto-disable after repeated failures. Team-scoped notification endpoints.
 
-### Runtime Provider Hub (`modulo/core/runtime_provider/`)
+### Runtime Provider Hub (`farna/core/runtime_provider/`)
 
 Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Farna Control has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; an unrelated `MODULO_RUNNER_*` variable never registers it, FAR-996; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
@@ -366,27 +366,27 @@ E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved 
 
 The Bundled Runner is the self-hosted default Runner packaging: a first-party `modulo-runner:opencode` image (`deploy/docker/runner-opencode.Dockerfile` – digest-pinned base, version-pinned opencode via the `OPENCODE_VERSION` build arg, non-root `runner` uid 1001, tini PID 1) executed as a hardened workspace container on the deployment's own Docker engine.
 
-- **Dispatch adapter (`modulo/core/bundled_runner/runner_dispatch.py`)** – the sandbox_agent dispatch branches on the PIPELINE-LEVEL bound profile's provider type (the same-org-enforced `PipelineSnapshot.environment_profile_id`, consumed at dispatch). `runner_docker` routes through a per-dispatch `build_hub()`-resolved Docker provider with both `sandbox_mode` values supported; the E2B path is untouched and gains a LOUD dispatch-time timeout validation (GraphValidator parity at <=3300, no silent clamp). The D4 upgrade rule: pipeline-level refs to providers that were never dispatch-relevant (`local`, legacy-inert `local_docker`) raise a typed `SandboxDispatchUnboundError` at dispatch instead of silently activating old bindings.
+- **Dispatch adapter (`farna/core/bundled_runner/runner_dispatch.py`)** – the sandbox_agent dispatch branches on the PIPELINE-LEVEL bound profile's provider type (the same-org-enforced `PipelineSnapshot.environment_profile_id`, consumed at dispatch). `runner_docker` routes through a per-dispatch `build_hub()`-resolved Docker provider with both `sandbox_mode` values supported; the E2B path is untouched and gains a LOUD dispatch-time timeout validation (GraphValidator parity at <=3300, no silent clamp). The D4 upgrade rule: pipeline-level refs to providers that were never dispatch-relevant (`local`, legacy-inert `local_docker`) raise a typed `SandboxDispatchUnboundError` at dispatch instead of silently activating old bindings.
 - **Streaming exec primitive** – the RuntimeProvider ABC gains `exec_command_stream` (async decoded chunks + a kill handle, `ExecProcess`) alongside the collect-then-return `exec_command`. Script-mode's live-log drain and stall/no-output detection work on Docker exactly as on E2B; an engine/proxy drop mid-stream surfaces as a stream ERROR – the dispatch classifies it retryable and a zero exit code is NEVER fabricated. A stall (no output within the stall window) or a total timeout fires the kill handle.
 - **Workspace hardening (at provision)** – non-root user (uid 1001 on first-party images), read-only rootfs + tmpfs `workdir`/`/tmp` (512m/128m), dropped capabilities + `no-new-privileges`, 1.0 CPU / 1 GiB, a dedicated workspace bridge network (never the compose/backend network; per-profile `none` egress opt-in), and provider-neutral `workspace_metadata` mapped to container Labels: `modulo.run.id`, `modulo.org.id`, `modulo.node.id`, plus the machine deployment-identity label (`modulo.machine.id`, from `MODULO_RUNNER_MACHINE_ID` with a hostname fallback) and a creation-marker label.
 - **Compose overlay (`deploy/compose/runner.yml`)** – opt-in via the `runner` compose profile. It adds a digest-pinned **filtered socket proxy** (the linuxserver/socket-proxy class; per-category allowlist derived mechanically from the backend's real Docker API surface – containers list/create/start/stop/remove + inspect + exec-create, exec-start/inspect, images inspect/list/create, ping/version/info; no networks endpoints, the workspace network is compose-defined) as the DEFAULT Docker endpoint via `MODULO_DOCKER_HOST`, and guarantees the dedicated `modulo-runner-workspace` bridge network exists (compose never creates unreferenced networks under `--profile` – the holder service references it). Workspaces never join the compose network, so a provisioned workspace cannot reach the proxy endpoint; the proxy publishes no host ports. Full posture + residual exposure: [`docs/security/bundled-runner-trust-boundary.md`](security/bundled-runner-trust-boundary.md); setup: [`docs/security/bundled-runner-operator-guide.md`](security/bundled-runner-operator-guide.md).
 - **Orphan reconciler (`runner_reconciler.py`, system cron every 5 min)** – leak repair without WorkspaceLease: lists labelled workspace containers (machine-scoped by the deployment-identity label), cross-references active runs (fail-safe: ANY cross-reference error aborts the sweep destroying nothing and emits `runner.reconciler.sweep_aborted`), destroys orphans older than the 5-min grace period with a destroy-path false-positive re-check (`runner.reconciler.suspected_false_positive` is the D4 rollback signal), applies the 24h max-lifetime backstop regardless of run state (`runner.workspace.reclaimed_max_lifetime`), and runs in a LOG-ONLY soak mode until `RUNNER_RECONCILER_DESTROY_ENABLED=true`. Liveness rides the shared sweep-stats contract (`saq:cron:stats:runner_workspace_reconcile`), surfaced as the advisory `runner_workspace_reconcile` check on `/healthz/ready`.
-- **Seeded Environment Profile "Bundled Runner (Docker)"** – provider `runner_docker`, per-minor release-advanced digest constant (`modulo/db/bundled_runner_template.py`; migration 0191 mirrors it and the release job's digest-drift guard asserts they match), hardening + network preset, and `persistence_policy` LOCKED to `ephemeral` (CRUD validator rejects `retained`/`cache` for `runner_docker`, dispatch re-checks). Seeded per org at org-creation; orgs predating the hook receive it via the one-time backfill migration 0191, which re-points the legacy `modulo-dev` `local_docker` row to the Bundled Runner. Template drift is computed live against the shipped constants (`template_drift_status`) – divergent rows surface "shipped template updated - apply" (D5 UI) instead of being silently re-applied. The apply refreshes the image reference only while the row still carries the release placeholder digest (or no image); an operator-set image reference survives and is not reported as drift.
+- **Seeded Environment Profile "Bundled Runner (Docker)"** – provider `runner_docker`, per-minor release-advanced digest constant (`farna/db/bundled_runner_template.py`; migration 0191 mirrors it and the release job's digest-drift guard asserts they match), hardening + network preset, and `persistence_policy` LOCKED to `ephemeral` (CRUD validator rejects `retained`/`cache` for `runner_docker`, dispatch re-checks). Seeded per org at org-creation; orgs predating the hook receive it via the one-time backfill migration 0191, which re-points the legacy `modulo-dev` `local_docker` row to the Bundled Runner. Template drift is computed live against the shipped constants (`template_drift_status`) – divergent rows surface "shipped template updated - apply" (D5 UI) instead of being silently re-applied. The apply refreshes the image reference only while the row still carries the release placeholder digest (or no image); an operator-set image reference survives and is not reported as drift.
 - **Docker-marked acceptance suite** – `backend/tests/docker/` (marker `docker`, run explicitly with `pytest -m docker`; `MODULO_RUNNER_DIND_TESTS=1` opts into the dind engine-kill strip) verifies hardening, streaming live output, container/engine kill classifying retryable (never `ExecResult(0)`), destroy, reconciler orphan destroy + active-run spare, and the proxy allowlist matrix with the runtime completeness assertion (the exercise must trigger no proxy rejection). CI/compose wiring of this suite plus the GHCR publish job (structure test, trivy/grype gates, digest-drift guard, cosign/SBOM) is the D4 GA/CI follow-up item.
 
-### Auth System (`modulo/auth/`)
+### Auth System (`farna/auth/`)
 
 Authentication and authorization – JWT, API keys, OIDC/SAML (v1), Basic Auth (alpha). Dual-layer scope enforcement for MCP (middleware + ViewModel command layer). See dedicated section below.
 
-### Schema Registry (`modulo/core/schema_registry/`)
+### Schema Registry (`farna/core/schema_registry/`)
 
 Versioned JSON Schema definitions (Draft 2020-12). Schemas are org-scoped, versioned (semver), reusable, and composable. Abstract schemas enable type-constraint matching during workflow import. Schema inference generates draft schemas from sample connector data.
 
-### Library Service (`modulo/core/library_service/`)
+### Library Service (`farna/core/library_service/`)
 
 Manages the local and community library of reusable primitives (agents, schemas, workflows, integrations). Community primitives are Ed25519-signed. Copy-to-adapt via `CopyToAdaptWizard` UI component (ownership picker + optional binding step).
 
-### Declarative Configuration CLI (`modulo/cli/apply/`) – FAR-681
+### Declarative Configuration CLI (`farna/cli/apply/`) – FAR-681
 
 `modulo apply -f <config.yaml>` applies an org's schemas (+ versions), model backends, pipelines and triggers to a live deployment from one YAML file (`api_version: modulo.dev/v1`), driven by `MODULO_URL` + `MODULO_API_KEY` (bearer `mk_` org key). Planning is name-based upsert (RLS-bound to the key's org): each entity chooses created / updated / unchanged / blocked from a canonical managed-field hash, so rerun is idempotent and runtime state (`next_fire_at`, `streak_epoch`, ...) never causes drift. Keys: entities apply in dependency order with per-entity containment; secrets are refs-only (`${env:VAR}` / `secretref://<key>` -- inline literals are a validation error; the server masks stored secrets, so `--refresh-secrets` re-sends trigger configs whose secrets rotated); backend writes are health-check-verified; `--dry-run/--plan` reports without writing; `--diff` is a read-only drift report (plan-shaped, labelled `mode=drift`, with graph node/edge breakdown for drifted pipelines) used as a CI gate -- exit 0 when the org matches the config, exit 1 on drift (created/updated/blocked), and real apply exits 1 on any blocked/failed entity.
 
@@ -403,7 +403,7 @@ git+<repo-url>[@<ref>]#<path>
 - `@<ref>` is an optional branch / tag / commit SHA; omitted means `HEAD`. A 40-hex value is a **pin**.
 - `#<path>` is a repository-relative file path (non-empty, no `..`, no `#`, no newlines).
 
-Lifecycle (the shared parse/resolve/pin helpers live in `modulo/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
+Lifecycle (the shared parse/resolve/pin helpers live in `farna/core/pipeline_engine/git_content.py`; the save-time gate is part of the graph validator):
 
 1. **Graph-save validation** (`GraphValidator`, codes `GIT_CONTENT_REF_INVALID` / `GIT_CONTENT_REF_UNPINNED`): a `git+` value must parse, and stored graphs must carry a **pinned** `@<40-hex>` ref, so every run snapshot (which deep-copies the live graph at snapshot creation) surfaces the resolved commit SHA for audit. Movable refs are rejected at save with a hint to pin them or use `modulo apply`. Composite-template sandbox sub-nodes obey the same gate. Agent rows are gated at every write path too: the REST/MCP Agent saves run `validate_agent_git_content_values` directly, the `PUT /graph` Agent-command sync validates each incoming list before writing the row (the graph validator only checks `sandbox_agent` nodes, so an `agent`-type node could otherwise carry an unpinned ref into the row ungated), and prompt rollback re-validates the restored template (a legacy history entry must not re-poison a clean row). A `GitContentRefError` from any of these surfaces is mapped to HTTP 422 and rolls back the enclosing write.
 2. **Pin-on-apply**: `modulo apply` resolves a movable spec ref to its current commit SHA at plan time (`git ls-remote`, bounded, fail-closed; an unresolvable ref BLOCKS the entity) and rewrites the field to the canonical pinned form. The desired managed view, the write payload, the stored graph, and every subsequent run snapshot therefore hold the same pinned SHA.
@@ -733,7 +733,7 @@ hiccup must never become a dispatch outage.
 
 Every run records the work items it serves as canonical refs (`kind` + `ref`, e.g. `linear`/`FAR-123`, `github`/`owner/repo#123`) in `runs.work_item_refs`, anchored to deterministic `journeys` rows (`uuid5(org:kind:ref)`, derivable at create and finalize time, no mint races). The refs travel through ONE reserved input-payload key, `_work_item_refs`: reserved (a trigger `payload_mapping` can never target it and a context-setter node may never write it) but EXEMPT from the create-time reserved-key strip so refs survive the coalesce identity: the engine re-stamps the stored value with canonicalized entries before hashing, so a forged key cannot escalate provenance.
 
-Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. The legacy `reported` alias was dropped (FAR-795): the persisted vocabulary is exactly `caller` / `derived` / `agent`, migration 0222 rewrote stored rows to `agent`, and any entry still declaring `source: reported` (e.g. an old snapshot or replay payload) is rejected/dropped by the validator. ONE shape validator (`modulo.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalization, the source vocabulary, and status (`done`/`attempted`) for every surface.
+Provenance is ENGINE-ASSIGNED per supply channel; the wire `source` value is never trusted. `caller` for authenticated channels (manual REST/MCP triggers, operator reruns), `derived` for extraction-driven channels (webhook, cron, polling, agent_signal, replay), `agent` for a node's own emission. The legacy `reported` alias was dropped (FAR-795): the persisted vocabulary is exactly `caller` / `derived` / `agent`, migration 0222 rewrote stored rows to `agent`, and any entry still declaring `source: reported` (e.g. an old snapshot or replay payload) is rejected/dropped by the validator. ONE shape validator (`farna.db.lifecycle_refs.validate_ref_entry`) owns kind/ref canonicalization, the source vocabulary, and status (`done`/`attempted`) for every surface.
 
 Minting is owned by provenance: `caller`/`derived` refs mint journey rows at run creation and again at terminal finalize via a rank-guarded upsert (`agent(0) < derived(1) < caller(2)`: provenance only ever upgrades, never downgrades; `first_seen_source` is immutable after mint; `latest_*`/`run_count` stay owned by the finalize evidence CAS). `agent`-sourced refs are collected and stored on the run. With the org setting `work_item_agent_minting_enabled` off (the default), they are only confirmed against EXISTING journey rows (advisory, match-only) and never mint. With it on, a missing journey row mints an `agent`-provenance row subject to the per-org rolling budget (`MODULO_AGENT_MINT_BUDGET_LIMIT`, default 500 per `MODULO_AGENT_MINT_BUDGET_WINDOW_MINUTES`, default 60); a dismissed tombstone still suppresses the mint, and an existing row only receives a rank-0 no-op write, so agent provenance can never upgrade or downgrade it. Suppressed agent mints are counted. Coalesced deliveries merge refs into the surviving run with the same rank-guarded union and re-mint newly-seen entries.
 
@@ -881,7 +881,7 @@ deny-all, a list = the exact set. Enforcement is
 the grant leg only ever narrows and is not lifted by the authz kill switch.
 Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
 caller's LIVE capability and rejects non-delegable keys. Delegability is a
-single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
+single registry-level flag, `farna.auth.permissions.is_delegable`, read live
 at enforcement and mint time (never-grantable: `api_key.*`, `oauth.client.*`,
 `system.*`, `org.delete`, break-glass controls; HITL decision permissions are
 registry-delegable, while the gate's `human_only` policy and the MCP
@@ -935,14 +935,14 @@ All tenant isolation is at the database layer via `SET LOCAL app.organisation_id
 
 ### Soft-Delete Scoping (FAR-1025)
 
-Soft-deleted rows (models inheriting `SoftDeleteMixin`) are **automatically excluded** from every ORM SELECT via a global `do_orm_execute` listener registered at startup (`modulo.db.soft_delete`). The listener injects `WHERE deleted_at IS NULL` through `with_loader_criteria`, so new read paths automatically exclude soft-deleted rows without requiring an explicit hand-written predicate.
+Soft-deleted rows (models inheriting `SoftDeleteMixin`) are **automatically excluded** from every ORM SELECT via a global `do_orm_execute` listener registered at startup (`farna.db.soft_delete`). The listener injects `WHERE deleted_at IS NULL` through `with_loader_criteria`, so new read paths automatically exclude soft-deleted rows without requiring an explicit hand-written predicate.
 
 **Every model with a `deleted_at` column MUST inherit `SoftDeleteMixin`.** This is enforced by the architecture test `tests/architecture/test_soft_delete_mixin_coverage.py`, which enumerates all registered mappers and fails CI if any model declares `deleted_at` without the mixin. The mixin provides the column definition (`DateTime(timezone=True), nullable=True, default=None`), so normalized models remove their locally-declared `deleted_at` to avoid duplication.
 
 **Opt-out convention:** Legitimate read paths that must see soft-deleted rows (restore flows, historical lookups, purge operations, version resolution) opt out per-statement:
 
 ```python
-from modulo.db.soft_delete import include_soft_deleted
+from farna.db.soft_delete import include_soft_deleted
 
 stmt = include_soft_deleted(select(Model).where(Model.id == uid))
 ```
@@ -1127,14 +1127,14 @@ The eight contracts in `backend/.importlinter`, all `forbidden` type. Each has e
 
 | Contract name | Source | Forbidden |
 |---|---|---|
-| API layer uses pipeline_engine, not LangGraph directly | `modulo.api` | `langgraph` |
-| Connectors layer is independent of API | `modulo.connectors` | `modulo.api`, `modulo.auth` |
-| Core is zero-coupled to modulo-cloud | `modulo.core`, `modulo.api`, `modulo.connectors` | `modulo_cloud` |
-| OTel bridge does not import core business logic | `modulo.otel_bridge` | `modulo.core.pipeline_engine`, `modulo.core.hitl_manager`, `modulo.core.eval_engine` |
-| Core layer never sees FastAPI | `modulo.core` | `modulo.api` |
-| DB layer has no business logic imports | `modulo.db` | `modulo.core`, `modulo.api` |
-| Connectors don't reach into core | `modulo.connectors` | `modulo.core` |
-| Concrete runtime providers are only imported inside `core/runtime_provider` (FAR-587) | `modulo` | `modulo.core.runtime_provider.{docker,e2b,k8s,local,local_docker}` |
+| API layer uses pipeline_engine, not LangGraph directly | `farna.api` | `langgraph` |
+| Connectors layer is independent of API | `farna.connectors` | `farna.api`, `farna.auth` |
+| Core is zero-coupled to modulo-cloud | `farna.core`, `farna.api`, `farna.connectors` | `modulo_cloud` |
+| OTel bridge does not import core business logic | `farna.otel_bridge` | `farna.core.pipeline_engine`, `farna.core.hitl_manager`, `farna.core.eval_engine` |
+| Core layer never sees FastAPI | `farna.core` | `farna.api` |
+| DB layer has no business logic imports | `farna.db` | `farna.core`, `farna.api` |
+| Connectors don't reach into core | `farna.connectors` | `farna.core` |
+| Concrete runtime providers are only imported inside `core/runtime_provider` (FAR-587) | `modulo` | `farna.core.runtime_provider.{docker,e2b,k8s,local,local_docker}` |
 
 ## Testing Strategy
 
@@ -1251,7 +1251,7 @@ The adapter is pure (constructs new objects), so extra wire keys are dropped.
 Coverage: `[tool.coverage.run]` in `backend/pyproject.toml` measures **branch** coverage
 (not just line coverage) over `src/farna`, and `[tool.coverage.report]` sets
 `fail_under = 89`. There is no per-module threshold in that config; the modules named as
-targets in earlier drafts (`modulo.auth`, `pipeline_engine`, `db.rls`) are instead the
+targets in earlier drafts (`farna.auth`, `pipeline_engine`, `db.rls`) are instead the
 mutation-testing (`mutmut`) `source_paths` alongside `core/license.py` and
 `core/eval_engine/`.
 

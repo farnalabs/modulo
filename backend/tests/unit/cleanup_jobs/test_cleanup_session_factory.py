@@ -1,4 +1,4 @@
-"""Unit tests for ``modulo.core.saq_worker._cleanup_session_factory``.
+"""Unit tests for ``farna.core.saq_worker._cleanup_session_factory``.
 
 The factory picker is shared by every cleanup cron (``webhook_dedup_cleanup``,
 ``trigger_events_cleanup``, ``expired_webhook_dedup_purge``), so it is tested

@@ -10,13 +10,13 @@ tracked separately (see FAR-520) and must not be assumed migrated here — this
 test suite only proves the pin for the connectors listed above.
 
 Before FAR-520 each validated its egress target
-(:func:`modulo.core.ssrf.validate_outbound_url`) and then built its own
+(:func:`farna.core.ssrf.validate_outbound_url`) and then built its own
 ``httpx.AsyncClient`` — a validate-then-connect pattern. A hostname under
 attacker DNS control could answer public at validation time and internal
 (169.254.169.254) at connect time (DNS rebinding), escaping the gate.
 
 These tests prove the migration actually pins: a connector's ``_client()`` now
-builds a :class:`modulo.core.ssrf.PinnedAsyncHTTPTransport` whose pin map is
+builds a :class:`farna.core.ssrf.PinnedAsyncHTTPTransport` whose pin map is
 ``{hostname: validated_ip}``, so the connection goes to the VALIDATED address
 and never re-resolves the host. The resolver is stubbed to FLIP from the
 validated public address to the cloud-metadata address between validation and
@@ -187,7 +187,7 @@ def test_azure_repos_health_check_egress_is_pinned_to_profile_host(
     ``health_check`` connects to the Microsoft profile host
     (``app.vssps.visualstudio.com``), NOT the repo ``base_url``
     (``dev.azure.com/<org>``). It must build its client through
-    :func:`modulo.core.ssrf.pinned_async_client_sync` targeting that host — not
+    :func:`farna.core.ssrf.pinned_async_client_sync` targeting that host — not
     a plain unpinned ``AsyncClient`` and not a stale
     ``validate_outbound_url(base_url)`` that guarded a host this connection
     never uses.

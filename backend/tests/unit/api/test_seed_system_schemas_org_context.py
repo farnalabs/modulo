@@ -1,6 +1,6 @@
 """FAR-1546 — per-org isolation + ERROR attribution for ``_seed_system_schemas``.
 
-``modulo.api.main._seed_system_schemas`` looped every organisation with NO
+``farna.api.main._seed_system_schemas`` looped every organisation with NO
 per-org ``try/except`` inside ONE shared transaction: the first org's failure
 poisoned that transaction for every org after it, and the exception bubbled to
 ``_boot_seed``'s ORG-LESS ``startup.seed_failed`` ERROR — which
@@ -127,7 +127,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 @pytest.fixture
 def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
-    # modulo.api.dependencies.get_or_create_session_factory).
+    # farna.api.dependencies.get_or_create_session_factory).
     return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 
@@ -138,7 +138,7 @@ def sink() -> _RecordingSink:
 
 @contextmanager
 def _attach(sink: _RecordingSink) -> Iterator[None]:
-    """Attach a REAL ``ErrorTrackingLogHandler`` to ``modulo.api.main``.
+    """Attach a REAL ``ErrorTrackingLogHandler`` to ``farna.api.main``.
 
     Scoped to the seeder's own logger so records from other loggers (the
     SQLAlchemy engine errors on the deliberately missing tables) can neither be
@@ -169,7 +169,7 @@ def _patch_seams(
     """Point the seeder's engine/factory seams at this test's SQLite engine.
 
     ``_seed_system_schemas`` resolves both through a function-local import from
-    ``modulo.api.dependencies``, so patching the module attributes is what the
+    ``farna.api.dependencies``, so patching the module attributes is what the
     real call site sees.
     """
     monkeypatch.setattr("farna.api.dependencies.get_or_create_engine", lambda *_a, **_kw: engine)

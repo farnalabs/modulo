@@ -134,7 +134,7 @@ $env:MODULO_USERS = "admin:admin"
 
 ```powershell
 cd backend
-uv run uvicorn modulo.api.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn farna.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Terminal 2 — frontend**
@@ -154,11 +154,11 @@ When running the API outside containers you must start them yourself:
 
 ```powershell
 # Runs worker — executes run jobs
-uv run python -m saq modulo.core.saq_worker.runs_settings
+uv run python -m saq farna.core.saq_worker.runs_settings
 
 # System worker — scheduler + reconcile + crons (requires SAQ_AUTH_USERNAME/SAQ_AUTH_PASSWORD)
 $env:SAQ_AUTH_USERNAME = "admin"; $env:SAQ_AUTH_PASSWORD = "admin"
-uv run python -m modulo.core.saq_worker
+uv run python -m farna.core.saq_worker
 ```
 
 The `python -m saq` argument is the settings module (no `worker` subcommand in
@@ -249,9 +249,9 @@ CLI tools are registered as console scripts in `pyproject.toml`:
 
 | Command | Entry point | Purpose |
 |---|---|---|
-| `modulo` | `modulo.cli.main:cli` | Native launcher (start/stop/status/env) + backup/restore/apply |
-| `modulo-migrate` | `modulo.cli.migrate:cli` | Export/import/verify org data |
-| `modulo-break-glass` | `modulo.cli.break_glass:cli` | Emergency break-glass operations |
+| `modulo` | `farna.cli.main:cli` | Native launcher (start/stop/status/env) + backup/restore/apply |
+| `modulo-migrate` | `farna.cli.migrate:cli` | Export/import/verify org data |
+| `modulo-break-glass` | `farna.cli.break_glass:cli` | Emergency break-glass operations |
 
 ---
 
@@ -269,10 +269,10 @@ uv run ruff check .
 uv run ruff format --check .
 
 # Type checking (strict mode)
-uv run mypy src/modulo/
+uv run mypy src/farna/
 
 # Security scanning
-uv run bandit -r src/modulo/ -ll
+uv run bandit -r src/farna/ -ll
 uv run semgrep --config=../.semgrep/ .
 
 # Dependency audit
@@ -297,10 +297,10 @@ step modules have relaxed rules.
 
 ### Import architecture (enforced by import-linter)
 
-- `modulo.api` must not import `langgraph` directly
-- `modulo.connectors` must not import `modulo.api` or `modulo.auth`
-- `modulo.core`, `.api`, `.connectors` must not import `modulo_cloud`
-- `modulo.otel_bridge` must not import `core.pipeline_engine`, `hitl_manager`, `eval_engine`
+- `farna.api` must not import `langgraph` directly
+- `farna.connectors` must not import `farna.api` or `farna.auth`
+- `farna.core`, `.api`, `.connectors` must not import `modulo_cloud`
+- `farna.otel_bridge` must not import `core.pipeline_engine`, `hitl_manager`, `eval_engine`
 
 ### TypeScript / Vue (frontend)
 
@@ -396,7 +396,7 @@ docker compose -f docker-compose.local.yml up -d db-local redis-local
 cd backend
 uv run alembic upgrade heads
 # Terminal 1 — backend:
-uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn farna.api.main:app --host 0.0.0.0 --port 8000
 
 # Terminal 2 — frontend (build + preview):
 cd ../frontend
@@ -429,7 +429,7 @@ pnpm run test:e2e             # playwright test
 | Target | Threshold | Measured by |
 |---|---|---|
 | Overall backend | 80% | pytest-cov |
-| `modulo.auth` | 90% | pytest-cov |
+| `farna.auth` | 90% | pytest-cov |
 | `pipeline_engine` | 85% | pytest-cov |
 | `db.rls` | 95% | pytest-cov |
 
@@ -602,7 +602,7 @@ repository page, or email `security@farna.dev`.
 - Never commit secrets, API keys, or credentials
 - Always use Pydantic validation for API inputs — never accept raw request bodies
 - Ensure every new API route and MCP tool handler enforces RLS
-- Use advisory locks (`modulo.db.repositories.locks`) for concurrency-sensitive
+- Use advisory locks (`farna.db.repositories.locks`) for concurrency-sensitive
   database operations
 - Decrypted credentials must never enter LangGraph state, checkpoint blobs,
   OTel spans, or logs

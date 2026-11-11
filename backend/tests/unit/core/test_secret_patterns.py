@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.secret_patterns — the canonical secret-VALUE
+"""Unit tests for farna.core.secret_patterns — the canonical secret-VALUE
 redaction patterns and the ReDoS-bounded masking helper.
 
 The module is the single source of truth for gitleaks-style secret-VALUE

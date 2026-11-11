@@ -1,6 +1,6 @@
 """Unit tests for the FAR-1374 mask-sentinel detector.
 
-``modulo.core.graph_validator.mask_sentinel`` is the single shared detection
+``farna.core.graph_validator.mask_sentinel`` is the single shared detection
 rule behind the composite-template write gates, the expansion rejection, the
 graph validator, and the housekeeping sweep. These tests pin the walker's
 shape handling (scalar / dict / list / non-dict node), the dotted-index path

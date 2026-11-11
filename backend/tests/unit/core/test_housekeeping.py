@@ -1,4 +1,4 @@
-"""Unit tests for the housekeeping scan service (modulo.core.housekeeping)."""
+"""Unit tests for the housekeeping scan service (farna.core.housekeeping)."""
 
 import logging
 import uuid

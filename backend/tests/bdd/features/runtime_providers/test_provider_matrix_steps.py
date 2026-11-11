@@ -1,6 +1,6 @@
 """BDD step definitions: runtime provider platform matrix (feat-core-runtime-provider-core).
 
-Wires ``provider_matrix.feature`` to the REAL ``modulo.core.runtime_provider``
+Wires ``provider_matrix.feature`` to the REAL ``farna.core.runtime_provider``
 seams network-free and DB-free — the ``build_hub`` env-gated factory
 registration matrix (local always; e2b only when ``MODULO_E2B_API_KEY`` is set;
 the docker family only when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set,

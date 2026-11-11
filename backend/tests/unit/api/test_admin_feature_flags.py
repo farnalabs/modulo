@@ -1535,7 +1535,7 @@ class TestOrgFlagOverrideAudit:
         the audit transaction; a fabricated ``"admin"`` would misrepresent the
         principal. Absent claim maps to the established neutral ``""`` sentinel
         (the same fallback used when minting access tokens in
-        ``modulo/auth/jwt.py``).
+        ``farna/auth/jwt.py``).
         """
         audit = AsyncMock()
         principal = AuthenticatedPrincipal(

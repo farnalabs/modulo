@@ -84,7 +84,7 @@ def _provide_required_settings_env(
 ) -> Generator[None, None, None]:
     """Make ``Settings()`` constructible at app-import time in the rig.
 
-    ``modulo.api.main`` calls ``get_settings()`` at module import
+    ``farna.api.main`` calls ``get_settings()`` at module import
     (api/main.py:1048). The runner-ci rig exports ``DATABASE_URL`` but not
     ``FERNET_KEY``/``SECRET_KEY``, so the import would raise a ValidationError
     before the ``client`` fixture can install its ``get_settings`` override.

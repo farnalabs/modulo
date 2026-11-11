@@ -2,9 +2,9 @@
 
 The allowed eval_type vocabulary lives in exactly five places:
 
-  (a) ``EvalType`` StrEnum (modulo.core.eval_engine) — the full universe,
+  (a) ``EvalType`` StrEnum (farna.core.eval_engine) — the full universe,
       now including ``guardrail``.
-  (b) the three Pydantic request regexes in ``modulo.api.routes.evals`` —
+  (b) the three Pydantic request regexes in ``farna.api.routes.evals`` —
       create / update accept the FULL universe (including ``guardrail``);
       from-run deliberately EXCLUDES ``guardrail`` (a deny-rule cannot be
       pre-populated from run output — a stub would be fail-open).

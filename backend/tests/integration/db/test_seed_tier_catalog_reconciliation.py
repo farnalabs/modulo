@@ -1,6 +1,6 @@
 """Boot seeder reconciliation (FAR-1875).
 
-``modulo.api.main._seed_tier_catalog`` inserts the code registry's flags into
+``farna.api.main._seed_tier_catalog`` inserts the code registry's flags into
 ``feature_flag_catalog`` with ``INSERT ... ON CONFLICT (name) DO NOTHING`` and,
 after this change, prunes every catalog row whose ``name`` is not in the current
 code registry. Without the prune, retiring a flag is a code-only change that

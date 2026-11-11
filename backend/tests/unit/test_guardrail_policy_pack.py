@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.guardrails.policy_pack — compliance policy packs.
+"""Unit tests for farna.core.guardrails.policy_pack — compliance policy packs.
 
 Covers the pack schema (valid/invalid controls, mapped flag sync, YAML
 load/dump round-trip), instantiation (mapped controls → valid

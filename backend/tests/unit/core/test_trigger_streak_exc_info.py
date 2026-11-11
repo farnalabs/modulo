@@ -1,5 +1,5 @@
 """Coverage for the ``exc_info=True`` exception handlers added across
-``modulo.core.trigger_streak`` (PR #97).
+``farna.core.trigger_streak`` (PR #97).
 
 Each test forces the best-effort ``except Exception`` branch to execute by
 making the underlying dependency (redis client, DB session factory, settings)

@@ -310,7 +310,7 @@ def test_matrix_pg_major_mismatch_refusal_blocks_the_swap(
 
 
 def _settings_env_ready() -> bool:
-    """``modulo.cli`` transitively imports ``modulo.db.session``, which builds
+    """``farna.cli`` transitively imports ``farna.db.session``, which builds
     its engine from Settings at import time; the CI test jobs export the
     required variables, but a bare developer checkout may not."""
     return all(os.environ.get(name) for name in ("DATABASE_URL", "SECRET_KEY", "FERNET_KEY"))

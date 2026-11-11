@@ -173,7 +173,7 @@ def test_gate_blocks_unused_import_and_unreachable(tmp_path: Path) -> None:
 def test_probe_is_staged_outside_the_measured_source_tree(tmp_path: Path, content: str) -> None:
     """Regression guard (FAR-2334): probes must never live under ``backend/src/farna``.
 
-    ``[tool.coverage.run] source = ["src/modulo"]`` makes coverage's
+    ``[tool.coverage.run] source = ["src/farna"]`` makes coverage's
     un-executed-source scan walk every module below ``backend/src/farna``. A
     probe written there — even transiently — is touched into a shard's coverage
     data on save, and ``coverage combine`` then dies on a fresh checkout with

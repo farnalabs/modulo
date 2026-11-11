@@ -1,6 +1,6 @@
 """Structural validation tests for canonical library workflow primitives.
 
-Every workflow primitive exported by ``modulo.core.library.workflows`` must be
+Every workflow primitive exported by ``farna.core.library.workflows`` must be
 a well-formed pipeline template: expected metadata, a non-empty sequence of
 steps with unique ids, valid ``depends_on`` edges, and connector bindings whose
 type belongs to the known connector-binding vocabulary.  No DB — pure data

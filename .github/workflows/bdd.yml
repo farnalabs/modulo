@@ -240,7 +240,7 @@ jobs:
         working-directory: backend
         shell: bash
         run: |
-          nohup uv run --no-build --no-sync uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000 > backend-bdd.log 2>&1 &
+          nohup uv run --no-build --no-sync uvicorn farna.api.main:app --host 0.0.0.0 --port 8000 > backend-bdd.log 2>&1 &
 
       - name: Serve frontend preview
         if: steps.detect.outputs.bdd == 'true'

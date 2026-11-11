@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.error_tracking.saq_hooks (plan F3d).
+"""Unit tests for farna.core.error_tracking.saq_hooks (plan F3d).
 
 Covers the PURE ``_classify`` outcome classifier and the ``after_process`` hook's
 action execution (run-failed marking, fire-error ingestion, DB-down safety).

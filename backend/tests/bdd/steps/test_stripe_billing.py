@@ -4,7 +4,7 @@ Wired into the executing BDD suite, closing the ``feat-license`` "stripe
 webhook cited as an adjacent but not behaviour-covered" gap
 (``docs/product-map/licensing/license.md``): ``stripe_billing.feature`` ships
 under ``tests/bdd/features/licensing/`` and drives the REAL
-``POST /api/v1/webhooks/stripe`` route (``modulo.api.routes.stripe_webhook``)
+``POST /api/v1/webhooks/stripe`` route (``farna.api.routes.stripe_webhook``)
 with only the outbound fulfilment seam patched (``fulfil_team_purchase`` runs
 as a FastAPI BackgroundTask) and the ``get_settings`` seam swapped for a
 stripe-configured Settings object — mirroring the hermetic-mock pattern of the

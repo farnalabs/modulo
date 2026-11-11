@@ -114,7 +114,7 @@ class TestExtractColumnInfo:
         an unanchored ``word.word`` alternative, so an error like
         ``"no module named a.b"`` produced a false attribution.
         """
-        exc = _make_db_error("ImportError: no module named modulo.db")
+        exc = _make_db_error("ImportError: no module named farna.db")
         table, column = _extract_column_info(exc)
         assert table is None
         assert column is None

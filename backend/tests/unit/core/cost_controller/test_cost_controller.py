@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.cost_controller.
+"""Unit tests for farna.core.cost_controller.
 
 All DB interaction is mocked; we verify logic, limit enforcement,
 and correct SQL filtering.

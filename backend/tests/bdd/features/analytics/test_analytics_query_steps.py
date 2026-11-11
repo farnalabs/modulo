@@ -1,9 +1,9 @@
 """Step definitions for the Analytics Query Surface BDD feature (FAR-102 / ADR 020).
 
 Wires the scenarios in ``query.feature`` to the REAL analytics routes
-(``modulo/api/routes/analytics.py``: ``/query``, ``/concurrency``,
+(``farna/api/routes/analytics.py``: ``/query``, ``/concurrency``,
 ``/guardrails``, ``/export``) through the shared TestClient pattern used by the
-dashboard steps. The route is a thin adapter over ``modulo.core.analytics.service``,
+dashboard steps. The route is a thin adapter over ``farna.core.analytics.service``,
 so only the four service functions are patched — every other seam is real: the
 FastAPI query-param binding (enum/date/limit validation), the ``analytics.query``
 permission gate, the org-context requirement, the ``analytics_page`` feature

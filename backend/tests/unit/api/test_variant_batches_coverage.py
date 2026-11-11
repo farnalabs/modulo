@@ -1,6 +1,6 @@
 """Coverage tests for the FAR-775 variant batch API routes.
 
-Drives every handler and helper in modulo.api.routes.variant_batches with
+Drives every handler and helper in farna.api.routes.variant_batches with
 mocked DB sessions / RLS so the new production code clears the SonarCloud
 new-code coverage gate. No real database is touched.
 """

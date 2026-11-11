@@ -149,8 +149,8 @@ def _health_route_patchers(ctx) -> list[Any]:
     patched; the routing, ``require_permission`` auth gate, org-ownership
     guard, transaction wrapper, decrypt ACL handling and response
     serialisation all run for real. Note the hub class is patched where the
-    ROUTE imported it (``modulo.api.routes.connectors.ConnectorHub``), not in
-    ``modulo.core.connector_hub`` — the route captured its own
+    ROUTE imported it (``farna.api.routes.connectors.ConnectorHub``), not in
+    ``farna.core.connector_hub`` — the route captured its own
     module-namespace reference at import time.
     """
     connector = MagicMock()

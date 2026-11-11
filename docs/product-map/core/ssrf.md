@@ -104,7 +104,7 @@ route, so it is tracked here rather than in the manifest registry.
 - 2026-09-18: **product-map review pass** - closed the
   tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
   into the executing BDD suite (``steps/test_ssrf_guard.py``), driving the real
-  ``modulo.core.ssrf`` seams - literal-IP fail-closed blocking (loopback /
+  ``farna.core.ssrf`` seams - literal-IP fail-closed blocking (loopback /
   private / link-local metadata / CGNAT / Aliyun metadata / current-network),
   pre-DNS syntax rejection (scheme, userinfo, hostname, port, non-canonical IP
   literals), injected-resolution sync/async validation including the any-blocked

@@ -19,7 +19,7 @@ Coverage map (internal spec section 7; criteria numbering only):
 *              PUT on the (gated-but-invalid) eval → 404 contract
 * criterion 8  node_id mismatch (gate vs eval) → generic 400 (PUT), gate row untouched
 * criterion 9  structured violation context ONLY in the WARNING log on
-*              logger ``modulo.api.routes.evals`` — HTTP body carries the
+*              logger ``farna.api.routes.evals`` — HTTP body carries the
 *              generic message, no exclusion names / org ids / eval id.
 *              Triggered via a suite-scoped eval: chunk 8 retired the
 *              guardrail_eval exclusion, so it is no longer a POST-path

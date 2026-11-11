@@ -42,9 +42,9 @@ from farna.api.mcp_server import (
 from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
-# A pipeline list page shaped like ``modulo.db.crud.base.PageResult``.
+# A pipeline list page shaped like ``farna.db.crud.base.PageResult``.
 _PAGE = SimpleNamespace(items=[], total=0, next_cursor=None, has_more=False)
-# A library page shaped like ``modulo.core.library_service``'s result.
+# A library page shaped like ``farna.core.library_service``'s result.
 _LIBRARY_PAGE = SimpleNamespace(items=[], total=0, next_cursor=None, has_more=False)
 
 

@@ -61,7 +61,7 @@ def _make_mock_session() -> AsyncMock:
 def client() -> Generator[TestClient, None, None]:
     """Minimal app with only the admin rate-limits router wired in.
 
-    Uses a bare FastAPI app (not ``modulo.api.main``) so the suite stays
+    Uses a bare FastAPI app (not ``farna.api.main``) so the suite stays
     fast and never triggers MCP server startup or DB connection pooling.
     """
     mock_session = _make_mock_session()

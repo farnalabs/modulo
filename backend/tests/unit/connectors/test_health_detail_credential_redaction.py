@@ -6,7 +6,7 @@ eroded rather than to pass vacuously:
 1. ``ConnectorBase`` keeps both redaction hooks (``_credential_values`` and
    ``_redacted_detail``), the default recipe carries no credentials, and the
    hook's redaction is the single shared ``CredentialRedactor`` implementation.
-2. Every ``ConnectorBase`` subclass defined under ``modulo.connectors``
+2. Every ``ConnectorBase`` subclass defined under ``farna.connectors``
    overrides ``_credential_values`` to hand the base hook its real credential
    values — unless the class is on the explicit ``NO_CREDENTIAL_CLASSES``
    allowlist (abstract bases, credential-free transports). A new connector
@@ -16,7 +16,7 @@ eroded rather than to pass vacuously:
    planted secret — proving the recipe actually binds something redactable
    (a recipe returning ``()`` or omitting the real credential fails here).
 4. No ``HealthResult(...)`` construction or ``detail =`` assignment in
-   ``modulo.connectors`` source builds an error-detail from a violation token
+   ``farna.connectors`` source builds an error-detail from a violation token
    (raw ``.text`` echo, ``str(exc)``, f-string ``{exc}``) without a redaction
    call in the same expression region. The scanner is validated against
    planted violations in the same test so the gate cannot erode silently.
@@ -43,7 +43,7 @@ from tests.unit._source_scan import iter_source_text
 #: with its real credential values.
 #: - CIRunnerBase / TicketTrackerBase: abstract bases, no credentials.
 #: - FilesystemConnector / ShellConnector: local transports, no credentials.
-#: Everything else found under ``modulo.connectors`` either defines its own
+#: Everything else found under ``farna.connectors`` either defines its own
 #: recipe or inherits one from a concrete parent (the CI test doubles inherit
 #: from the real connectors they double for, so their recipe origin is the
 #: real class's override — no allowlist entry is needed).
@@ -316,7 +316,7 @@ def test_connector_source_contains_no_raw_echo_details() -> None:
         for finding in scan_detail_regions(source):
             offenders.append(f"{path.relative_to(root)} {finding}")
     assert not offenders, (
-        "Raw (unredacted) error-echo detail constructions in modulo/connectors (FAR-1651): "
+        "Raw (unredacted) error-echo detail constructions in farna/connectors (FAR-1651): "
         f"{offenders}. Route the detail through the connector's redactor "
         "(`self._redacted_detail` / `self._redactor.redact`) before it is persisted."
     )

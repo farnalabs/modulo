@@ -834,7 +834,7 @@ _S2_S3_S4_SOURCES = (
 
 
 def _repo_src(rel: str) -> str:
-    # node_runner.py -> .../src/farna/core/pipeline_engine -> parents[2] = .../src/modulo
+    # node_runner.py -> .../src/farna/core/pipeline_engine -> parents[2] = .../src/farna
     return (Path(nr.__file__).parents[2] / rel).read_text(encoding="utf-8")
 
 

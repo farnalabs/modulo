@@ -70,14 +70,14 @@ _pid_alive() {
 # limit. Reset the window on a successful run (clean exit or ran >= 300s).
 #
 # The guard constants (window/limit/restart-sleep) are SINGLE-SOURCED from
-# the shared supervision policy (modulo.launcher.policy — shipped in the
+# the shared supervision policy (farna.launcher.policy — shipped in the
 # wheel; the all-in-one image installs the project, so `python3 -m
-# modulo.launcher.policy` works with PYTHONPATH=/app/src). Behaviour is
+# farna.launcher.policy` works with PYTHONPATH=/app/src). Behaviour is
 # identical to the former inline values (300s window, 5 crashes, 1s sleep);
 # a broken generator is FATAL (silent default-drift is forbidden).
 POLICY_ENV_FILE="${POLICY_ENV_FILE:-/tmp/modulo-supervision-policy.env}"
-if ! python3 -m modulo.launcher.policy > "$POLICY_ENV_FILE" 2>/dev/null || [[ ! -s "$POLICY_ENV_FILE" ]]; then
-    echo "FATAL: could not generate supervision policy constants (python3 -m modulo.launcher.policy)." >&2
+if ! python3 -m farna.launcher.policy > "$POLICY_ENV_FILE" 2>/dev/null || [[ ! -s "$POLICY_ENV_FILE" ]]; then
+    echo "FATAL: could not generate supervision policy constants (python3 -m farna.launcher.policy)." >&2
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -173,7 +173,7 @@ if [[ -f /tmp/system_database_url.env ]]; then
 fi
 
 echo "=== Bootstrapping modulo_app role ==="
-python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
+python3 -m farna.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
 # The Fly [release] command (release.sh) now owns migrations (ONCE per deploy BEFORE machines
@@ -190,10 +190,10 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
-from modulo.db.migrations.env import _to_sync_url
+from farna.db.migrations.env import _to_sync_url
 
 cfg = Config("/app/alembic.ini")
-cfg.set_main_option("script_location", "/app/src/modulo/db/migrations")
+cfg.set_main_option("script_location", "/app/src/farna/db/migrations")
 try:
     head = ScriptDirectory.from_config(cfg).get_current_head()
     if not head:
@@ -244,7 +244,7 @@ if [[ "$FLY_PROCESS_GROUP" = "worker" ]]; then
     # SAQ worker fail-closed auth check (plan F1) — reads the SETTINGS VALUES so
     # a defaulted/empty secret fails just like an unset one.
     echo "=== Checking SAQ system worker auth (fail-closed) ==="
-    if ! python3 -c "from modulo.settings import get_settings; s = get_settings(); raise SystemExit(0 if (s.saq_auth_password and s.saq_auth_username) else 1)"; then
+    if ! python3 -c "from farna.settings import get_settings; s = get_settings(); raise SystemExit(0 if (s.saq_auth_password and s.saq_auth_username) else 1)"; then
       echo "FATAL: SAQ_AUTH_PASSWORD / SAQ_AUTH_USERNAME must be set (fail-closed SAQ system worker web UI auth)." >&2
       exit 1
     fi
@@ -500,7 +500,7 @@ else
     python3 - <<'PY'
 import os
 
-from modulo.launcher.runtime_config import build_runtime_config_payload, write_runtime_config_js
+from farna.launcher.runtime_config import build_runtime_config_payload, write_runtime_config_js
 
 payload = build_runtime_config_payload(os.environ)
 write_runtime_config_js(payload, "/usr/share/nginx/html/runtime-config.js")

@@ -43,15 +43,15 @@ Scope notes:
   the run WebSocket surface. Both delegate to the SAME shared classifier in
   ``db_error_handling``; only the rendering differs (500 vs payload), which is
   why accepting either satisfies both predicates.
-* Helper resolution is CROSS-MODULE across the scanned ``modulo.api`` +
-  ``modulo.auth`` trees (iteration-2 fix): a helper reached via
+* Helper resolution is CROSS-MODULE across the scanned ``farna.api`` +
+  ``farna.auth`` trees (iteration-2 fix): a helper reached via
   ``from farna.api.<...> import <name>``
   (incl. ``as`` aliases, relative imports, ``import farna.api.<...>`` usage and
   ``import *``) is resolved to its definition in the source module and the
   503-predicate is computed as a fixed point over the whole import graph —
   so an arm whose 503 comes from an imported helper is flagged exactly like a
-  module-local one. Helpers defined OUTSIDE the scanned trees (``modulo.core``,
-  ``modulo.db``, third-party) are unresolvable and are NOT treated as 503 —
+  module-local one. Helpers defined OUTSIDE the scanned trees (``farna.core``,
+  ``farna.db``, third-party) are unresolvable and are NOT treated as 503 —
   documented boundary, not a silent gap; no current arm delegates its 503 to
   a non-scanned helper. FAR-1481 added the auth root because
   ``auth/dependencies.py``'s two arms sat outside the api root and were
@@ -98,7 +98,7 @@ _ROOTS_BY_NAME: dict[str, Path] = {name: path for path, _prefix, name in _ROOTS}
 
 #: Files whose SQLAlchemyError arms are allowed to report a 503 WITHOUT the
 #: guard, mapped to the reason the exemption is legitimate (FAR-1464).
-#: Keys are ``"<root name>/<path under src/modulo>"`` (FAR-1481).
+#: Keys are ``"<root name>/<path under src/farna>"`` (FAR-1481).
 _EXEMPT = {
     "api/db_error_handling.py": (
         "The shared classifier itself: _translate_wrapped_exception's SQLAlchemyError "
@@ -575,7 +575,7 @@ async def handler_local() -> None:
 
 
 def _write_synthetic_tree(root: Path, route_sources: dict[str, str]) -> None:
-    """Build a miniature modulo.api tree: helper file + route file(s)."""
+    """Build a miniature farna.api tree: helper file + route file(s)."""
     (root / "routes").mkdir(parents=True, exist_ok=True)
     (root / "cross_helper_503.py").write_text(_CROSS_HELPER_SOURCE, encoding="utf-8")
     for rel, source in route_sources.items():
@@ -700,7 +700,7 @@ def test_mcp_payload_guard_shape_is_accepted(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # FAR-1481: the auth root is scanned with the SAME predicate as the api root.
-# A synthetic modulo.auth tree proves the second root is wired in — an
+# A synthetic farna.auth tree proves the second root is wired in — an
 # unguarded 503 arm under auth/ is flagged, the guarded shape is clean.
 # ---------------------------------------------------------------------------
 

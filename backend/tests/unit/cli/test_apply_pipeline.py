@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.pipeline_apply (FAR-681 slice 2).
+"""Unit tests for farna.cli.apply.pipeline_apply (FAR-681 slice 2).
 
 HTTP mocked via respx. Round-trip payloads are validated against the REAL
 API pydantic models (contract round-trip), not hand-built response fixtures.

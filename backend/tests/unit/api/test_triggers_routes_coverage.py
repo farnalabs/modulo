@@ -1223,7 +1223,7 @@ def test_update_trigger_happy_path_returns_serialized(client: tuple[TestClient, 
 
 
 # ---------------------------------------------------------------------------
-# DELETE / POST restore — CRUD via modulo.db.crud.trigger
+# DELETE / POST restore — CRUD via farna.db.crud.trigger
 # ---------------------------------------------------------------------------
 
 

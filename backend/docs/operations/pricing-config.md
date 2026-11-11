@@ -5,15 +5,15 @@ This document explains how pricing is configured and how to add new models.
 
 ## How Pricing Works
 
-- Each model backend has a `cost_tracking` field (`enabled`/`disabled`) — see `ModelBackend.cost_tracking` in `src/modulo/db/models/model_backend.py`
-- Token counts are recorded per node execution and costs are calculated using `get_pricing()` in `src/modulo/core/pricing.py`
+- Each model backend has a `cost_tracking` field (`enabled`/`disabled`) — see `ModelBackend.cost_tracking` in `src/farna/db/models/model_backend.py`
+- Token counts are recorded per node execution and costs are calculated using `get_pricing()` in `src/farna/core/pricing.py`
 - Costs are displayed in the run detail view and the admin cost dashboard at `GET /api/v1/admin/costs`
 - Spend limits can be set per org and per team via `PUT /api/v1/admin/costs/limits/org` and `PUT /api/v1/admin/costs/limits/teams/{team_id}`
 - Spend anomalies are detected daily (org spend > 2x rolling 7-day average) at `GET /api/v1/admin/costs/anomalies`
 
 ## Pricing Table
 
-The `PRICING_TABLE` in `src/modulo/core/pricing.py` maps model provider/pattern pairs to per-token costs.
+The `PRICING_TABLE` in `src/farna/core/pricing.py` maps model provider/pattern pairs to per-token costs.
 Lookup uses `fnmatch.fnmatch` — the first matching entry wins, so list specific patterns before generic ones.
 
 | Provider | Model Pattern | Input Price/1K | Output Price/1K |
@@ -51,7 +51,7 @@ Lookup uses `fnmatch.fnmatch` — the first matching entry wins, so list specifi
 
 ## Adding a New Model
 
-1. Add a `PricingConfig` entry to `PRICING_TABLE` in `src/modulo/core/pricing.py`
+1. Add a `PricingConfig` entry to `PRICING_TABLE` in `src/farna/core/pricing.py`
 2. The first matching pattern wins — add specific patterns (e.g. `"gpt-4o"`) before generic ones (e.g. `"gpt-4o*"`)
 3. Run tests: `python -m pytest tests/unit/core/test_pricing.py`
 
@@ -70,7 +70,7 @@ Lookup uses `fnmatch.fnmatch` — the first matching entry wins, so list specifi
 
 | File | Purpose |
 |---|---|
-| `src/modulo/core/pricing.py` | Pricing table and `get_pricing()` lookup |
-| `src/modulo/db/models/model_backend.py` | `ModelBackend.cost_tracking` and `currency` fields |
-| `src/modulo/api/routes/costs.py` | Cost report, spend limits, anomaly detection, CSV export, scheduled reports |
+| `src/farna/core/pricing.py` | Pricing table and `get_pricing()` lookup |
+| `src/farna/db/models/model_backend.py` | `ModelBackend.cost_tracking` and `currency` fields |
+| `src/farna/api/routes/costs.py` | Cost report, spend limits, anomaly detection, CSV export, scheduled reports |
 | `tests/unit/core/test_pricing.py` | Tests for pricing lookup and table integrity |

@@ -1,6 +1,6 @@
 """Tests for the load-time warning on unrecognised trigger config keys (FAR-1144).
 
-Covers ``_warn_unrecognised_config_keys`` in ``modulo.core.trigger_engine``:
+Covers ``_warn_unrecognised_config_keys`` in ``farna.core.trigger_engine``:
 * A trigger with only recognised keys emits no warning.
 * A trigger with an unrecognised key (e.g. ``events``) emits a WARNING log.
 * The warning names the offending key(s) and the set of recognised keys.

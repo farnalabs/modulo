@@ -1,6 +1,6 @@
 """Step definitions for the Guardrail Detection Engine (T1) feature.
 
-Exercises the pure engine functions in ``modulo.core.guardrails`` directly:
+Exercises the pure engine functions in ``farna.core.guardrails`` directly:
 ``evaluate_guardrails`` (raising), ``run_interception_pass`` (non-raising
 two-phase), ``apply_redaction_masks`` (masks-only), ``derive_conformance_state``
 (fail-closed three-state), and the misrouting/retry guardrails. Detection is

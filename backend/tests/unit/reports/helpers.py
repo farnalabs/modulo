@@ -248,7 +248,7 @@ def patched_http_client(client: AsyncMock) -> Iterator[AsyncMock]:
     """Make the scheduler's pinned client factory hand out *client*.
 
     Every delivery URL now goes through
-    ``modulo.core.ssrf.pinned_async_client`` (re-validated + connection pinned),
+    ``farna.core.ssrf.pinned_async_client`` (re-validated + connection pinned),
     so this patches that factory rather than ``httpx.AsyncClient``. Yields the
     factory mock so tests that must inspect the construction call (e.g. the
     timeout pass-through contract) can assert on its kwargs.

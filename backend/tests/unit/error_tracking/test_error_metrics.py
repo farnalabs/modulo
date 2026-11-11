@@ -1,4 +1,4 @@
-"""Unit tests for error-tracking Prometheus metrics (modulo.core.error_tracking.metrics).
+"""Unit tests for error-tracking Prometheus metrics (farna.core.error_tracking.metrics).
 
 Covers OTel meter discovery, lazy counter/gauge registration, idempotency,
 gauge-unavailable fallback, and the ingest/alert record helpers — all without a

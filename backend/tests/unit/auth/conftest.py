@@ -20,7 +20,7 @@ def _no_pinned_ip_dns() -> None:
     """Stub the pinned outbound client's DNS resolution in auth unit tests.
 
     The OIDC/SAML code paths fetch remote-supplied endpoints through
-    :func:`modulo.core.ssrf.pinned_async_client`, which resolves + pins the
+    :func:`farna.core.ssrf.pinned_async_client`, which resolves + pins the
     connect IP. Auth unit tests mock outbound HTTP via ``httpx.AsyncClient``, so
     the pin resolution must not perform a real DNS lookup (hostnames like
     ``issuer.example`` are deliberately not resolvable). Stubbing

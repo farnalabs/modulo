@@ -37,7 +37,7 @@ from farna.db.models.organisation import Organisation
 from farna.db.soft_delete import register_soft_delete_filter
 
 # Soft-delete semantics depend on the global ORM filter, which is registered as
-# an import side effect of ``modulo.db.session``. A test module asserting a
+# an import side effect of ``farna.db.session``. A test module asserting a
 # soft-deleted row is hidden MUST ensure the filter is registered in its own
 # process (see the 2026-10-14 lesson in Repos/modulo/AGENTS.md).
 register_soft_delete_filter()

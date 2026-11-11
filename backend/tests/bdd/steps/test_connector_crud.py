@@ -2,7 +2,7 @@
 
 Wires the scenarios in ``connector_crud.feature`` to the real
 ``/api/v1/connectors`` create / get / list / update / delete routes
-(``modulo/api/routes/connectors.py``) through the shared TestClient +
+(``farna/api/routes/connectors.py``) through the shared TestClient +
 mock-org-session pattern used by the nearby connector / feedback step modules.
 Only the DB lookup / CRUD and RLS seams are patched at their route use-site;
 the routing, permission gating (``require_permission`` resolving through the

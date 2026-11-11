@@ -1,4 +1,4 @@
-"""Unit tests for modulo.cli.apply.loader (FAR-681 slice 1)."""
+"""Unit tests for farna.cli.apply.loader (FAR-681 slice 1)."""
 
 from __future__ import annotations
 
