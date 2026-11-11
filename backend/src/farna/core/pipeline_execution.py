@@ -3605,6 +3605,11 @@ async def _await_executor_task(
         # before the ``finally`` below cancels them — cancelling a watchdog
         # mid-write would abort its terminal-fail transaction and leave the run
         # ``running`` forever.
+        # S7497: the cancellation is deliberately consumed here for a
+        # classified cause. A genuine worker-shutdown cancellation is
+        # re-raised inside ``_resolve_cancel_outcome``; swallowing the
+        # classified causes is the FAR-598 contract (SAQ must not re-enqueue a
+        # job whose run is already terminal or owned by a successor claim).
         await _resolve_cancel_outcome(
             watchdog_task=tasks.watchdog_task,
             node_deadline_task=tasks.node_deadline_task,
