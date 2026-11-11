@@ -384,3 +384,4 @@ minimumReleaseAgeExclude:
   - '@grafana/faro-core@2.14.0'
   - '@grafana/faro-web-sdk@2.14.0'
   - '@lucide/vue@1.71.0'
+  - 'vue-router@5.5.0'
