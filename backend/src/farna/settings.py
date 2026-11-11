@@ -1330,7 +1330,7 @@ class Settings(BaseSettings):
         if self.modulo_db.lower() == "sqlite":
             _log.warning("settings.sqlite_mode")
             if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
-                self.database_url = "sqlite+aiosqlite:///./modulo.db"
+                self.database_url = "sqlite+aiosqlite:///./farna.db"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         elif self.modulo_db.lower() in ("mariadb", "mysql"):
             _log.warning("settings.mariadb_mode")
