@@ -2995,7 +2995,7 @@ jobs:
   # wrapper and must never gain a second publisher.
   # ---------------------------------------------------------------------------
   publish-pypi:
-    name: Publish farnalabs-modulo to PyPI
+    name: Publish farna-control to PyPI
     needs: release
     if: inputs.mode == 'promote'
     runs-on: ubicloud-standard-2
@@ -3038,11 +3038,11 @@ jobs:
           with zipfile.ZipFile(wheel[0]) as archive:
               metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
               metadata = email.message_from_bytes(archive.read(metadata_name))
-          assert metadata["Name"] == "farnalabs-modulo"
+          assert metadata["Name"] == "farna-control"
           assert metadata["License-Expression"] == "BUSL-1.1"
           assert metadata["License-File"] == "LICENSE"
           assert "License :: Other/Proprietary License" in metadata.get_all("Classifier", [])
-          print("Package metadata: name=farnalabs-modulo license=BUSL-1.1")
+          print("Package metadata: name=farna-control license=BUSL-1.1")
           PY
 
       - name: Smoke-test the wheel in a clean virtual environment
@@ -3053,7 +3053,7 @@ jobs:
           /tmp/modulo-pypi-smoke/bin/python -m pip install --disable-pip-version-check --no-cache-dir dist/*.whl
           /tmp/modulo-pypi-smoke/bin/modulo apply --help
 
-      - name: Publish farnalabs-modulo via Trusted Publishing
+      - name: Publish farna-control via Trusted Publishing
         # PyPI Trusted Publisher must be registered by a human for this
         # repository, workflow and `pypi` environment before promote can upload.
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

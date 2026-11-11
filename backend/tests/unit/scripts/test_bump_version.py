@@ -157,7 +157,7 @@ def test_read_version_uv_lock(root_tmp):
     """Only the editable project entry carries the project version.
 
     An unrelated dependency's quoted ``version =`` line sits BEFORE the
-    ``farnalabs-modulo`` block, so a naive first-match reader
+    ``farna-control`` block, so a naive first-match reader
     (``^version = "..."``) returns that dependency's version. The reader must
     be anchored on the project block.
     """
@@ -172,7 +172,7 @@ def test_write_version_uv_lock_updates_only_the_project_entry(root_tmp):
     path.write_text(_UV_LOCK_FIXTURE, encoding="utf-8")
     bv.write_version(path, "1.2.3", "2.0.0")
     content = path.read_text(encoding="utf-8")
-    assert 'name = "farnalabs-modulo"\nversion = "2.0.0"' in content
+    assert 'name = "farna-control"\nversion = "2.0.0"' in content
     # An unrelated dependency's version line is never touched.
     assert 'name = "httpx"\nversion = "0.28.1"' in content
     assert "1.2.3" not in content
@@ -241,7 +241,7 @@ _UV_LOCK_FIXTURE = """version = 1
 revision = 5
 
 [[package]]
-name = "farnalabs-modulo"
+name = "farna-control"
 version = "1.2.3"
 source = { editable = "." }
 dependencies = [
@@ -266,7 +266,7 @@ version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 
 [[package]]
-name = "farnalabs-modulo"
+name = "farna-control"
 version = "1.2.3"
 source = { editable = "." }
 """
@@ -296,7 +296,7 @@ def test_main_bumps_patch_by_default(monkeypatch, root_tmp, capsys):
     ):
         bv.main()
     assert 'version = "1.2.4"' in pyproject.read_text()
-    assert 'name = "farnalabs-modulo"\nversion = "1.2.4"' in uv_lock.read_text(encoding="utf-8")
+    assert 'name = "farna-control"\nversion = "1.2.4"' in uv_lock.read_text(encoding="utf-8")
     assert '"version": "1.2.4"' in package.read_text()
     assert 'appVersion: "1.2.4"' in chart.read_text()
     out = capsys.readouterr().out

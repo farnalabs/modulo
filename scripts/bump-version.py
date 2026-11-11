@@ -7,7 +7,7 @@ reads the current version from there and writes it to every mirror:
 
 * ``backend/pyproject.toml``            ``version = "X.Y.Z"``
 * ``backend/uv.lock``                   ``version = "X.Y.Z"`` (the editable
-  ``farnalabs-modulo`` package entry — uv records the project version there)
+  ``farna-control`` package entry — uv records the project version there)
 * ``frontend/package.json``             ``"version": "X.Y.Z"``
 * ``deploy/helm/modulo/Chart.yaml``     ``version: X.Y.Z`` AND ``appVersion: "X.Y.Z"``
 
@@ -45,7 +45,7 @@ _SET_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # Anchored on the block so an unrelated dependency's version line can never be
 # rewritten; a format change makes the pattern miss, which the fail-loud
 # contract below reports instead of silently skipping the mirror.
-_UV_LOCK_MODULO_BLOCK_RE = re.compile(r'(?m)^\[\[package\]\]\r?\nname = "farnalabs-modulo"\r?\nversion = "([^"]+)"')
+_UV_LOCK_MODULO_BLOCK_RE = re.compile(r'(?m)^\[\[package\]\]\r?\nname = "farna-control"\r?\nversion = "([^"]+)"')
 
 
 def _extract_version(content: str, path: Path) -> str | None:
@@ -84,7 +84,7 @@ def _field_patterns(path: Path, old_version: str, new_version: str) -> list[tupl
         return [
             (
                 re.compile(
-                    r'(?m)^(\[\[package\]\]\r?\nname = "farnalabs-modulo"\r?\nversion = )'
+                    r'(?m)^(\[\[package\]\]\r?\nname = "farna-control"\r?\nversion = )'
                     rf'"{re.escape(old_version)}"'
                 ),
                 rf'\g<1>"{new_version}"',

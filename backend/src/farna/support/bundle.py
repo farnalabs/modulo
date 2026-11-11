@@ -359,7 +359,7 @@ def _package_version() -> str:
     try:
         from importlib.metadata import version
 
-        return version("farnalabs-modulo")
+        return version("farna-control")
     except Exception:  # pragma: no cover - uninstalled dev checkout
         return "unknown"
 

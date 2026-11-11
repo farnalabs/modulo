@@ -39,7 +39,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --no-binary-package ibm-cos-sdk \
     --no-binary-package ibm-cos-sdk-core \
     --no-binary-package ibm-cos-sdk-s3transfer \
-    --no-binary-package farnalabs-modulo && \
+    --no-binary-package farna-control && \
     uv pip install --only-binary :all: psycopg2-binary==2.9.12 && \
     chmod +x entrypoint.sh
 

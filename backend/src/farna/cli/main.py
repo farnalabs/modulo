@@ -56,7 +56,7 @@ from farna.cli.backup import cli as _legacy_backup_cli  # noqa: E402 — must fo
 from farna.core.secret_patterns import WHOLESALE_REDACT_FIELDS, is_sensitive_field_name  # noqa: E402
 
 _DEFAULT_COMMAND = "backup"
-_PACKAGE_NAME = "farnalabs-modulo"
+_PACKAGE_NAME = "farna-control"
 
 # Canonical sensitive-field vocabulary (single source of truth: FAR-2305).
 # ``modulo env``, ``modulo doctor --report`` and the support bundle all
