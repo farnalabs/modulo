@@ -43,22 +43,10 @@ COLUMNS = ("outputs_json", "node_telemetry_json", "raw_output_markers")
 # Whole-file allowlist — every reference in these files is sanctioned:
 # (path-relative-to-src/farna, reason).
 _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
-    "db/crud/run_node_outputs.py": (
-        "the repo module — the single blob chokepoint: the new-table columns "
-        "(ORM columns, legit) + the raw Core legacy-table readers that serve "
-        "the EMPTY/MISMATCH fallback, the fenced markers join, and the marker "
-        "dual-write's legacy leg"
-    ),
+    "db/crud/run_node_outputs.py": ("the repo module — the single blob chokepoint: the new-table columns (ORM columns, legit) + the raw Core legacy-table readers that serve the EMPTY/MISMATCH fallback, the fenced markers join, and the marker dual-write's legacy leg"),
     "db/models/run_node_outputs.py": "the new-table model + its portable CHECK constraints",
-    "core/pipeline_engine/workspace_input_audit.py": (
-        "sanctioned read/write surface for the new run_node_outputs table "
-        "(the legit blob chokepoint, FAR-801) — references RunNodeOutput.outputs_json "
-        "(the new-table column), NOT the legacy runs blob column that B1 cut"
-    ),
-    "core/analytics/maintenance.py": (
-        "SQL-side facts formula — new-table column reads + the legacy coalesce"
-        " fallback through the raw Core legacy table (documented parity, dropped at B2b)"
-    ),
+    "core/pipeline_engine/workspace_input_audit.py": ("sanctioned read/write surface for the new run_node_outputs table (the legit blob chokepoint, FAR-801) — references RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs blob column that B1 cut"),
+    "core/analytics/maintenance.py": ("SQL-side facts formula — new-table column reads + the legacy coalesce fallback through the raw Core legacy table (documented parity, dropped at B2b)"),
 }
 
 # Scoped allowlist — (file, innermost-enclosing-scope-name): the only
@@ -67,30 +55,12 @@ _WHOLE_FILE_ALLOWLIST: dict[str, str] = {
 _SCOPED_ALLOWLIST: dict[tuple[str, str], str] = {
     ("api/routes/runs.py", "build_fixture_map"): "RunIOResponse wire-shape field, not the ORM column",
     ("api/routes/runs.py", "_build_messages"): "_MessageContext dataclass field, not the ORM column",
-    ("db/crud/run.py", "update_run_status"): (
-        "_RunStatusUpdate payload kwargs (the blobs write API surface), not the ORM column"
-    ),
-    ("db/crud/run.py", "_update_run_status_fenced"): (
-        "_RunStatusUpdate payload fields (the blobs write API surface), not the ORM column"
-    ),
-    ("api/routes/runs.py", "_do_get_workspace_inputs"): (
-        "RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs "
-        "blob column that B1 cut — FAR-802 run-detail workspace-inputs surfacing"
-    ),
-    ("core/analytics/__init__.py", "_fact_workspace_inputs_count"): (
-        "RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs "
-        "blob column that B1 cut — FAR-802 workspace_inputs_count daily fact"
-    ),
-    ("core/agent_return_legacy.py", "_legacy_predicate"): (
-        "RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), "
-        "NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape "
-        "straggler set-based predicate"
-    ),
-    ("core/agent_return_legacy.py", "count_legacy_agent_return_rows"): (
-        "RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), "
-        "NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape "
-        "straggler sample projection"
-    ),
+    ("db/crud/run.py", "update_run_status"): ("_RunStatusUpdate payload kwargs (the blobs write API surface), not the ORM column"),
+    ("db/crud/run.py", "_update_run_status_fenced"): ("_RunStatusUpdate payload fields (the blobs write API surface), not the ORM column"),
+    ("api/routes/runs.py", "_do_get_workspace_inputs"): ("RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs blob column that B1 cut — FAR-802 run-detail workspace-inputs surfacing"),
+    ("core/analytics/__init__.py", "_fact_workspace_inputs_count"): ("RunNodeOutput.outputs_json (the new-table column), NOT the legacy runs blob column that B1 cut — FAR-802 workspace_inputs_count daily fact"),
+    ("core/agent_return_legacy.py", "_legacy_predicate"): ("RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape straggler set-based predicate"),
+    ("core/agent_return_legacy.py", "count_legacy_agent_return_rows"): ("RunNodeOutput.outputs_json / .node_telemetry_json (the new-table columns), NOT the legacy runs blob column that B1 cut — FAR-132 read-only legacy-shape straggler sample projection"),
 }
 
 # Raw-text allowlist — whole files whose string constants may carry the
@@ -206,27 +176,12 @@ def test_no_legacy_blob_reads_outside_the_repo():
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and node.id in COLUMNS and node.id not in bound and not whole_file_allowed:
                 name_violations.append(f"  {rel}:{node.lineno}  bare name {node.id} ({type(node.ctx).__name__})")
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "getattr"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)
-                and node.args[1].value in COLUMNS
-            ):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr" and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str) and node.args[1].value in COLUMNS:
                 getattr_violations.append(f"  {rel}:{node.lineno}  getattr(..., '{node.args[1].value}')")
 
             # RAW-TEXT: string constants carrying a column name, docstrings
             # excluded; comments filtered via tokenize below.
-            if (
-                isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
-                and not whole_file_allowed
-                and rel not in _RAW_TEXT_FILE_ALLOWLIST
-                and not _is_docstring(node, parents)
-                and any(col in node.value for col in COLUMNS)
-            ):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and not whole_file_allowed and rel not in _RAW_TEXT_FILE_ALLOWLIST and not _is_docstring(node, parents) and any(col in node.value for col in COLUMNS):
                 raw_text_violations.append(f"  {rel}:{node.lineno}  string {node.value[:72]!r}")
 
         if whole_file_allowed or rel in _RAW_TEXT_FILE_ALLOWLIST:
@@ -240,12 +195,5 @@ def test_no_legacy_blob_reads_outside_the_repo():
     if getattr_violations:
         problems.append("getattr(..., '<blob>') banned — call the repo reader:\n" + "\n".join(getattr_violations))
     if raw_text_violations:
-        problems.append(
-            "Raw-text refs to legacy blob columns outside the allowlist:\n" + "\n".join(raw_text_violations)
-        )
-    assert not problems, (
-        "FAR-583 read-switch violated. Every run-blob read must go through\n"
-        "farna.db.crud.run_node_outputs (the legacy columns dual-write until\n"
-        "B1 and drop at B2b); extend the allowlist ONLY for a sanctioned\n"
-        "surface with a documented reason.\n\n" + "\n\n".join(problems)
-    )
+        problems.append("Raw-text refs to legacy blob columns outside the allowlist:\n" + "\n".join(raw_text_violations))
+    assert not problems, "FAR-583 read-switch violated. Every run-blob read must go through\nfarna.db.crud.run_node_outputs (the legacy columns dual-write until\nB1 and drop at B2b); extend the allowlist ONLY for a sanctioned\nsurface with a documented reason.\n\n" + "\n\n".join(problems)

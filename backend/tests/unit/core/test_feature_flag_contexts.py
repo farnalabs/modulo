@@ -176,9 +176,7 @@ class TestDbPlanContext:
             patch("farna.db.crud.tier_catalog.list_tiers", return_value=_db_tiers()),
             patch("farna.db.crud.tier_catalog.list_feature_flags", return_value=_db_flags()),
         ):
-            return await DbPlanContext.from_db(
-                session, tier, has_license_key=has_license_key, license_features=license_features
-            )
+            return await DbPlanContext.from_db(session, tier, has_license_key=has_license_key, license_features=license_features)
 
     async def test_feature_enabled_unknown_flag_returns_false(self) -> None:
         ctx = await self._ctx("community")
@@ -381,9 +379,7 @@ class TestEntityOverrideLookups:
     @staticmethod
     def _org_patch(session: AsyncMock, org, side_effect=None) -> contextlib.AbstractContextManager[None]:
         stack = contextlib.ExitStack()
-        stack.enter_context(
-            _fake_crud_module("farna.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock()))
-        )
+        stack.enter_context(_fake_crud_module("farna.api.dependencies", get_or_create_engine=MagicMock(return_value=MagicMock())))
         stack.enter_context(
             _fake_crud_module(
                 "farna.db.crud.organisation",

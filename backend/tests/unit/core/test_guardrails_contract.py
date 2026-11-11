@@ -72,11 +72,7 @@ def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
     result = ValidationResult()
     GraphValidator()._check_output_validation(
         "node-1",
-        {
-            "eval_definitions": [
-                {"id": "gr", "name": "guardrail-eval", "type": "guardrail", "config": {}, "failure_behaviour": "block"}
-            ]
-        },
+        {"eval_definitions": [{"id": "gr", "name": "guardrail-eval", "type": "guardrail", "config": {}, "failure_behaviour": "block"}]},
         result,
     )
     codes = [issue.code for issue in result.issues]

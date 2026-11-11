@@ -96,26 +96,16 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     ids = {"account": uuid.uuid4(), "org": uuid.uuid4(), "pipeline": uuid.uuid4(), "other_pipeline": uuid.uuid4()}
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'f2227@example.com', 'f2227', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'f2227@example.com', 'f2227', 'hash', 'local', true)"),
             {"id": str(ids["account"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'f2227', 'f2227', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'f2227', 'f2227', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         for key in ("pipeline", "other_pipeline"):
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :aid, :name, 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :aid, :name, 10, 30, 300, '{}'::json, '[]'::json)"),
                 {"id": str(ids[key]), "oid": str(ids["org"]), "aid": str(ids["account"]), "name": f"f2227 {key}"},
             )
         rows: list[tuple[uuid.UUID, str, str, str | None, bool]] = [
@@ -130,12 +120,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
         ]
         for row_id, pipeline_key, trigger_type, name, deleted in rows:
             await conn.execute(
-                text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, name, "
-                    "config_json, deleted_at) "
-                    "VALUES (:id, :oid, :pid, :aid, :tt, :name, '{}'::json, "
-                    "CASE WHEN :deleted THEN now() ELSE NULL END)"
-                ),
+                text("INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, name, config_json, deleted_at) VALUES (:id, :oid, :pid, :aid, :tt, :name, '{}'::json, CASE WHEN :deleted THEN now() ELSE NULL END)"),
                 {
                     "id": str(row_id),
                     "oid": str(ids["org"]),
@@ -163,14 +148,7 @@ async def _names(engine: AsyncEngine) -> dict[uuid.UUID, str | None]:
 
 async def _name_is_nullable(engine: AsyncEngine) -> bool:
     async with engine.connect() as conn:
-        value = (
-            await conn.execute(
-                text(
-                    "SELECT is_nullable FROM information_schema.columns "
-                    "WHERE table_name = 'triggers' AND column_name = 'name'"
-                )
-            )
-        ).scalar_one()
+        value = (await conn.execute(text("SELECT is_nullable FROM information_schema.columns WHERE table_name = 'triggers' AND column_name = 'name'"))).scalar_one()
     return str(value) == "YES"
 
 
@@ -196,10 +174,7 @@ async def test_upgrade_backfills_null_names_and_enforces_not_null(pre_upgrade_db
         with pytest.raises(IntegrityError):
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, name, "
-                        "config_json) VALUES (:id, :oid, :pid, :aid, 'manual', NULL, '{}'::json)"
-                    ),
+                    text("INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, trigger_type, name, config_json) VALUES (:id, :oid, :pid, :aid, 'manual', NULL, '{}'::json)"),
                     {
                         "id": str(uuid.uuid4()),
                         "oid": str(ids["org"]),

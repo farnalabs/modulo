@@ -72,10 +72,7 @@ class TestScanPredicateCarriesTheUnownedResumeLeg:
 
         assert "runs.dispatcher IS NULL OR runs.dispatcher != 'saq'" in sql
         assert "runs.status = 'running' AND (runs.dispatcher IS NULL OR runs.dispatcher != 'saq')" in sql
-        assert (
-            "runs.dispatch_phase = 'first_node_dispatched' AND "
-            "(runs.heartbeat_at IS NULL OR runs.heartbeat_at < now() - 600 * interval '1 second')"
-        ) in sql
+        assert ("runs.dispatch_phase = 'first_node_dispatched' AND (runs.heartbeat_at IS NULL OR runs.heartbeat_at < now() - 600 * interval '1 second')") in sql
         # The FAR-1803 saq-owned leg is untouched.
         assert "runs.dispatcher = 'saq' AND runs.dispatch_phase = 'first_node_dispatched'" in sql
 
@@ -138,12 +135,7 @@ class TestUnownedNodeStartedResumeRowRecheck:
         assert ch._is_unowned_node_started_resume_row(self._row(dispatcher="saq"), STALE_WINDOW) is False
 
     def test_fresh_heartbeat_is_a_live_attempt(self) -> None:
-        assert (
-            ch._is_unowned_node_started_resume_row(
-                self._row(heartbeat_at=datetime.now(UTC) - timedelta(seconds=5)), STALE_WINDOW
-            )
-            is False
-        )
+        assert ch._is_unowned_node_started_resume_row(self._row(heartbeat_at=datetime.now(UTC) - timedelta(seconds=5)), STALE_WINDOW) is False
 
     def test_null_heartbeat_is_stale_evidence(self) -> None:
         assert ch._is_unowned_node_started_resume_row(self._row(heartbeat_at=None), STALE_WINDOW) is True
@@ -331,13 +323,9 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
         stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
-        reenqueue = stack.enter_context(
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
-        )
+        reenqueue = stack.enter_context(patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result))
         stack.enter_context(patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock))
-        stack.enter_context(
-            patch.object(ch, "_awaiting_human_has_committed_decision", new_callable=AsyncMock, return_value=True)
-        )
+        stack.enter_context(patch.object(ch, "_awaiting_human_has_committed_decision", new_callable=AsyncMock, return_value=True))
         stack.enter_context(
             patch.object(
                 recovery_module,
@@ -347,9 +335,7 @@ async def _run_reconcile(
             )
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
-        stack.enter_context(
-            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
-        )
+        stack.enter_context(patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0))
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session
 
@@ -372,9 +358,7 @@ class TestHandlerRecoversByCheckpointResume:
         """A checkpointless row would be RE-EXECUTED from the graph start by a
         resume, so the handler refuses it (counted skipped) and the sweep's
         terminaliser owns it."""
-        summary, reenqueue, _session = await _run_reconcile(
-            monkeypatch, [_unowned_row(uuid.uuid4())], checkpoint_present=False
-        )
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [_unowned_row(uuid.uuid4())], checkpoint_present=False)
 
         reenqueue.assert_not_awaited()
         assert summary["repaired"] == 0
@@ -462,10 +446,7 @@ async def test_recent_node_output_shields_the_run_and_a_stale_one_does_not() -> 
             await conn.exec_driver_sql("CREATE TABLE run_node_outputs (run_id VARCHAR, updated_at DATETIME)")
             await conn.execute(text("INSERT INTO runs (id) VALUES ('recent'), ('stale'), ('none')"))
             await conn.execute(
-                text(
-                    "INSERT INTO run_node_outputs (run_id, updated_at) VALUES "
-                    "(:recent_id, :recent_at), (:stale_id, :stale_at)"
-                ),
+                text("INSERT INTO run_node_outputs (run_id, updated_at) VALUES (:recent_id, :recent_at), (:stale_id, :stale_at)"),
                 {
                     "recent_id": "recent",
                     "recent_at": (now - timedelta(minutes=1)).strftime(fmt),

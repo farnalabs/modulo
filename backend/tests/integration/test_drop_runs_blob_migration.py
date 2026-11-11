@@ -39,13 +39,7 @@ async def org_ready(test_org: uuid.UUID, test_user: uuid.UUID, db_engine: AsyncE
     """Seed the b2b pipeline + snapshot under the session-scoped test org."""
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:pid, :oid, 'b2b pipeline', :uid, 10, 30, 300, '{}'::json, '[]'::json) "
-                "ON CONFLICT (id) DO NOTHING"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:pid, :oid, 'b2b pipeline', :uid, 10, 30, 300, '{}'::json, '[]'::json) ON CONFLICT (id) DO NOTHING"),
             {"pid": PIPELINE_ID, "oid": str(test_org), "uid": str(test_user)},
         )
         await conn.execute(
@@ -106,17 +100,7 @@ async def _seed_run(
 
 async def test_dropped_legacy_columns(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'runs'"
-                    )
-                )
-            ).all()
-        }
+        cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs'"))).all()}
     assert "outputs_json" not in cols
     assert "node_telemetry_json" not in cols
     assert "raw_output_markers" not in cols
@@ -137,9 +121,7 @@ async def test_blobs_serve_from_the_new_table(db_engine: AsyncEngine, org_ready:
             outputs={"n1": {"answer": 42}},
             telemetry=None,
         )
-        await write_run_markers(
-            session, run_id=run_id, organisation_id=org_ready, markers={f"run:{run_id}:node:n1:0": {"raw": "x"}}
-        )
+        await write_run_markers(session, run_id=run_id, organisation_id=org_ready, markers={f"run:{run_id}:node:n1:0": {"raw": "x"}})
 
     async with sessions() as session:
         async with session.begin():
@@ -152,17 +134,7 @@ async def test_blobs_serve_from_the_new_table(db_engine: AsyncEngine, org_ready:
 
 async def test_quarantine_table_survives(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        names = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public' AND table_name = 'run_node_outputs_quarantine'"
-                    )
-                )
-            ).all()
-        }
+        names = {row[0] for row in (await conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'run_node_outputs_quarantine'"))).all()}
     assert names == {"run_node_outputs_quarantine"}
 
 
@@ -178,11 +150,7 @@ async def test_drain_count_matches_the_migration_gate(db_engine: AsyncEngine, or
     async with db_engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT count(*) FROM runs r "
-                    "WHERE r.status IN ('running', 'claimed', 'awaiting_human', 'pending', 'hitl_parked') "
-                    "AND r.created_at < :cutoff"
-                ),
+                text("SELECT count(*) FROM runs r WHERE r.status IN ('running', 'claimed', 'awaiting_human', 'pending', 'hitl_parked') AND r.created_at < :cutoff"),
                 {"cutoff": _B1_CUTOFF},
             )
         ).scalar_one()

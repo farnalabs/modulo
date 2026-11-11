@@ -39,9 +39,7 @@ from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES, TriggerEvent
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _MIGRATION_NAME = "0319_trigger_event_parse_failed"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 
 # (_MIGRATION_NAME above is pinned to the migration that owns the widened
 # constraint under test — the Slack parse-failure fix moved that ownership to
@@ -187,9 +185,7 @@ class TestRequiredRefsMissingRoundTrip:
             from sqlalchemy import select
 
             async with maker() as session:
-                stored = (
-                    await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))
-                ).scalar_one()
+                stored = (await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))).scalar_one()
                 assert stored.validation_result == "required_refs_missing"
                 assert stored.organisation_id == org_id
         finally:
@@ -232,9 +228,7 @@ class TestParseFailedRoundTrip:
             from sqlalchemy import select
 
             async with maker() as session:
-                stored = (
-                    await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))
-                ).scalar_one()
+                stored = (await session.execute(select(TriggerEvent).where(TriggerEvent.trigger_id == trigger_id))).scalar_one()
                 assert stored.validation_result == "parse_failed"
                 assert stored.organisation_id == org_id
         finally:

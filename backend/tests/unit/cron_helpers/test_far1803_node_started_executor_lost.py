@@ -131,9 +131,7 @@ class TestFar1803ReproResolved:
         the shield lifts once the heartbeat is stale."""
         assert "heartbeat_at >= now() - (:heartbeat_fresh * interval '1 second')" in ch._MID_GRAPH_WEDGE_SQL
 
-    async def test_repro_full_tick_now_reports_the_class_under_its_own_counter(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_repro_full_tick_now_reports_the_class_under_its_own_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """PRE-FIX OBSERVED: feeding the observed row through a real reconcile
         tick left it ``running``, never re-dispatched it (correct) but reported
         it ONLY under ``node_started_deferred`` — a counter documented as
@@ -164,10 +162,7 @@ class TestFar1803Regression:
         # FAR-1803 saq leg and FAR-2122's non-saq checkpoint-resume leg.
         assert sql.count("dispatch_phase = 'first_node_dispatched'") == 3
         # The new leg pairs the phase with the staleness gate...
-        assert (
-            "runs.dispatcher = 'saq' AND runs.dispatch_phase = 'first_node_dispatched' "
-            "AND (runs.heartbeat_at IS NULL OR runs.heartbeat_at < now() - 600 * interval '1 second')"
-        ) in sql
+        assert ("runs.dispatcher = 'saq' AND runs.dispatch_phase = 'first_node_dispatched' AND (runs.heartbeat_at IS NULL OR runs.heartbeat_at < now() - 600 * interval '1 second')") in sql
         # ...and refuses the guardrail-override class (its leg re-dispatches
         # resume_run; this leg must never shadow it). ``not_(...is_(True))``
         # compiles to ``IS NOT true`` — NULL (the common case) passes, so a
@@ -187,9 +182,7 @@ class TestFar1803Regression:
         # race/fail-closed scope (fresh heartbeat / missing phase attribute).
         assert summary["node_started_deferred"] == 0
 
-    async def test_reconcile_never_counts_a_fresh_heartbeat_row_as_executor_lost(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_reconcile_never_counts_a_fresh_heartbeat_row_as_executor_lost(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A node-started row whose heartbeat is FRESH is a LIVE attempt: it
         is not this class (the belt still holds it back from re-dispatch)."""
         row = _run_row(
@@ -221,9 +214,7 @@ class TestFar1803Regression:
         stale/NULL heartbeat ``NOT (shield)`` is true and the age gate
         terminalises the row ``no_progress`` at the bound."""
         session = _CaptureSession()
-        await ch._terminalize_mid_graph_wedges(
-            session, uuid.uuid4(), max_age_minutes=135, max_rows=None, stale_seconds=STALE_WINDOW_SECONDS
-        )
+        await ch._terminalize_mid_graph_wedges(session, uuid.uuid4(), max_age_minutes=135, max_rows=None, stale_seconds=STALE_WINDOW_SECONDS)
         sql, params = session.calls[0]
         assert "heartbeat_at IS NOT NULL" in sql
         assert "heartbeat_at >= now() - (:heartbeat_fresh * interval '1 second')" in sql

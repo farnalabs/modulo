@@ -65,10 +65,7 @@ def test_vocabulary_drift_guard_matches_model() -> None:
     model's ``INITIALISATION_STRATEGIES`` single source of truth. A value added
     to one side and not the other breaks the constraint/model contract."""
     module = _load_migration()
-    assert set(module._VOCABULARY) == INITIALISATION_STRATEGIES, (
-        "migration 0227 vocabulary drifted from INITIALISATION_STRATEGIES — "
-        "keep them in sync (model is the source of truth)"
-    )
+    assert set(module._VOCABULARY) == INITIALISATION_STRATEGIES, "migration 0227 vocabulary drifted from INITIALISATION_STRATEGIES — keep them in sync (model is the source of truth)"
 
 
 def test_check_sql_and_name_drift_guard_matches_model() -> None:
@@ -81,11 +78,7 @@ def test_check_sql_and_name_drift_guard_matches_model() -> None:
     )
 
     module = _load_migration()
-    constraint = next(
-        c
-        for c in EnvironmentProfile.__table_args__
-        if getattr(c, "name", None) == "ck_env_profiles_initialisation_strategy"
-    )
+    constraint = next(c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_initialisation_strategy")
     assert getattr(constraint, "name", None) == module._CONSTRAINT_NAME
     # CHECK expression parity (sorted vocabulary => identical text).
     assert _initialisation_strategy_check_sql() == module._CHECK_EXPR
@@ -127,13 +120,7 @@ def test_check_rejects_disallowed_value_and_accepts_allowed_sqlite_roundtrip() -
     engine = create_engine("sqlite:///:memory:")
     try:
         with engine.connect() as conn:
-            conn.execute(
-                text(
-                    "CREATE TABLE environment_profiles ("
-                    "id INTEGER PRIMARY KEY, "
-                    "initialisation_strategy VARCHAR(30) NOT NULL DEFAULT 'git_clone')"
-                )
-            )
+            conn.execute(text("CREATE TABLE environment_profiles (id INTEGER PRIMARY KEY, initialisation_strategy VARCHAR(30) NOT NULL DEFAULT 'git_clone')"))
             conn.commit()
 
         with engine.connect() as mig_conn:
@@ -154,19 +141,13 @@ def test_check_rejects_disallowed_value_and_accepts_allowed_sqlite_roundtrip() -
 
         # Allowed values are accepted.
         with engine.connect() as ok_conn:
-            ok_conn.execute(
-                text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (1, 'git_clone')")
-            )
-            ok_conn.execute(
-                text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (2, 'managed_inputs')")
-            )
+            ok_conn.execute(text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (1, 'git_clone')"))
+            ok_conn.execute(text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (2, 'managed_inputs')"))
             ok_conn.commit()
 
         # A disallowed value is rejected by the CHECK constraint.
         with engine.connect() as bad_conn, bad_conn.begin(), pytest.raises(IntegrityError):
-            bad_conn.execute(
-                text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (3, 'nonsense')")
-            )
+            bad_conn.execute(text("INSERT INTO environment_profiles (id, initialisation_strategy) VALUES (3, 'nonsense')"))
     finally:
         # Close the pooled SingletonThreadPool connection to avoid a
         # ResourceWarning on the in-memory SQLite engine at GC time.

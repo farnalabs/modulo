@@ -35,11 +35,7 @@ set_public_key(_TEST_PUB)
 def _sign_license_payload(payload: dict, private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
     sig_bytes = bytes.fromhex(sig_hex)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(sig_bytes).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -183,11 +179,7 @@ def tampered_license_key(ctx: dict[str, Any]) -> None:
     payload = _valid_payload()
     key = _sign_license_payload(payload)
     parts = key.split(".")
-    tampered_payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps({"tier": "community"}, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     ctx["license_key"] = f"{tampered_payload_b64}.{parts[1]}"
 
 

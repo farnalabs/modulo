@@ -29,9 +29,7 @@ async def test_query_repos(connector):
 
 @respx.mock
 async def test_query_file(connector):
-    respx.get(f"{_API}/repositories/myteam/myrepo/src/main/README.md", headers={"Accept": "*/*"}).mock(
-        return_value=httpx.Response(200, text="# Hello")
-    )
+    respx.get(f"{_API}/repositories/myteam/myrepo/src/main/README.md", headers={"Accept": "*/*"}).mock(return_value=httpx.Response(200, text="# Hello"))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -93,9 +91,7 @@ async def test_write_file(connector):
 @respx.mock
 async def test_write_pull(connector):
     pr_response = {"id": 99, "title": "Add feature", "state": "OPEN"}
-    respx.post(f"{_API}/repositories/myteam/myrepo/pullrequests").mock(
-        return_value=httpx.Response(201, json=pr_response)
-    )
+    respx.post(f"{_API}/repositories/myteam/myrepo/pullrequests").mock(return_value=httpx.Response(201, json=pr_response))
     result = await connector.write(
         ConnectorPayload(
             resource="pull",
@@ -115,9 +111,7 @@ async def test_write_pull(connector):
 @respx.mock
 async def test_write_pull_without_target_and_description(connector):
     pr_response = {"id": 100, "title": "Quick fix"}
-    respx.post(f"{_API}/repositories/myteam/myrepo/pullrequests").mock(
-        return_value=httpx.Response(201, json=pr_response)
-    )
+    respx.post(f"{_API}/repositories/myteam/myrepo/pullrequests").mock(return_value=httpx.Response(201, json=pr_response))
     result = await connector.write(
         ConnectorPayload(
             resource="pull",
@@ -149,9 +143,7 @@ def test_connector_type(connector):
 @respx.mock
 async def test_query_repos_corrupt_total(connector):
     """A non-finite ``size`` must not poison the reported total."""
-    respx.get(f"{_API}/repositories/myteam").mock(
-        return_value=httpx.Response(200, content=b'{"values": [{"uuid": "{1}"}], "size": 1e999}')
-    )
+    respx.get(f"{_API}/repositories/myteam").mock(return_value=httpx.Response(200, content=b'{"values": [{"uuid": "{1}"}], "size": 1e999}'))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"workspace": "myteam"}))
     assert len(result.records) == 1
     assert result.total == 0
@@ -171,9 +163,7 @@ async def test_query_repos_corrupt_body_no_crash(connector):
 async def test_query_repos_non_list_values_no_crash(connector):
     """A corrupt body placing a non-list in ``values`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_API}/repositories/myteam").mock(
-        return_value=httpx.Response(200, json={"values": "not-a-list", "size": 2})
-    )
+    respx.get(f"{_API}/repositories/myteam").mock(return_value=httpx.Response(200, json={"values": "not-a-list", "size": 2}))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"workspace": "myteam"}))
     assert not result.records
     assert result.total == 2

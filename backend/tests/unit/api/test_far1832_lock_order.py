@@ -203,9 +203,7 @@ def system_admin_client(events: list[str]) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-def test_f6_delete_org_lock_precedes_the_system_audit_append(
-    system_admin_client: TestClient, events: list[str]
-) -> None:
+def test_f6_delete_org_lock_precedes_the_system_audit_append(system_admin_client: TestClient, events: list[str]) -> None:
     """The crud delete (org-row lock) runs BEFORE the system-audit append —
     global order R6, repaired by FAR-1832 QA F6. Exercised cross-organisation,
     which is the only deletion path FAR-2225 leaves reachable."""
@@ -233,10 +231,7 @@ def test_f6_delete_org_lock_precedes_the_system_audit_append(
         resp = system_admin_client.delete(_DELETE_ORG_URL)
 
     assert resp.status_code == 204, resp.text
-    assert events == ["begin-enter", "read_org", "crud_delete", "system_audit_append", "begin-exit"], (
-        "F6: the org delete must precede the system-audit append, and both must "
-        f"stay inside the same transaction: {events}"
-    )
+    assert events == ["begin-enter", "read_org", "crud_delete", "system_audit_append", "begin-exit"], f"F6: the org delete must precede the system-audit append, and both must stay inside the same transaction: {events}"
 
 
 def test_f6_failed_delete_never_reaches_the_append(system_admin_client: TestClient, events: list[str]) -> None:
@@ -271,9 +266,7 @@ def test_f6_failed_delete_never_reaches_the_append(system_admin_client: TestClie
     assert "system_audit_append" not in events, f"a failed delete must not append: {events}"
 
 
-def test_f6_refuses_the_callers_own_org_before_any_database_work(
-    system_admin_client: TestClient, events: list[str]
-) -> None:
+def test_f6_refuses_the_callers_own_org_before_any_database_work(system_admin_client: TestClient, events: list[str]) -> None:
     """FAR-2225: the same route refuses the caller's OWN organisation with 409
     before the transaction opens, so the lock-then-append order is irrelevant
     there — nothing is locked and nothing is appended."""

@@ -127,23 +127,13 @@ async def test_rls_isolates_cost_state_between_orgs(
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
-            visible = (
-                (
-                    await session.execute(
-                        select(OrganisationCostState.org_id).where(OrganisationCostState.org_id.in_([org_a, org_b]))
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            visible = (await session.execute(select(OrganisationCostState.org_id).where(OrganisationCostState.org_id.in_([org_a, org_b])))).scalars().all()
             assert set(visible) == {org_a}
 
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             # Even an explicit cross-org predicate returns nothing.
-            cross = await session.scalar(
-                select(OrganisationCostState.org_id).where(OrganisationCostState.org_id == org_b)
-            )
+            cross = await session.scalar(select(OrganisationCostState.org_id).where(OrganisationCostState.org_id == org_b))
             assert cross is None
     finally:
         async with db_engine.begin() as conn:

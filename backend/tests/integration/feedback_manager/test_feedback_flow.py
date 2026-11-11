@@ -313,8 +313,7 @@ async def _create_seed_run(
     pipeline_name = f"feedback-test-pipeline-{uuid.uuid4().hex[:10]}"
     await session.execute(
         text(
-            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
-            "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
+            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
         ),
         {
             "id": str(pipeline_id),

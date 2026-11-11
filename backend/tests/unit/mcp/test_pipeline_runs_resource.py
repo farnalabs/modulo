@@ -66,12 +66,7 @@ class _DeferredColumnRun:
 
     @property
     def cost_breakdown(self) -> list[dict[str, Any]]:
-        raise AssertionError(
-            "cost_breakdown was read off the ORM instance — it is a deferred "
-            "column, so under asyncio this raises MissingGreenlet (session open) "
-            "or DetachedInstanceError (session closed). The MCP pipeline-runs "
-            "resource must load it via the awaited get_run_cost_breakdowns query."
-        )
+        raise AssertionError("cost_breakdown was read off the ORM instance — it is a deferred column, so under asyncio this raises MissingGreenlet (session open) or DetachedInstanceError (session closed). The MCP pipeline-runs resource must load it via the awaited get_run_cost_breakdowns query.")
 
 
 def _make_mock_session() -> AsyncMock:

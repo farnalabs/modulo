@@ -60,27 +60,12 @@ def _source() -> str:
 
 def _scaffold(conn: sa.Connection) -> None:
     """A pre-migration ``policy_gates`` shape (no ``evaluation_mode``)."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE policy_gates ("
-            "id INTEGER PRIMARY KEY, "
-            "organisation_id TEXT NOT NULL, "
-            "eval_id TEXT NOT NULL, "
-            "node_id TEXT, "
-            "action TEXT NOT NULL, "
-            "version INTEGER NOT NULL DEFAULT 1)"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE policy_gates (id INTEGER PRIMARY KEY, organisation_id TEXT NOT NULL, eval_id TEXT NOT NULL, node_id TEXT, action TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1)"))
 
 
 def _insert_legacy_gate(conn: sa.Connection) -> None:
     """A gate row created BEFORE the upgrade — no ``evaluation_mode``."""
-    conn.execute(
-        sa.text(
-            "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) "
-            "VALUES (1, 'org-1', 'eval-1', 'node-1', 'block', 1)"
-        )
-    )
+    conn.execute(sa.text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (1, 'org-1', 'eval-1', 'node-1', 'block', 1)"))
 
 
 def _run(engine: sa.Engine, module: ModuleType, fn: str) -> None:
@@ -132,12 +117,7 @@ class TestSqliteRoundTrip:
             _scaffold(conn)
         _run(sqlite_engine, _load_migration(), "upgrade")
         with sqlite_engine.begin() as conn:
-            conn.execute(
-                sa.text(
-                    "INSERT INTO policy_gates (id, organisation_id, eval_id, action) "
-                    "VALUES (2, 'org-1', 'eval-2', 'warn')"
-                )
-            )
+            conn.execute(sa.text("INSERT INTO policy_gates (id, organisation_id, eval_id, action) VALUES (2, 'org-1', 'eval-2', 'warn')"))
         with sqlite_engine.connect() as conn:
             mode = conn.execute(sa.text("SELECT evaluation_mode FROM policy_gates WHERE id = 2")).scalar_one()
         assert mode == "automatic"

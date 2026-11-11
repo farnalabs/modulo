@@ -138,11 +138,7 @@ class TestApproveWithModificationClientType:
                 client_type=_BROWSER,
                 answer={"kind": "choice", "option_id": "ship-it"},
             )
-        modified_event = next(
-            c.kwargs["payload_json"]
-            for c in mock_audit.await_args_list
-            if c.kwargs["event_type"] == "hitl.output_modified"
-        )
+        modified_event = next(c.kwargs["payload_json"] for c in mock_audit.await_args_list if c.kwargs["event_type"] == "hitl.output_modified")
         assert modified_event["answer_kind"] == "choice"
         assert modified_event["answer_option_id"] == "ship-it"
 
@@ -159,11 +155,7 @@ class TestApproveWithModificationClientType:
                 modified_output={"value": 42},
                 actor_id=_USER,
             )
-        modified_event = next(
-            c.kwargs["payload_json"]
-            for c in mock_audit.await_args_list
-            if c.kwargs["event_type"] == "hitl.output_modified"
-        )
+        modified_event = next(c.kwargs["payload_json"] for c in mock_audit.await_args_list if c.kwargs["event_type"] == "hitl.output_modified")
         assert "answer_kind" not in modified_event
         assert "answer_option_id" not in modified_event
 

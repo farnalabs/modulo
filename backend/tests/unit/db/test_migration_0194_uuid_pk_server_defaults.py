@@ -161,9 +161,7 @@ def test_migration_source_is_frozen_not_runtime_enumerated() -> None:
 
 def test_upgrade_covers_exactly_every_metadata_uuid_pk() -> None:
     _load_migration()  # the migration module must import cleanly
-    upgrade_pairs_all = {
-        (_RENAMED_BY_0257.get(table, table), column) for table, column in _alter_pairs(_source_code(), "SET")
-    }
+    upgrade_pairs_all = {(_RENAMED_BY_0257.get(table, table), column) for table, column in _alter_pairs(_source_code(), "SET")}
     metadata_pairs = _metadata_uuid_pk_pairs()
 
     # A retired-model pair must still be covered by the frozen migration...

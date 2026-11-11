@@ -311,9 +311,7 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
             )
 
         assert count == 1
-        stored = (
-            await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))
-        ).scalar_one()
+        stored = (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))).scalar_one()
         assert all("policy_gate" not in node for node in stored.graph_json["nodes"])
         assert "policy_gate declaration(s) dropped on clone of snapshot" in caplog.text
         assert _NODE_A in caplog.text
@@ -362,9 +360,7 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
             )
 
         assert count == 1
-        stored = (
-            await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))
-        ).scalar_one()
+        stored = (await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))).scalar_one()
         assert stored.graph_json == ["not-a-dict"]
         assert "policy_gate declaration(s) dropped on clone of snapshot" not in caplog.text
 

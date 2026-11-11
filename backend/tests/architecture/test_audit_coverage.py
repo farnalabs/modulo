@@ -232,10 +232,7 @@ def test_no_unannotated_mutating_routes_outside_the_baseline():
     unannotated = scanner.scan_tree()
     new_violations, _stale = scanner.compare(unannotated, scanner.read_baseline())
     assert not new_violations, (
-        f"{len(new_violations)} mutating route(s) have no audited(...) dependency and are not baselined:\n  "
-        + "\n  ".join(new_violations)
-        + "\n\nEither annotate the route or, for a deliberate exemption, regenerate the baseline "
-        "with: uv run python scripts/audit_coverage.py --update"
+        f"{len(new_violations)} mutating route(s) have no audited(...) dependency and are not baselined:\n  " + "\n  ".join(new_violations) + "\n\nEither annotate the route or, for a deliberate exemption, regenerate the baseline with: uv run python scripts/audit_coverage.py --update"
     )
 
 
@@ -243,10 +240,7 @@ def test_baseline_contains_no_stale_entries():
     """A baselined route that is now annotated must leave the baseline."""
     unannotated = scanner.scan_tree()
     _new, stale_entries = scanner.compare(unannotated, scanner.read_baseline())
-    assert not stale_entries, (
-        f"{len(stale_entries)} baseline entr(ies) are annotated now - regenerate the baseline "
-        "with: uv run python scripts/audit_coverage.py --update:\n  " + "\n  ".join(stale_entries)
-    )
+    assert not stale_entries, f"{len(stale_entries)} baseline entr(ies) are annotated now - regenerate the baseline with: uv run python scripts/audit_coverage.py --update:\n  " + "\n  ".join(stale_entries)
 
 
 def test_baseline_is_sorted_so_regeneration_is_idempotent():
@@ -300,9 +294,7 @@ def test_no_unannotated_mutating_mcp_tools_outside_the_baseline():
     unannotated = scanner.scan_mcp_tree()
     new_violations, _stale = scanner.compare(unannotated, scanner.read_baseline())
     assert not new_violations, (
-        f"{len(new_violations)} mutating MCP tool(s) have no audit annotation and are not baselined:\n  "
-        + "\n  ".join(new_violations)
-        + "\n\nEither add @mcp_audited(...) under @mcp.tool(...) or, for a deliberate exemption "
+        f"{len(new_violations)} mutating MCP tool(s) have no audit annotation and are not baselined:\n  " + "\n  ".join(new_violations) + "\n\nEither add @mcp_audited(...) under @mcp.tool(...) or, for a deliberate exemption "
         "(the tool already appends its own richer event), regenerate the baseline with: "
         "uv run python scripts/audit_coverage.py --update"
     )

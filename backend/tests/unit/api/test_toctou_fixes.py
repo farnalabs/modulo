@@ -583,9 +583,7 @@ class TestNoRedisInProcessGuard:
                 assert admin_rotation._rotation_owner is not None
 
                 resp2 = client.post("/api/v1/admin/rotation/rotate-key", json={"new_fernet_key": _VALID_32})
-                assert resp2.status_code == 409, (
-                    f"second concurrent rotate must be rejected, got {resp2.status_code}: {resp2.text}"
-                )
+                assert resp2.status_code == 409, f"second concurrent rotate must be rejected, got {resp2.status_code}: {resp2.text}"
                 admin_rotation._run_rotation_background.assert_called_once()
 
                 # The status endpoint consults the same guard.

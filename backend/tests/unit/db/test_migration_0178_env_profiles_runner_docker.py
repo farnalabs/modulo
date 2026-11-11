@@ -83,15 +83,11 @@ def test_downgrade_repoints_runner_docker_and_restores_guarded() -> None:
 def test_model_parity_widened_check_no_server_default() -> None:
     from farna.db.models.environment_profile import EnvironmentProfile
 
-    constraint = next(
-        c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type"
-    )
+    constraint = next(c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type")
     sql = str(getattr(constraint, "sqltext", constraint))
     assert "runner_docker" in sql
     assert "local_docker" in sql
 
     column = EnvironmentProfile.__table__.columns["provider_type"]
     assert column.nullable is False
-    assert column.server_default is None, (
-        "model/migration drift: the DB default was dropped by 0178; the model must not re-introduce it"
-    )
+    assert column.server_default is None, "model/migration drift: the DB default was dropped by 0178; the model must not re-introduce it"

@@ -1106,9 +1106,7 @@ def test_strip_context_files_keeps_clean_content() -> None:
     )
 
     assert kept == {"/tmp/ok.txt": "no credential here"}
-    assert redactions == [
-        {"node_id": "n1", "field": "context_files", "path": "/tmp/creds.txt", "reason": "secret_value"}
-    ]
+    assert redactions == [{"node_id": "n1", "field": "context_files", "path": "/tmp/creds.txt", "reason": "secret_value"}]
 
 
 def test_strip_deep_values_walks_lists_and_drops_secret_elements() -> None:

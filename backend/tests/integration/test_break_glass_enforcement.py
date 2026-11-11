@@ -49,11 +49,7 @@ async def _create_account(
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, "
-                "is_break_glass, break_glass_expires_at, break_glass_deactivated_at) "
-                "VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp, :deactivated)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, is_break_glass, break_glass_expires_at, break_glass_deactivated_at) VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp, :deactivated)"),
             {
                 "id": str(acc_id),
                 "email": f"enf-{acc_id.hex[:12]}@example.com",
@@ -67,9 +63,7 @@ async def _create_account(
     return acc_id
 
 
-async def _create_membership(
-    engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin"
-) -> None:
+async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, :role)"),
@@ -118,9 +112,7 @@ async def test_modulo_breakglass_has_only_break_glass_column_updates(db_engine: 
             ).scalar_one()
             assert granted is False, f"modulo_breakglass must NOT UPDATE {col} (deliverable (B) grants not shipped)"
 
-        has_delete = (
-            await conn.execute(text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', 'DELETE')"))
-        ).scalar_one()
+        has_delete = (await conn.execute(text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', 'DELETE')"))).scalar_one()
         assert has_delete is False, "modulo_breakglass must not DELETE from accounts"
 
 
@@ -132,15 +124,7 @@ async def test_no_table_level_update_on_accounts_for_app_or_public(db_engine: As
     predicate. Runs on the superuser engine (an unrelated role would see zero
     rows and false-pass)."""
     async with db_engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT grantee FROM information_schema.role_table_grants "
-                    "WHERE table_schema = 'public' AND table_name = 'accounts' "
-                    "AND privilege_type = 'UPDATE' AND grantee IN ('modulo_app', 'PUBLIC')"
-                )
-            )
-        ).fetchall()
+        rows = (await conn.execute(text("SELECT grantee FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name = 'accounts' AND privilege_type = 'UPDATE' AND grantee IN ('modulo_app', 'PUBLIC')"))).fetchall()
         assert rows == [], f"accounts has a table-level UPDATE grant: {rows}"
 
 
@@ -149,17 +133,7 @@ async def test_allow_list_set_equality(db_engine: AsyncEngine) -> None:
     can UPDATE equals the single-sourced allow-listed constant, and the three
     break-glass columns are NOT writable by it."""
     async with db_engine.connect() as conn:
-        cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'accounts'"
-                    )
-                )
-            ).fetchall()
-        }
+        cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'accounts'"))).fetchall()}
         granted: set[str] = set()
         for col in sorted(cols):
             ok = (
@@ -171,9 +145,7 @@ async def test_allow_list_set_equality(db_engine: AsyncEngine) -> None:
             if ok:
                 granted.add(col)
 
-        assert granted == set(ACCOUNTS_WRITABLE_COLUMNS), (
-            f"modulo_app UPDATE-grant drift: granted={sorted(granted)} allow_list={sorted(ACCOUNTS_WRITABLE_COLUMNS)}"
-        )
+        assert granted == set(ACCOUNTS_WRITABLE_COLUMNS), f"modulo_app UPDATE-grant drift: granted={sorted(granted)} allow_list={sorted(ACCOUNTS_WRITABLE_COLUMNS)}"
         for col in _BG_COLS:
             assert col not in granted, f"modulo_app must not UPDATE {col}"
 
@@ -205,9 +177,7 @@ async def enf_org(db_engine: AsyncEngine) -> uuid.UUID:
     return await _create_org(db_engine)
 
 
-async def test_denied_break_glass_resolves_none_live_resolves_role(
-    db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID
-) -> None:
+async def test_denied_break_glass_resolves_none_live_resolves_role(db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID) -> None:
     future = datetime.now(UTC) + timedelta(hours=1)
     past = datetime.now(UTC) - timedelta(seconds=1)
     live = await _create_account(db_engine, is_break_glass=True, expires_at=future)
@@ -229,9 +199,7 @@ async def test_denied_break_glass_resolves_none_live_resolves_role(
         assert resolved is None, f"denied break-glass account {denied} must resolve None, got {resolved!r}"
 
 
-async def test_recovery_cycle_deny_at_canonical_site(
-    db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID
-) -> None:
+async def test_recovery_cycle_deny_at_canonical_site(db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID) -> None:
     """The full recovery-cycle deny: expired / NULL-expiry / deactivated
     break-glass memberships all return None at the canonical site
     (resolve_role_from_membership), and a live one still resolves."""

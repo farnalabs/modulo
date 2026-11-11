@@ -2472,9 +2472,7 @@ def test_recover_node_without_undecided_row_dispatches_unstamped(client: TestCli
     assert "review_id" not in dispatched
 
 
-def test_recover_node_prefers_matching_node_row_over_stale_undecided_rows(
-    client: TestClient, mock_session: AsyncMock
-) -> None:
+def test_recover_node_prefers_matching_node_row_over_stale_undecided_rows(client: TestClient, mock_session: AsyncMock) -> None:
     """FAR-541 (iteration 4, FIX B): with MULTIPLE undecided claim rows the
     stamp pick prefers the row matching the node being recovered — a stale
     undecided row (normal: recover_node never marks bypassed rows decided)
@@ -2533,9 +2531,7 @@ def test_recover_node_without_matching_row_picks_deterministically(client: TestC
     assert mock_dispatch.await_args.kwargs["resume_data"]["review_id"] == "fresh-guardrail-row"
 
 
-def test_recover_node_undecided_rows_query_orders_matching_then_newest(
-    client: TestClient, mock_session: AsyncMock
-) -> None:
+def test_recover_node_undecided_rows_query_orders_matching_then_newest(client: TestClient, mock_session: AsyncMock) -> None:
     """FAR-541 (iteration 4, FIX B): the undecided-rows query is deterministic
     — matching-node-id rows first, then ``claimed_at DESC NULLS LAST``,
     tiebroken on ``id`` DESC (mirroring ``_latest_committed_decision_row``)."""
@@ -3227,12 +3223,8 @@ class TestListRunsObservability:
     """GET /api/v1/runs — active-run observability fields on each item."""
 
     def test_viewer_list_passes_account_scope(self, client: TestClient, mock_session) -> None:
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-        )
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
         page = MagicMock(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False)
         with (
             patch("farna.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=page) as list_runs,
@@ -3668,12 +3660,7 @@ def test_get_run_status_surfaces_the_node_deadline_known_fix(client: TestClient)
     ("session interrupted"), which a deadline kill never records. The
     operator therefore saw a failed run with no fix guidance.
     """
-    detail = (
-        "Node 'agent-1' did not complete within its configured timeout_seconds "
-        "(3300s) — node-deadline watchdog ended the dispatch. The cause is "
-        "not asserted here; retained deadline_triage evidence is conditional, not "
-        "guaranteed."
-    )
+    detail = "Node 'agent-1' did not complete within its configured timeout_seconds (3300s) — node-deadline watchdog ended the dispatch. The cause is not asserted here; retained deadline_triage evidence is conditional, not guaranteed."
     run = _make_run(status="failed", error_code="node_deadline_exceeded", error_detail=detail)
     with (
         patch("farna.api.routes.runs._do_get_run", return_value=run),

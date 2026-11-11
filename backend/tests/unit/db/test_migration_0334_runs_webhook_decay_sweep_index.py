@@ -111,9 +111,7 @@ async def _sweep_select() -> Any:
         notifier=_NullNotifier(),
         now=datetime(2026, 10, 25, 12, 0, tzinfo=UTC),
     )
-    assert len(session.statements) == 1, (
-        f"expected exactly the bounded aggregate SELECT, got {len(session.statements)} statements"
-    )
+    assert len(session.statements) == 1, f"expected exactly the bounded aggregate SELECT, got {len(session.statements)} statements"
     return session.statements[0]
 
 
@@ -236,10 +234,7 @@ class TestPredicateParity:
     async def test_sweep_select_static_filter_matches_the_index_predicate(self) -> None:
         where = _canonical(_extract_where(_compile(await _sweep_select())))
         predicate = _canonical(_migration_predicate())
-        assert where.startswith(predicate), (
-            "the sweep's static filter no longer implies the partial index predicate, so the "
-            f"planner cannot use {_INDEX_NAME}:\n  sweep:     {where}\n  predicate: {predicate}"
-        )
+        assert where.startswith(predicate), f"the sweep's static filter no longer implies the partial index predicate, so the planner cannot use {_INDEX_NAME}:\n  sweep:     {where}\n  predicate: {predicate}"
 
     async def test_sweep_select_filters_the_two_hour_window_on_the_index_key(self) -> None:
         where = _canonical(_extract_where(_compile(await _sweep_select())))

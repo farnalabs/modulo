@@ -132,53 +132,35 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     }
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'm0311', 'm0311', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'm0311', 'm0311', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'm0311-human@example.com', 'm0311-human', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'm0311-human@example.com', 'm0311-human', 'hash', 'local', true)"),
             {"id": str(ids["human"])},
         )
         # The QA hole: a human-shaped row with NO identity columns — the
         # identity CHECK does not discriminate its kind, so only the kind
         # IMMUTABILITY trigger can refuse the flip.
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, NULL, 'm0311-nullhuman', NULL, NULL, true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, NULL, 'm0311-nullhuman', NULL, NULL, true)"),
             {"id": str(ids["nullhuman"])},
         )
         # The FAR-1385 shape: a service row carries NO human-shaped identity.
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) "
-                "VALUES (:id, NULL, 'm0311-svc', NULL, NULL, true, 'service')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) VALUES (:id, NULL, 'm0311-svc', NULL, NULL, true, 'service')"),
             {"id": str(ids["service"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(ids["human_membership"]), "aid": str(ids["human"]), "oid": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(ids["nullhuman_membership"]), "aid": str(ids["nullhuman"]), "oid": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(ids["service_membership"]), "aid": str(ids["service"]), "oid": str(ids["org"])},
         )
     return ids
@@ -207,22 +189,16 @@ class TestServiceRoleCeilingTrigger:
         try:
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'o', 'o', '{}'::json)"
-                    ),
+                    text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'o', 'o', '{}'::json)"),
                     {"id": str(org_id)},
                 )
                 await conn.execute(
-                    text(
-                        "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) "
-                        "VALUES (:id, NULL, 'svc', NULL, NULL, true, 'service')"
-                    ),
+                    text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) VALUES (:id, NULL, 'svc', NULL, NULL, true, 'service')"),
                     {"id": str(service_id)},
                 )
             err = await _expect_check_violation(
                 engine,
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
                 {"mid": str(uuid.uuid4()), "aid": str(service_id), "oid": str(org_id)},
             )
             assert _pgcode(err) == "23514"
@@ -274,23 +250,15 @@ async def _seed_one_service(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     ids = {"org": uuid.uuid4(), "service": uuid.uuid4()}
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'svc-org', 'svc', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'svc-org', 'svc', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) "
-                "VALUES (:id, NULL, 'svc', NULL, NULL, true, 'service')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, kind) VALUES (:id, NULL, 'svc', NULL, NULL, true, 'service')"),
             {"id": str(ids["service"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(ids["service"]), "oid": str(ids["org"])},
         )
     return ids
@@ -300,23 +268,15 @@ async def _seed_one_human(engine: AsyncEngine) -> dict[str, uuid.UUID]:
     ids = {"org": uuid.uuid4(), "human": uuid.uuid4()}
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'human-org', 'hum', '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'human-org', 'hum', '{}'::json)"),
             {"id": str(ids["org"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, 'hum@example.com', 'hum', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, 'hum@example.com', 'hum', 'hash', 'local', true)"),
             {"id": str(ids["human"])},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'viewer')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'viewer')"),
             {"mid": str(uuid.uuid4()), "aid": str(ids["human"]), "oid": str(ids["org"])},
         )
     return ids
@@ -345,18 +305,8 @@ class TestAccountKindImmutableTrigger:
             assert _pgcode(err) == "23514"
             # The admin membership is untouched AND the kind did not flip.
             async with engine.connect() as conn:
-                kind = (
-                    await conn.execute(text("SELECT kind FROM accounts WHERE display_name = 'm0311-nullhuman'"))
-                ).scalar_one()
-                role = (
-                    await conn.execute(
-                        text(
-                            "SELECT om.role FROM org_memberships om "
-                            "JOIN accounts a ON a.id = om.account_id "
-                            "WHERE a.display_name = 'm0311-nullhuman'"
-                        )
-                    )
-                ).scalar_one()
+                kind = (await conn.execute(text("SELECT kind FROM accounts WHERE display_name = 'm0311-nullhuman'"))).scalar_one()
+                role = (await conn.execute(text("SELECT om.role FROM org_memberships om JOIN accounts a ON a.id = om.account_id WHERE a.display_name = 'm0311-nullhuman'"))).scalar_one()
             assert kind == "human"
             assert role == "admin"
         finally:
@@ -392,12 +342,7 @@ class TestAccountKindImmutableTrigger:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.begin() as conn:
-                result = await conn.execute(
-                    text(
-                        "UPDATE accounts SET display_name = 'm0311-human-renamed' "
-                        "WHERE email = 'm0311-human@example.com' RETURNING display_name"
-                    )
-                )
+                result = await conn.execute(text("UPDATE accounts SET display_name = 'm0311-human-renamed' WHERE email = 'm0311-human@example.com' RETURNING display_name"))
                 assert result.scalar_one() == "m0311-human-renamed"
         finally:
             await engine.dispose()
@@ -406,11 +351,7 @@ class TestAccountKindImmutableTrigger:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                trigger = (
-                    await conn.execute(
-                        text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'")
-                    )
-                ).scalar_one()
+                trigger = (await conn.execute(text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'"))).scalar_one()
                 assert trigger == 1
         finally:
             await engine.dispose()
@@ -433,12 +374,7 @@ class TestDecommissionedCheck:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.begin() as conn:
-                result = await conn.execute(
-                    text(
-                        "UPDATE accounts SET decommissioned_at = now() "
-                        "WHERE display_name = 'm0311-svc' RETURNING decommissioned_at IS NOT NULL"
-                    )
-                )
+                result = await conn.execute(text("UPDATE accounts SET decommissioned_at = now() WHERE display_name = 'm0311-svc' RETURNING decommissioned_at IS NOT NULL"))
                 assert result.scalar_one() is True
         finally:
             await engine.dispose()
@@ -447,22 +383,9 @@ class TestDecommissionedCheck:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                col = (
-                    await conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM information_schema.columns "
-                            "WHERE table_name = 'accounts' AND column_name = 'decommissioned_at'"
-                        )
-                    )
-                ).scalar_one()
+                col = (await conn.execute(text("SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'accounts' AND column_name = 'decommissioned_at'"))).scalar_one()
                 assert col == 1
-                trigger = (
-                    await conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_org_memberships_service_role_ceiling'"
-                        )
-                    )
-                ).scalar_one()
+                trigger = (await conn.execute(text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_org_memberships_service_role_ceiling'"))).scalar_one()
                 assert trigger == 1
         finally:
             await engine.dispose()
@@ -472,28 +395,11 @@ class TestDecommissionedCheck:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                col = (
-                    await conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM information_schema.columns "
-                            "WHERE table_name = 'accounts' AND column_name = 'decommissioned_at'"
-                        )
-                    )
-                ).scalar_one()
+                col = (await conn.execute(text("SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'accounts' AND column_name = 'decommissioned_at'"))).scalar_one()
                 assert col == 0
-                trigger = (
-                    await conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_org_memberships_service_role_ceiling'"
-                        )
-                    )
-                ).scalar_one()
+                trigger = (await conn.execute(text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_org_memberships_service_role_ceiling'"))).scalar_one()
                 assert trigger == 0
-                kind_trigger = (
-                    await conn.execute(
-                        text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'")
-                    )
-                ).scalar_one()
+                kind_trigger = (await conn.execute(text("SELECT COUNT(*) FROM pg_trigger WHERE tgname = 'trg_accounts_kind_immutable'"))).scalar_one()
                 assert kind_trigger == 0
         finally:
             await engine.dispose()

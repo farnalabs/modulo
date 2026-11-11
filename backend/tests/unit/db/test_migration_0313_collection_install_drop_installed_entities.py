@@ -120,11 +120,7 @@ class TestDowngrade:
 
     def test_readded_column_is_nullable_jsonb_on_postgresql(self) -> None:
         rec = _run("downgrade", column_exists=False)
-        added = [
-            col
-            for table, col in rec.added_columns
-            if table == _INSTALL_TABLE and getattr(col, "name", None) == _DROPPED_COLUMN
-        ]
+        added = [col for table, col in rec.added_columns if table == _INSTALL_TABLE and getattr(col, "name", None) == _DROPPED_COLUMN]
         assert len(added) == 1, f"expected exactly one added column, got {added}"
         column = added[0]
         impl = column.type.dialect_impl(postgresql.dialect())

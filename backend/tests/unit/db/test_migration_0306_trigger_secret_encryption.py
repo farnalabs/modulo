@@ -141,9 +141,7 @@ class TestUpgrade:
 
         key = _KEY
         fern = _Fernet(key.encode())
-        bind, _module = _run_upgrade(
-            [{"url": "https://example.com", "hmac_secret": "hmac-value", "signing_secret": "signing-value"}]
-        )
+        bind, _module = _run_upgrade([{"url": "https://example.com", "hmac_secret": "hmac-value", "signing_secret": "signing-value"}])
         updates = _update_calls(bind)
         assert len(updates) == 1, f"expected exactly one row update, got {updates}"
         stmt, params = updates[0]
@@ -163,9 +161,7 @@ class TestUpgrade:
         assert not updates, "already-encrypted rows must never be rewritten"
 
     def test_masked_sentinel_empty_and_nonstring_values_skip(self) -> None:
-        bind, _module = _run_upgrade(
-            [{"hmac_secret": SENSITIVE_VALUE_MASK}, {"hmac_secret": ""}, {"hmac_secret": 12345}]
-        )
+        bind, _module = _run_upgrade([{"hmac_secret": SENSITIVE_VALUE_MASK}, {"hmac_secret": ""}, {"hmac_secret": 12345}])
         updates = _update_calls(bind)
         assert not updates, "non-plaintext values must never be rewritten"
 

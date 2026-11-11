@@ -180,15 +180,8 @@ class TestMigrationSource:
 
 class TestModelParity:
     def test_org_membership_declares_the_partial_index(self) -> None:
-        matches = [
-            index
-            for index in OrgMembership.__table__.indexes
-            if index.name == _INDEX_NAME and tuple(c.name for c in index.columns) == _INDEX_COLUMNS
-        ]
-        assert matches, (
-            f"OrgMembership must declare {_INDEX_NAME}{_INDEX_COLUMNS} to stay in parity with "
-            "migration 0312 — a migration/model index drift is a review block"
-        )
+        matches = [index for index in OrgMembership.__table__.indexes if index.name == _INDEX_NAME and tuple(c.name for c in index.columns) == _INDEX_COLUMNS]
+        assert matches, f"OrgMembership must declare {_INDEX_NAME}{_INDEX_COLUMNS} to stay in parity with migration 0312 — a migration/model index drift is a review block"
 
     def test_index_predicates_match_the_migration(self) -> None:
         """``postgresql_where`` alone is ignored on SQLite, so the model must
@@ -206,9 +199,6 @@ class TestModelParity:
 
     def test_team_membership_role_has_server_default_viewer(self) -> None:
         column = TeamMembership.__table__.columns[_TEAM_ROLE_COLUMN]
-        assert column.server_default is not None, (
-            "TeamMembership.role must carry server_default='viewer' to stay in parity with "
-            "migration 0312's ALTER COLUMN ... SET DEFAULT"
-        )
+        assert column.server_default is not None, "TeamMembership.role must carry server_default='viewer' to stay in parity with migration 0312's ALTER COLUMN ... SET DEFAULT"
         assert str(column.server_default.arg) == _ROLE_SERVER_DEFAULT
         assert column.nullable is False

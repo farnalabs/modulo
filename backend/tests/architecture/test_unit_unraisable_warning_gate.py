@@ -139,10 +139,7 @@ def _apply_hook(item: SimpleNamespace) -> None:
 
 
 def _has_error_filter() -> bool:
-    return any(
-        action == "error" and category is not None and issubclass(_CATEGORY, category)
-        for action, _message, category, _module, _lineno in warnings.filters
-    )
+    return any(action == "error" and category is not None and issubclass(_CATEGORY, category) for action, _message, category, _module, _lineno in warnings.filters)
 
 
 def _baseline_without_the_escalation() -> list[Any]:
@@ -155,11 +152,7 @@ def _baseline_without_the_escalation() -> list[Any]:
     (the filter is present no matter which path is passed). Strip any matching
     ``error`` filter to model the un-gated starting state.
     """
-    return [
-        entry
-        for entry in warnings.filters
-        if not (entry[0] == "error" and entry[2] is not None and issubclass(_CATEGORY, entry[2]))
-    ]
+    return [entry for entry in warnings.filters if not (entry[0] == "error" and entry[2] is not None and issubclass(_CATEGORY, entry[2]))]
 
 
 @pytest.mark.parametrize("suite", sorted(_GATED_SAMPLES))
@@ -313,10 +306,7 @@ def test_runner_ci_command_runs_every_docker_test_module() -> None:
     assert len(commands) == 1, f"expected exactly one docker pytest command, found {len(commands)}"
     wired = set(re.findall(r"tests/docker/(\w+\.py)", commands[0]))
     on_disk = {path.name for path in (TESTS / "docker").glob("test_*.py")}
-    assert wired == on_disk, (
-        "the runner-ci docker command does not run every tests/docker module: "
-        f"missing={sorted(on_disk - wired)} extra={sorted(wired - on_disk)}"
-    )
+    assert wired == on_disk, f"the runner-ci docker command does not run every tests/docker module: missing={sorted(on_disk - wired)} extra={sorted(wired - on_disk)}"
 
 
 def _without_shell_comments(command: str) -> str:
@@ -337,11 +327,7 @@ def test_every_workflow_command_naming_a_gated_suite_carries_the_escalation() ->
     added, whereas this scan fails as soon as one is.
     """
     gated_commands = [
-        (workflow.name, command)
-        for workflow in sorted(WORKFLOWS_DIR.glob("*.yml"))
-        for command in _workflow_run_commands(workflow)
-        if "pytest" in _without_shell_comments(command)
-        and any(f"tests/{suite}" in _without_shell_comments(command) for suite in _root_conftest.GATED_SUITE_ROOTS)
+        (workflow.name, command) for workflow in sorted(WORKFLOWS_DIR.glob("*.yml")) for command in _workflow_run_commands(workflow) if "pytest" in _without_shell_comments(command) and any(f"tests/{suite}" in _without_shell_comments(command) for suite in _root_conftest.GATED_SUITE_ROOTS)
     ]
     assert len(gated_commands) >= 10, f"expected the gated-suite command set, found {len(gated_commands)}"
     for workflow_name, command in gated_commands:
@@ -382,17 +368,13 @@ def test_ci_unit_command_carries_the_escalation() -> None:
     script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
     invocations = _pytest_invocations(script)
     assert invocations, "no pytest invocation found in .github/scripts/coverage-thresholds.sh"
-    assert any(_UNIT_ROOT.search(line) for line in invocations), (
-        "the coverage script's unit pytest invocation no longer targets the tests/unit root"
-    )
+    assert any(_UNIT_ROOT.search(line) for line in invocations), "the coverage script's unit pytest invocation no longer targets the tests/unit root"
     # The invocation is a backslash-continued command, so _pytest_invocations
     # joins the continuation lines before looking for the flag. Check every
     # invocation, so a future split that drops the flag from one shard fails
     # here even though a whole-script search would still pass.
     offenders = [line for line in invocations if _ESCALATION not in line]
-    assert all(_ESCALATION in line for line in invocations), (
-        f"every pytest invocation must carry {_ESCALATION!r}; missing on:\n" + "\n".join(offenders)
-    )
+    assert all(_ESCALATION in line for line in invocations), f"every pytest invocation must carry {_ESCALATION!r}; missing on:\n" + "\n".join(offenders)
 
 
 def test_ci_unit_run_covers_the_whole_suite() -> None:
@@ -405,12 +387,8 @@ def test_ci_unit_run_covers_the_whole_suite() -> None:
     that quietly narrows the root.
     """
     invocations = _pytest_invocations(COVERAGE_SCRIPT.read_text(encoding="utf-8"))
-    assert len(invocations) == 1, (
-        f"expected exactly one unit pytest invocation, found {len(invocations)}:\n" + "\n".join(invocations)
-    )
-    assert _UNIT_ROOT.search(invocations[0]), (
-        f"the unit pytest invocation no longer covers the whole tests/unit suite: {invocations[0]}"
-    )
+    assert len(invocations) == 1, f"expected exactly one unit pytest invocation, found {len(invocations)}:\n" + "\n".join(invocations)
+    assert _UNIT_ROOT.search(invocations[0]), f"the unit pytest invocation no longer covers the whole tests/unit suite: {invocations[0]}"
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:

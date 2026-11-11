@@ -57,17 +57,7 @@ def _source() -> str:
 
 def _scaffold(conn: sa.Connection) -> None:
     """A pre-migration ``triggers`` shape (no ``name`` column)."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE triggers ("
-            "id INTEGER PRIMARY KEY, "
-            "organisation_id CHAR(32) NOT NULL, "
-            "pipeline_id INTEGER NOT NULL, "
-            "trigger_type TEXT NOT NULL, "
-            "active INTEGER NOT NULL, "
-            "deleted_at TIMESTAMP NULL)"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE triggers (id INTEGER PRIMARY KEY, organisation_id CHAR(32) NOT NULL, pipeline_id INTEGER NOT NULL, trigger_type TEXT NOT NULL, active INTEGER NOT NULL, deleted_at TIMESTAMP NULL)"))
 
 
 def _run(engine: sa.Engine, module: ModuleType, fn: str) -> None:
@@ -91,20 +81,12 @@ def _index_names(engine: sa.Engine, table_name: str) -> set[str]:
 
 def _insert_legacy_trigger(conn: sa.Connection) -> None:
     """A trigger row created BEFORE the upgrade (pre-FAR-681, unnamed)."""
-    conn.execute(
-        sa.text(
-            "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at) "
-            "VALUES (1, 'org1', 10, 'cron', 1, NULL)"
-        )
-    )
+    conn.execute(sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at) VALUES (1, 'org1', 10, 'cron', 1, NULL)"))
 
 
 def _insert_named_trigger(conn: sa.Connection, row_id: int, name: str, *, deleted: bool = False) -> None:
     conn.execute(
-        sa.text(
-            "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) "
-            "VALUES (:id, 'org1', 10, 'cron', 1, :deleted_at, :name)"
-        ),
+        sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) VALUES (:id, 'org1', 10, 'cron', 1, :deleted_at, :name)"),
         {"id": row_id, "deleted_at": "2026-01-01 00:00:00" if deleted else None, "name": name},
     )
 
@@ -215,12 +197,7 @@ class TestTriggerIdentityUniqueness:
         engine = self._upgraded_engine(sqlite_engine)
         with engine.begin() as conn:
             _insert_named_trigger(conn, 1, "nightly")
-            conn.execute(
-                sa.text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) "
-                    "VALUES (2, 'org1', 11, 'cron', 1, NULL, 'nightly')"
-                )
-            )
+            conn.execute(sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) VALUES (2, 'org1', 11, 'cron', 1, NULL, 'nightly')"))
         with engine.connect() as conn:
             count = conn.execute(sa.text("SELECT COUNT(*) FROM triggers WHERE name = 'nightly'")).scalar_one()
         assert count == 2, "same name on distinct pipelines must coexist"
@@ -232,18 +209,8 @@ class TestTriggerIdentityUniqueness:
         with engine.begin() as conn:
             _insert_named_trigger(conn, 1, "")
             # Two NULL-name rows on the same (org, pipeline).
-            conn.execute(
-                sa.text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) "
-                    "VALUES (2, 'org1', 10, 'cron', 1, NULL, NULL)"
-                )
-            )
-            conn.execute(
-                sa.text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) "
-                    "VALUES (3, 'org1', 10, 'cron', 1, NULL, NULL)"
-                )
-            )
+            conn.execute(sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) VALUES (2, 'org1', 10, 'cron', 1, NULL, NULL)"))
+            conn.execute(sa.text("INSERT INTO triggers (id, organisation_id, pipeline_id, trigger_type, active, deleted_at, name) VALUES (3, 'org1', 10, 'cron', 1, NULL, NULL)"))
         with engine.connect() as conn:
             null_count = conn.execute(sa.text("SELECT COUNT(*) FROM triggers WHERE name IS NULL")).scalar_one()
         assert null_count == 2, "NULL names must never collide with each other or the empty string"

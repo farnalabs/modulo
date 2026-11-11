@@ -113,20 +113,10 @@ def test_graph_is_idempotent_true_when_only_a_query_binding_is_present():
 def test_run_level_retry_gate_is_closed_by_the_binding_alone():
     """The binding alone must close the run-level ``retry_policy`` gate."""
     budget = _retry_after_budget()
-    assert (
-        _retry_policy_applies(
-            budget, is_correction_run=False, graph_idempotent=_graph_is_idempotent(_graph_with(_job_node()))
-        )
-        is False
-    )
+    assert _retry_policy_applies(budget, is_correction_run=False, graph_idempotent=_graph_is_idempotent(_graph_with(_job_node()))) is False
     # control: the same budget applies when the graph really is idempotent
     query_only = _job_node(connector_binding=_binding(operation="query"))
-    assert (
-        _retry_policy_applies(
-            budget, is_correction_run=False, graph_idempotent=_graph_is_idempotent(_graph_with(query_only))
-        )
-        is True
-    )
+    assert _retry_policy_applies(budget, is_correction_run=False, graph_idempotent=_graph_is_idempotent(_graph_with(query_only))) is True
 
 
 def _retry_after_budget() -> int:
@@ -179,9 +169,7 @@ async def test_edge_retry_never_reexecutes_a_dispatch_source():
         node_id="target",
         node_def={"id": "target"},
         pipeline_retry_policy=None,
-        incoming_edges=[
-            {"source": "src", "retry": {"max_attempts": 2, "backoff": 0.0, "events": ["error", "timeout"]}}
-        ],
+        incoming_edges=[{"source": "src", "retry": {"max_attempts": 2, "backoff": 0.0, "events": ["error", "timeout"]}}],
         raw_fn_resolver={"src": _source}.__getitem__,
         node_defs={"src": source_node, "target": {"id": "target"}},
     )
@@ -208,9 +196,7 @@ async def test_edge_retry_never_reinvokes_the_failing_dispatch_node():
         node_id="target",
         node_def=failing_node,
         pipeline_retry_policy=None,
-        incoming_edges=[
-            {"source": "src", "retry": {"max_attempts": 2, "backoff": 0.0, "events": ["error", "timeout"]}}
-        ],
+        incoming_edges=[{"source": "src", "retry": {"max_attempts": 2, "backoff": 0.0, "events": ["error", "timeout"]}}],
         raw_fn_resolver={"src": _source}.__getitem__,
         node_defs={"src": {"id": "src"}, "target": failing_node},
     )
@@ -275,9 +261,7 @@ def test_run_classifier_and_engine_route_on_the_same_condition(
     assert connector_binding_operation(node) == expected_operation
     assert graph_contains_dispatch(graph) is expected_dispatched
     if expected_operation == "dispatch":
-        assert node_fires_dispatch_job(node) is (
-            node["connector_binding"].get("dispatch_action", "trigger_run") == "trigger_run"
-        )
+        assert node_fires_dispatch_job(node) is (node["connector_binding"].get("dispatch_action", "trigger_run") == "trigger_run")
     else:
         assert node_fires_dispatch_job(node) is False
 
@@ -308,9 +292,7 @@ class _VerbRecorder:
         self.verbs.append("get_run_status")
         return CIRun(id=run_id, pipeline_id="p", status=CIRunStatus.SUCCESS)
 
-    async def trigger_run(
-        self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None
-    ) -> Any:
+    async def trigger_run(self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None) -> Any:
         self.verbs.append("trigger_run")
         return CIRun(id="job-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
 
@@ -447,9 +429,7 @@ def test_classifier_and_engine_agree_on_every_node_type(
     assert connector_binding_operation(node) == expected_operation
     assert _engine_route(node) == expected_route
     if graph_contains_dispatch(_graph_with(node)):
-        assert expected_route == "connector", (
-            f"graph_contains_dispatch claimed dispatch for a node the engine routes to {expected_route!r}",
-        )
+        assert expected_route == "connector", (f"graph_contains_dispatch claimed dispatch for a node the engine routes to {expected_route!r}",)
 
 
 def test_an_agent_node_with_a_dispatch_binding_fires_nothing():
@@ -529,9 +509,7 @@ class _PollConnector:
     async def write(self, payload: Any) -> Any:
         raise AssertionError("dispatch node must never write")
 
-    async def trigger_run(
-        self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None
-    ) -> Any:
+    async def trigger_run(self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None) -> Any:
         self.trigger_calls += 1
         return CIRun(id="job-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
 
@@ -841,9 +819,7 @@ async def test_a_wrapped_5xx_is_still_classified_transient():
     """The same wrap for a 503 MUST be retried — the connectors fail loud by
     wrapping the HTTP status, so classifying only the outer ``ValueError``
     would have abandoned a live run over a recoverable upstream blip."""
-    connector = _PollConnector(
-        [_wrapped_http_status_error(503, "GitHub API error (503): upstream"), CIRunStatus.SUCCESS]
-    )
+    connector = _PollConnector([_wrapped_http_status_error(503, "GitHub API error (503): upstream"), CIRunStatus.SUCCESS])
     with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001):
         state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=10)
     assert state["status"] == "success"
@@ -1003,9 +979,7 @@ class _DispatchVerbStub:
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
 
-    async def trigger_run(
-        self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None
-    ) -> Any:
+    async def trigger_run(self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None) -> Any:
         self.calls.append(("trigger_run", pipeline_id, branch, variables))
         return CIRun(id="r-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
 

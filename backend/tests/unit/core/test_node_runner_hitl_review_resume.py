@@ -137,9 +137,7 @@ async def test_foreign_decision_logs_warning_without_payload(caplog: pytest.LogC
     """``hitl_review.foreign_decision_ignored`` carries the gate id and the
     decision's stamped gate id ONLY — never payload content."""
     with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
-        await _resume(
-            {"action": "approved", "review_id": _FOREIGN_REVIEW_ID, "notes": "do-not-log-me", "output": {"x": 1}}
-        )
+        await _resume({"action": "approved", "review_id": _FOREIGN_REVIEW_ID, "notes": "do-not-log-me", "output": {"x": 1}})
     records = [r for r in caplog.records if r.getMessage() == "hitl_review.foreign_decision_ignored"]
     assert len(records) == 1
     assert records[0].review_id == _REVIEW_ID

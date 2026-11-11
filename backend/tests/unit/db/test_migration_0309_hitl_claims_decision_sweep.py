@@ -179,10 +179,7 @@ class TestModelParity:
 def _insert_claim(engine: object, decision: str | None) -> None:
     with engine.connect() as conn:  # type: ignore[attr-defined]
         conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, review_id, pipeline_id, "
-                "expires_at, decision) VALUES (:id, :org, :run, :review, :pipeline, :expires, :decision)"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, review_id, pipeline_id, expires_at, decision) VALUES (:id, :org, :run, :review, :pipeline, :expires, :decision)"),
             {
                 "id": uuid.uuid4().hex,
                 "org": uuid.uuid4().hex,

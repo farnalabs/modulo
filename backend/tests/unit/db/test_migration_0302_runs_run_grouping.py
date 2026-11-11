@@ -151,22 +151,14 @@ class TestUpgrade:
         assert kwargs.get("type_") == "unique", kwargs
 
     def test_creates_the_run_group_id_index(self) -> None:
-        creates = [
-            (args, kwargs)
-            for _n, args, kwargs in _migration_calls("upgrade")
-            if _n == "create_index" and args and args[0] == "ix_runs_run_group_id"
-        ]
+        creates = [(args, kwargs) for _n, args, kwargs in _migration_calls("upgrade") if _n == "create_index" and args and args[0] == "ix_runs_run_group_id"]
         assert len(creates) == 1, f"expected ix_runs_run_group_id, got {creates}"
         args, kwargs = creates[0]
         assert args == ("ix_runs_run_group_id", "runs", ["run_group_id"]), args
         assert kwargs.get("unique") is not True
 
     def test_creates_the_resume_parent_partial_unique_with_model_predicate(self) -> None:
-        creates = [
-            (args, kwargs)
-            for _n, args, kwargs in _migration_calls("upgrade")
-            if _n == "create_index" and args and args[0] == "uq_runs_resume_parent"
-        ]
+        creates = [(args, kwargs) for _n, args, kwargs in _migration_calls("upgrade") if _n == "create_index" and args and args[0] == "uq_runs_resume_parent"]
         assert len(creates) == 1, f"expected uq_runs_resume_parent, got {creates}"
         args, kwargs = creates[0]
         assert args == ("uq_runs_resume_parent", "runs", ["parent_run_id"]), args
@@ -175,11 +167,7 @@ class TestUpgrade:
         assert _where_text(kwargs["sqlite_where"]) == _RESUME_PARENT_SQLITE
 
     def test_creates_the_thread_non_resume_partial_unique_with_model_predicate(self) -> None:
-        creates = [
-            (args, kwargs)
-            for _n, args, kwargs in _migration_calls("upgrade")
-            if _n == "create_index" and args and args[0] == "uq_runs_thread_non_resume"
-        ]
+        creates = [(args, kwargs) for _n, args, kwargs in _migration_calls("upgrade") if _n == "create_index" and args and args[0] == "uq_runs_thread_non_resume"]
         assert len(creates) == 1, f"expected uq_runs_thread_non_resume, got {creates}"
         args, kwargs = creates[0]
         assert args == ("uq_runs_thread_non_resume", "runs", ["langgraph_thread_id"]), args
@@ -246,12 +234,7 @@ class TestModelParity:
         two partial uniques below — a resume child MUST share its parent's
         thread to continue the checkpoint."""
         assert not Run.__table__.c.langgraph_thread_id.unique
-        constrained = {
-            col.name
-            for constraint in Run.__table__.constraints
-            if isinstance(constraint, UniqueConstraint)
-            for col in constraint.columns
-        }
+        constrained = {col.name for constraint in Run.__table__.constraints if isinstance(constraint, UniqueConstraint) for col in constraint.columns}
         assert "langgraph_thread_id" not in constrained
 
     def _index(self, name: str):

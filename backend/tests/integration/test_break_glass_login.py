@@ -53,11 +53,7 @@ async def _create_bg_account(
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, "
-                "is_break_glass, break_glass_expires_at, break_glass_deactivated_at) "
-                "VALUES (:id, :email, :name, :hash, 'local', true, true, :exp, :deactivated)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, is_break_glass, break_glass_expires_at, break_glass_deactivated_at) VALUES (:id, :email, :name, :hash, 'local', true, true, :exp, :deactivated)"),
             {
                 "id": str(acc_id),
                 "email": email,
@@ -73,27 +69,20 @@ async def _create_bg_account(
 async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"),
             {"id": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
 
 
 async def _password_hash(engine: AsyncEngine, account_id: uuid.UUID) -> str | None:
     async with engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT password_hash FROM accounts WHERE id = :id"), {"id": str(account_id)})
-        ).scalar_one()
+        return (await conn.execute(text("SELECT password_hash FROM accounts WHERE id = :id"), {"id": str(account_id)})).scalar_one()
 
 
 async def _deactivate(engine: AsyncEngine, account_id: uuid.UUID) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "UPDATE accounts SET break_glass_deactivated_at = now(), "
-                "break_glass_expires_at = NULL, password_hash = gen_random_uuid()::text WHERE id = :id"
-            ),
+            text("UPDATE accounts SET break_glass_deactivated_at = now(), break_glass_expires_at = NULL, password_hash = gen_random_uuid()::text WHERE id = :id"),
             {"id": str(account_id)},
         )
 
@@ -146,9 +135,7 @@ def _login_json(email: str) -> dict[str, str]:
 async def test_live_break_glass_login_consumes_then_second_fails(db_engine: AsyncEngine, client: AsyncClient) -> None:
     org_id = await _create_org(db_engine)
     email = f"live-{uuid.uuid4().hex[:12]}@example.com"
-    acc_id = await _create_bg_account(
-        db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) + timedelta(hours=1)
-    )
+    acc_id = await _create_bg_account(db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) + timedelta(hours=1))
     await _create_membership(db_engine, org_id=org_id, account_id=acc_id)
 
     first = await client.post("/api/v1/auth/login", json=_login_json(email))
@@ -167,9 +154,7 @@ async def test_live_break_glass_login_consumes_then_second_fails(db_engine: Asyn
 async def test_expired_break_glass_login_401(client: AsyncClient, db_engine: AsyncEngine) -> None:
     org_id = await _create_org(db_engine)
     email = f"expired-{uuid.uuid4().hex[:12]}@example.com"
-    acc_id = await _create_bg_account(
-        db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) - timedelta(seconds=1)
-    )
+    acc_id = await _create_bg_account(db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) - timedelta(seconds=1))
     await _create_membership(db_engine, org_id=org_id, account_id=acc_id)
 
     resp = await client.post("/api/v1/auth/login", json=_login_json(email))
@@ -200,9 +185,7 @@ async def test_refresh_denied_after_break_glass_deactivation(client: AsyncClient
     denies 401 before any family write."""
     org_id = await _create_org(db_engine)
     email = f"refresh-{uuid.uuid4().hex[:12]}@example.com"
-    acc_id = await _create_bg_account(
-        db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) + timedelta(hours=1)
-    )
+    acc_id = await _create_bg_account(db_engine, email=email, password=_PASSWORD, expires_at=datetime.now(UTC) + timedelta(hours=1))
     await _create_membership(db_engine, org_id=org_id, account_id=acc_id)
 
     login = await client.post("/api/v1/auth/login", json=_login_json(email))

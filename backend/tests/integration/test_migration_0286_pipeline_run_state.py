@@ -123,9 +123,7 @@ async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
 
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -177,11 +175,7 @@ async def _state(engine: AsyncEngine, pipeline_id: uuid.UUID) -> dict[str, Any]:
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT run_enabled, run_disabled_reason, run_disabled_at, "
-                        "circuit_breaker_tripped, circuit_breaker_tripped_at "
-                        "FROM pipelines WHERE id = :id"
-                    ),
+                    text("SELECT run_enabled, run_disabled_reason, run_disabled_at, circuit_breaker_tripped, circuit_breaker_tripped_at FROM pipelines WHERE id = :id"),
                     {"id": str(pipeline_id)},
                 )
             )
@@ -204,9 +198,7 @@ async def test_backfill_folds_tripped_witnesses_into_the_unified_state(isolated_
             tripped=True,
             tripped_at=datetime.fromisoformat("2026-10-01T04:05:06+00:00"),
         )
-        tripped_null_stamp = await _seed_pipeline(
-            engine, org_id=org_id, account_id=account_id, tripped=True, tripped_at=None
-        )
+        tripped_null_stamp = await _seed_pipeline(engine, org_id=org_id, account_id=account_id, tripped=True, tripped_at=None)
         clean = await _seed_pipeline(engine, org_id=org_id, account_id=account_id, tripped=False, tripped_at=None)
 
         _migrate(isolated_db_url, MIGRATION_REV)
@@ -319,7 +311,5 @@ async def test_paused_pipeline_is_refused_on_real_postgres(db_engine: AsyncEngin
     assert excinfo.value.pipeline_id == pipeline_id
 
     async with db_engine.connect() as conn:
-        run_count = (
-            await conn.execute(text("SELECT count(*) FROM runs WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
-        ).scalar_one()
+        run_count = (await conn.execute(text("SELECT count(*) FROM runs WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})).scalar_one()
     assert int(run_count) == 0, "the refusal must precede the run INSERT"

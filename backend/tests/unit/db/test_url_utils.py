@@ -227,9 +227,7 @@ def test_split_postgres_sslmode_refuses_non_postgres_scheme(url: str) -> None:
         ),
     ],
 )
-def test_split_engine_sslmode_gates_on_driver_scheme(
-    url: str, expected_url: str, expected_ssl: str | bool | None
-) -> None:
+def test_split_engine_sslmode_gates_on_driver_scheme(url: str, expected_url: str, expected_ssl: str | bool | None) -> None:
     assert split_engine_sslmode(url) == (expected_url, expected_ssl)
 
 

@@ -70,12 +70,7 @@ async def evidence_tenant(db_engine: AsyncEngine, test_user: uuid.UUID) -> _Evid
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(tenant.pipeline_id),
                 "oid": str(tenant.org_id),
@@ -100,11 +95,7 @@ async def evidence_tenant(db_engine: AsyncEngine, test_user: uuid.UUID) -> _Evid
         # write_evidence_row swallows IntegrityError, a silently-dropped evidence
         # row would make this test vacuously pass if that FK is ever re-added.
         await conn.execute(
-            text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:nid, :oid, :pid, 'evidence-node', :uid, 300) "
-                "ON CONFLICT (id) DO NOTHING"
-            ),
+            text("INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:nid, :oid, :pid, 'evidence-node', :uid, 300) ON CONFLICT (id) DO NOTHING"),
             {
                 "nid": str(_NODE_A),
                 "oid": str(tenant.org_id),
@@ -139,11 +130,7 @@ async def _insert_run(db_engine: AsyncEngine, tenant: _EvidenceTenant) -> uuid.U
     run_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :hash, :thread)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :hash, :thread)"),
             {
                 "id": str(run_id),
                 "oid": str(tenant.org_id),

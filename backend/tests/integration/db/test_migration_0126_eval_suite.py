@@ -169,9 +169,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -190,16 +188,9 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     try:
         yield iso_url
     finally:
-        admin_engine = create_async_engine(
-            db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"}
-        )
+        admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
         async with admin_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :n AND pid <> pg_backend_pid()"
-                ).bindparams(n=db_name)
-            )
+            await conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()").bindparams(n=db_name))
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
         await admin_engine.dispose()
 
@@ -217,10 +208,7 @@ async def _seed(db_url: str, orgs: tuple[uuid.UUID, uuid.UUID]) -> dict[str, uui
                     {"id": str(oid), "n": slug, "s": slug},
                 )
                 await conn.execute(
-                    text(
-                        "INSERT INTO accounts (id, email, display_name, password_hash, "
-                        "auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"
-                    ),
+                    text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
                     {"id": str(uuid.uuid4()), "e": f"{slug}@example.com", "n": slug},
                 )
             for oid, slug in [(org_a, "eval-org-a"), (org_b, "eval-org-b")]:
@@ -246,12 +234,7 @@ async def _seed(db_url: str, orgs: tuple[uuid.UUID, uuid.UUID]) -> dict[str, uui
                 did = uuid.uuid4()
                 defs[name] = did
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_definitions "
-                        "(id, organisation_id, pipeline_id, account_id, name, eval_type, "
-                        "config_json, failure_behaviour, suite_id) "
-                        "VALUES (:id, :oid, :pid, :aid, :name, 'regex', '{}'::json, 'warn', :suite)"
-                    ),
+                    text("INSERT INTO eval_definitions (id, organisation_id, pipeline_id, account_id, name, eval_type, config_json, failure_behaviour, suite_id) VALUES (:id, :oid, :pid, :aid, :name, 'regex', '{}'::json, 'warn', :suite)"),
                     {
                         "id": str(did),
                         "oid": str(org_a),
@@ -267,12 +250,7 @@ async def _seed(db_url: str, orgs: tuple[uuid.UUID, uuid.UUID]) -> dict[str, uui
             did = uuid.uuid4()
             defs["b_org_suiteA"] = did
             await conn.execute(
-                text(
-                    "INSERT INTO eval_definitions "
-                    "(id, organisation_id, pipeline_id, account_id, name, eval_type, "
-                    "config_json, failure_behaviour, suite_id) "
-                    "VALUES (:id, :oid, :pid, :aid, :name, 'regex', '{}'::json, 'warn', 'suiteA')"
-                ),
+                text("INSERT INTO eval_definitions (id, organisation_id, pipeline_id, account_id, name, eval_type, config_json, failure_behaviour, suite_id) VALUES (:id, :oid, :pid, :aid, :name, 'regex', '{}'::json, 'warn', 'suiteA')"),
                 {
                     "id": str(did),
                     "oid": str(org_b),
@@ -288,15 +266,7 @@ async def _seed(db_url: str, orgs: tuple[uuid.UUID, uuid.UUID]) -> dict[str, uui
 
 async def _count_suites(engine, org: uuid.UUID | None = None) -> int:
     async with engine.connect() as conn:
-        if org is None:
-            n = (await conn.execute(text("SELECT count(*) FROM eval_suites"))).scalar()
-        else:
-            n = (
-                await conn.execute(
-                    text("SELECT count(*) FROM eval_suites WHERE organisation_id = :o"),
-                    {"o": str(org)},
-                )
-            ).scalar()
+        n = (await conn.execute(text("SELECT count(*) FROM eval_suites"))).scalar() if org is None else (await conn.execute(text("SELECT count(*) FROM eval_suites WHERE organisation_id = :o"), {"o": str(org)})).scalar()
     return int(n)
 
 
@@ -347,10 +317,7 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
 
             member_count = (
                 await conn.execute(
-                    text(
-                        "SELECT jsonb_array_length(eval_definition_ids) "
-                        "FROM eval_suites WHERE organisation_id = :o AND legacy_suite_id = 'suiteA'"
-                    ),
+                    text("SELECT jsonb_array_length(eval_definition_ids) FROM eval_suites WHERE organisation_id = :o AND legacy_suite_id = 'suiteA'"),
                     {"o": str(org_a)},
                 )
             ).scalar()
@@ -358,10 +325,7 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
 
             sentinel = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM eval_suites "
-                        "WHERE organisation_id = :o AND legacy_suite_id = '__NO_SUITE__'"
-                    ),
+                    text("SELECT count(*) FROM eval_suites WHERE organisation_id = :o AND legacy_suite_id = '__NO_SUITE__'"),
                     {"o": str(org_a)},
                 )
             ).scalar()
@@ -375,23 +339,12 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
 
         # --- RLS assertions ---
         async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'eval_suites'")
-                )
-            ).fetchone()
+            row = (await conn.execute(text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'eval_suites'"))).fetchone()
             assert row is not None, "eval_suites should exist"
             assert row[0] is True, "RLS must be ENABLED on eval_suites"
             assert row[1] is True, "RLS must be FORCED on eval_suites"
 
-            policy = (
-                await conn.execute(
-                    text(
-                        "SELECT count(*) FROM pg_policies "
-                        "WHERE tablename = 'eval_suites' AND policyname = 'rls_org_isolation'"
-                    )
-                )
-            ).scalar()
+            policy = (await conn.execute(text("SELECT count(*) FROM pg_policies WHERE tablename = 'eval_suites' AND policyname = 'rls_org_isolation'"))).scalar()
             assert policy == 1, "eval_suites must carry rls_org_isolation policy"
 
         # --- Cross-org RLS enforcement (non-superuser role) ---
@@ -408,17 +361,11 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
             suite_b = uuid.uuid4()
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_suites (id, organisation_id, visibility, name) "
-                        "VALUES (:id, :o, 'org', 'RLS-A')"
-                    ),
+                    text("INSERT INTO eval_suites (id, organisation_id, visibility, name) VALUES (:id, :o, 'org', 'RLS-A')"),
                     {"id": str(suite_a), "o": str(org_a)},
                 )
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_suites (id, organisation_id, visibility, name) "
-                        "VALUES (:id, :o, 'org', 'RLS-B')"
-                    ),
+                    text("INSERT INTO eval_suites (id, organisation_id, visibility, name) VALUES (:id, :o, 'org', 'RLS-B')"),
                     {"id": str(suite_b), "o": str(org_b)},
                 )
 
@@ -461,20 +408,9 @@ async def test_0126_eval_suite_backfill_rls_and_downgrade(isolated_db_url, monke
             config.cmd_opts = types.SimpleNamespace(command="downgrade")
             command.downgrade(config, "-1")
             async with engine.connect() as conn:
-                exists = (
-                    await conn.execute(
-                        text("SELECT count(*) FROM information_schema.tables WHERE table_name = 'eval_suites'")
-                    )
-                ).scalar()
+                exists = (await conn.execute(text("SELECT count(*) FROM information_schema.tables WHERE table_name = 'eval_suites'"))).scalar()
                 assert exists == 0, "eval_suites should be dropped after downgrade"
-                col = (
-                    await conn.execute(
-                        text(
-                            "SELECT count(*) FROM information_schema.columns "
-                            "WHERE table_name = 'eval_definitions' AND column_name = 'eval_suite_id'"
-                        )
-                    )
-                ).scalar()
+                col = (await conn.execute(text("SELECT count(*) FROM information_schema.columns WHERE table_name = 'eval_definitions' AND column_name = 'eval_suite_id'"))).scalar()
                 assert col == 0, "eval_suite_id column should be dropped after downgrade"
         finally:
             # Drop the temporary RLS role so it never outlives the test. The

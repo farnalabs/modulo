@@ -121,9 +121,7 @@ async def pre_fix_db_url(db_url: str):
     db_name, iso_url = await _fresh_db(db_url, "m0276_pre")
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     _migrate(iso_url, PREV_REV)
@@ -143,9 +141,7 @@ async def fresh_chain_db_url(db_url: str):
     db_name, iso_url = await _fresh_db(db_url, "m0276_fresh")
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     _migrate(iso_url, MIGRATION_REV)
@@ -184,10 +180,7 @@ async def _assert_runs_autovacuum_enabled(engine: AsyncEngine) -> None:
     This is the assertion that FAILS against the pre-0276 deployed state -
     the negative control in ``TestOutOfBandDisable``."""
     state = await _autovacuum_enabled(engine)
-    assert state != "false", (
-        "runs has autovacuum_enabled=false - the table is excluded from autovacuum "
-        "(FAR-1419: n_dead_tup 361302 vs n_live_tup 10411, last_autovacuum=never)"
-    )
+    assert state != "false", "runs has autovacuum_enabled=false - the table is excluded from autovacuum (FAR-1419: n_dead_tup 361302 vs n_live_tup 10411, last_autovacuum=never)"
 
 
 class TestOutOfBandDisable:

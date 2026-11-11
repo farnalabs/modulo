@@ -109,9 +109,7 @@ def test_definition_has_description(entry: dict[str, Any]) -> None:
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_each_property_has_type(entry: dict[str, Any]) -> None:
     for prop_name, prop_schema in iter_all_properties(entry["definition"]):
-        assert prop_schema.get("type") in VALID_PROPERTY_TYPES, (
-            f"'{entry['name']}.{prop_name}' has invalid type {prop_schema.get('type')!r}"
-        )
+        assert prop_schema.get("type") in VALID_PROPERTY_TYPES, f"'{entry['name']}.{prop_name}' has invalid type {prop_schema.get('type')!r}"
 
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
@@ -150,11 +148,7 @@ def test_json_roundtrip(entry: dict[str, Any]) -> None:
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_enum_values_are_valid(entry: dict[str, Any]) -> None:
     expected = EXPECTED_ENUMS.get(entry["name"], {})
-    actual = {
-        prop: prop_schema["enum"]
-        for prop, prop_schema in entry["definition"]["properties"].items()
-        if "enum" in prop_schema
-    }
+    actual = {prop: prop_schema["enum"] for prop, prop_schema in entry["definition"]["properties"].items() if "enum" in prop_schema}
     assert actual == expected, f"'{entry['name']}' enum properties differ from the canonical spec"
 
 

@@ -83,9 +83,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -116,17 +114,11 @@ async def _seed_org_and_pipeline(
     pipeline_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, created_by) "
-                "VALUES (:o, 'm0254-org', 'm0254-org', '{}'::json, :a)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, created_by) VALUES (:o, 'm0254-org', 'm0254-org', '{}'::json, :a)"),
             {"o": str(org_id), "a": str(account_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:a, 'm0254@example.com', 'm0254', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:a, 'm0254@example.com', 'm0254', 'hash', 'local', true)"),
             {"a": str(account_id)},
         )
         await conn.execute(
@@ -260,12 +252,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :status)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :status)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -293,10 +280,7 @@ async def _seed_eval_result(engine: AsyncEngine, seeded: dict[str, uuid.UUID], e
     result_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score, detail) "
-                "VALUES (:id, :oid, :rid, :eid, true, 1.0, 'pre-migration result')"
-            ),
+            text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score, detail) VALUES (:id, :oid, :rid, :eid, true, 1.0, 'pre-migration result')"),
             {
                 "id": str(result_id),
                 "oid": str(seeded["org_id"]),
@@ -326,22 +310,17 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
 
     eligible = await _scalar(
         engine,
-        "SELECT COUNT(*) FROM eval_definitions WHERE deleted_at IS NULL "
-        "AND node_id IS NOT NULL AND eval_type != 'guardrail'",
+        "SELECT COUNT(*) FROM eval_definitions WHERE deleted_at IS NULL AND node_id IS NOT NULL AND eval_type != 'guardrail'",
     )
     pg_count = await _scalar(engine, "SELECT COUNT(*) FROM policy_gates")
-    assert pg_count == 3, (
-        f"expected PolicyGate for the 3 live node-scoped non-guardrail candidates "
-        f"(ordinary-warn, ordinary-block, dual-scoped), got {pg_count}"
-    )
+    assert pg_count == 3, f"expected PolicyGate for the 3 live node-scoped non-guardrail candidates (ordinary-warn, ordinary-block, dual-scoped), got {pg_count}"
     assert eligible == 3, f"candidate count drifted, got {eligible}"
 
     # Anti-join: every eligible definition produced exactly one gate (a
     # duplicate + missing pair would keep the COUNT equal but fail this).
     missing = await _scalar(
         engine,
-        "SELECT COUNT(*) FROM eval_definitions ed LEFT JOIN policy_gates pg ON pg.eval_id = ed.id "
-        "WHERE pg.id IS NULL AND ed.deleted_at IS NULL AND ed.node_id IS NOT NULL AND ed.eval_type != 'guardrail'",
+        "SELECT COUNT(*) FROM eval_definitions ed LEFT JOIN policy_gates pg ON pg.eval_id = ed.id WHERE pg.id IS NULL AND ed.deleted_at IS NULL AND ed.node_id IS NOT NULL AND ed.eval_type != 'guardrail'",
     )
     assert missing == 0, f"anti-join failed: {missing} eligible definition(s) missing a PolicyGate"
 
@@ -370,18 +349,14 @@ async def _assert_c1_c2_c3_c4_c5(engine: AsyncEngine, seeded: dict[str, uuid.UUI
     for key in ("guardrail", "suite_scoped", "soft_deleted"):
         eval_id = defs[key]
         eval_exists = await _scalar(engine, "SELECT COUNT(*) FROM evals WHERE id = :eid", {"eid": str(eval_id)})
-        gate_exists = await _scalar(
-            engine, "SELECT COUNT(*) FROM policy_gates WHERE eval_id = :eid", {"eid": str(eval_id)}
-        )
+        gate_exists = await _scalar(engine, "SELECT COUNT(*) FROM policy_gates WHERE eval_id = :eid", {"eid": str(eval_id)})
         assert eval_exists == 1, f"Eval row for {key} population missing from evals"
         assert gate_exists == 0, f"PolicyGate must not exist for {key} population"
 
     # Population 5 (dual-scoped): node_id IS NOT NULL AND suite_id IS NOT NULL.
     # This MUST produce a PolicyGate — per-node evaluation applies.
     dual_eval_id = defs["dual_scoped"]
-    dual_gate = await _scalar(
-        engine, "SELECT COUNT(*) FROM policy_gates WHERE eval_id = :eid", {"eid": str(dual_eval_id)}
-    )
+    dual_gate = await _scalar(engine, "SELECT COUNT(*) FROM policy_gates WHERE eval_id = :eid", {"eid": str(dual_eval_id)})
     assert dual_gate == 1, f"dual-scoped eval (node_id + suite_id both set) must produce a PolicyGate, got {dual_gate}"
 
 
@@ -389,15 +364,13 @@ async def _assert_c6(engine: AsyncEngine) -> None:
     """C6: every PolicyGate.action equals the source failure_behaviour."""
     mismatches = await _scalar(
         engine,
-        "SELECT COUNT(*) FROM policy_gates pg JOIN eval_definitions ed ON pg.eval_id = ed.id "
-        "WHERE pg.action != ed.failure_behaviour",
+        "SELECT COUNT(*) FROM policy_gates pg JOIN eval_definitions ed ON pg.eval_id = ed.id WHERE pg.action != ed.failure_behaviour",
     )
     assert mismatches == 0, f"{mismatches} PolicyGate(s) whose action mismatches the source failure_behaviour"
 
     block_action = await _scalar(
         engine,
-        "SELECT pg.action FROM policy_gates pg JOIN eval_definitions ed ON pg.eval_id = ed.id "
-        "WHERE ed.failure_behaviour = 'block'",
+        "SELECT pg.action FROM policy_gates pg JOIN eval_definitions ed ON pg.eval_id = ed.id WHERE ed.failure_behaviour = 'block'",
     )
     assert block_action == "block", f"the block candidate must produce a block gate, got {block_action}"
 
@@ -406,14 +379,12 @@ async def _assert_c8(engine: AsyncEngine) -> None:
     """C8: the FK on eval_results.eval_id targets evals; the legacy target is gone."""
     new_fk = await _scalar(
         engine,
-        "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass "
-        "AND confrelid = 'evals'::regclass",
+        "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass AND confrelid = 'evals'::regclass",
     )
     assert new_fk == 1, f"expected exactly one eval_results FK referencing evals, got {new_fk}"
     old_fk = await _scalar(
         engine,
-        "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass "
-        "AND confrelid = 'eval_definitions'::regclass",
+        "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass AND confrelid = 'eval_definitions'::regclass",
     )
     assert old_fk == 0, f"legacy FK to eval_definitions must be gone, found {old_fk}"
 
@@ -557,20 +528,13 @@ async def test_eval_definitions_table_unchanged(isolated_db_url: str) -> None:
         await _seed_eval_definitions(engine, seeded)
 
         async with engine.connect() as conn:
-            before = await conn.run_sync(
-                lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")}
-            )
+            before = await conn.run_sync(lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")})
 
         command.upgrade(_alembic_config(db_url), MIGRATION_REV)
 
         async with engine.connect() as conn:
-            after = await conn.run_sync(
-                lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")}
-            )
-        assert after == before, (
-            f"eval_definitions must be untouched by the backfill; reflected-only="
-            f"{after - before}, disappeared={before - after}"
-        )
+            after = await conn.run_sync(lambda sync_conn: {c["name"] for c in inspect(sync_conn).get_columns("eval_definitions")})
+        assert after == before, f"eval_definitions must be untouched by the backfill; reflected-only={after - before}, disappeared={before - after}"
 
         audit_exists = await _scalar(
             engine,
@@ -656,8 +620,7 @@ async def test_content_correctness_every_copied_field_matches_source(isolated_db
         # The suite-scoped definition's threshold survived the copy.
         suite_threshold = await _scalar(
             engine,
-            "SELECT e.pass_threshold FROM evals e JOIN eval_definitions ed ON e.id = ed.id "
-            "WHERE ed.suite_id = 'legacy-suite'",
+            "SELECT e.pass_threshold FROM evals e JOIN eval_definitions ed ON e.id = ed.id WHERE ed.suite_id = 'legacy-suite'",
         )
         assert suite_threshold is not None, "suite-scoped Eval must carry its pass_threshold"
         assert float(suite_threshold) == 0.5, f"suite-scoped threshold drifted, got {suite_threshold}"
@@ -686,25 +649,18 @@ async def test_tenant_trigger_resolves_via_evals(isolated_db_url: str) -> None:
         # The trigger definition points at evals.
         trigger_def = await _scalar(
             engine,
-            "SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'trg_eval_results_eval_id_tenant' "
-            "AND tgrelid = 'eval_results'::regclass",
+            "SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'trg_eval_results_eval_id_tenant' AND tgrelid = 'eval_results'::regclass",
         )
         assert trigger_def is not None, "trg_eval_results_eval_id_tenant must exist after the migration"
         assert "evals" in str(trigger_def), f"trigger must resolve via evals, got: {trigger_def}"
-        assert "eval_definitions" not in str(trigger_def), (
-            f"trigger must NOT resolve via eval_definitions, got: {trigger_def}"
-        )
+        assert "eval_definitions" not in str(trigger_def), f"trigger must NOT resolve via eval_definitions, got: {trigger_def}"
 
         # An Eval that exists ONLY in evals (never backfilled from
         # eval_definitions) — exactly the post-cutover authoring shape.
         evals_only_id = uuid.uuid4()
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, "
-                    "account_id) VALUES (:id, :oid, :pid, CAST(:nid AS uuid), 'post-cutover-eval', 'regex', "
-                    "'{}'::jsonb, :aid)"
-                ),
+                text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, CAST(:nid AS uuid), 'post-cutover-eval', 'regex', '{}'::jsonb, :aid)"),
                 {
                     "id": str(evals_only_id),
                     "oid": str(seeded["org_id"]),
@@ -720,10 +676,7 @@ async def test_tenant_trigger_resolves_via_evals(isolated_db_url: str) -> None:
         result_id = uuid.uuid4()
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) "
-                    "VALUES (:id, :oid, :rid, :eid, true)"
-                ),
+                text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) VALUES (:id, :oid, :rid, :eid, true)"),
                 {
                     "id": str(result_id),
                     "oid": str(seeded["org_id"]),
@@ -739,10 +692,7 @@ async def test_tenant_trigger_resolves_via_evals(isolated_db_url: str) -> None:
         with pytest.raises(IntegrityError, match=r"cross-organisation reference from eval_results\.eval_id to evals"):
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) "
-                        "VALUES (:id, :oid, :rid, :eid, true)"
-                    ),
+                    text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) VALUES (:id, :oid, :rid, :eid, true)"),
                     {
                         "id": str(uuid.uuid4()),
                         "oid": str(seeded["org_id"]),
@@ -789,24 +739,19 @@ async def test_downgrade_restores_legacy_fk_and_trigger_targets(isolated_db_url:
 
         trigger_def = await _scalar(
             engine,
-            "SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'trg_eval_results_eval_id_tenant' "
-            "AND tgrelid = 'eval_results'::regclass",
+            "SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'trg_eval_results_eval_id_tenant' AND tgrelid = 'eval_results'::regclass",
         )
         assert trigger_def is not None, "downgrade must recreate the tenant trigger"
-        assert "eval_definitions" in str(trigger_def), (
-            f"downgraded trigger must resolve via eval_definitions, got: {trigger_def}"
-        )
+        assert "eval_definitions" in str(trigger_def), f"downgraded trigger must resolve via eval_definitions, got: {trigger_def}"
 
         restored_fk = await _scalar(
             engine,
-            "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass "
-            "AND confrelid = 'eval_definitions'::regclass",
+            "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass AND confrelid = 'eval_definitions'::regclass",
         )
         assert restored_fk == 1, f"downgrade must restore the FK to eval_definitions, got {restored_fk}"
         evals_fk = await _scalar(
             engine,
-            "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass "
-            "AND confrelid = 'evals'::regclass",
+            "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'eval_results'::regclass AND confrelid = 'evals'::regclass",
         )
         assert evals_fk == 0, f"downgraded FK to evals must be gone, found {evals_fk}"
 

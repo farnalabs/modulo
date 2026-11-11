@@ -40,9 +40,7 @@ def _make_session(state: MagicMock | None) -> MagicMock:
         text = str(stmt).lower()
         # FAR-1833: the pre-gate reads the ceiling from the per-org cost-state
         # row; the org row itself is only read for existence (same object here).
-        result.scalar_one_or_none = MagicMock(
-            return_value=state if ("organisation_cost_state" in text or "organisations" in text) else None
-        )
+        result.scalar_one_or_none = MagicMock(return_value=state if ("organisation_cost_state" in text or "organisations" in text) else None)
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
@@ -96,9 +94,7 @@ async def test_pre_gate_blocks_when_at_ceiling() -> None:
             new=AsyncMock(return_value=run),
         ),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
     assert halted is not None
     update_status.assert_awaited_once()
     assert update_status.call_args.kwargs["error_code"] == ORG_CEILING_EXCEEDED
@@ -120,9 +116,7 @@ async def test_pre_gate_blocks_kill_switch_zero_ceiling() -> None:
             new=AsyncMock(return_value=run),
         ),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
     assert halted is not None
     update_status.assert_awaited_once()
 
@@ -143,9 +137,7 @@ async def test_pre_gate_allows_when_budget_remaining() -> None:
             new=AsyncMock(return_value=run),
         ),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
     assert halted is None
     update_status.assert_not_awaited()
 
@@ -166,9 +158,7 @@ async def test_pre_gate_allows_when_no_ceiling() -> None:
             new=AsyncMock(return_value=run),
         ),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
     assert halted is None
     update_status.assert_not_awaited()
 

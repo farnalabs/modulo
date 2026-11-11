@@ -27,9 +27,7 @@ async def test_query_incidents(connector: PagerDutyConnector) -> None:
         {"id": "I1", "title": "Production outage", "status": "triggered"},
         {"id": "I2", "title": "Degraded performance", "status": "acknowledged"},
     ]
-    respx.get(f"{_BASE}/incidents").mock(
-        return_value=httpx.Response(200, json={"incidents": incidents, "total": 2, "more": False})
-    )
+    respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, json={"incidents": incidents, "total": 2, "more": False}))
     result = await connector.query(ConnectorQuery(resource="incidents"))
     assert len(result.records) == 2
     assert result.records[0]["title"] == "Production outage"
@@ -106,9 +104,7 @@ async def test_query_services(connector: PagerDutyConnector) -> None:
         {"id": "S1", "name": "Web API", "status": "active"},
         {"id": "S2", "name": "Database", "status": "active"},
     ]
-    respx.get(f"{_BASE}/services").mock(
-        return_value=httpx.Response(200, json={"services": services, "total": 2, "more": False})
-    )
+    respx.get(f"{_BASE}/services").mock(return_value=httpx.Response(200, json={"services": services, "total": 2, "more": False}))
     result = await connector.query(ConnectorQuery(resource="services"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Web API"
@@ -160,9 +156,7 @@ async def test_query_escalation_policies(connector: PagerDutyConnector) -> None:
         {"id": "EP1", "name": "Critical Escalation"},
         {"id": "EP2", "name": "Standard Escalation"},
     ]
-    respx.get(f"{_BASE}/escalation_policies").mock(
-        return_value=httpx.Response(200, json={"escalation_policies": policies, "total": 2, "more": False})
-    )
+    respx.get(f"{_BASE}/escalation_policies").mock(return_value=httpx.Response(200, json={"escalation_policies": policies, "total": 2, "more": False}))
     result = await connector.query(ConnectorQuery(resource="escalation_policies"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Critical Escalation"
@@ -173,9 +167,7 @@ async def test_query_schedules(connector: PagerDutyConnector) -> None:
     schedules = [
         {"id": "SCH1", "name": "Primary On-Call"},
     ]
-    respx.get(f"{_BASE}/schedules").mock(
-        return_value=httpx.Response(200, json={"schedules": schedules, "total": 1, "more": False})
-    )
+    respx.get(f"{_BASE}/schedules").mock(return_value=httpx.Response(200, json={"schedules": schedules, "total": 1, "more": False}))
     result = await connector.query(ConnectorQuery(resource="schedules"))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Primary On-Call"
@@ -186,9 +178,7 @@ async def test_query_on_calls(connector: PagerDutyConnector) -> None:
     oncalls = [
         {"user": {"id": "U1", "summary": "Alice"}, "schedule": {"id": "SCH1"}},
     ]
-    respx.get(f"{_BASE}/oncalls").mock(
-        return_value=httpx.Response(200, json={"oncalls": oncalls, "total": 1, "more": False})
-    )
+    respx.get(f"{_BASE}/oncalls").mock(return_value=httpx.Response(200, json={"oncalls": oncalls, "total": 1, "more": False}))
     result = await connector.query(ConnectorQuery(resource="on_calls"))
     assert len(result.records) == 1
     assert result.records[0]["user"]["id"] == "U1"
@@ -592,9 +582,7 @@ def test_next_offset_cursor_corrupt_offset() -> None:
 
 @respx.mock
 async def test_query_incidents_corrupt_total_inf(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/incidents").mock(
-        return_value=httpx.Response(200, content=b'{"incidents": [{"id": "I1"}], "total": 1e999, "more": false}')
-    )
+    respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, content=b'{"incidents": [{"id": "I1"}], "total": 1e999, "more": false}'))
     result = await connector.query(ConnectorQuery(resource="incidents"))
     assert len(result.records) == 1
     assert result.total == 0
@@ -619,9 +607,7 @@ async def test_query_incidents_garbage_cursor_does_not_crash(connector: PagerDut
 
 @respx.mock
 async def test_query_services_corrupt_total_garbage(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/services").mock(
-        return_value=httpx.Response(200, json={"services": [{"id": "S1"}], "total": "not-a-number", "more": False})
-    )
+    respx.get(f"{_BASE}/services").mock(return_value=httpx.Response(200, json={"services": [{"id": "S1"}], "total": "not-a-number", "more": False}))
     result = await connector.query(ConnectorQuery(resource="services"))
     assert len(result.records) == 1
     assert result.total == 0
@@ -629,9 +615,7 @@ async def test_query_services_corrupt_total_garbage(connector: PagerDutyConnecto
 
 @respx.mock
 async def test_query_on_calls_corrupt_offset_no_poisoned_cursor(connector: PagerDutyConnector) -> None:
-    respx.get(f"{_BASE}/oncalls").mock(
-        return_value=httpx.Response(200, content=b'{"oncalls": [{"user": {"id": "U1"}}], "total": 1e999, "more": true}')
-    )
+    respx.get(f"{_BASE}/oncalls").mock(return_value=httpx.Response(200, content=b'{"oncalls": [{"user": {"id": "U1"}}], "total": 1e999, "more": true}'))
     result = await connector.query(ConnectorQuery(resource="on_calls"))
     assert len(result.records) == 1
     assert result.total == 0

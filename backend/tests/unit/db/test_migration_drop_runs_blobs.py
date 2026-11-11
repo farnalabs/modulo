@@ -147,9 +147,7 @@ class TestStructure:
         assert "_FOLDED_TEL_SQL" in code
         mismatch_block = code[code.index("_PARITY_OUT_TEL_MISMATCH_SQL") : code.index("_PARITY_OUT_POPULATION_SQL")]
         assert "_FOLDED_OUT_SQL} IS DISTINCT FROM {_REASM_OUT_SQL}" in mismatch_block
-        candidates_block = code[
-            code.index("_REPAIR_CANDIDATES_TERMINAL_SQL") : code.index("_REPAIR_CANDIDATES_UNKNOWN_SQL")
-        ]
+        candidates_block = code[code.index("_REPAIR_CANDIDATES_TERMINAL_SQL") : code.index("_REPAIR_CANDIDATES_UNKNOWN_SQL")]
         assert "_HAS_OUT_TEL_BLOB_SQL} " in candidates_block
 
     def test_out_tel_repair_leg_has_the_sentinel_filter(self) -> None:

@@ -46,15 +46,7 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]  # backend/
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0264_pipelines_max_autonomy_ge_default.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[2] / "src" / "farna" / "db" / "migrations" / "versions" / "0264_pipelines_max_autonomy_ge_default.py"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 
 _MANUAL = "manual_approval"
@@ -145,9 +137,7 @@ async def isolated_head_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> 
 
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -163,10 +153,7 @@ async def isolated_head_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> 
         cleanup = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
         async with cleanup.connect() as conn:
             await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :n AND pid <> pg_backend_pid()"
-                ),
+                text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()"),
                 {"n": db_name},
             )
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
@@ -195,10 +182,7 @@ async def _seed_org_and_account(engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UU
             {"id": str(org_id), "name": slug, "slug": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_id), "email": f"{slug}@example.com", "name": "0264 repair"},
         )
     return org_id, account_id

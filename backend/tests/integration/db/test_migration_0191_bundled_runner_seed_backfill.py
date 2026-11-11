@@ -82,9 +82,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -106,17 +104,11 @@ async def _seed_org(engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUI
     """Create an org with an admin membership and no environment profiles."""
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, created_by) "
-                "VALUES (:o, 'm0191-org', 'm0191-org', '{}'::json, :a)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, created_by) VALUES (:o, 'm0191-org', 'm0191-org', '{}'::json, :a)"),
             {"o": str(org_id), "a": str(account_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:a, 'm0191@example.com', 'm0191', 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:a, 'm0191@example.com', 'm0191', 'hash', 'local', true)"),
             {"a": str(account_id)},
         )
         await conn.execute(
@@ -186,10 +178,7 @@ async def test_0191_downgrade_is_clean_and_additive(isolated_db_url: str) -> Non
             # Backfilled profile is LEFT IN PLACE (additive-on-rollback contract).
             remaining = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM environment_profiles "
-                        "WHERE organisation_id = :o AND name = :n AND provider_type = 'runner_docker'"
-                    ),
+                    text("SELECT count(*) FROM environment_profiles WHERE organisation_id = :o AND name = :n AND provider_type = 'runner_docker'"),
                     {"o": str(org_id), "n": _TEMPLATE_NAME},
                 )
             ).scalar()

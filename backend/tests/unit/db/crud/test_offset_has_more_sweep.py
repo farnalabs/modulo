@@ -149,9 +149,7 @@ async def _setup_connector_instances(session: AsyncSession) -> PageCall:
             )
         )
     await session.flush()
-    return lambda page, page_size: list_connector_instances(
-        session, organisation_id=_ORG, page=page, page_size=page_size
-    )
+    return lambda page, page_size: list_connector_instances(session, organisation_id=_ORG, page=page, page_size=page_size)
 
 
 async def _setup_environment_profiles(session: AsyncSession) -> PageCall:
@@ -229,9 +227,7 @@ async def _setup_pipeline_references(session: AsyncSession) -> PageCall:
             )
         )
     await session.flush()
-    return lambda page, page_size: list_pipeline_references_for_backend(
-        session, org_id=_ORG, backend_id=backend_id, page=page, page_size=page_size
-    )
+    return lambda page, page_size: list_pipeline_references_for_backend(session, org_id=_ORG, backend_id=backend_id, page=page, page_size=page_size)
 
 
 async def _setup_node_categories(session: AsyncSession) -> PageCall:

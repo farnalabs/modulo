@@ -118,9 +118,7 @@ class TestCleanupCronAutobeginTransaction:
     """
 
     @pytest.mark.parametrize("case", JOB_CASES)
-    async def test_cron_deletes_old_rows_against_autobegin_false_session(
-        self, case: JobCase, autobegin_false_factory
-    ) -> None:
+    async def test_cron_deletes_old_rows_against_autobegin_false_session(self, case: JobCase, autobegin_false_factory) -> None:
         async with autobegin_false_factory() as session, session.begin():
             session.add(make_trigger_event(case.seed_age_days))
 
@@ -151,9 +149,7 @@ class TestCleanupCronAutobeginTransaction:
         assert len(await _select_all(autobegin_false_factory)) == 1
 
     @pytest.mark.parametrize("case", JOB_CASES)
-    async def test_cron_zero_batch_against_autobegin_false_session(
-        self, case: JobCase, autobegin_false_factory
-    ) -> None:
+    async def test_cron_zero_batch_against_autobegin_false_session(self, case: JobCase, autobegin_false_factory) -> None:
         """Even an empty table must not raise: the SELECT needs an active
         transaction on an autobegin=False session."""
         with (

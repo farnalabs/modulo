@@ -209,9 +209,7 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
     works without the autobegin error.
     """
     key = Fernet.generate_key().decode()
-    eng: AsyncEngine = create_async_engine(
-        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-    )
+    eng: AsyncEngine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
     from farna.db.models.sso_provider import SsoProvider
 
     async with eng.begin() as conn:

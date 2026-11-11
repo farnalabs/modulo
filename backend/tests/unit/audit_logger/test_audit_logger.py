@@ -1026,9 +1026,7 @@ class TestListAuditEvents:
             if call_count == 1:
                 return _scalar_result(10)
             # Return limit+1 items to trigger has_more
-            return _scalars_result(
-                [_make_event(org_id=org_id, event_type="test.event", created_at_val=f"t{i}") for i in range(limit + 1)]
-            )
+            return _scalars_result([_make_event(org_id=org_id, event_type="test.event", created_at_val=f"t{i}") for i in range(limit + 1)])
 
         session.execute = _execute
 
@@ -1336,9 +1334,7 @@ class TestExportEdgeCases:
 
         async def _execute(*a, **kw):
             r = MagicMock()
-            r.scalars = MagicMock(
-                return_value=[_make_event(org_id=org_id, event_type="test.event", payload_json=large_payload)]
-            )
+            r.scalars = MagicMock(return_value=[_make_event(org_id=org_id, event_type="test.event", payload_json=large_payload)])
             r.scalar = MagicMock(return_value=1)
             return r
 

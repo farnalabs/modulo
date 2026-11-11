@@ -1162,9 +1162,7 @@ def _make_resume_session(snapshot: MagicMock, retry_policy: dict[str, Any] | Non
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter(
-        [graph_json_result, snapshot_result, pipeline_result, claim_stamp_result, eval_result, count_result]
-    )
+    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, claim_stamp_result, eval_result, count_result])
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
@@ -1763,9 +1761,7 @@ def _pipeline_with_earned(level: str | None) -> MagicMock:
     return pipeline
 
 
-def _earned_executor(
-    monkeypatch: pytest.MonkeyPatch, *, live: str | None, error: Exception | None = None
-) -> PipelineExecutor:
+def _earned_executor(monkeypatch: pytest.MonkeyPatch, *, live: str | None, error: Exception | None = None) -> PipelineExecutor:
     """Build an executor whose ``_resolve_earned_at_start`` live read is wired.
 
     Patches the lazily-imported crud/RLS seams the method uses.
@@ -3136,9 +3132,7 @@ async def test_eval_blocked_audit_payload_error_detail_is_sanitized():
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
-    compiled = _mock_compiled_raising(
-        EvalBlockedError("qa", "conn failed postgresql://user:supersecret@db.example/modulo")
-    )
+    compiled = _mock_compiled_raising(EvalBlockedError("qa", "conn failed postgresql://user:supersecret@db.example/modulo"))
     registry = _mock_registry()
 
     with (
@@ -4775,9 +4769,7 @@ def test_work_intact_false_for_downgraded_sandbox_agent_failure():
     }
     # The completed set equals the full DAG node set and every output has a
     # summary — exactly the shape that would compute work_intact=True.
-    assert (
-        executor._compute_run_work_intact("failed", "sandbox.agent_failed", {"node-x": synthetic}, {"node-x"}) is False
-    )
+    assert executor._compute_run_work_intact("failed", "sandbox.agent_failed", {"node-x": synthetic}, {"node-x"}) is False
     assert executor._compute_run_work_intact("failed", "sandbox.agent_failed", {}, set()) is False
 
 
@@ -5193,9 +5185,7 @@ class TestTransientFailureDetail:
         class name to), not the generic ``node_cancelled`` — a no-output stall
         must not be bucketed as a cancellation."""
         exc = SandboxNodeFailedError("agent produced no output for 600s", node_id="node-a")
-        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "sandbox.no_output_json"
         assert "Sandbox node failed (transient) after retries exhausted: agent produced no output for 600s" in detail
 
@@ -5208,9 +5198,7 @@ class TestTransientFailureDetail:
             "E2B rate-limited after 4 attempts creating sandbox for node 'node-a'",
             node_id="node-a",
         )
-        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "sandbox.queue_timeout"
         assert "rate-limited after 4 attempts" in detail
 
@@ -5221,9 +5209,7 @@ class TestTransientFailureDetail:
             "E2B rate-limited creating sandbox for node 'node-a'",
             node_id="node-a",
         )
-        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "sandbox.rate_limited"
 
     def test_unmapped_sandbox_subclass_falls_back_to_no_output_json(self) -> None:
@@ -5234,9 +5220,7 @@ class TestTransientFailureDetail:
             pass
 
         exc = _UnmappedSandboxError("sandbox died in an unclassified way", node_id="node-a")
-        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "sandbox.no_output_json"
 
     def test_provider_refusal_wins_over_subclass_sandbox_code(self) -> None:
@@ -5244,13 +5228,10 @@ class TestTransientFailureDetail:
         sandbox-code override, so a permanent provider refusal still wins even
         when the exception is a sandbox subclass that maps to its own code."""
         exc = SandboxQueueTimeoutError(
-            "E2B rate-limited after 4 attempts creating sandbox for node 'node-a'; "
-            '{"type":"error","error":{"statusCode":402,"message":"Insufficient account funds"}}',
+            'E2B rate-limited after 4 attempts creating sandbox for node \'node-a\'; {"type":"error","error":{"statusCode":402,"message":"Insufficient account funds"}}',
             node_id="node-a",
         )
-        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "model.insufficient_funds"
 
     def test_hang_death_keeps_generic_cancelled_code(self) -> None:
@@ -5258,21 +5239,16 @@ class TestTransientFailureDetail:
         excluded from ``failure`` retries ONLY while its code resolves to
         ``node.cancelled`` — the FAR-1526 sandbox-code upgrade must not apply."""
         exc = SandboxNodeFailedError(
-            "Sandbox agent command produced no output within 3300s. "
-            "No stdout/stderr was captured — the agent likely hung before writing any result.",
+            "Sandbox agent command produced no output within 3300s. No stdout/stderr was captured — the agent likely hung before writing any result.",
             node_id="node-a",
         )
-        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "node_cancelled"
         assert "likely hung" in detail
 
     def test_non_idempotent_graph_retry_suppression_detail(self) -> None:
         exc = SandboxNodeFailedError("side-effect fail", node_id="node-a")
-        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=False, execution_attempt_count=0, retries=1
-        )
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=False, execution_attempt_count=0, retries=1)
         assert code == "node_cancelled"
         assert "retry suppressed because a node in the graph is non-idempotent" in detail
         assert "idempotent=false" in detail
@@ -5285,9 +5261,7 @@ class TestTransientFailureDetail:
             '{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":429}}}',
             node_id="node-a",
         )
-        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(
-            exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1
-        )
+        code, _detail = TestTransientFailureDetail._executor()._transient_failure_detail(exc=exc, script_lease_ok=True, graph_idempotent=True, execution_attempt_count=1, retries=1)
         assert code == "model.rate_limited"
 
     def test_non_retryable_code_detail_names_the_class_not_exhaustion(self) -> None:
@@ -5388,9 +5362,7 @@ async def test_init_connector_hub_propagates_shared_budget_error():
     executor._session_factory = _make_session_factory(  # type: ignore[assignment]
         _make_connector_init_session([MagicMock()])
     )
-    hub = _FakeConnectorHub(
-        SharedBudgetUnavailableError("shared rate-limit Redis client is configured but could not be constructed")
-    )
+    hub = _FakeConnectorHub(SharedBudgetUnavailableError("shared rate-limit Redis client is configured but could not be constructed"))
 
     with (
         patch("farna.core.connector_hub.ConnectorHub", return_value=hub),
@@ -5728,9 +5700,7 @@ class TestNodeOutputConnectorFailure:
 
     def test_connector_node_with_failed_artifact_no_error_returns_generic(self):
         output = {"artifacts": [{"node_id": "c1", "status": "failed"}]}
-        assert (
-            _node_output_connector_failure(output, "connector", expected_node_id="c1") == "Connector reported failure"
-        )
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") == "Connector reported failure"
         assert _node_output_connector_failure(output, "connector") == "Connector reported failure"
 
     def test_dispatch_node_with_failed_artifact_no_error_returns_generic(self):
@@ -5769,11 +5739,7 @@ async def test_stream_graph_captures_connector_failure():
             "event": "on_chain_end",
             "name": "connector-node",
             "run_id": node_run_id,
-            "data": {
-                "output": {
-                    "artifacts": [{"node_id": "connector-node", "status": "failed", "error": "GitHub query failed"}]
-                }
-            },
+            "data": {"output": {"artifacts": [{"node_id": "connector-node", "status": "failed", "error": "GitHub query failed"}]}},
         }
     ]
     compiled = _mock_compiled(events)
@@ -5815,9 +5781,7 @@ async def test_stream_graph_captures_dispatch_failure():
             "event": "on_chain_end",
             "name": "dispatch-node",
             "run_id": node_run_id,
-            "data": {
-                "output": {"artifacts": [{"node_id": "dispatch-node", "status": "failed", "error": "Dispatch timeout"}]}
-            },
+            "data": {"output": {"artifacts": [{"node_id": "dispatch-node", "status": "failed", "error": "Dispatch timeout"}]}},
         }
     ]
     compiled = _mock_compiled(events)
@@ -6519,9 +6483,7 @@ async def test_resume_stream_terminalizes_when_checkpointer_scope_entry_fails() 
 
 
 async def test_resume_stream_maps_checkpointer_scope_entry_runtime_error() -> None:
-    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(
-        RuntimeError("checkpointer pool exhausted")
-    )
+    status, code, detail, _ntu = await _run_resume_stream_scope_entry_raising(RuntimeError("checkpointer pool exhausted"))
 
     assert status == "failed"
     assert code == "configuration_error"
@@ -6595,9 +6557,7 @@ async def test_interrupt_gate_pipeline_name_lookup_swallows_failure() -> None:
     session = _session_raising_on_begin_nested(RuntimeError("db down"))
 
     with patch("farna.core.pipeline_engine.executor._log") as mock_log:
-        result = await executor._create_interrupt_gate_resolve_pipeline_name(
-            session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-        )
+        result = await executor._create_interrupt_gate_resolve_pipeline_name(session, uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
 
     assert result is None
     mock_log.warning.assert_called_once()

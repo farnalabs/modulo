@@ -61,9 +61,7 @@ def make_test_settings(**overrides: str | bool) -> Settings:
 
 def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
     header_b64 = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
     return f"{header_b64}.{payload_b64}.signature"
 
 

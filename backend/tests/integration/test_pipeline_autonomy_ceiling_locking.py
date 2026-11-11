@@ -190,9 +190,7 @@ async def test_locked_reselect_refreshes_the_identity_mapped_row(
             assert locked is unlocked
             # ...whose attributes must now reflect the LOCKED row, not the
             # pre-lock snapshot the unlocked read captured.
-            assert locked.default_autonomy_level == _FULL, (
-                "the FOR UPDATE re-select returned the stale identity-mapped values"
-            )
+            assert locked.default_autonomy_level == _FULL, "the FOR UPDATE re-select returned the stale identity-mapped values"
             # The endpoint's ceiling merge now validates against the fresh
             # default and must reject the lower ceiling.
             with pytest.raises(ValueError, match="must be >="):
@@ -217,10 +215,7 @@ async def test_locked_reselect_refreshes_the_identity_mapped_row(
             assert stale is first
             # WITHOUT populate_existing the freshly-fetched row is discarded
             # and the pre-lock values remain — the identity-map trap.
-            assert stale.default_autonomy_level == _MANUAL, (
-                "expected the un-refreshed re-select to keep the stale value "
-                "(the control would no longer discriminate the fix)"
-            )
+            assert stale.default_autonomy_level == _MANUAL, "expected the un-refreshed re-select to keep the stale value (the control would no longer discriminate the fix)"
     finally:
         await _cleanup(db_engine, pipeline_id)
 
@@ -243,9 +238,7 @@ async def test_patch_rejects_ceiling_made_inverted_by_a_concurrent_commit(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_race(
-        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-    ) -> Pipeline:
+    async def _unlocked_read_then_race(session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline:
         nonlocal raced
         row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
@@ -317,10 +310,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> u
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"far1222-{account_id.hex[:12]}@example.com",
@@ -328,10 +318,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> u
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -434,9 +421,7 @@ async def test_patch_to_the_pre_change_owner_is_blocked_for_a_non_member(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_rescope(
-        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-    ) -> Pipeline:
+    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline:
         nonlocal raced
         row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
@@ -489,9 +474,7 @@ async def test_patch_reports_rebind_compared_against_the_post_lock_owner(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_rescope(
-        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
-    ) -> Pipeline:
+    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None) -> Pipeline:
         nonlocal raced
         row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
@@ -509,9 +492,7 @@ async def test_patch_reports_rebind_compared_against_the_post_lock_owner(
 
         assert raced, "the endpoint never performed its unlocked read"
         assert resp.status_code == 200, resp.text
-        assert resp.json()["connector_rebind_required"] is True, (
-            "ownership_changed was computed from the pre-lock owner, not the locked row"
-        )
+        assert resp.json()["connector_rebind_required"] is True, "ownership_changed was computed from the pre-lock owner, not the locked row"
 
         visibility, owner = await _read_scope(db_engine, pipeline_id)
         assert visibility == "team"

@@ -69,13 +69,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true) "
-                "ON CONFLICT (email) DO UPDATE SET id = accounts.id "
-                "RETURNING id"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true) ON CONFLICT (email) DO UPDATE SET id = accounts.id RETURNING id"),
             {"id": str(account_id), "email": email, "name": email},
         )
         existing = await conn.execute(
@@ -89,10 +83,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         )
         if membership.first() is None:
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
                 {"mid": str(uuid.uuid4()), "aid": str(resolved_id), "oid": str(org_id)},
             )
     return resolved_id
@@ -132,13 +123,7 @@ async def _seed_schema(
     content = {"definition_json": definition or {"type": "object", "properties": {}}}
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO library_primitives "
-                "(id, organisation_id, source, primitive_type, name, slug, "
-                "author, version, tags, content_json, visibility, tier) "
-                "VALUES (:id, :oid, 'local', 'schema', :name, :slug, "
-                "'test', :version, '[]'::json, :content, 'org', 'native')"
-            ),
+            text("INSERT INTO library_primitives (id, organisation_id, source, primitive_type, name, slug, author, version, tags, content_json, visibility, tier) VALUES (:id, :oid, 'local', 'schema', :name, :slug, 'test', :version, '[]'::json, :content, 'org', 'native')"),
             {
                 "id": str(prim_id),
                 "oid": str(org_id),
@@ -171,13 +156,7 @@ async def _seed_agent(
     }
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO library_primitives "
-                "(id, organisation_id, source, primitive_type, name, slug, "
-                "author, version, tags, content_json, visibility, tier) "
-                "VALUES (:id, :oid, 'local', 'agent', :name, :slug, "
-                "'test', :version, '[]'::json, :content, 'org', 'native')"
-            ),
+            text("INSERT INTO library_primitives (id, organisation_id, source, primitive_type, name, slug, author, version, tags, content_json, visibility, tier) VALUES (:id, :oid, 'local', 'agent', :name, :slug, 'test', :version, '[]'::json, :content, 'org', 'native')"),
             {
                 "id": str(prim_id),
                 "oid": str(org_id),
@@ -264,10 +243,7 @@ async def _count_entities(
 ) -> dict[str, int]:
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT entity_type, count(*) FROM collection_install_entity "
-                "WHERE install_id = :iid GROUP BY entity_type"
-            ),
+            text("SELECT entity_type, count(*) FROM collection_install_entity WHERE install_id = :iid GROUP BY entity_type"),
             {"iid": str(install_id)},
         )
         return {r[0]: r[1] for r in row.all()}
@@ -417,9 +393,7 @@ async def test_full_install_verify_uninstall_round_trip(
 
     # ...while the row itself SURVIVES with a deleted_at stamp (the
     # collection_install_entity children below must survive with it).
-    retired = await db_session.scalar(
-        include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
-    )
+    retired = await db_session.scalar(include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id)))
     assert retired is not None
     assert retired.deleted_at is not None
 
@@ -499,9 +473,7 @@ async def test_install_response_entity_list_matches_child_rows(
     install_id = install.install_id
 
     # Ground truth: the child rows as read by the BYPASSRLS superuser.
-    child_result = await db_session.execute(
-        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id)
-    )
+    child_result = await db_session.execute(select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id))
     child_rows = child_result.scalars().all()
     # 2 schemas + 1 agent + 1 materialised pipeline, each stamped by
     # ``_stamp_install_id`` (proven by the round-trip test above) — a
@@ -548,9 +520,7 @@ async def test_install_response_entity_list_matches_child_rows(
             session=endpoint_session,
             principal=principal,
         )
-    endpoint_reported = sorted(
-        (entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or []
-    )
+    endpoint_reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or [])
     assert endpoint_reported
     assert endpoint_reported == expected
 
@@ -785,10 +755,7 @@ async def test_reinstall_same_version_idempotent(
     # cleaned up by uninstall, which only handles entities)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "DELETE FROM library_primitives WHERE organisation_id = :oid "
-                "AND primitive_type = 'workflow' AND source = 'local'"
-            ),
+            text("DELETE FROM library_primitives WHERE organisation_id = :oid AND primitive_type = 'workflow' AND source = 'local'"),
             {"oid": str(org)},
         )
 
@@ -980,9 +947,7 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
     # 1 + 2: exactly one sentinel-owned library_primitives row — the collection.
     async with db_engine.connect() as conn:
         rows = await conn.execute(
-            text(
-                "SELECT id, organisation_id, source, slug, version FROM library_primitives WHERE organisation_id = :oid"
-            ),
+            text("SELECT id, organisation_id, source, slug, version FROM library_primitives WHERE organisation_id = :oid"),
             {"oid": str(MODULO_ORG_ID)},
         )
         sentinel_rows = rows.all()
@@ -1100,9 +1065,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
         {"slug": "clean-agent", "version": "1.1"},
         {"slug": "edited-agent", "version": "1.1"},
     ]
-    collection_v2 = await _seed_collection(
-        db_engine, org, pins_v2, slug="upgrade-collection", version="1.1", version_group_id=collection_v1
-    )
+    collection_v2 = await _seed_collection(db_engine, org, pins_v2, slug="upgrade-collection", version="1.1", version_group_id=collection_v1)
 
     # --- Detection: "update available" with a per-entity-type delta ---
     report = await detect_collection_update(db_session, org, install_id, collection_v1)
@@ -1153,10 +1116,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
     # --- Verify: reconciled entities match the new pin content ---
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT sv.definition_json FROM schema_versions sv "
-                "WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"
-            ),
+            text("SELECT sv.definition_json FROM schema_versions sv WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"),
             {"sid": str(input_local)},
         )
         upgraded_def = row.scalar_one()
@@ -1171,10 +1131,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
     # --- Verify: modified entities are untouched ---
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT sv.definition_json FROM schema_versions sv "
-                "WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"
-            ),
+            text("SELECT sv.definition_json FROM schema_versions sv WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"),
             {"sid": str(output_local)},
         )
         assert row.scalar_one() == def_b

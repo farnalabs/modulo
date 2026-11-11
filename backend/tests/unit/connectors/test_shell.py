@@ -157,9 +157,7 @@ async def test_read_file(provider: _FakeRuntimeProvider, provider_ref: str, work
     assert result.records[0]["path"] == "/tmp/hello.txt"
 
 
-async def test_read_file_missing(
-    provider: _FakeRuntimeProvider, provider_ref: str, workspace_lease_id: uuid.UUID
-) -> None:
+async def test_read_file_missing(provider: _FakeRuntimeProvider, provider_ref: str, workspace_lease_id: uuid.UUID) -> None:
     c = _connector(provider, workspace_lease_id)
 
     with pytest.raises(ValueError, match="Failed to read file"):
@@ -347,9 +345,7 @@ async def test_run_command_deny_all_default(provider: _FakeRuntimeProvider, prov
 
 
 async def test_run_command_not_in_allowlist(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(
-        runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat"]
-    )
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat"])
 
     with pytest.raises(ConnectorPermissionError, match="not in the allowed list"):
         await c.write(
@@ -364,9 +360,7 @@ async def test_run_command_not_in_allowlist(provider: _FakeRuntimeProvider, prov
 
 
 async def test_run_command_allowed(provider: _FakeRuntimeProvider, provider_ref: str) -> None:
-    c = ShellConnector(
-        runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat", "ls"]
-    )
+    c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo", "cat", "ls"])
 
     result = await c.write(
         ConnectorPayload(
@@ -397,9 +391,7 @@ _SHELL_METACHARACTER_COMMANDS = [
 
 
 @pytest.mark.parametrize("command_str", _SHELL_METACHARACTER_COMMANDS)
-async def test_run_command_rejects_shell_metacharacters(
-    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
-) -> None:
+async def test_run_command_rejects_shell_metacharacters(provider: _FakeRuntimeProvider, provider_ref: str, command_str: str) -> None:
     """A metacharacter-bearing command is rejected before it reaches the provider.
 
     The allowlist matches only the first argv token while the raw string is run
@@ -423,9 +415,7 @@ async def test_run_command_rejects_shell_metacharacters(
 
 
 @pytest.mark.parametrize("command_str", ["ls -la", "git status"])
-async def test_run_command_allows_plain_commands(
-    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
-) -> None:
+async def test_run_command_allows_plain_commands(provider: _FakeRuntimeProvider, provider_ref: str, command_str: str) -> None:
     """A simple allowlisted command without shell syntax still runs."""
     c = ShellConnector(
         runtime_provider=provider,
@@ -456,9 +446,7 @@ async def test_run_command_allows_plain_commands(
         "ls \\;",
     ],
 )
-async def test_run_command_allows_quoted_metacharacters(
-    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
-) -> None:
+async def test_run_command_allows_quoted_metacharacters(provider: _FakeRuntimeProvider, provider_ref: str, command_str: str) -> None:
     """A metacharacter made literal by quoting or escaping is not shell syntax."""
     c = ShellConnector(
         runtime_provider=provider,

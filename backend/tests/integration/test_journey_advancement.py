@@ -129,9 +129,7 @@ async def _advance(
     )
 
 
-async def test_first_advance_inserts_journey_with_evidence(
-    app_role_rls_session: AsyncSession, test_org: uuid.UUID
-) -> None:
+async def test_first_advance_inserts_journey_with_evidence(app_role_rls_session: AsyncSession, test_org: uuid.UUID) -> None:
     """FAR-665 regression: the upsert must EXECUTE on Postgres (the str bind
     raised ``asyncpg.DataError`` here — silently swallowed upstream) and the
     INSERT arm must land evidence + run_count."""
@@ -148,9 +146,7 @@ async def test_first_advance_inserts_journey_with_evidence(
     assert journey.updated_at == _T2
 
 
-async def test_older_evidence_is_ignored_by_compare_and_set(
-    app_role_rls_session: AsyncSession, test_org: uuid.UUID
-) -> None:
+async def test_older_evidence_is_ignored_by_compare_and_set(app_role_rls_session: AsyncSession, test_org: uuid.UUID) -> None:
     first_run = uuid.uuid4()
     await _seed_journey(app_role_rls_session, test_org, latest_terminal_run_id=first_run, updated_at=_T2)
 
@@ -197,9 +193,7 @@ async def test_newer_evidence_overwrites(app_role_rls_session: AsyncSession, tes
     assert journey.updated_at == _T3
 
 
-async def test_journey_row_is_rls_scoped_to_the_calling_org(
-    app_role_rls_session: AsyncSession, test_org: uuid.UUID
-) -> None:
+async def test_journey_row_is_rls_scoped_to_the_calling_org(app_role_rls_session: AsyncSession, test_org: uuid.UUID) -> None:
     """The advance is visible only under the advancing org's RLS context.
 
     Both probes run the SAME unfiltered query (no ``organisation_id``
@@ -213,9 +207,7 @@ async def test_journey_row_is_rls_scoped_to_the_calling_org(
 
     async def _unfiltered_journey() -> Journey | None:
         app_role_rls_session.expire_all()
-        return (
-            await app_role_rls_session.execute(select(Journey).where(Journey.kind == "pr", Journey.ref == "123"))
-        ).scalar_one_or_none()
+        return (await app_role_rls_session.execute(select(Journey).where(Journey.kind == "pr", Journey.ref == "123"))).scalar_one_or_none()
 
     visible = await _unfiltered_journey()
     assert visible is not None

@@ -14,15 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0005_v2_features_system.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0005_v2_features_system.py"
 # Literal table names created by migration 0005 (immutable — historical names).
 _M0005_TABLES = {"chat_sessions", "chat_messages", "remy_skills"}
 
@@ -64,9 +56,7 @@ class TestMigration0005Upgrade:
 
     def test_declares_check_constraints(self, create_tables_op: MagicMock) -> None:
         calls_by_table = {call.args[0]: call.args[1:] for call in create_tables_op.create_table.call_args_list}
-        constraint_names = {
-            item.name for table in _M0005_TABLES for item in calls_by_table[table] if getattr(item, "name", None)
-        }
+        constraint_names = {item.name for table in _M0005_TABLES for item in calls_by_table[table] if getattr(item, "name", None)}
         assert "ck_chat_messages_role" in constraint_names
         assert "ck_remy_skills_owner" in constraint_names
 

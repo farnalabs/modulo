@@ -6,9 +6,7 @@ from farna.settings import Settings
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
-    monkeypatch.setenv(
-        "DATABASE_URL", overrides.pop("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
-    )
+    monkeypatch.setenv("DATABASE_URL", overrides.pop("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"))
     monkeypatch.setenv("SECRET_KEY", overrides.pop("SECRET_KEY", "a" * 32))
     monkeypatch.setenv("FERNET_KEY", overrides.pop("FERNET_KEY", "a" * 32))
     for k, v in overrides.items():

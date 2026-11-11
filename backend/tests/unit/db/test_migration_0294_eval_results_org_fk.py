@@ -103,16 +103,12 @@ class TestDdlEmission:
         assert executed == [
             f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_OLD_FK}"',
             f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_COMPOSITE_FK}"',
-            "ALTER TABLE eval_results ADD CONSTRAINT fk_eval_results_eval_org "
-            "FOREIGN KEY (eval_id, organisation_id) "
-            "REFERENCES evals (id, organisation_id) ON DELETE CASCADE",
+            "ALTER TABLE eval_results ADD CONSTRAINT fk_eval_results_eval_org FOREIGN KEY (eval_id, organisation_id) REFERENCES evals (id, organisation_id) ON DELETE CASCADE",
         ], executed
 
     def test_postgres_upgrade_adds_unique_when_missing(self) -> None:
         executed = _run_with_mocked_op("postgresql", "upgrade", unique_exists=False)
-        assert executed[0] == (
-            "ALTER TABLE evals ADD CONSTRAINT uq_evals_id_organisation_id UNIQUE (id, organisation_id)"
-        ), executed
+        assert executed[0] == ("ALTER TABLE evals ADD CONSTRAINT uq_evals_id_organisation_id UNIQUE (id, organisation_id)"), executed
         assert len(executed) == 4, executed
 
     def test_postgres_downgrade_restores_plain_fk(self) -> None:
@@ -120,8 +116,7 @@ class TestDdlEmission:
         assert executed == [
             f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_COMPOSITE_FK}"',
             f'ALTER TABLE eval_results DROP CONSTRAINT IF EXISTS "{_OLD_FK}"',
-            "ALTER TABLE eval_results ADD CONSTRAINT eval_results_eval_id_fkey "
-            "FOREIGN KEY (eval_id) REFERENCES evals (id) ON DELETE CASCADE",
+            "ALTER TABLE eval_results ADD CONSTRAINT eval_results_eval_id_fkey FOREIGN KEY (eval_id) REFERENCES evals (id) ON DELETE CASCADE",
         ], executed
 
     def test_non_postgres_is_a_no_op(self) -> None:
@@ -151,11 +146,7 @@ class TestModelParity:
     def test_eval_id_is_covered_by_exactly_one_composite_fk(self) -> None:
         """No standalone single-column ``eval_id`` FK may coexist with the
         composite one — a single-column FK would not enforce same-org binding."""
-        covering = [
-            fk
-            for fk in EvalResult.__table__.foreign_key_constraints
-            if any(column.name == "eval_id" for column in fk.columns)
-        ]
+        covering = [fk for fk in EvalResult.__table__.foreign_key_constraints if any(column.name == "eval_id" for column in fk.columns)]
         assert len(covering) == 1, [sorted(c.name for c in fk.columns) for fk in covering]
         assert [column.name for column in covering[0].columns] == ["eval_id", "organisation_id"]
 

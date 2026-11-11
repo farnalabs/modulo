@@ -150,9 +150,7 @@ async def test_outcome_failed_surfaces_verbatim():
 
 async def test_summary_and_other_fields_still_extracted():
     """The phase-1 change must not disturb the existing summary/changed_files/pr_url extraction."""
-    result = await _run_node(
-        '{"status": "completed", "summary": "done", "changed_files": ["a.py"], "pr_url": "https://example.com/p"}'
-    )
+    result = await _run_node('{"status": "completed", "summary": "done", "changed_files": ["a.py"], "pr_url": "https://example.com/p"}')
 
     output = result["output"]
     telemetry = result["telemetry"]
@@ -250,26 +248,15 @@ def test_session_lost_detection_matches_summary_variants():
     """FAR-227 spec point 5: the detector matches BOTH the base summary and the
     '...after 3 attempts' variant — the match is a substring, so a suffix on the
     base string still fires."""
-    assert (
-        _is_sandbox_session_lost_echo({"status": "failed", "summary": "No output from agent - session interrupted"})
-        is True
-    )
-    assert (
-        _is_sandbox_session_lost_echo(
-            {"status": "failed", "summary": "No output from agent - session interrupted after 3 attempts"}
-        )
-        is True
-    )
+    assert _is_sandbox_session_lost_echo({"status": "failed", "summary": "No output from agent - session interrupted"}) is True
+    assert _is_sandbox_session_lost_echo({"status": "failed", "summary": "No output from agent - session interrupted after 3 attempts"}) is True
 
 
 def test_session_lost_detection_matches_error_field_and_rejects_ordinary_output():
     """The detector also reads the ``error`` field (a wrapper may echo the
     placeholder there), and never misreads ordinary summaries/errors as a dead
     session."""
-    assert (
-        _is_sandbox_session_lost_echo({"status": "failed", "error": "No output from agent - session interrupted"})
-        is True
-    )
+    assert _is_sandbox_session_lost_echo({"status": "failed", "error": "No output from agent - session interrupted"}) is True
     assert _is_sandbox_session_lost_echo({"status": "failed", "summary": "the task is impossible because X"}) is False
     assert _is_sandbox_session_lost_echo({"status": "completed", "summary": "all good"}) is False
     assert _is_sandbox_session_lost_echo({"status": "failed", "summary": 42}) is False

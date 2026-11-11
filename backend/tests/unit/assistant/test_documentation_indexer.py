@@ -13,13 +13,7 @@ class TestDocumentationIndexBuild:
     def test_build_creates_entries_from_routes(self, tmp_path: Path) -> None:
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
-            "routes:\n"
-            "    /pipelines:\n"
-            "        name: pipeline-list\n"
-            "        breadcrumb: Pipelines\n"
-            "        type: list_page\n"
-            "        sidebar_group: build\n"
-            "        deprecated: false\n",
+            "routes:\n    /pipelines:\n        name: pipeline-list\n        breadcrumb: Pipelines\n        type: list_page\n        sidebar_group: build\n        deprecated: false\n",
             encoding="utf-8",
         )
         index = DocumentationIndex.build(manifest)
@@ -134,9 +128,7 @@ class TestDocumentationIndexFormatResults:
     @pytest.fixture
     def index(self) -> DocumentationIndex:
         entries = [
-            DocEntry(
-                heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core execution unit."
-            ),
+            DocEntry(heading_path="Pipelines > Overview", heading="Pipeline Overview", first_paragraph="Core execution unit."),
             DocEntry(
                 heading_path="Schemas > Types",
                 heading="Schema Types",

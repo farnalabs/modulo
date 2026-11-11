@@ -375,12 +375,8 @@ class TestScanCheckpointRetention:
     @pytest.mark.asyncio
     async def test_reports_only_runs_with_reclaimable_checkpoint_bytes(self) -> None:
         session = AsyncMock()
-        run1 = SimpleNamespace(
-            langgraph_thread_id="org:t1", status="complete", run_number=1, created_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
-        run2 = SimpleNamespace(
-            langgraph_thread_id="org:t2", status="failed", run_number=2, created_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        run1 = SimpleNamespace(langgraph_thread_id="org:t1", status="complete", run_number=1, created_at=datetime(2026, 1, 1, tzinfo=UTC))
+        run2 = SimpleNamespace(langgraph_thread_id="org:t2", status="failed", run_number=2, created_at=datetime(2026, 1, 1, tzinfo=UTC))
         result = MagicMock()
         result.scalars.return_value.all.return_value = [run1, run2]
         session.execute = AsyncMock(return_value=result)
@@ -449,9 +445,7 @@ class TestScannerRegistry:
         for entry in _SCANNERS:
             if entry.entity_type is None:
                 continue
-            assert entry.entity_type in ENTITY_MODEL_MAP, (
-                f"{entry.category} -> {entry.entity_type} missing from ENTITY_MODEL_MAP"
-            )
+            assert entry.entity_type in ENTITY_MODEL_MAP, f"{entry.category} -> {entry.entity_type} missing from ENTITY_MODEL_MAP"
 
     def test_every_scanner_has_entity_type_or_is_detection_only(self) -> None:
         """Every scanner declares a cleanup ``entity_type`` unless it is a

@@ -126,9 +126,7 @@ class TestToTicket:
 
 class TestListTickets:
     @patch("httpx.AsyncClient")
-    async def test_lists_tickets_with_default_filter(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_lists_tickets_with_default_filter(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.return_value = _response(200, json=[_make_mock_issue()])
@@ -167,9 +165,7 @@ class TestListTickets:
         assert call_kwargs["params"]["labels"] == "bug"
 
     @patch("httpx.AsyncClient")
-    async def test_offset_page_math_uses_effective_per_page(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_offset_page_math_uses_effective_per_page(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.return_value = _response(200, json=[])
@@ -253,9 +249,7 @@ class TestHealthCheck:
     async def test_returns_unhealthy_on_failure(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.side_effect = httpx.HTTPStatusError(
-            "404 Not Found", request=MagicMock(), response=_response(404)
-        )
+        mock_client.get.side_effect = httpx.HTTPStatusError("404 Not Found", request=MagicMock(), response=_response(404))
 
         result = await tracker.health_check()
 
@@ -291,13 +285,9 @@ class TestWrite:
     async def test_writes_ticket(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.post.return_value = _response(
-            201, json={"number": 42, "html_url": "https://github.com/owner/repo/issues/42"}
-        )
+        mock_client.post.return_value = _response(201, json={"number": 42, "html_url": "https://github.com/owner/repo/issues/42"})
 
-        result = await tracker.write(
-            ConnectorPayload(resource="issue", data={"title": "New bug", "description": "Desc"})
-        )
+        result = await tracker.write(ConnectorPayload(resource="issue", data={"title": "New bug", "description": "Desc"}))
 
         assert result["ticket_id"] == "42"
         assert result["url"] == "https://github.com/owner/repo/issues/42"
@@ -310,9 +300,7 @@ class TestConnectorType:
 
 class TestHealthCheckCancelledError:
     @patch("httpx.AsyncClient")
-    async def test_health_check_reraises_cancelled_error(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_health_check_reraises_cancelled_error(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.side_effect = asyncio.CancelledError()
@@ -323,9 +311,7 @@ class TestHealthCheckCancelledError:
 
 class TestCreateTicketBranches:
     @patch("httpx.AsyncClient")
-    async def test_create_ticket_with_description(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_create_ticket_with_description(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.post.return_value = _response(201, json=_make_mock_issue())
@@ -351,9 +337,7 @@ class TestCreateTicketBranches:
         assert call_kwargs["json"]["labels"] == ["bug", "urgent"]
 
     @patch("httpx.AsyncClient")
-    async def test_create_ticket_with_description_and_labels(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_create_ticket_with_description_and_labels(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.post.return_value = _response(201, json=_make_mock_issue())
@@ -407,9 +391,7 @@ class TestUpdateTicketBranches:
         assert call_kwargs["json"]["title"] == "Updated title"
 
     @patch("httpx.AsyncClient")
-    async def test_update_ticket_status_labels_title(
-        self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker
-    ) -> None:
+    async def test_update_ticket_status_labels_title(self, mock_client_cls: MagicMock, tracker: GitHubTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.patch.return_value = _response(

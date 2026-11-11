@@ -440,9 +440,7 @@ class TestDup400:
 class TestFailureReporting:
     def test_failure_writes_github_step_summary(self, tmp_path: Path) -> None:
         summary = tmp_path / "summary.md"
-        proc = run_dispatch(
-            tmp_path, codes="429", body='{"detail":"busy"}', summary=summary, extra_env={"DISPATCH_MAX_ATTEMPTS": "1"}
-        )
+        proc = run_dispatch(tmp_path, codes="429", body='{"detail":"busy"}', summary=summary, extra_env={"DISPATCH_MAX_ATTEMPTS": "1"})
         assert proc.returncode == 1
         text = summary.read_text(encoding="utf-8")
         assert "### Modulo Branch Fixer dispatch failed: capacity saturated" in text

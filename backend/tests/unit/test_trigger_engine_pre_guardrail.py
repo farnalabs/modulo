@@ -224,9 +224,7 @@ class TestCanonicalPayloadHash:
         assert canonical_payload_hash({"name": "café"}) != canonical_payload_hash({"name": "cafe"})
 
     def test_different_payloads_differ(self) -> None:
-        assert canonical_payload_hash({"event": "push", "ref": "main"}) != canonical_payload_hash(
-            {"event": "push", "ref": "dev"}
-        )
+        assert canonical_payload_hash({"event": "push", "ref": "main"}) != canonical_payload_hash({"event": "push", "ref": "dev"})
 
     def test_nested_key_order_irrelevant(self) -> None:
         left = {"payload": {"z": 1, "a": {"y": 2, "x": 3}}}
@@ -706,11 +704,7 @@ async def test_replay_event_pre_trigger_pass_is_detection_only() -> None:
 
     assert run is run_mock
     assert te.validation_result == "accepted"
-    blocked = [
-        c[0][0]
-        for c in session.add.call_args_list
-        if getattr(c[0][0], "validation_result", None) == "guardrail_blocked"
-    ]
+    blocked = [c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None) == "guardrail_blocked"]
     assert blocked == []
 
 

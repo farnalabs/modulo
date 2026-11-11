@@ -952,9 +952,7 @@ class TestChangeMemberRolePrivilegeGuard:
                 new=AsyncMock(return_value=updated),
             ) as mock_update,
         ):
-            membership, old_role = await _change_member_role_checked(
-                AsyncMock(), _operator_principal(), _TEAM_ID, _MEMBERSHIP_ID, "viewer"
-            )
+            membership, old_role = await _change_member_role_checked(AsyncMock(), _operator_principal(), _TEAM_ID, _MEMBERSHIP_ID, "viewer")
         assert old_role == "runner"
         assert membership is updated
         mock_update.assert_awaited_once()

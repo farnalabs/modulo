@@ -109,18 +109,12 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
     async with engine.begin() as conn:
         await conn.execute(text("SET session_replication_role = replica"))
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) "
-                "VALUES (:id, :org, :pipeline, :account, 'llm_judge', '{}'::jsonb, 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) VALUES (:id, :org, :pipeline, :account, 'llm_judge', '{}'::jsonb, 1)"),
             {"id": _EVAL, "org": _ORG, "pipeline": _PIPELINE, "account": _ACCOUNT},
         )
         for result_id, passed in ((_PASS_RESULT, True), (_FAIL_RESULT, False)):
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, observed) "
-                    "VALUES (:id, :org, :run, :eval, :passed, true)"
-                ),
+                text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, observed) VALUES (:id, :org, :run, :eval, :passed, true)"),
                 {"id": result_id, "org": _ORG, "run": _RUN, "eval": _EVAL, "passed": passed},
             )
     await engine.dispose()
@@ -128,17 +122,7 @@ async def _seed_pre_upgrade(iso_url: str) -> None:
 
 async def _column_shapes(engine: AsyncEngine) -> dict[str, dict[str, str | None]]:
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT column_name, is_nullable, column_default, data_type "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'eval_results' "
-                    "AND column_name IN ('outcome', 'judge_result_json', "
-                    "'judge_confidence_kind', 'error_code')"
-                )
-            )
-        ).all()
+        rows = (await conn.execute(text("SELECT column_name, is_nullable, column_default, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'eval_results' AND column_name IN ('outcome', 'judge_result_json', 'judge_confidence_kind', 'error_code')"))).all()
     return {str(r[0]): {"nullable": str(r[1]), "default": r[2], "type": str(r[3])} for r in rows}
 
 
@@ -158,11 +142,7 @@ async def _insert_eval(engine: AsyncEngine, eval_type: str) -> None:
     async with engine.begin() as conn:
         await conn.execute(text("SET session_replication_role = replica"))
         await conn.execute(
-            text(
-                "INSERT INTO evals "
-                "(id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) "
-                "VALUES (gen_random_uuid(), :org, :pipeline, :account, :eval_type, '{}'::jsonb, 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, eval_type, config_json, version) VALUES (gen_random_uuid(), :org, :pipeline, :account, :eval_type, '{}'::jsonb, 1)"),
             {"org": _ORG, "pipeline": _PIPELINE, "account": _ACCOUNT, "eval_type": eval_type},
         )
 
@@ -191,9 +171,7 @@ class TestMigration0330:
         try:
             assert not await _column_shapes(engine)
             async with engine.connect() as conn:
-                eval_type = (
-                    await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})
-                ).scalar_one()
+                eval_type = (await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})).scalar_one()
             assert eval_type == "llm_judge"
         finally:
             await engine.dispose()
@@ -203,9 +181,7 @@ class TestMigration0330:
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                eval_type = (
-                    await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})
-                ).scalar_one()
+                eval_type = (await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})).scalar_one()
                 outcomes = dict(
                     (
                         await conn.execute(
@@ -228,19 +204,8 @@ class TestMigration0330:
             assert shapes["error_code"]["nullable"] == "YES"
 
             async with engine.connect() as conn:
-                temp_check = (
-                    await conn.execute(
-                        text("SELECT COUNT(*) FROM pg_constraint WHERE conname = 'ck_eval_results_outcome_not_null'")
-                    )
-                ).scalar_one()
-                vocabulary_valid = (
-                    await conn.execute(
-                        text(
-                            "SELECT convalidated FROM pg_constraint WHERE conname = 'ck_evals_type' "
-                            "AND conrelid = 'public.evals'::regclass"
-                        )
-                    )
-                ).scalar_one()
+                temp_check = (await conn.execute(text("SELECT COUNT(*) FROM pg_constraint WHERE conname = 'ck_eval_results_outcome_not_null'"))).scalar_one()
+                vocabulary_valid = (await conn.execute(text("SELECT convalidated FROM pg_constraint WHERE conname = 'ck_evals_type' AND conrelid = 'public.evals'::regclass"))).scalar_one()
             # The temporary NOT NULL-proof check is dropped after SET NOT NULL.
             assert temp_check == 0
             # The swapped vocabulary CHECK is VALID, not left NOT VALID.
@@ -289,17 +254,11 @@ class TestMigration0330:
             async with engine.begin() as conn:
                 await conn.execute(text("SET session_replication_role = replica"))
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_results "
-                        "(id, organisation_id, run_id, eval_id, passed, observed) "
-                        "VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"
-                    ),
+                    text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, observed) VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"),
                     {"org": _ORG, "run": _RUN, "eval": _EVAL},
                 )
             async with engine.connect() as conn:
-                null_count = (
-                    await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))
-                ).scalar_one()
+                null_count = (await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))).scalar_one()
             assert null_count == 1
         finally:
             await engine.dispose()
@@ -311,11 +270,7 @@ class TestMigration0330:
             with pytest.raises(IntegrityError):
                 async with engine.begin() as conn:
                     await conn.execute(
-                        text(
-                            "INSERT INTO eval_results "
-                            "(id, organisation_id, run_id, eval_id, outcome, passed, observed) "
-                            "VALUES (gen_random_uuid(), :org, :run, :eval, 'bogus', true, true)"
-                        ),
+                        text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, outcome, passed, observed) VALUES (gen_random_uuid(), :org, :run, :eval, 'bogus', true, true)"),
                         {"org": _ORG, "run": _RUN, "eval": _EVAL},
                     )
             with pytest.raises(IntegrityError):
@@ -341,11 +296,7 @@ class TestMigration0330:
         try:
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE eval_results SET judge_result_json = CAST(:payload AS jsonb), "
-                        "judge_confidence_kind = 'unavailable', error_code = 'judge.unavailable' "
-                        "WHERE id = :id"
-                    ),
+                    text("UPDATE eval_results SET judge_result_json = CAST(:payload AS jsonb), judge_confidence_kind = 'unavailable', error_code = 'judge.unavailable' WHERE id = :id"),
                     {"payload": json.dumps(envelope), "id": _FAIL_RESULT},
                 )
             async with engine.connect() as conn:
@@ -379,38 +330,18 @@ class TestMigration0330:
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                shapes = await conn.execute(
-                    text(
-                        "SELECT is_nullable, column_default FROM information_schema.columns "
-                        "WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"
-                    )
-                )
+                shapes = await conn.execute(text("SELECT is_nullable, column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"))
                 assert shapes.one() == ("NO", None)
-                null_count = (
-                    await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))
-                ).scalar_one()
-                legacy_count = (
-                    await conn.execute(text("SELECT count(*) FROM evals WHERE eval_type='llm_judge'"))
-                ).scalar_one()
-                validated = (
-                    await conn.execute(
-                        text(
-                            "SELECT convalidated FROM pg_constraint WHERE conname='ck_evals_type' "
-                            "AND conrelid='public.evals'::regclass"
-                        )
-                    )
-                ).scalar_one()
+                null_count = (await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))).scalar_one()
+                legacy_count = (await conn.execute(text("SELECT count(*) FROM evals WHERE eval_type='llm_judge'"))).scalar_one()
+                validated = (await conn.execute(text("SELECT convalidated FROM pg_constraint WHERE conname='ck_evals_type' AND conrelid='public.evals'::regclass"))).scalar_one()
             assert null_count == 0
             assert legacy_count == 0
             assert validated is True
             with pytest.raises(IntegrityError):
                 async with engine.begin() as conn:
                     await conn.execute(
-                        text(
-                            "INSERT INTO eval_results "
-                            "(id, organisation_id, run_id, eval_id, passed, observed) "
-                            "VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"
-                        ),
+                        text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, observed) VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"),
                         {"org": _ORG, "run": _RUN, "eval": _EVAL},
                     )
             await _insert_eval(engine, "model_judge")
@@ -437,17 +368,8 @@ class TestMigration0330:
         engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                nullable = (
-                    await conn.execute(
-                        text(
-                            "SELECT is_nullable FROM information_schema.columns "
-                            "WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"
-                        )
-                    )
-                ).scalar_one()
-                eval_type = (
-                    await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})
-                ).scalar_one()
+                nullable = (await conn.execute(text("SELECT is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"))).scalar_one()
+                eval_type = (await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})).scalar_one()
             assert nullable == "YES"
             assert eval_type == "model_judge"
         finally:
@@ -460,9 +382,7 @@ class TestMigration0330:
         try:
             assert not await _column_shapes(engine)
             async with engine.connect() as conn:
-                eval_type = (
-                    await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})
-                ).scalar_one()
+                eval_type = (await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})).scalar_one()
             assert eval_type == "llm_judge"
         finally:
             await engine.dispose()

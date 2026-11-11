@@ -1834,9 +1834,7 @@ def test_shim_watch_loop_drains_child_once_shutting_down(
     assert drained == [child]
 
 
-def test_load_status_state_missing_state_file_is_honest_unknown(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_load_status_state_missing_state_file_is_honest_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A state.json that disappears between the secrets read and the load is
     an honest unknown (no error string), not an unreadable-state failure."""
     secrets = LauncherSecrets(

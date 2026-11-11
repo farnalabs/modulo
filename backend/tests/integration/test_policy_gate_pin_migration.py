@@ -79,9 +79,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     iso_url = _swap_db_name(db_url, db_name)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     monkeypatch.setenv("DATABASE_URL", iso_url)
@@ -126,28 +124,16 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
             {"i": str(org_id), "n": slug, "s": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:i, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:i, :e, :n, 'hash', 'local', true)"),
             {"i": str(account_id), "e": f"{slug}@test.com", "n": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json, visibility) "
-                "VALUES (:i, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json, 'org')"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json, visibility) VALUES (:i, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json, 'org')"),
             {"i": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(account_id)},
         )
         for eid in eval_ids:
             await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
-                    "node_id, name, eval_type, config_json, version) "
-                    "VALUES (:i, :oid, :pid, :aid, :nid, :n, 'regex', '{}'::jsonb, 1)"
-                ),
+                text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, name, eval_type, config_json, version) VALUES (:i, :oid, :pid, :aid, :nid, :n, 'regex', '{}'::jsonb, 1)"),
                 {
                     "i": str(eid),
                     "oid": str(org_id),
@@ -157,22 +143,12 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
                     "n": f"{slug}-eval",
                 },
             )
-        post_migration = (
-            await conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM information_schema.columns "
-                    "WHERE table_name = 'policy_gates' AND column_name = 'enabled'"
-                )
-            )
-        ).scalar_one()
+        post_migration = (await conn.execute(text("SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'policy_gates' AND column_name = 'enabled'"))).scalar_one()
         for gid, eid in zip(gate_ids, eval_ids[:3], strict=True):
             gate_sql = (
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                "action, version) VALUES (:i, :oid, :eid, :nid, 'block', 1)"
+                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:i, :oid, :eid, :nid, 'block', 1)"
                 if not post_migration
-                else "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                "action, enabled, enabled_at, disabled_at, version) "
-                "VALUES (:i, :oid, :eid, :nid, 'block', true, now(), NULL, 1)"
+                else "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, enabled, enabled_at, disabled_at, version) VALUES (:i, :oid, :eid, :nid, 'block', true, now(), NULL, 1)"
             )
             await conn.execute(
                 text(gate_sql),
@@ -213,10 +189,7 @@ async def _scalar(engine: AsyncEngine, sql: str, params: dict | None = None) -> 
 # ---------------------------------------------------------------------------
 
 
-_GATE_COLUMNS_SQL = (
-    "SELECT column_name, data_type, character_maximum_length, is_nullable "
-    "FROM information_schema.columns WHERE table_name = 'policy_gates'"
-)
+_GATE_COLUMNS_SQL = "SELECT column_name, data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_name = 'policy_gates'"
 
 
 async def _engine_connect(iso_url: str) -> AsyncEngine:
@@ -244,15 +217,7 @@ class TestC13MigrationRoundTrip:
 
             # Snapshots: pin columns ship nullable legacy-compat (C12).
             async with engine.connect() as conn:
-                snap_rows = (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name, data_type, character_maximum_length, is_nullable "
-                            "FROM information_schema.columns WHERE table_name = 'pipeline_snapshots' "
-                            "AND column_name IN ('policy_gate_pins_json', 'policy_gate_pins_fingerprint')"
-                        )
-                    )
-                ).fetchall()
+                snap_rows = (await conn.execute(text("SELECT column_name, data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_name = 'pipeline_snapshots' AND column_name IN ('policy_gate_pins_json', 'policy_gate_pins_fingerprint')"))).fetchall()
             snap_cols = {r[0]: r for r in snap_rows}
             fingerprint = snap_cols["policy_gate_pins_fingerprint"]
             assert fingerprint[1] == "character varying"
@@ -285,9 +250,7 @@ class TestC13MigrationRoundTrip:
             await _migrate_to_target(isolated_db_url)
             convalidated = await _scalar(
                 engine,
-                "SELECT convalidated FROM pg_constraint "
-                "WHERE conname = 'ck_policy_gates_enabled_timestamps' "
-                "AND conrelid = 'public.policy_gates'::regclass",
+                "SELECT convalidated FROM pg_constraint WHERE conname = 'ck_policy_gates_enabled_timestamps' AND conrelid = 'public.policy_gates'::regclass",
             )
             assert convalidated is True
         finally:
@@ -312,9 +275,7 @@ class TestC13MigrationRoundTrip:
             assert not {"enabled", "enabled_at", "disabled_at"} & gate_names
             snap_names = await _scalar(
                 engine,
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_name = 'pipeline_snapshots' "
-                "AND column_name IN ('policy_gate_pins_json', 'policy_gate_pins_fingerprint')",
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'pipeline_snapshots' AND column_name IN ('policy_gate_pins_json', 'policy_gate_pins_fingerprint')",
             )
             assert snap_names == 0
             check_gone = await _scalar(
@@ -344,9 +305,7 @@ class TestC13MigrationRoundTrip:
             assert version == MIGRATION_REV
             columns = await _scalar(
                 engine,
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_name = 'policy_gates' "
-                "AND column_name IN ('enabled', 'enabled_at', 'disabled_at')",
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'policy_gates' AND column_name IN ('enabled', 'enabled_at', 'disabled_at')",
             )
             assert columns == 3
         finally:
@@ -365,10 +324,7 @@ class TestC12LegacyCompat:
             async with engine.connect() as conn:
                 rows = (
                     await conn.execute(
-                        text(
-                            "SELECT policy_gate_pins_json, policy_gate_pins_fingerprint "
-                            "FROM pipeline_snapshots WHERE id = :sid"
-                        ),
+                        text("SELECT policy_gate_pins_json, policy_gate_pins_fingerprint FROM pipeline_snapshots WHERE id = :sid"),
                         {"sid": str(seeded["snapshot_id"])},
                     )
                 ).fetchall()
@@ -395,9 +351,7 @@ class TestC11CheckBehaviour:
             gate_id = str(seeded["gate_ids"][0])
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE policy_gates SET enabled = false, disabled_at = now(), enabled_at = NULL WHERE id = :g"
-                    ),
+                    text("UPDATE policy_gates SET enabled = false, disabled_at = now(), enabled_at = NULL WHERE id = :g"),
                     {"g": gate_id},
                 )
             state = await _scalar(
@@ -439,9 +393,7 @@ class TestC11CheckBehaviour:
             gate_id = str(seeded["gate_ids"][0])
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE policy_gates SET enabled = false, disabled_at = now(), enabled_at = NULL WHERE id = :g"
-                    ),
+                    text("UPDATE policy_gates SET enabled = false, disabled_at = now(), enabled_at = NULL WHERE id = :g"),
                     {"g": gate_id},
                 )
             with pytest.raises(IntegrityError):
@@ -464,11 +416,7 @@ class TestC11CheckBehaviour:
             new_gate = uuid.uuid4()
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                        "action, enabled, enabled_at, disabled_at, version) "
-                        "VALUES (:i, :oid, :eid, :nid, 'warn', true, now(), NULL, 1)"
-                    ),
+                    text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, enabled, enabled_at, disabled_at, version) VALUES (:i, :oid, :eid, :nid, 'warn', true, now(), NULL, 1)"),
                     {
                         "i": str(new_gate),
                         "oid": str(seeded["org_id"]),
@@ -507,20 +455,14 @@ class TestSnapshotPinColumnsWriteable:
             fingerprint = fingerprint_policy_gate_pins(pins)
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE pipeline_snapshots SET policy_gate_pins_json = CAST(:pins AS json), "
-                        "policy_gate_pins_fingerprint = :fp WHERE id = :sid"
-                    ),
+                    text("UPDATE pipeline_snapshots SET policy_gate_pins_json = CAST(:pins AS json), policy_gate_pins_fingerprint = :fp WHERE id = :sid"),
                     {"pins": json.dumps(pins), "fp": fingerprint, "sid": str(seeded["snapshot_id"])},
                 )
             read_back = None
             async with engine.connect() as conn:
                 read_back = (
                     await conn.execute(
-                        text(
-                            "SELECT policy_gate_pins_json, policy_gate_pins_fingerprint "
-                            "FROM pipeline_snapshots WHERE id = :sid"
-                        ),
+                        text("SELECT policy_gate_pins_json, policy_gate_pins_fingerprint FROM pipeline_snapshots WHERE id = :sid"),
                         {"sid": str(seeded["snapshot_id"])},
                     )
                 ).fetchall()
@@ -546,8 +488,7 @@ class TestF4RollingDeploySafety:
         try:
             column_default = await _scalar(
                 engine,
-                "SELECT column_default FROM information_schema.columns "
-                "WHERE table_name = 'policy_gates' AND column_name = 'enabled_at'",
+                "SELECT column_default FROM information_schema.columns WHERE table_name = 'policy_gates' AND column_name = 'enabled_at'",
             )
             assert column_default is not None, "enabled_at must carry a server-side DEFAULT"
             assert "now()" in column_default.lower(), f"expected DEFAULT now(), got {column_default!r}"
@@ -585,10 +526,7 @@ class TestF4RollingDeploySafety:
             old_shape_gate = uuid.uuid4()
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) "
-                        "VALUES (:i, :oid, :eid, :nid, 'warn', 1)"
-                    ),
+                    text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:i, :oid, :eid, :nid, 'warn', 1)"),
                     {
                         "i": str(old_shape_gate),
                         "oid": str(seeded["org_id"]),
@@ -596,15 +534,9 @@ class TestF4RollingDeploySafety:
                         "nid": str(seeded["node_id"]),
                     },
                 )
-            enabled = await _scalar(
-                engine, "SELECT enabled FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
-            )
-            enabled_at = await _scalar(
-                engine, "SELECT enabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
-            )
-            disabled_at = await _scalar(
-                engine, "SELECT disabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)}
-            )
+            enabled = await _scalar(engine, "SELECT enabled FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)})
+            enabled_at = await _scalar(engine, "SELECT enabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)})
+            disabled_at = await _scalar(engine, "SELECT disabled_at FROM policy_gates WHERE id = :g", {"g": str(old_shape_gate)})
             assert enabled is True
             assert enabled_at is not None, "server default must stamp enabled_at so the CHECK passes"
             assert disabled_at is None

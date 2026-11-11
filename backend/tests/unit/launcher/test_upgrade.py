@@ -1656,10 +1656,7 @@ def _usable_tar_or_skip() -> str:
                 timeout=30,
             )
             if created.returncode != 0:
-                pytest.skip(
-                    "tar is not usable for installer shell-verifier tests: creating an archive "
-                    f"at a host-absolute path failed: {created.stderr.strip()}"
-                )
+                pytest.skip(f"tar is not usable for installer shell-verifier tests: creating an archive at a host-absolute path failed: {created.stderr.strip()}")
             extract_root = scratch_path / "extract"
             extract_root.mkdir()
             extracted = subprocess.run(  # noqa: S603 - resolved tar executable and test-owned paths
@@ -1672,11 +1669,8 @@ def _usable_tar_or_skip() -> str:
         except (OSError, subprocess.TimeoutExpired) as exc:
             pytest.skip(f"tar is not usable for installer shell-verifier tests: {exc}")
         if extracted.returncode != 0 or not (extract_root / "payload" / "probe.txt").is_file():
-            pytest.skip(
-                "tar is not usable for installer shell-verifier tests: extracting an archive "
-                f"at a host-absolute path failed: {extracted.stderr.strip()}"
-            )
-    return tar_bin (fix(FAR-2282): make launcher tests Windows-host robust)
+            pytest.skip(f"tar is not usable for installer shell-verifier tests: extracting an archive at a host-absolute path failed: {extracted.stderr.strip()}")
+    return tar_bin
 
 
 def _installer_probe(
@@ -1717,7 +1711,7 @@ def _installer_probe(
     else:
         (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
     tar_bin = _usable_tar_or_skip()
-    bash_bin = _usable_bash_or_skip() (fix(FAR-2282): make launcher tests Windows-host robust)
+    bash_bin = _usable_bash_or_skip()
     archive_entries = [root_name]
     if extra_top_level is not None:
         extra = tmp_path / extra_top_level

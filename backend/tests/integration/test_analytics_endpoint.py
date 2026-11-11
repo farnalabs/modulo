@@ -60,15 +60,13 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -128,9 +126,7 @@ async def _insert_fact(
                 "oid": str(org_id),
                 "rid": str(run_id),
                 "day": run_date,
-                "created": created_at
-                if created_at is not None
-                else datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
+                "created": created_at if created_at is not None else datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
                 "tt": trigger_type,
                 "st": status,
                 "cost": cost,
@@ -161,9 +157,7 @@ async def _insert_fact(
         )
 
 
-async def _seed_pipeline_for_fact(
-    db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str
-) -> uuid.UUID:
+async def _seed_pipeline_for_fact(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str) -> uuid.UUID:
     """Create a real pipeline row so a fact's pipeline_id FK resolves."""
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -334,10 +328,7 @@ class TestTwoOrgIsolation:
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         payload = resp.json()
         total = sum(b["count"] for b in payload["buckets"])
-        assert total == 1, (
-            "org B must see exactly its own run — org A's fact leaked through the query "
-            f"(total={total}, buckets={payload['buckets']})"
-        )
+        assert total == 1, f"org B must see exactly its own run — org A's fact leaked through the query (total={total}, buckets={payload['buckets']})"
 
 
 class TestEmptyOrg:
@@ -411,15 +402,13 @@ class TestDimensionedQuery:
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO pipeline_folders (id, organisation_id, name, account_id) "
-                    "VALUES (:fid, :oid, 'QA Folder', :aid)",
+                    "INSERT INTO pipeline_folders (id, organisation_id, name, account_id) VALUES (:fid, :oid, 'QA Folder', :aid)",
                 ),
                 {"fid": str(folder), "oid": str(org_a), "aid": str(user_a)},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, created_at, trigger_type, "
-                    "status, folder_id) VALUES (:id, :oid, :rid, :day, :created, 'manual', 'complete', :fid)",
+                    "INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, created_at, trigger_type, status, folder_id) VALUES (:id, :oid, :rid, :day, :created, 'manual', 'complete', :fid)",
                 ),
                 {
                     "id": str(uuid.uuid4()),
@@ -443,9 +432,7 @@ class TestDimensionedQuery:
         # org_a also holds earlier null-folder facts in the same range, so None is
         # legitimate — the regression guard is that the folder UUID key is present
         # at all (pre-fix every bucket collapsed under None).
-        assert any(b["key"] is not None for b in payload["buckets"]), (
-            "dimensioned buckets must not all collapse under None"
-        )
+        assert any(b["key"] is not None for b in payload["buckets"]), "dimensioned buckets must not all collapse under None"
 
     async def test_ongoing_trigger_type_dimension_is_hermetic(
         self,
@@ -511,9 +498,7 @@ class TestHourGranularity:
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         buckets = resp.json()["buckets"]
         assert len(buckets) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
-        assert all("T" in b["date"] and b["date"].endswith(":00:00") for b in buckets), (
-            "hour buckets must carry ISO datetime dates"
-        )
+        assert all("T" in b["date"] and b["date"].endswith(":00:00") for b in buckets), "hour buckets must carry ISO datetime dates"
         by_hour = {b["date"]: b["count"] for b in buckets}
         assert by_hour[f"{today.isoformat()}T10:00:00"] >= 1, "the 10:00 fact must land in the 10:00 bucket"
         assert by_hour[f"{today.isoformat()}T14:00:00"] >= 1, "the 14:00 fact must land in the 14:00 bucket"
@@ -577,11 +562,7 @@ class TestPredicateStrip:
             # WHERE clause, and execute WITHOUT any app.organisation_id context.
             base = AnalyticsQuery(org_id=org_a, date_from=today - timedelta(days=30), date_to=today)
             stmt, params = build_facts_query(base)
-            stripped = (
-                select(*stmt.selected_columns)
-                .where(RunDailyFact.run_date >= (today - timedelta(days=30)))
-                .group_by(RunDailyFact.run_date)
-            )
+            stripped = select(*stmt.selected_columns).where(RunDailyFact.run_date >= (today - timedelta(days=30))).group_by(RunDailyFact.run_date)
             # The aggregate FILTERs (complete/stall counts) carry bound params —
             # the query still needs them even with the org predicate stripped.
             result = await session.execute(stripped, params)
@@ -709,10 +690,7 @@ class TestValidation:
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         buckets = resp.json()["buckets"]
         assert buckets, "expected zero-filled buckets for the range"
-        assert buckets[0]["date"] == "2026-08-01", (
-            "the -05:00 date_from 2026-07-31T21:00 must convert to 2026-08-01 02:00Z — "
-            f"first bucket is {buckets[0]['date']}"
-        )
+        assert buckets[0]["date"] == "2026-08-01", f"the -05:00 date_from 2026-07-31T21:00 must convert to 2026-08-01 02:00Z — first bucket is {buckets[0]['date']}"
 
     async def test_explicit_hour_over_fourteen_days_returns_422(
         self,
@@ -860,9 +838,7 @@ class TestEnrichedColumns:
                 f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&status={status_value}",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 200, (
-                f"status={status_value} must be a valid analytics filter, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 200, f"status={status_value} must be a valid analytics filter, got {resp.status_code}: {resp.text}"
             total = sum(b["count"] for b in resp.json()["buckets"])
             assert total == 1, f"status={status_value} filter must return its one fact, got {total}"
 
@@ -883,8 +859,7 @@ class TestEnrichedColumns:
 
         token = _token(org_a, user_a, "admin")
         resp = await integration_client.get(
-            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}"
-            f"&pipeline_id={pid_a}&pipeline_id={pid_b}",
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&pipeline_id={pid_a}&pipeline_id={pid_b}",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
@@ -921,8 +896,7 @@ class TestEnrichedColumns:
 
         token = _token(org_a, user_a, "admin")
         resp = await integration_client.get(
-            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}"
-            "&error_code=executor_stalled",
+            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}&error_code=executor_stalled",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
@@ -1004,9 +978,7 @@ class TestEnrichedColumns:
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         keys = {b["key"] for b in resp.json()["buckets"]}
-        assert "harness.unknown" in keys, (
-            f"unmapped raw error_code must canonicalize into the harness.unknown dimension slice, got {keys}"
-        )
+        assert "harness.unknown" in keys, f"unmapped raw error_code must canonicalize into the harness.unknown dimension slice, got {keys}"
 
         # The aggregate filter (NOT IN over the complement of known codes) must
         # match the SAME raw row the unknown slice shows.
@@ -1145,10 +1117,7 @@ class TestExportEndpoint:
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         payload = resp.json()
-        assert payload["total"] == 1, (
-            "org B's export must contain only its own fact — org A's same-day fact leaked "
-            f"(total={payload['total']}, items={payload['items']})"
-        )
+        assert payload["total"] == 1, f"org B's export must contain only its own fact — org A's same-day fact leaked (total={payload['total']}, items={payload['items']})"
         assert payload["items"][0]["run_id"] == str(rid_b)
         assert payload["items"][0]["total_cost_usd"] == pytest.approx(9.99)
 
@@ -1369,8 +1338,7 @@ class TestFAR2079QueueWaitNonNegative:
 
         token = _token(org_a, user_a, "admin")
         resp = await integration_client.get(
-            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}"
-            f"&pipeline_id={pipeline_id}",
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&pipeline_id={pipeline_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
@@ -1421,10 +1389,7 @@ class TestBackfillEnrichment:
                     "id": str(snapshot_id),
                     "pid": str(pipeline_id),
                     "oid": str(org_a),
-                    "gjson": (
-                        '{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, '
-                        '{"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'
-                    ),
+                    "gjson": ('{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, {"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'),
                 },
             )
             await conn.execute(
@@ -1455,12 +1420,7 @@ class TestBackfillEnrichment:
             # is gone. ``output_bytes`` is now reassembled from ``run_node_outputs``
             # (the per-node store), so seed the run's ``__final__`` output row here.
             await conn.execute(
-                text(
-                    "INSERT INTO run_node_outputs (organisation_id, run_id, node_id, "
-                    "attempt_key, outputs_json) "
-                    "VALUES (:oid, :rid, 'node_a', '__final__', "
-                    "CAST(:outjson AS jsonb))"
-                ),
+                text("INSERT INTO run_node_outputs (organisation_id, run_id, node_id, attempt_key, outputs_json) VALUES (:oid, :rid, 'node_a', '__final__', CAST(:outjson AS jsonb))"),
                 {"oid": str(org_a), "rid": str(run_id), "outjson": '{"result": "ok"}'},
             )
 
@@ -1472,9 +1432,7 @@ class TestBackfillEnrichment:
             await conn.execute(text(f'DROP ROLE IF EXISTS "{bypass_role}"'))
             await conn.execute(text(f'CREATE ROLE "{bypass_role}" NOSUPERUSER BYPASSRLS NOLOGIN'))
             await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{bypass_role}"'))
-            await conn.execute(
-                text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{bypass_role}"')
-            )
+            await conn.execute(text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{bypass_role}"'))
             await conn.execute(text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{bypass_role}"'))
 
         from farna.core.analytics.maintenance import backfill_facts
@@ -1605,15 +1563,9 @@ class TestConcurrencyEndpoint:
         assert payload["group_by"] == "hour"
         buckets = {b["date"]: b for b in payload["buckets"]}
         assert len(buckets) == 24, "a single day at hour granularity must zero-fill 24 buckets"
-        assert buckets[f"{today.isoformat()}T09:00:00"]["max_active"] == 1, (
-            "the 09:30..10:30 run must count toward the 09:00 bucket's active overlap"
-        )
-        assert buckets[f"{today.isoformat()}T10:00:00"]["max_active"] == 1, (
-            "a run spanning a bucket boundary counts in BOTH buckets"
-        )
-        assert buckets[f"{today.isoformat()}T23:00:00"]["max_queued"] == 1, (
-            "a never-started run counts as queued through the range"
-        )
+        assert buckets[f"{today.isoformat()}T09:00:00"]["max_active"] == 1, "the 09:30..10:30 run must count toward the 09:00 bucket's active overlap"
+        assert buckets[f"{today.isoformat()}T10:00:00"]["max_active"] == 1, "a run spanning a bucket boundary counts in BOTH buckets"
+        assert buckets[f"{today.isoformat()}T23:00:00"]["max_queued"] == 1, "a never-started run counts as queued through the range"
         assert buckets[f"{today.isoformat()}T23:00:00"]["max_active"] == 0
         total_active = sum(b["max_active"] for b in payload["buckets"])
         assert total_active == 2, f"org B's run leaked into the concurrency org — total active {total_active}"

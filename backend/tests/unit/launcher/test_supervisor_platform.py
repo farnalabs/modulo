@@ -56,11 +56,7 @@ from farna.launcher.supervisor import (
 
 macos_only = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason=(
-        "FAR-2185 macOS-only fault test: exercises the REAL libproc start-time seam and the "
-        "darwin child-death binding with live processes. It cannot execute on Linux — run it on "
-        "a Mac with `uv run pytest tests/unit/launcher/test_supervisor_platform.py`."
-    ),
+    reason=("FAR-2185 macOS-only fault test: exercises the REAL libproc start-time seam and the darwin child-death binding with live processes. It cannot execute on Linux — run it on a Mac with `uv run pytest tests/unit/launcher/test_supervisor_platform.py`."),
 )
 
 
@@ -850,9 +846,7 @@ def test_data_dir_lock_release_unlocks_through_the_seam(fake_fcntl: FakeFcntl, t
     assert lock._fd is None
 
 
-def test_data_dir_lock_release_without_file_locking_closes_without_flock(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_data_dir_lock_release_without_file_locking_closes_without_flock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The Windows arm must never reach for ``fcntl`` - it still closes the fd."""
     fake = FakeFcntl()
     _install_fake_fcntl(monkeypatch, fake)

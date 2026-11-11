@@ -51,27 +51,13 @@ def _load_features() -> dict:
 
 
 def test_every_feature_has_description():
-    blank = {
-        feat: spec
-        for feat, spec in _load_features().items()
-        if not isinstance(spec, dict) or not str(spec.get("description") or "").strip()
-    }
-    assert not blank, "features without a description (Assistant's feature search has nothing to match):\n" + "\n".join(
-        f"  {feat} -> {spec!r}" for feat, spec in sorted(blank.items())
-    )
+    blank = {feat: spec for feat, spec in _load_features().items() if not isinstance(spec, dict) or not str(spec.get("description") or "").strip()}
+    assert not blank, "features without a description (Assistant's feature search has nothing to match):\n" + "\n".join(f"  {feat} -> {spec!r}" for feat, spec in sorted(blank.items()))
 
 
 def test_status_values_are_controlled():
-    bogus = {
-        feat: spec["status"]
-        for feat, spec in _load_features().items()
-        if isinstance(spec, dict) and "status" in spec and spec["status"] not in _VALID_STATUSES
-    }
-    assert not bogus, (
-        "feature 'status' must be one of covered / partial / gap (or omitted when the "
-        "feature is a route-described, fully covered surface):\n"
-        + "\n".join(f"  {feat} -> {status!r}" for feat, status in sorted(bogus.items()))
-    )
+    bogus = {feat: spec["status"] for feat, spec in _load_features().items() if isinstance(spec, dict) and "status" in spec and spec["status"] not in _VALID_STATUSES}
+    assert not bogus, "feature 'status' must be one of covered / partial / gap (or omitted when the feature is a route-described, fully covered surface):\n" + "\n".join(f"  {feat} -> {status!r}" for feat, status in sorted(bogus.items()))
 
 
 def test_behaviours_is_a_non_empty_checked_list():
@@ -86,9 +72,7 @@ def test_behaviours_is_a_non_empty_checked_list():
         for index, item in enumerate(behaviours):
             if not isinstance(item, str) or not item.startswith((_CHECKED, _UNCHECKED)):
                 bad[f"{feat}[{index}]"] = f"{item!r}"
-    assert not bad, "each behaviour is a checklist item starting with '[x]' or '[ ]':\n" + "\n".join(
-        f"  {key} -> {value}" for key, value in sorted(bad.items())
-    )
+    assert not bad, "each behaviour is a checklist item starting with '[x]' or '[ ]':\n" + "\n".join(f"  {key} -> {value}" for key, value in sorted(bad.items()))
 
 
 def test_all_checked_features_are_not_partial():
@@ -100,10 +84,7 @@ def test_all_checked_features_are_not_partial():
         behaviours = spec.get("behaviours")
         if behaviours and all(str(item).startswith(_CHECKED) for item in behaviours):
             stale.append(f"  {feat} -> status: partial with every behaviour checked")
-    assert not stale, (
-        "feature checklist is fully checked but the feature is still parked at "
-        "'status: partial' (the gaps it once tracked have shipped):\n" + "\n".join(stale)
-    )
+    assert not stale, "feature checklist is fully checked but the feature is still parked at 'status: partial' (the gaps it once tracked have shipped):\n" + "\n".join(stale)
 
 
 def test_deferrals_are_non_empty_strings():
@@ -133,11 +114,7 @@ def test_deferrals_are_non_empty_strings():
                 bad[f"{feat}[{index}]"] = f"<entry must be a string, got {type(item).__name__}: {item!r}>"
             elif not item.strip():
                 bad[f"{feat}[{index}]"] = "<entry must not be blank>"
-    assert not bad, (
-        "each 'deferrals' entry must be a non-empty string (quote any entry containing "
-        "a colon so YAML does not parse it as a mapping):\n"
-        + "\n".join(f"  {key} -> {value}" for key, value in sorted(bad.items()))
-    )
+    assert not bad, "each 'deferrals' entry must be a non-empty string (quote any entry containing a colon so YAML does not parse it as a mapping):\n" + "\n".join(f"  {key} -> {value}" for key, value in sorted(bad.items()))
 
 
 def test_partial_or_gap_features_name_their_gaps():
@@ -155,10 +132,7 @@ def test_partial_or_gap_features_name_their_gaps():
         has_unchecked = any(str(item).startswith(_UNCHECKED) for item in behaviours)
         if not has_unchecked and not deferrals:
             silent.append(f"  {feat} -> status={spec.get('status')!r} with no unchecked behaviour or deferral")
-    assert not silent, (
-        "non-covered features must expose their gaps (unchecked behaviours and/or "
-        "deferrals) so partiality is auditable:\n" + "\n".join(silent)
-    )
+    assert not silent, "non-covered features must expose their gaps (unchecked behaviours and/or deferrals) so partiality is auditable:\n" + "\n".join(silent)
 
 
 def test_checked_features_cannot_leave_unchecked_items():
@@ -172,6 +146,4 @@ def test_checked_features_cannot_leave_unchecked_items():
         behaviours = spec.get("behaviours") or []
         if any(str(item).startswith(_UNCHECKED) for item in behaviours):
             contradictory.append(f"  {feat} -> status: covered but behaviour unchecked")
-    assert not contradictory, "feature with unchecked behaviour items cannot claim 'status: covered':\n" + "\n".join(
-        contradictory
-    )
+    assert not contradictory, "feature with unchecked behaviour items cannot claim 'status: covered':\n" + "\n".join(contradictory)

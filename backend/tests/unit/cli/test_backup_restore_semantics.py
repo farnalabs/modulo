@@ -49,10 +49,7 @@ _APP_DB_URL = "postgresql://modulo_app:pw@127.0.0.1:5432/modulo"
 _FAKE_ARCHIVED_PAYLOAD = {"schema_version": 1, "postgres_port": 15432, "redis_port": 16379, "api_port": 18000}
 _DB_SQL_NAME = "database.sql"
 
-_LOCK_REFUSAL = (
-    "Refusing to start: data dir /data is locked by another launcher "
-    "(holder PID 4242, mode 'serve'); the requested acquire (mode 'backup') is refused."
-)
+_LOCK_REFUSAL = "Refusing to start: data dir /data is locked by another launcher (holder PID 4242, mode 'serve'); the requested acquire (mode 'backup') is refused."
 
 
 def _seed_data_dir(tmp_path: Path) -> Path:
@@ -276,9 +273,7 @@ def test_record_last_backup_helper_is_roundtrip_stable(tmp_path: Path) -> None:
     assert after.last_backup_at == "2026-09-10T00:00:00+00:00"
 
 
-def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The broad catch-all must never break a backup — and an unknown failure
     is a bug, so it is logged at ERROR level WITH the traceback."""
     data_dir = _seed_data_dir(tmp_path)
@@ -537,9 +532,7 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
     assert admin_url
 
 
-def test_restore_resolves_app_role_from_configuration_not_db_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restore_resolves_app_role_from_configuration_not_db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-2021: the app role comes from DATABASE_URL, never from --db-url.
 
     A restore run through the ADMIN URL must not configure the admin role as
@@ -593,9 +586,7 @@ def test_restore_app_db_url_option_overrides_configuration(tmp_path: Path, monke
 def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
     """FAR-2021: a posture failure FAILS the restore (non-zero) and names the check."""
     archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
-    failure = RestorePostureError(
-        "Role-posture verification FAILED after the restore. Failing check: RuntimeError: modulo_app can bypass RLS."
-    )
+    failure = RestorePostureError("Role-posture verification FAILED after the restore. Failing check: RuntimeError: modulo_app can bypass RLS.")
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", side_effect=failure))
@@ -666,9 +657,7 @@ def test_executed_restore_does_not_rewrap_a_posture_error(tmp_path: Path, monkey
 def test_as_asyncpg_url_normalises_every_supported_prefix() -> None:
     """FAR-2021: each accepted Postgres URL prefix normalises to asyncpg."""
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://"):
-        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == (
-            "postgresql+asyncpg://role:pw@db:5432/modulo"
-        )
+        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == ("postgresql+asyncpg://role:pw@db:5432/modulo")
 
 
 def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password() -> None:
@@ -726,9 +715,7 @@ def test_resolve_restore_app_url_refuses_a_missing_source(configured: Any) -> No
         backup_mod._resolve_restore_app_url(settings, None)
 
 
-def test_restore_validates_the_app_url_before_touching_the_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restore_validates_the_app_url_before_touching_the_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-2021: an invalid app URL must fail BEFORE the safety dump / wipe."""
     monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
     archive = _make_archive(tmp_path, MANIFEST_VERSION, None)

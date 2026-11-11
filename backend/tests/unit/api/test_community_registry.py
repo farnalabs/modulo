@@ -90,9 +90,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -581,9 +579,7 @@ class TestTrustAnchor:
             patch("farna.api.routes.registry.get_publisher_status", return_value="verified"),
             patch("farna.api.routes.registry.set_rls_org"),
         ):
-            resp = client.get(
-                f"{VERIFY_URL}?public_key_pem=LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KZmFrZQotLS0tLUVORCBQVUJMSUMgS0VZLS0tLS0K"
-            )
+            resp = client.get(f"{VERIFY_URL}?public_key_pem=LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KZmFrZQotLS0tLUVORCBQVUJMSUMgS0VZLS0tLS0K")
         assert resp.status_code == 200
         data = resp.json()
         assert data["trust_anchor_verified"] is True

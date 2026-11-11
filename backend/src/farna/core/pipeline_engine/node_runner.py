@@ -11347,19 +11347,15 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _provision_timeout = _sandbox_provisioning_timeout()
         _dispatch_spec: WorkspaceSpec | None = None
         _dispatch_ref: str | None = None
-        if _route_provider is not None:
-            # FAR-1051: the route already resolved — and fail-loud validated —
-            # the profile's provider (kubernetes), so THIS dispatch reuses that
-            # one instance instead of building a second hub. Its hub is
-            # aclosed in the finally (after this provider's own close, which
-            # is idempotent — a provider's close() only tears down state it
-            # still tracks).
-            _dispatch_provider = _require_dispatch_provider(_route_provider)
-        else:
-            # Legacy / profile-less shape (unchanged): resolve the run's own
-            # provider through a fresh hub — e2b (hub-registered) or None,
-            # which _require_dispatch_provider refuses with the typed error.
-            _dispatch_provider = _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
+        # FAR-1051: when the route already resolved — and fail-loud validated —
+        # the profile's provider (kubernetes), THIS dispatch reuses that one
+        # instance instead of building a second hub. Its hub is aclosed in the
+        # finally (after this provider's own close, which is idempotent — a
+        # provider's close() only tears down state it still tracks).
+        # Legacy / profile-less shape (unchanged): resolve the run's own provider
+        # through a fresh hub — e2b (hub-registered) or None, which
+        # _require_dispatch_provider refuses with the typed error.
+        _dispatch_provider = _require_dispatch_provider(_route_provider) if _route_provider is not None else _require_dispatch_provider(await _build_dispatch_provider(_resolved_provider))
         # FAR-1050 R5: ``E2BRuntimeProvider.create_workspace`` now carries
         # ``spec.egress_policy`` into the SDK's ``allow_internet_access``
         # (deny_all/selected/none -> False; default/None -> True), and the
@@ -12248,10 +12244,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         if _bridge_escalation_error is not None:
             command_error = _bridge_escalation_error
         elif cmd_result is None:
-            if stall_reason:
-                command_error = stall_reason
-            else:
-                command_error = f"Sandbox agent command produced no output within {sandbox_timeout}s. No stdout/stderr was captured — the agent likely hung before writing any result."
+            command_error = stall_reason or f"Sandbox agent command produced no output within {sandbox_timeout}s. No stdout/stderr was captured — the agent likely hung before writing any result."
             # The E2B kill reason only lives in the sandbox logs, and the logs
             # endpoint only serves live sandboxes — fetch the tail BEFORE the
             # kill below (FAR-97 observability).
@@ -12315,10 +12308,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                         ),
                         timeout=_SANDBOX_TAIL_READ_TIMEOUT,
                     )
-                    if isinstance(_fresh_log, str):
-                        _fresh_text = _fresh_log
-                    else:
-                        _fresh_text = bytes(_fresh_log).decode("utf-8", "replace")
+                    _fresh_text = _fresh_log if isinstance(_fresh_log, str) else bytes(_fresh_log).decode("utf-8", "replace")
                     if len(_fresh_text) > _stdout_cap:
                         _stall_full_stdout = _fresh_text
                 except asyncio.CancelledError:
@@ -13555,10 +13545,7 @@ def _resolve_stdout_cap(
     ``system_config.sandbox_stdout_retention_max_bytes``; the resolved cap is
     clamped to it when set, so a node can never request an unbounded cap.
     """
-    if stdout_retention_mode == "full":
-        resolved = stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES
-    else:
-        resolved = _MAX_ARTIFACT_LOG
+    resolved = (stdout_max_bytes if stdout_max_bytes is not None else _FULL_MODE_DEFAULT_MAX_BYTES) if stdout_retention_mode == "full" else _MAX_ARTIFACT_LOG
     if org_ceiling is not None:
         resolved = min(resolved, org_ceiling)
     return resolved

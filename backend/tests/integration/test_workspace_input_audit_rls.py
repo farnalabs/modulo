@@ -69,11 +69,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :rn, :ih, :tid)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :rn, :ih, :tid)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),

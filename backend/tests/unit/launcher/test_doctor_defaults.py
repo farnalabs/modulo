@@ -41,8 +41,7 @@ def _write_state_secrets(tmp_path: Path) -> LauncherState:
         state_hmac_key=bytes(range(32)),
     )
     (tmp_path / "secrets.json").write_text(
-        '{"postgres_password": "pg-pw", "redis_password": "redis-pw", '
-        f'"state_hmac_key": "{secrets.state_hmac_key_hex}"}}',
+        f'{{"postgres_password": "pg-pw", "redis_password": "redis-pw", "state_hmac_key": "{secrets.state_hmac_key_hex}"}}',
         encoding="utf-8",
     )
     save_state(_state(), tmp_path / "state.json", secrets.state_hmac_key)
@@ -79,11 +78,7 @@ class _FakeProcPath:
             return "  sl  local_address rem_address st tx_queue\n   0: 0100007F:3C48 00000000:0000 0A 01 02\n"
         if str(self._real) == "/proc/net/tcp6":
             # ::1:15432 (0x3C48), state 0A = LISTEN
-            return (
-                "  sl  local_address rem_address st\n"
-                "   0: 00000000000000000000000000000001:3C48 "
-                "00000000000000000000000000000000:0000 0A\n"
-            )
+            return "  sl  local_address rem_address st\n   0: 00000000000000000000000000000001:3C48 00000000000000000000000000000000:0000 0A\n"
         return self._real.read_text(encoding=encoding)
 
 

@@ -200,9 +200,7 @@ class TestServerModelRoundTrip:
         This is the mechanism that produced the defect — proving it for an
         undeclared field shows the round-trip test above is not vacuous.
         """
-        graph = pipeline_apply.normalize_current_graph(
-            {"nodes": [{"id": NODE_ID, "node_type": "manual", "position": {"x": 0, "y": 0}, "mystery": 1}], "edges": []}
-        )
+        graph = pipeline_apply.normalize_current_graph({"nodes": [{"id": NODE_ID, "node_type": "manual", "position": {"x": 0, "y": 0}, "mystery": 1}], "edges": []})
         assert "mystery" not in graph["nodes"][0]
 
 
@@ -220,9 +218,7 @@ class TestModelValidation:
         assert node.policy_gate == ApplyGraphPolicyGate(action="block", eval_id=uuid.UUID(EVAL_ID))
 
     def test_absent_policy_gate_accepted(self) -> None:
-        node = ApplyGraphNode.model_validate(
-            {"id": NODE_ID, "node_type": "agent", "agent": "worker", "position": {"x": 0, "y": 0}}
-        )
+        node = ApplyGraphNode.model_validate({"id": NODE_ID, "node_type": "agent", "agent": "worker", "position": {"x": 0, "y": 0}})
         assert node.policy_gate is None
 
     @pytest.mark.parametrize("action", ["halt", "BLOCK", "", "warn "])
@@ -320,9 +316,7 @@ class TestPlanDrift:
 
     def test_graphless_config_ignores_policy_gates(self) -> None:
         """Criterion 8: a graph-less config does not manage nodes."""
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3})
         view = entity.managed_view()
         current = {
             "description": "Sample pipeline",
@@ -395,9 +389,7 @@ class TestDriftDetail:
             "unchanged": [],
             "blocked": [],
             "failed": [],
-            "gate_changes": [
-                {"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}
-            ],
+            "gate_changes": [{"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}],
         }
         text = render_table(report)
         assert f"gate add pipeline 'sample' node {NODE_ID} (block, eval {EVAL_ID})" in text
@@ -429,9 +421,7 @@ class TestEvalResolution:
 
     def test_eval_error_blocks_gate_declaring_entity(self) -> None:
         entity = _entity(gate=_gate())
-        reason = pipeline_apply.resolve_policy_gate_evals(
-            entity, {"evals": {}, "evals_error": "403 forbidden", KIND_PIPELINE: {}}
-        )
+        reason = pipeline_apply.resolve_policy_gate_evals(entity, {"evals": {}, "evals_error": "403 forbidden", KIND_PIPELINE: {}})
         assert reason is not None
         assert "cannot resolve" in reason
 
@@ -502,9 +492,7 @@ class TestPipelineApplyGraphGuard:
         supplied populated current side as removals and reports gate changes
         that were never persisted.
         """
-        entity = PipelineEntity.model_validate(
-            {"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3}
-        )
+        entity = PipelineEntity.model_validate({"name": "sample", "description": "Sample pipeline", "max_concurrent_runs": 3})
         executor, report, pipeline_id = _apply_one(entity, current_graph=_current_graph(gate=_gate("block")))
         assert not report.get("gate_changes")
         assert pipeline_id == PIPELINE_ID
@@ -517,9 +505,7 @@ class TestPipelineApplyGraphGuard:
         """Control: the guard must not suppress a real gate change."""
         entity = _entity(gate=_gate("block"))
         _executor, report, _pipeline_id = _apply_one(entity, current_graph=_current_graph(gate=None))
-        assert report["gate_changes"] == [
-            {"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}
-        ]
+        assert report["gate_changes"] == [{"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}]
 
 
 def _pipeline_item(name: str, pipeline_id: str) -> dict:
@@ -569,24 +555,14 @@ def _mock_current(
 
     _mock_base([], [])
     routes: dict[str, respx.Route] = {}
-    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=_LIST_PARAMS).respond(
-        json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": PAGE_SIZE}
-    )
-    respx.get("https://api.test/api/v1/agents", params=_LIST_PARAMS).respond(
-        json={"items": [{"id": AGENT_ID, "name": "worker"}], "total": 1, "page": 1, "page_size": PAGE_SIZE}
-    )
-    respx.get("https://api.test/api/v1/evals", params=_LIST_PARAMS).respond(
-        json={"items": list(evals or []), "total": len(evals or []), "page": 1, "page_size": PAGE_SIZE}
-    )
+    routes["pipelines_get"] = respx.get("https://api.test/api/v1/pipelines", params=_LIST_PARAMS).respond(json={"items": pipelines, "total": len(pipelines), "page": 1, "page_size": PAGE_SIZE})
+    respx.get("https://api.test/api/v1/agents", params=_LIST_PARAMS).respond(json={"items": [{"id": AGENT_ID, "name": "worker"}], "total": 1, "page": 1, "page_size": PAGE_SIZE})
+    respx.get("https://api.test/api/v1/evals", params=_LIST_PARAMS).respond(json={"items": list(evals or []), "total": len(evals or []), "page": 1, "page_size": PAGE_SIZE})
     for row in pipelines:
         payload = graph if graph is not None else {"nodes": [], "edges": [], "validation_issues": []}
         respx.get(f"https://api.test/api/v1/pipelines/{row['id']}/graph").respond(json=dict(payload))
-    routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(
-        return_value=httpx.Response(201, json=_pipeline_item("sample", str(uuid.uuid4())))
-    )
-    routes["pipeline_patch"] = respx.patch(re.compile(r"https://api\.test/api/v1/pipelines/[^/]+$")).mock(
-        return_value=httpx.Response(200, json=_pipeline_item("sample", str(uuid.uuid4())))
-    )
+    routes["pipelines_post"] = respx.post("https://api.test/api/v1/pipelines").mock(return_value=httpx.Response(201, json=_pipeline_item("sample", str(uuid.uuid4()))))
+    routes["pipeline_patch"] = respx.patch(re.compile(r"https://api\.test/api/v1/pipelines/[^/]+$")).mock(return_value=httpx.Response(200, json=_pipeline_item("sample", str(uuid.uuid4()))))
     return routes
 
 
@@ -599,9 +575,7 @@ class TestApplyReport:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
         assert not report["failed"]
-        assert report["gate_changes"] == [
-            {"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}
-        ]
+        assert report["gate_changes"] == [{"pipeline": "sample", "change": "added", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}]
         patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
         graph_json = patch_payload["graph_json"]
         assert graph_json["nodes"][0]["policy_gate"] == {"action": "block", "eval_id": EVAL_ID}
@@ -619,9 +593,7 @@ class TestApplyReport:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
         assert not report["failed"]
-        assert report["gate_changes"] == [
-            {"pipeline": "sample", "change": "removed", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}
-        ]
+        assert report["gate_changes"] == [{"pipeline": "sample", "change": "removed", "node": NODE_ID, "action": "block", "eval_id": EVAL_ID}]
         patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
         graph_json = patch_payload["graph_json"]
         assert graph_json["nodes"][0].get("policy_gate") is None

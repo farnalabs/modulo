@@ -58,10 +58,7 @@ def _make_backend() -> MagicMock:
 
 
 def _base_infer_patches(mock_ci, mock_mb, records, expected_schema, backend_id=None):
-    if mock_mb is None:
-        page_result = MagicMock(items=[], total=0, page=1, page_size=1)
-    else:
-        page_result = MagicMock(items=[mock_mb], total=1, page=1, page_size=1)
+    page_result = MagicMock(items=[], total=0, page=1, page_size=1) if mock_mb is None else MagicMock(items=[mock_mb], total=1, page=1, page_size=1)
     if backend_id is None:
         backend_id = uuid.uuid4()
 
@@ -422,9 +419,7 @@ def step_assert_field_type(type_name: str, field_name: str, request):
     definition = data["definition_json"]
     properties = definition.get("properties", {})
     assert field_name in properties, f"Field '{field_name}' not found in schema properties: {list(properties.keys())}"
-    assert properties[field_name]["type"] == type_name, (
-        f"Expected field '{field_name}' to have type '{type_name}', got '{properties[field_name]['type']}'"
-    )
+    assert properties[field_name]["type"] == type_name, f"Expected field '{field_name}' to have type '{type_name}', got '{properties[field_name]['type']}'"
 
 
 @then('the inferred schema includes an enum constraint for field "status"')

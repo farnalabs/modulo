@@ -148,9 +148,7 @@ class TestCheckPortChangeBreaking:
             "nodes": [{"id": "a", "outputs": []}],
             "edges": [{"source": "a", "target": "b", "source_port": "res"}],
         }
-        findings = check_port_change_breaking(
-            graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "removed"}]
-        )
+        findings = check_port_change_breaking(graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "removed"}])
         assert findings, "expected a block finding"
         assert findings[0]["severity"] == "block"
 
@@ -159,17 +157,13 @@ class TestCheckPortChangeBreaking:
             "nodes": [{"id": "a", "outputs": [{"name": "res", "schema_ref": "s2"}]}],
             "edges": [{"source": "a", "target": "b", "source_port": "res"}],
         }
-        findings = check_port_change_breaking(
-            graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "modified"}]
-        )
+        findings = check_port_change_breaking(graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "modified"}])
         assert findings, "expected a warning finding"
         assert findings[0]["severity"] == "warning"
 
     def test_port_less_edge_still_breaks_when_default_output_removed(self):
         graph_new = {"nodes": [{"id": "a", "outputs": []}], "edges": [{"source": "a", "target": "b"}]}
-        findings = check_port_change_breaking(
-            graph_new, [{"node_id": "a", "direction": "output", "port": "out", "change": "removed"}]
-        )
+        findings = check_port_change_breaking(graph_new, [{"node_id": "a", "direction": "output", "port": "out", "change": "removed"}])
         assert findings, "expected a block finding"
         assert findings[0]["severity"] == "block"
 
@@ -178,9 +172,7 @@ class TestCheckPortChangeBreaking:
             "nodes": [{"id": "a", "outputs": []}],
             "edges": [{"source": "a", "target": "b", "source_port": "other"}],
         }
-        findings = check_port_change_breaking(
-            graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "removed"}]
-        )
+        findings = check_port_change_breaking(graph_new, [{"node_id": "a", "direction": "output", "port": "res", "change": "removed"}])
         assert findings == []
 
 
@@ -222,9 +214,7 @@ class TestCreateSnapshotEdit:
         pipeline_id = uuid.uuid4()
         account_id = uuid.uuid4()
         session = AsyncMock()
-        await create_snapshot_edit(
-            session, pipeline_id=pipeline_id, account_id=account_id, draft=True, channel="canary"
-        )
+        await create_snapshot_edit(session, pipeline_id=pipeline_id, account_id=account_id, draft=True, channel="canary")
         mock_create.assert_awaited_once_with(
             session,
             pipeline_id=pipeline_id,
@@ -257,16 +247,12 @@ class TestRollbackDiscriminator:
         "farna.db.crud.pipeline_snapshot_versioning.enforce_guardrail_binding_strip",
         new_callable=AsyncMock,
     )
-    async def test_rollback_tags_created_kind_rollback(
-        self, mock_enforce, mock_apply, mock_resolve, mock_create, mock_audit
-    ):
+    async def test_rollback_tags_created_kind_rollback(self, mock_enforce, mock_apply, mock_resolve, mock_create, mock_audit):
         from farna.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 
         # FAR-609: the diff result now also carries weakened_nodes — the mock
         # must provide both lists for the caller's blended raise/audit path.
-        mock_apply.return_value = SimpleNamespace(
-            denied=False, has_weakening=False, reason_code=None, weakened_edges=[], weakened_nodes=[]
-        )
+        mock_apply.return_value = SimpleNamespace(denied=False, has_weakening=False, reason_code=None, weakened_edges=[], weakened_nodes=[])
         new_snapshot = MagicMock()
         mock_create.return_value = new_snapshot
 
@@ -589,17 +575,13 @@ class TestResolveSnapshotForChannel:
         snap.id = uuid.uuid4()
         session = _channel_session(snap)
 
-        result = await resolve_snapshot_for_channel(
-            session, pipeline_id=pipeline_id, channel="canary", organisation_id=org_id
-        )
+        result = await resolve_snapshot_for_channel(session, pipeline_id=pipeline_id, channel="canary", organisation_id=org_id)
         assert result is snap
 
     async def test_returns_none_when_no_snapshot_for_channel(self):
         session = _channel_session(None)
 
-        result = await resolve_snapshot_for_channel(
-            session, pipeline_id=uuid.uuid4(), channel="stable", organisation_id=uuid.uuid4()
-        )
+        result = await resolve_snapshot_for_channel(session, pipeline_id=uuid.uuid4(), channel="stable", organisation_id=uuid.uuid4())
         assert result is None
 
     async def test_statement_scopes_pipeline_channel_and_excludes_drafts(self):
@@ -673,9 +655,7 @@ class TestResolveSnapshotIdForTrigger:
 
         session = _channel_session(MagicMock())
 
-        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
-            session, trigger=self._trigger({"release_channel": "bogus"})
-        )
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(session, trigger=self._trigger({"release_channel": "bogus"}))
         assert result is None
         session.execute.assert_not_called()
 
@@ -686,9 +666,7 @@ class TestResolveSnapshotIdForTrigger:
         snap.id = uuid.uuid4()
         session = _channel_session(snap)
 
-        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
-            session, trigger=self._trigger({"release_channel": "canary"})
-        )
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(session, trigger=self._trigger({"release_channel": "canary"}))
         assert result == snap.id
         _, params = _compiled_statement(session)
         assert "canary" in params.values(), "hook must resolve the bound channel"
@@ -698,7 +676,5 @@ class TestResolveSnapshotIdForTrigger:
 
         session = _channel_session(None)
 
-        result = await TriggerEngine().resolve_snapshot_id_for_trigger(
-            session, trigger=self._trigger({"release_channel": "stable"})
-        )
+        result = await TriggerEngine().resolve_snapshot_id_for_trigger(session, trigger=self._trigger({"release_channel": "stable"}))
         assert result is None

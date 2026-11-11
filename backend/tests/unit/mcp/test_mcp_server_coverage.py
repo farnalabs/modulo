@@ -103,9 +103,7 @@ class _AdminCtx(_Ctx):
 
 class TestSerializeEdges:
     def test_serializes_edges(self) -> None:
-        e1 = SimpleNamespace(
-            id=uuid.uuid4(), source_node_id=uuid.uuid4(), target_node_id=uuid.uuid4(), edge_type="normal"
-        )
+        e1 = SimpleNamespace(id=uuid.uuid4(), source_node_id=uuid.uuid4(), target_node_id=uuid.uuid4(), edge_type="normal")
         result = _serialize_edges([e1])
         assert len(result) == 1
         assert result[0]["id"] == str(e1.id)
@@ -1081,9 +1079,7 @@ class TestApplyNodeConnectorBinding:
         nid = uuid.uuid4()
         nodes = [{"id": str(nid), "node_type": "dispatch"}]
         pipeline = SimpleNamespace(graph_nodes_json=nodes)
-        result = _apply_node_connector_binding(
-            pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
-        )
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query")
         assert result is not None
         assert result["error"] == "validation_failed"
         assert result["field"] == "operation"
@@ -1184,9 +1180,7 @@ class TestApplyNodeConnectorBinding:
         nid = uuid.uuid4()
         nodes = [{"id": str(nid), "node_type": "sandbox_agent"}]
         pipeline = SimpleNamespace(graph_nodes_json=nodes)
-        result = _apply_node_connector_binding(
-            pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
-        )
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query")
         assert result is None
         assert pipeline.graph_nodes_json[0]["connector_binding"]["operation"] == "query"
 

@@ -74,9 +74,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -116,9 +114,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="viewer",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -182,9 +178,7 @@ def _patch_status(
         patch(f"{_ROUTES}.list_runner_probe_cache", new=AsyncMock(return_value=rows)),
         patch(
             f"{_ROUTES}.list_environment_profiles",
-            new=AsyncMock(
-                return_value=PageResult(items=profiles or [], total=len(profiles or []), page=1, page_size=100)
-            ),
+            new=AsyncMock(return_value=PageResult(items=profiles or [], total=len(profiles or []), page=1, page_size=100)),
         ),
         patch(f"{_ROUTES}.get_sandbox_concurrency_limit", new=AsyncMock(return_value=contract)),
         patch(f"{_ROUTES}.count_active_runner_dispatches_for_org", new=AsyncMock(return_value=active_workspaces)),

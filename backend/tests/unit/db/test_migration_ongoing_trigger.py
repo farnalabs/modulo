@@ -186,9 +186,7 @@ class TestOrmCheckDriftGuard:
 
         from farna.db.models.run import Run
 
-        runs_check = next(
-            c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_trigger_type"
-        )
+        runs_check = next(c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_trigger_type")
         assert "rerun" in runs_check.sqltext.text
 
     def test_orm_partial_ongoing_checks_present(self) -> None:
@@ -208,7 +206,5 @@ class TestOrmCheckDriftGuard:
 
         from farna.db.models.run import ONGOING_ACTIVE_STATUSES, Run
 
-        status_check = next(
-            c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_status"
-        )
+        status_check = next(c for c in Run.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_runs_status")
         assert all(status in status_check.sqltext.text for status in ONGOING_ACTIVE_STATUSES)

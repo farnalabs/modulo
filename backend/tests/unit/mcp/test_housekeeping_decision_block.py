@@ -132,9 +132,7 @@ class TestDeleteHousekeepingGroupDecisionBlock:
         session = _mock_session()
         session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
 
-        deleted = await _delete_housekeeping_group(
-            session, "pipelines", [str(uuid.uuid4())], Pipeline, uuid.uuid4(), errors
-        )
+        deleted = await _delete_housekeeping_group(session, "pipelines", [str(uuid.uuid4())], Pipeline, uuid.uuid4(), errors)
 
         assert deleted == 0
         assert not errors

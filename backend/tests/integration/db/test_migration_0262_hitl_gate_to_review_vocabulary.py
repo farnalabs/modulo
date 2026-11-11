@@ -92,9 +92,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     monkeypatch.setenv("DATABASE_ADMIN_URL", iso_url)
     eng = create_async_engine(iso_url, poolclass=NullPool)
     async with eng.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
         await conn.commit()
     await eng.dispose()
 
@@ -103,16 +101,9 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Async
     try:
         yield iso_url
     finally:
-        admin_engine = create_async_engine(
-            db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"}
-        )
+        admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
         async with admin_engine.connect() as conn:
-            await conn.execute(
-                text(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                    "WHERE datname = :n AND pid <> pg_backend_pid()"
-                ).bindparams(n=db_name)
-            )
+            await conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()").bindparams(n=db_name))
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
         await admin_engine.dispose()
 
@@ -129,18 +120,11 @@ async def _seed(engine: AsyncEngine) -> None:
             {"a": account},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, status, authz_enforce, triggers_paused, "
-                "guardrails_kill_switch, org_cumulative_spend_cents, settings_json, otel_config_json) "
-                "VALUES (:o, 'm0262', 'm0262', 'active', false, false, false, 0, '{}', '{}')"
-            ),
+            text("INSERT INTO organisations (id, name, slug, status, authz_enforce, triggers_paused, guardrails_kill_switch, org_cumulative_spend_cents, settings_json, otel_config_json) VALUES (:o, 'm0262', 'm0262', 'active', false, false, false, 0, '{}', '{}')"),
             {"o": org},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, name, account_id, organisation_id, graph_nodes_json) "
-                'VALUES (:p, \'m0262\', :a, :o, \'[{"id":"hitl_gate_a_b"},{"id":"plain"}]\'::json)'
-            ),
+            text('INSERT INTO pipelines (id, name, account_id, organisation_id, graph_nodes_json) VALUES (:p, \'m0262\', :a, :o, \'[{"id":"hitl_gate_a_b"},{"id":"plain"}]\'::json)'),
             {"p": pipeline, "a": account, "o": org},
         )
         # A scalar (non-object) pipeline_edges config must not trip jsonb_each.
@@ -154,23 +138,14 @@ async def _seed(engine: AsyncEngine) -> None:
             {"e": edge, "p": pipeline, "o": org},
         )
         snapshots = {
-            1: (
-                '{"nodes":[{"id":"n1"}],"edges":[{"id":"e1","source":"n1",'
-                '"target":"hitl_gate_n1_n2","hitl_gate_config":"hitl_gate_n1_n2"}]}'
-            ),
+            1: ('{"nodes":[{"id":"n1"}],"edges":[{"id":"e1","source":"n1","target":"hitl_gate_n1_n2","hitl_gate_config":"hitl_gate_n1_n2"}]}'),
             2: '{"nodes":[{"id":"hitl_gate_a_b"}],"edges":[{"id":"e2","hitl_gate_config":null}]}',
-            3: (
-                '{"nodes":[{"id":"hitl_gate_x_y"}],"edges":[{"id":"e3",'
-                '"hitl_gate_config":{"gate_id":"g3","label":"L"}}]}'
-            ),
+            3: ('{"nodes":[{"id":"hitl_gate_x_y"}],"edges":[{"id":"e3","hitl_gate_config":{"gate_id":"g3","label":"L"}}]}'),
         }
         for version, graph_json in snapshots.items():
             await conn.execute(
                 text(
-                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, "
-                    "graph_json, connector_bindings_json, schema_pins_json, prompt_pins_json, "
-                    "model_backend_pins_json, run_context_defaults) "
-                    "VALUES (:id, :p, :o, :v, CAST(:g AS jsonb), '[]', '[]', '[]', '[]', '{}')"
+                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, graph_json, connector_bindings_json, schema_pins_json, prompt_pins_json, model_backend_pins_json, run_context_defaults) VALUES (:id, :p, :o, :v, CAST(:g AS jsonb), '[]', '[]', '[]', '[]', '{}')"
                 ),
                 {"id": str(uuid.uuid4()), "p": pipeline, "o": org, "v": version, "g": graph_json},
             )
@@ -186,33 +161,25 @@ async def test_0262_rewrites_scalar_and_object_configs_without_error(isolated_db
 
         async with engine.connect() as conn:
             # Scalar string preserved under the renamed key; no hitl_gate_ left.
-            scalar: dict[str, Any] = (
-                await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 1"))
-            ).scalar_one()
+            scalar: dict[str, Any] = (await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 1"))).scalar_one()
             assert scalar["edges"][0]["hitl_review_config"] == "hitl_review_n1_n2"
             assert scalar["edges"][0]["target"] == "hitl_review_n1_n2"
             assert "hitl_gate_" not in str(scalar)
 
             # JSON null preserved under the renamed key.
-            nulled: dict[str, Any] = (
-                await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 2"))
-            ).scalar_one()
+            nulled: dict[str, Any] = (await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 2"))).scalar_one()
             assert "hitl_review_config" in nulled["edges"][0]
             assert nulled["edges"][0]["hitl_review_config"] is None
             assert nulled["nodes"][0]["id"] == "hitl_review_a_b"
 
             # Object config: key + inner gate_id renamed.
-            obj: dict[str, Any] = (
-                await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 3"))
-            ).scalar_one()
+            obj: dict[str, Any] = (await conn.execute(text("SELECT graph_json FROM pipeline_snapshots WHERE snapshot_version = 3"))).scalar_one()
             assert obj["edges"][0]["hitl_review_config"]["review_id"] == "g3"
             assert "hitl_gate_config" not in obj["edges"][0]
             assert "gate_id" not in obj["edges"][0]["hitl_review_config"]
 
             # pipelines node IDs renamed.
-            nodes: list[dict[str, Any]] = (
-                await conn.execute(text("SELECT graph_nodes_json FROM pipelines"))
-            ).scalar_one()
+            nodes: list[dict[str, Any]] = (await conn.execute(text("SELECT graph_nodes_json FROM pipelines"))).scalar_one()
             assert nodes == [{"id": "hitl_review_a_b"}, {"id": "plain"}]
 
             # pipeline_edges scalar config preserved, column renamed by the migration.
@@ -223,12 +190,7 @@ async def test_0262_rewrites_scalar_and_object_configs_without_error(isolated_db
             # would terminate rather than spin forever.
             residual: int = (
                 await conn.execute(
-                    text(
-                        "SELECT "
-                        "(SELECT count(*) FROM pipeline_snapshots WHERE graph_json::text LIKE '%hitl_gate_%') "
-                        "+ (SELECT count(*) FROM pipelines WHERE graph_nodes_json::text LIKE '%hitl_gate_%') "
-                        "+ (SELECT count(*) FROM pipeline_edges WHERE hitl_review_config::text LIKE '%gate_id%')"
-                    )
+                    text("SELECT (SELECT count(*) FROM pipeline_snapshots WHERE graph_json::text LIKE '%hitl_gate_%') + (SELECT count(*) FROM pipelines WHERE graph_nodes_json::text LIKE '%hitl_gate_%') + (SELECT count(*) FROM pipeline_edges WHERE hitl_review_config::text LIKE '%gate_id%')")
                 )
             ).scalar_one()
             assert residual == 0

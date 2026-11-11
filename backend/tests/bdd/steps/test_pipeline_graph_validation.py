@@ -93,9 +93,7 @@ def _graph_rejected(ctx: dict, code: str) -> None:
     result = ctx["result"]
     assert result is not None, "no validation result"
     assert not result.is_valid, "expected the graph to be rejected"
-    assert any(issue.code == code for issue in result.issues), (
-        f"expected error code {code!r}, got: {[i.code for i in result.issues]}"
-    )
+    assert any(issue.code == code for issue in result.issues), f"expected error code {code!r}, got: {[i.code for i in result.issues]}"
 
 
 @then("the graph is valid")

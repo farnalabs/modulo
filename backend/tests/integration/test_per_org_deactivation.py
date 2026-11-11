@@ -64,10 +64,7 @@ async def _create_account(
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', :active)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', :active)"),
             {
                 "id": str(acc_id),
                 "email": email,
@@ -89,10 +86,7 @@ async def _create_membership(
 ) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role, joined_at) "
-                "VALUES (:id, :aid, :oid, :role, :joined)"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role, joined_at) VALUES (:id, :aid, :oid, :role, :joined)"),
             {
                 "id": str(uuid.uuid4()),
                 "aid": str(account_id),
@@ -122,10 +116,7 @@ async def _tombstone_set(engine: AsyncEngine, account_id: uuid.UUID, org_id: uui
         return bool(
             (
                 await conn.execute(
-                    text(
-                        "SELECT deactivated_at IS NOT NULL FROM org_memberships "
-                        "WHERE account_id = :aid AND organisation_id = :oid"
-                    ),
+                    text("SELECT deactivated_at IS NOT NULL FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
                     {"aid": str(account_id), "oid": str(org_id)},
                 )
             ).scalar_one()
@@ -134,11 +125,7 @@ async def _tombstone_set(engine: AsyncEngine, account_id: uuid.UUID, org_id: uui
 
 async def _account_active(engine: AsyncEngine, account_id: uuid.UUID) -> bool:
     async with engine.connect() as conn:
-        return bool(
-            (
-                await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(account_id)})
-            ).scalar_one()
-        )
+        return bool((await conn.execute(text("SELECT active FROM accounts WHERE id = :id"), {"id": str(account_id)})).scalar_one())
 
 
 async def _membership_state(engine: AsyncEngine, account_id: uuid.UUID, org_id: uuid.UUID) -> tuple[str, bool]:
@@ -146,10 +133,7 @@ async def _membership_state(engine: AsyncEngine, account_id: uuid.UUID, org_id: 
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text(
-                    "SELECT role, deactivated_at IS NOT NULL AS deactivated "
-                    "FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"
-                ),
+                text("SELECT role, deactivated_at IS NOT NULL AS deactivated FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"),
                 {"aid": str(account_id), "oid": str(org_id)},
             )
         ).one()
@@ -216,9 +200,7 @@ def _login_org_of(access_token: str) -> uuid.UUID:
 # ---------------------------------------------------------------------------
 
 
-async def test_put_role_change_is_committed_and_visible_in_a_fresh_session(
-    db_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_put_role_change_is_committed_and_visible_in_a_fresh_session(db_engine: AsyncEngine, client: AsyncClient) -> None:
     org_id = await _create_org(db_engine, "RoleDurability")
     admin_id = await _create_account(db_engine, email=f"role-admin-{uuid.uuid4().hex[:12]}@example.com")
     target_id = await _create_account(db_engine, email=f"role-target-{uuid.uuid4().hex[:12]}@example.com")
@@ -236,9 +218,7 @@ async def test_put_role_change_is_committed_and_visible_in_a_fresh_session(
     assert await _membership_state(db_engine, target_id, org_id) == ("viewer", False)
 
 
-async def test_put_activation_mutations_are_committed_and_visible_in_a_fresh_session(
-    db_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_put_activation_mutations_are_committed_and_visible_in_a_fresh_session(db_engine: AsyncEngine, client: AsyncClient) -> None:
     org_id = await _create_org(db_engine, "ActivationDurability")
     admin_id = await _create_account(db_engine, email=f"active-admin-{uuid.uuid4().hex[:12]}@example.com")
     target_id = await _create_account(db_engine, email=f"active-target-{uuid.uuid4().hex[:12]}@example.com")
@@ -262,9 +242,7 @@ async def test_put_activation_mutations_are_committed_and_visible_in_a_fresh_ses
     assert await _membership_state(db_engine, target_id, org_id) == ("runner", False)
 
 
-async def test_org_a_deactivation_leaves_org_b_and_account_active(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_org_a_deactivation_leaves_org_b_and_account_active(db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient) -> None:
     org_a = await _create_org(db_engine, "PerOrgA")
     org_b = await _create_org(db_engine, "PerOrgB")
     admin_a = await _create_account(db_engine, email=f"poa-{uuid.uuid4().hex[:12]}@example.com")
@@ -276,9 +254,7 @@ async def test_org_a_deactivation_leaves_org_b_and_account_active(
     # protects EVERY org the target belongs to, not just the caller's).
     await _create_membership(db_engine, org_id=org_a, account_id=admin_a)
     await _create_membership(db_engine, org_id=org_b, account_id=admin_b)
-    await _create_membership(
-        db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5)
-    )
+    await _create_membership(db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5))
     await _create_membership(db_engine, org_id=org_b, account_id=shared, role="runner", joined_at=datetime.now(UTC))
 
     resp = await client.post(
@@ -310,9 +286,7 @@ async def test_org_a_deactivation_leaves_org_b_and_account_active(
     assert role_b == "runner"
 
 
-async def test_reactivate_restores_callers_org_only(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_reactivate_restores_callers_org_only(db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient) -> None:
     org_a = await _create_org(db_engine, "PerOrgReA")
     org_b = await _create_org(db_engine, "PerOrgReB")
     admin_a = await _create_account(db_engine, email=f"pora-{uuid.uuid4().hex[:12]}@example.com")
@@ -321,9 +295,7 @@ async def test_reactivate_restores_callers_org_only(
     shared = await _create_account(db_engine, email=shared_email, password=_PASSWORD)
     await _create_membership(db_engine, org_id=org_a, account_id=admin_a)
     await _create_membership(db_engine, org_id=org_b, account_id=admin_b)
-    await _create_membership(
-        db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5)
-    )
+    await _create_membership(db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5))
     await _create_membership(db_engine, org_id=org_b, account_id=shared, role="runner", joined_at=datetime.now(UTC))
 
     # Org-A admin deactivates via the SECURITY DEFINER (non-operator branch).
@@ -352,9 +324,7 @@ async def test_reactivate_restores_callers_org_only(
     assert _login_org_of(login.json()["access_token"]) == org_a
 
 
-async def test_org_b_admin_cannot_clear_org_a_tombstone(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_org_b_admin_cannot_clear_org_a_tombstone(db_engine: AsyncEngine, app_engine: AsyncEngine, client: AsyncClient) -> None:
     org_a = await _create_org(db_engine, "PerOrgAuthA")
     org_b = await _create_org(db_engine, "PerOrgAuthB")
     admin_a = await _create_account(db_engine, email=f"poaa-{uuid.uuid4().hex[:12]}@example.com")
@@ -363,9 +333,7 @@ async def test_org_b_admin_cannot_clear_org_a_tombstone(
     shared = await _create_account(db_engine, email=shared_email, password=_PASSWORD)
     await _create_membership(db_engine, org_id=org_a, account_id=admin_a)
     await _create_membership(db_engine, org_id=org_b, account_id=admin_b)
-    await _create_membership(
-        db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5)
-    )
+    await _create_membership(db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5))
     await _create_membership(db_engine, org_id=org_b, account_id=shared, role="runner", joined_at=datetime.now(UTC))
 
     await _call_deactivate(app_engine, admin_a, shared)
@@ -388,9 +356,7 @@ async def test_org_b_admin_cannot_clear_org_a_tombstone(
     assert _login_org_of(login.json()["access_token"]) == org_b
 
 
-async def test_operator_deactivation_remains_global(
-    breakglass_engine: AsyncEngine, db_engine: AsyncEngine, client: AsyncClient
-) -> None:
+async def test_operator_deactivation_remains_global(breakglass_engine: AsyncEngine, db_engine: AsyncEngine, client: AsyncClient) -> None:
     org_a = await _create_org(db_engine, "PerOrgOpA")
     org_b = await _create_org(db_engine, "PerOrgOpB")
     other_admin_a = await _create_account(db_engine, email=f"pooa-{uuid.uuid4().hex[:12]}@example.com")
@@ -400,9 +366,7 @@ async def test_operator_deactivation_remains_global(
     shared = await _create_account(db_engine, email=shared_email, password=_PASSWORD)
     await _create_membership(db_engine, org_id=org_a, account_id=other_admin_a)
     await _create_membership(db_engine, org_id=org_b, account_id=other_admin_b)
-    await _create_membership(
-        db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5)
-    )
+    await _create_membership(db_engine, org_id=org_a, account_id=shared, role="runner", joined_at=datetime.now(UTC) - timedelta(minutes=5))
     await _create_membership(db_engine, org_id=org_b, account_id=shared, role="runner", joined_at=datetime.now(UTC))
 
     # Operator (session_user = modulo_breakglass): the break-glass branch —

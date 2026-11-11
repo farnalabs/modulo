@@ -232,9 +232,7 @@ async def test_composed_dispatch_graph_fires_awaits_and_hands_off_downstream() -
 
     # --- downstream hand-off: the consumer read the dispatch output -----------
     assert artifacts["consume-result"]["status"] == "completed"
-    assert adapter.prompts == ["substrate=success"], (
-        "the downstream node must render the dispatch node's output from run state"
-    )
+    assert adapter.prompts == ["substrate=success"], "the downstream node must render the dispatch node's output from run state"
 
     # --- the traced layer really proxied both provider calls ------------------
     # Span names are ``connector.<type>.<op>`` — derived from the proxy's own

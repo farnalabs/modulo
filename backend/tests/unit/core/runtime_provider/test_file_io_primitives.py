@@ -113,9 +113,7 @@ class _FakeShellProvider(RuntimeProvider):
         if path.rstrip("/") not in self.dirs:  # ls treats "/ws/" and "/ws" alike
             return ExecResult(exit_code=2, stdout="", stderr=f"ls: cannot access '{path}'")
         prefix = path.rstrip("/") + "/"
-        names = sorted(
-            key[len(prefix) :] for key in self.files if key.startswith(prefix) and "/" not in key[len(prefix) :]
-        )
+        names = sorted(key[len(prefix) :] for key in self.files if key.startswith(prefix) and "/" not in key[len(prefix) :])
         listing = "\n".join([".", "..", *names])
         return ExecResult(exit_code=0, stdout=listing + "\n", stderr="")
 

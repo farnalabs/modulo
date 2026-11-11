@@ -172,9 +172,7 @@ class TestExportFixture:
         assert body["input_payload"] == {"prompt": "Hello"}
         assert body["outputs_json"] == {"node-1": "World"}
 
-    def test_export_fixture_flat_outputs_produces_single_map_entry(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_flat_outputs_produces_single_map_entry(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(
             input_payload={"prompt": "write a poem"},
             outputs_json={"result": "Roses are red"},
@@ -189,9 +187,7 @@ class TestExportFixture:
         key = " ".join(str({"prompt": "write a poem"}).split())
         assert body["fixture_map"][key] == str({"result": "Roses are red"})
 
-    def test_export_fixture_per_node_outputs_produces_multi_entry_map(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_per_node_outputs_produces_multi_entry_map(self, client: TestClient, mock_session: AsyncMock) -> None:
         run = _make_run(
             input_payload={"prompt": "build a thing"},
             outputs_json={
@@ -209,9 +205,7 @@ class TestExportFixture:
         assert body["fixture_map"]["design"] == "blueprint"
         assert body["fixture_map"]["blueprint"] == "code"
 
-    def test_export_fixture_new_shape_exports_pure_return_only(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_export_fixture_new_shape_exports_pure_return_only(self, client: TestClient, mock_session: AsyncMock) -> None:
         pure_outputs = {"planner": {"input": "design a thing", "output": "blueprint"}}
         telemetry = {
             "planner": {

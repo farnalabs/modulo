@@ -76,16 +76,11 @@ async def _seed_user(engine: AsyncEngine, org_id: uuid.UUID, label: str) -> uuid
     account_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": f"dash-{label}-{org_id.hex[:8]}@test.local", "name": f"Dash {label}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -127,11 +122,7 @@ async def _seed_team(engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID,
     team_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO teams (id, organisation_id, name, account_id, "
-                "notification_endpoints, settings) "
-                "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json)"
-            ),
+            text("INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json)"),
             {"id": str(team_id), "oid": str(org_id), "name": f"Dash Team {label}", "aid": str(user_id)},
         )
     return team_id
@@ -150,11 +141,7 @@ async def _seed_run(
     run_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, "
-                "trigger_type, input_hash, langgraph_thread_id, run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :ih, :thread, :rn, :st)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, input_hash, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :ih, :thread, :rn, :st)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -183,11 +170,7 @@ async def _seed_fact(
 ) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, trigger_type, "
-                "status, pipeline_id, total_tokens, duration_ms) "
-                "VALUES (:id, :oid, :rid, :day, 'manual', :st, :pid, :tok, :dur)"
-            ),
+            text("INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, trigger_type, status, pipeline_id, total_tokens, duration_ms) VALUES (:id, :oid, :rid, :day, 'manual', :st, :pid, :tok, :dur)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -212,10 +195,7 @@ async def _seed_ledger(
 ) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO org_daily_run_counts (id, organisation_id, team_id, run_date, "
-                "run_count, total_spend_usd) VALUES (:id, :oid, :tid, :d, :rc, :spend)"
-            ),
+            text("INSERT INTO org_daily_run_counts (id, organisation_id, team_id, run_date, run_count, total_spend_usd) VALUES (:id, :oid, :tid, :d, :rc, :spend)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -231,11 +211,7 @@ async def _seed_eval(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.U
     eval_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, 'Dash Eval', 'model_judge', '{}'::jsonb, :aid)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, NULL, 'Dash Eval', 'model_judge', '{}'::jsonb, :aid)"),
             {"id": str(eval_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(user_id)},
         )
     return eval_id
@@ -252,10 +228,7 @@ async def _seed_eval_result(
 ) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome, score, evaluated_at) "
-                "VALUES (:id, :oid, :rid, :eid, :passed, :outcome, :score, COALESCE(:at, now()))"
-            ),
+            text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome, score, evaluated_at) VALUES (:id, :oid, :rid, :eid, :passed, :outcome, :score, COALESCE(:at, now()))"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -422,15 +395,7 @@ class TestSummary:
         assert team["run_counts_by_status"]["budget_exceeded"] == 1, f"team breakdown lost budget_exceeded: {team}"
         assert team["run_counts_by_status"]["unknown"] == 1, f"team breakdown lost unknown: {team}"
         team_counts = team["run_counts_by_status"]
-        assert (
-            team["total_runs"]
-            == sum(
-                team_counts[status]
-                for status in team_counts
-                if status not in {"idle", "pending", "claimed", "hitl_parked", "completed"}
-            )
-            + team_counts["idle"]
-        ), f"team buckets must reconcile with team total: {team}"
+        assert team["total_runs"] == sum(team_counts[status] for status in team_counts if status not in {"idle", "pending", "claimed", "hitl_parked", "completed"}) + team_counts["idle"], f"team buckets must reconcile with team total: {team}"
         assert team["total_runs"] == payload["total_runs"], f"team total must reconcile with org total: {team}"
 
         eval_rate = payload["eval_pass_rate"]
@@ -455,9 +420,7 @@ class TestSummary:
 
         recent_ids = {entry["id"] for entry in payload["recent_runs"]}
         expected_recent_ids = {str(rid) for rid in run_ids[-10:]}
-        assert recent_ids == expected_recent_ids, (
-            f"recent_runs must surface the 10 most recent seeded runs: {recent_ids}"
-        )
+        assert recent_ids == expected_recent_ids, f"recent_runs must surface the 10 most recent seeded runs: {recent_ids}"
         recent_statuses = {entry["status"] for entry in payload["recent_runs"]}
         assert "failed" in recent_statuses, f"recent_runs must carry run status: {payload['recent_runs']}"
 
@@ -489,14 +452,8 @@ class TestSummary:
 
         entry = next((e for e in payload["trend"] if e["date"] == today.isoformat()), None)
         assert entry is not None, f"today's trend entry missing: {payload['trend']}"
-        assert entry["run_count"] == 3, (
-            "org-level trend run_count must sum ONLY the team_id IS NULL row — the team row "
-            f"already rolled into it (got {entry['run_count']}, expected 3)"
-        )
-        assert entry["token_spend_usd"] == 30.0, (
-            "org-level trend spend must sum ONLY the team_id IS NULL row "
-            f"(got {entry['token_spend_usd']}, expected 30.0)"
-        )
+        assert entry["run_count"] == 3, f"org-level trend run_count must sum ONLY the team_id IS NULL row — the team row already rolled into it (got {entry['run_count']}, expected 3)"
+        assert entry["token_spend_usd"] == 30.0, f"org-level trend spend must sum ONLY the team_id IS NULL row (got {entry['token_spend_usd']}, expected 30.0)"
 
     async def test_period_block_computes_windows_from_run_date_buckets(
         self,
@@ -607,9 +564,7 @@ class TestTrends:
         pipeline_id = await _seed_pipeline(db_engine, org_id, user_id, "trends")
         snapshot_id = await _seed_snapshot(db_engine, org_id, pipeline_id)
         team_id = await _seed_team(db_engine, org_id, user_id, "trends")
-        run_id = await _seed_run(
-            db_engine, org_id, pipeline_id, snapshot_id, status="complete", run_number=1, owner_team_id=team_id
-        )
+        run_id = await _seed_run(db_engine, org_id, pipeline_id, snapshot_id, status="complete", run_number=1, owner_team_id=team_id)
 
         today = datetime.now(UTC).date()
         await _seed_ledger(db_engine, org_id, today, run_count=5, spend_usd=12.5)
@@ -651,14 +606,9 @@ class TestTrends:
         assert len(payload["run_counts"]) == 1, f"only one ledger date seeded: {payload['run_counts']}"
         run_entry = payload["run_counts"][0]
         assert run_entry["date"] == today.isoformat(), f"run_counts must key the seeded date: {run_entry}"
-        assert run_entry["run_count"] == 5, (
-            f"trends run_counts must sum ONLY the team_id IS NULL ledger row (got {run_entry['run_count']}, expected 5)"
-        )
+        assert run_entry["run_count"] == 5, f"trends run_counts must sum ONLY the team_id IS NULL ledger row (got {run_entry['run_count']}, expected 5)"
         spend_entry = payload["token_spend"][0]
-        assert spend_entry["total_spend_usd"] == 12.5, (
-            "trends token_spend must sum ONLY the team_id IS NULL ledger row "
-            f"(got {spend_entry['total_spend_usd']}, expected 12.5)"
-        )
+        assert spend_entry["total_spend_usd"] == 12.5, f"trends token_spend must sum ONLY the team_id IS NULL ledger row (got {spend_entry['total_spend_usd']}, expected 12.5)"
 
         assert len(payload["eval_pass_rates"]) == 1, f"only one eval date seeded: {payload['eval_pass_rates']}"
         eval_entry = payload["eval_pass_rates"][0]
@@ -674,10 +624,7 @@ class TestTrends:
         assert hitl_today["approved_count"] == 1, f"approved decision missing: {hitl_today}"
         assert hitl_today["rejected_count"] == 1, f"rejected decision missing: {hitl_today}"
         assert hitl_today["rejection_rate"] == 50.0, f"rejection rate wrong: {hitl_today}"
-        assert hitl_today["avg_time_to_approve_ms"] == 3000.0, (
-            "avg time to approve must average the real decision lags (2s and 4s): "
-            f"{hitl_today['avg_time_to_approve_ms']}"
-        )
+        assert hitl_today["avg_time_to_approve_ms"] == 3000.0, f"avg time to approve must average the real decision lags (2s and 4s): {hitl_today['avg_time_to_approve_ms']}"
 
         rejection_today = next(e for e in payload["rejection_trend"] if e["date"] == today.isoformat())
         assert rejection_today["raw_rejection_rate"] == 50.0, f"raw rejection rate wrong: {rejection_today}"
@@ -718,9 +665,7 @@ class TestTrends:
         assert not payload["run_counts"], f"org Y must not see org X's ledger rows: {payload['run_counts']}"
         assert not payload["token_spend"], f"org Y must not see org X's spend: {payload['token_spend']}"
         assert not payload["eval_pass_rates"], f"org Y must not see org X's evals: {payload['eval_pass_rates']}"
-        assert {entry["total_decisions"] for entry in payload["hitl_volume"]} == {0}, (
-            "org Y must see an all-zero HITL volume grid"
-        )
+        assert {entry["total_decisions"] for entry in payload["hitl_volume"]} == {0}, "org Y must see an all-zero HITL volume grid"
         assert payload["feedback_volume"][-1]["feedback_count"] == 0, "org Y must see zero feedback today"
 
 

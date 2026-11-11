@@ -400,11 +400,7 @@ async def test_retry_one_delivery_fails_closed_on_ssrf_rebind() -> None:
     delivery.attempt_count = 2
 
     async def _fake_pinned(_url: str) -> httpx.AsyncClient:
-        raise ValueError(
-            "URL hostname hooks.example.com resolves to a private/internal "
-            "address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES "
-            "to allow this target, or use a public URL."
-        )
+        raise ValueError("URL hostname hooks.example.com resolves to a private/internal address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL.")
 
     session = _make_mock_session()
     principal = TenantPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
@@ -439,11 +435,7 @@ async def test_test_webhook_fails_closed_on_ssrf_rebind() -> None:
     principal = TenantPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
 
     async def _fake_pinned(_url: str) -> httpx.AsyncClient:
-        raise ValueError(
-            "URL hostname hooks.example.com resolves to a private/internal "
-            "address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES "
-            "to allow this target, or use a public URL."
-        )
+        raise ValueError("URL hostname hooks.example.com resolves to a private/internal address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL.")
 
     unpinned_post = AsyncMock()
 

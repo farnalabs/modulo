@@ -71,9 +71,7 @@ class TestRetryOffByOne:
         # run mid-retry. This is the off-by-one guard: the run is failed only
         # once all N attempts are exhausted, never after attempt 1.
         for mid_retry in (Status.QUEUED, Status.ACTIVE, Status.NEW, Status.COMPLETE):
-            assert (
-                _classify("farna.core.saq_worker.execute_run", mid_retry, None, {"run_id": "r-1"})["action"] == "noop"
-            )
+            assert _classify("farna.core.saq_worker.execute_run", mid_retry, None, {"run_id": "r-1"})["action"] == "noop"
 
         # fire_* failure -> ingest_error (no run state).
         out2 = _classify("farna.core.saq_worker.fire_cron_trigger", Status.FAILED, "x", {"org_id": "o-1"})
@@ -351,11 +349,7 @@ class TestClaimTokenFence:
 
 class TestEventLoopStallRefusal:
     def test_claim_sql_requires_stale_heartbeat_for_running_rows(self) -> None:
-        sql = str(
-            pe.build_claim_update(_stale_seconds=450, claim_token="tok-a").compile(
-                dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True}
-            )
-        )
+        sql = str(pe.build_claim_update(_stale_seconds=450, claim_token="tok-a").compile(dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True}))
         # A successor can only claim a RUNNING row once the heartbeat is stale
         # past the 450s gate — the at-most-once refusal point for event-loop stalls.
         assert "status = 'running'" in sql

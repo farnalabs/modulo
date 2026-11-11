@@ -30,16 +30,12 @@ def pipeline_runtime_migration() -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def team_migrations(
-    team_library_migration: ModuleType, pipeline_runtime_migration: ModuleType
-) -> tuple[ModuleType, ...]:
+def team_migrations(team_library_migration: ModuleType, pipeline_runtime_migration: ModuleType) -> tuple[ModuleType, ...]:
     return team_library_migration, pipeline_runtime_migration
 
 
 def _compiled_execute_sql(mock_op: MagicMock) -> list[str]:
-    return [
-        str(call.args[0].compile(compile_kwargs={"literal_binds": True})) for call in mock_op.execute.call_args_list
-    ]
+    return [str(call.args[0].compile(compile_kwargs={"literal_binds": True})) for call in mock_op.execute.call_args_list]
 
 
 class TestTeamScopedTables:
@@ -61,9 +57,7 @@ class TestTeamScopedTables:
 
 class TestTeamPolicyUpgrade:
     @pytest.mark.parametrize("fixture_name", ["team_library_migration", "pipeline_runtime_migration"])
-    def test_creates_complete_policy_for_each_owned_table(
-        self, fixture_name: str, request: pytest.FixtureRequest
-    ) -> None:
+    def test_creates_complete_policy_for_each_owned_table(self, fixture_name: str, request: pytest.FixtureRequest) -> None:
         migration = request.getfixturevalue(fixture_name)
         mock_op = MagicMock()
 
@@ -127,18 +121,14 @@ class TestLifecycleEvalsTeamPolicy:
         mock_op.get_context.return_value.dialect = SimpleNamespace(name="postgresql")
         return mock_op
 
-    def test_targets_exactly_the_three_neither_layer_tables(
-        self, lifecycle_evals_team_rls_migration: ModuleType
-    ) -> None:
+    def test_targets_exactly_the_three_neither_layer_tables(self, lifecycle_evals_team_rls_migration: ModuleType) -> None:
         assert set(lifecycle_evals_team_rls_migration._TEAM_SCOPED_TABLES) == {
             "lifecycle_maps",
             "eval_datasets",
             "eval_suites",
         }
 
-    def test_upgrade_drops_org_only_and_creates_team_policy(
-        self, lifecycle_evals_team_rls_migration: ModuleType
-    ) -> None:
+    def test_upgrade_drops_org_only_and_creates_team_policy(self, lifecycle_evals_team_rls_migration: ModuleType) -> None:
         migration = lifecycle_evals_team_rls_migration
         mock_op = self._pg_op()
 
@@ -147,26 +137,18 @@ class TestLifecycleEvalsTeamPolicy:
 
         statements = _executed_sql(mock_op)
         for table in migration._TEAM_SCOPED_TABLES:
-            assert f"DROP POLICY IF EXISTS rls_org_isolation ON public.{table}" in statements, (
-                f"{table}: org-only policy must be dropped — Postgres ORs permissive policies, "
-                "so keeping it would make rls_team_isolation dead weight (the 0124 cross-team leak)"
-            )
+            assert f"DROP POLICY IF EXISTS rls_org_isolation ON public.{table}" in statements, f"{table}: org-only policy must be dropped — Postgres ORs permissive policies, so keeping it would make rls_team_isolation dead weight (the 0124 cross-team leak)"
             create = next(s for s in statements if s.startswith(f"CREATE POLICY rls_team_isolation ON public.{table}"))
             # Full visibility matrix, verbatim 0124.
             assert "app.organisation_id" in create, f"{table}: team policy lost the org check (cross-org leak)"
             assert "(visibility)::text = 'org'::text" in create, f"{table}: team policy missing the org-visibility arm"
             assert "owner_team_id IS NULL" in create, f"{table}: team policy missing the unowned arm"
-            assert "SELECT team_id FROM team_memberships" in create or "team_memberships.team_id" in create, (
-                f"{table}: team policy missing the membership arm"
-            )
+            assert "SELECT team_id FROM team_memberships" in create or "team_memberships.team_id" in create, f"{table}: team policy missing the membership arm"
             assert "app.user_id" in create, f"{table}: team policy missing the account binding"
             assert "app.org_role" in create, f"{table}: team policy missing the admin arm"
             # Execution-context escape hatch (background machinery reads with
             # org scope only — 0124).
-            assert "app.execution_context" in create, (
-                f"{table}: team policy missing the execution-context escape hatch — background "
-                "reads (executor/cron/housekeeping) would lose team-private rows"
-            )
+            assert "app.execution_context" in create, f"{table}: team policy missing the execution-context escape hatch — background reads (executor/cron/housekeeping) would lose team-private rows"
 
     def test_upgrade_is_existence_guarded(self, lifecycle_evals_team_rls_migration: ModuleType) -> None:
         """Every DROP is guarded so a re-run (or partial run) is a no-op."""
@@ -202,6 +184,4 @@ class TestLifecycleEvalsTeamPolicy:
         statements = _executed_sql(mock_op)
         for table in migration._TEAM_SCOPED_TABLES:
             assert f"DROP POLICY IF EXISTS rls_team_isolation ON public.{table}" in statements
-            assert any(s.startswith(f"CREATE POLICY rls_org_isolation ON public.{table}") for s in statements), (
-                f"{table}: downgrade must restore the pre-0287 org-only policy"
-            )
+            assert any(s.startswith(f"CREATE POLICY rls_org_isolation ON public.{table}") for s in statements), f"{table}: downgrade must restore the pre-0287 org-only policy"

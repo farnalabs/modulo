@@ -168,9 +168,7 @@ def test_provider_refusal_is_never_retried_inline() -> None:
     carriers = (
         'HTTP 401 "This API key has expired"',
         'HTTP 402 "Insufficient account funds"',
-        '{"type":"error","error":{"name":"APIError","data":'
-        '{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402,"isRetryable":false}}}',
+        '{"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402,"isRetryable":false}}}',
     )
     for text in carriers:
         outcome = _classify_attempt(None, policy, SandboxNodeFailedError(text))

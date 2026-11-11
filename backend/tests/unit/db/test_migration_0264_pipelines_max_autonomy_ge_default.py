@@ -57,18 +57,8 @@ _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_REVISION}.py"
 
 #: Both statements rank the SAME vocabulary through the SAME CASE shape - only
 #: the comparison operator differs (repair ``>`` == the check's ``<=``).
-_REPAIR_RANK_DEFAULT = (
-    "(CASE default_autonomy_level "
-    "WHEN 'manual_approval' THEN 0 "
-    "WHEN 'notify_on_complete' THEN 1 "
-    "WHEN 'fully_autonomous' THEN 2 END)"
-)
-_REPAIR_RANK_CEILING = (
-    "(CASE max_autonomy_level "
-    "WHEN 'manual_approval' THEN 0 "
-    "WHEN 'notify_on_complete' THEN 1 "
-    "WHEN 'fully_autonomous' THEN 2 END)"
-)
+_REPAIR_RANK_DEFAULT = "(CASE default_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)"
+_REPAIR_RANK_CEILING = "(CASE max_autonomy_level WHEN 'manual_approval' THEN 0 WHEN 'notify_on_complete' THEN 1 WHEN 'fully_autonomous' THEN 2 END)"
 
 
 def _load_migration() -> ModuleType:

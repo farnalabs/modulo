@@ -29,9 +29,7 @@ _GATE = "review-step"
 
 
 def _make_access_token(subject: str = "alice") -> str:
-    return create_access_token(
-        subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin", client_kind="browser"
-    )
+    return create_access_token(subject, _KEY, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin", client_kind="browser")
 
 
 def test_create_access_token_and_decode_principal_roundtrip() -> None:
@@ -170,9 +168,7 @@ def test_token_carries_org_context() -> None:
 def test_decode_principal_validates_tenant_identity() -> None:
     org_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     account_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-    token = create_access_token(
-        "alice", _KEY, organisation_id=org_id, account_id=account_id, org_role="operator", client_kind="browser"
-    )
+    token = create_access_token("alice", _KEY, organisation_id=org_id, account_id=account_id, org_role="operator", client_kind="browser")
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
     assert str(principal.organisation_id) == org_id
@@ -181,9 +177,7 @@ def test_decode_principal_validates_tenant_identity() -> None:
 
 
 def test_decode_principal_accepts_malformed_org_id_as_none() -> None:
-    token = create_access_token(
-        "alice", _KEY, organisation_id="not-a-uuid", account_id=_ACCOUNT, org_role="admin", client_kind="browser"
-    )
+    token = create_access_token("alice", _KEY, organisation_id="not-a-uuid", account_id=_ACCOUNT, org_role="admin", client_kind="browser")
     principal = decode_principal(token, _KEY)
     assert principal.organisation_id is None
     assert principal.username == "alice"

@@ -57,9 +57,7 @@ async def test_trigger_run(teamcity):
 
 @respx.mock
 async def test_trigger_run_null_id_maps_to_empty_string(teamcity):
-    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild", "href": ""})
-    )
+    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild", "href": ""}))
     run = await teamcity.trigger_run(pipeline_id="MyBuild")
     assert not run.id
     assert "None" not in run.id
@@ -133,9 +131,7 @@ async def test_get_run_status_success(teamcity):
 
 @respx.mock
 async def test_get_run_status_uses_requested_id_when_response_id_is_null(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(
-        return_value=httpx.Response(200, json={"id": None, "state": "queued"})
-    )
+    respx.get(f"{_TC_BASE}/app/rest/builds/id:42").mock(return_value=httpx.Response(200, json={"id": None, "state": "queued"}))
 
     run = await teamcity.get_run_status("42")
 
@@ -221,9 +217,7 @@ async def test_get_run_status_queued(teamcity):
 
 @respx.mock
 async def test_get_run_logs(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/builds/id:42/text").mock(
-        return_value=httpx.Response(200, text="line1\nline2\nline3\n")
-    )
+    respx.get(f"{_TC_BASE}/app/rest/builds/id:42/text").mock(return_value=httpx.Response(200, text="line1\nline2\nline3\n"))
     logs = await teamcity.get_run_logs("42")
     assert len(logs.lines) == 3
     assert logs.lines == ["line1", "line2", "line3"]
@@ -231,9 +225,7 @@ async def test_get_run_logs(teamcity):
 
 @respx.mock
 async def test_get_run_logs_with_cursor(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/builds/id:42/text").mock(
-        return_value=httpx.Response(200, text="line1\nline2\nline3\n")
-    )
+    respx.get(f"{_TC_BASE}/app/rest/builds/id:42/text").mock(return_value=httpx.Response(200, text="line1\nline2\nline3\n"))
     logs = await teamcity.get_run_logs("42", cursor="2")
     assert logs.lines == ["line3"]
 
@@ -449,9 +441,7 @@ async def test_query_unsupported_resource(teamcity):
 
 @respx.mock
 async def test_write_build(teamcity):
-    route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={"id": 42, "buildTypeId": "MyBuild"})
-    )
+    route = respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(return_value=httpx.Response(200, json={"id": 42, "buildTypeId": "MyBuild"}))
     payload = ConnectorPayload(resource="build", data={"buildTypeId": "MyBuild"})
     result = await teamcity.write(payload)
     assert result["id"] == "42"
@@ -461,9 +451,7 @@ async def test_write_build(teamcity):
 
 @respx.mock
 async def test_write_build_null_id_maps_to_empty_string(teamcity):
-    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(
-        return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild"})
-    )
+    respx.post(f"{_TC_BASE}/app/rest/buildQueue").mock(return_value=httpx.Response(200, json={"id": None, "buildTypeId": "MyBuild"}))
     payload = ConnectorPayload(resource="build", data={"buildTypeId": "MyBuild"})
     result = await teamcity.write(payload)
     assert not result["id"]
@@ -472,9 +460,7 @@ async def test_write_build_null_id_maps_to_empty_string(teamcity):
 
 @respx.mock
 async def test_write_build_type(teamcity):
-    route = respx.post(f"{_TC_BASE}/app/rest/buildTypes").mock(
-        return_value=httpx.Response(200, json={"id": "BT_New", "name": "New Build Type"})
-    )
+    route = respx.post(f"{_TC_BASE}/app/rest/buildTypes").mock(return_value=httpx.Response(200, json={"id": "BT_New", "name": "New Build Type"}))
     payload = ConnectorPayload(
         resource="buildType",
         data={"buildTypeId": "BT_New", "projectId": "ProjectA", "name": "New Build Type"},

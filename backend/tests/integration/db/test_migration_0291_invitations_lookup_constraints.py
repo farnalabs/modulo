@@ -85,9 +85,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     iso_url = _swap_db_name(db_url, db_name)
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
     monkeypatch.setenv("DATABASE_URL", iso_url)
@@ -98,11 +96,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
 
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     async with admin_engine.connect() as conn:
-        await conn.execute(
-            text(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()"
-            ).bindparams(n=db_name)
-        )
+        await conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()").bindparams(n=db_name))
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
     await admin_engine.dispose()
 
@@ -110,10 +104,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
 async def _index_def(engine: AsyncEngine, name: str) -> str | None:
     async with engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT indexdef FROM pg_indexes "
-                "WHERE schemaname = 'public' AND tablename = 'invitations' AND indexname = :n"
-            ),
+            text("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'invitations' AND indexname = :n"),
             {"n": name},
         )
         return row.scalar_one_or_none()
@@ -122,10 +113,7 @@ async def _index_def(engine: AsyncEngine, name: str) -> str | None:
 async def _constraint_def(engine: AsyncEngine, name: str) -> str | None:
     async with engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-                "WHERE conname = :n AND conrelid = 'public.invitations'::regclass"
-            ),
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :n AND conrelid = 'public.invitations'::regclass"),
             {"n": name},
         )
         return row.scalar_one_or_none()
@@ -141,11 +129,7 @@ async def _insert_invitation(
 ) -> None:
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO invitations (id, organisation_id, email, display_name, "
-                "org_role, token_hash, invited_by, expires_at) "
-                "VALUES (:id, :o, :e, 'Invitee', :r, :t, :b, now() + interval '1 day')"
-            ),
+            text("INSERT INTO invitations (id, organisation_id, email, display_name, org_role, token_hash, invited_by, expires_at) VALUES (:id, :o, :e, 'Invitee', :r, :t, :b, now() + interval '1 day')"),
             {
                 "id": str(uuid.uuid4()),
                 "o": str(org_id),
@@ -193,13 +177,9 @@ async def test_0291_indexes_checks_and_roundtrip(isolated_db_url: str) -> None:
         org_id, account_id = await _seed_org_account(engine, "M0291Org", cap=None)
         await _insert_invitation(engine, org_id=org_id, account_id=account_id, org_role="admin", token_hash="a" * 64)
         with pytest.raises(IntegrityError, match=_ORG_ROLE_CHECK):
-            await _insert_invitation(
-                engine, org_id=org_id, account_id=account_id, org_role="superuser", token_hash="b" * 64
-            )
+            await _insert_invitation(engine, org_id=org_id, account_id=account_id, org_role="superuser", token_hash="b" * 64)
         with pytest.raises(IntegrityError, match=_TOKEN_HASH_CHECK):
-            await _insert_invitation(
-                engine, org_id=org_id, account_id=account_id, org_role="viewer", token_hash="deadbeef"
-            )
+            await _insert_invitation(engine, org_id=org_id, account_id=account_id, org_role="viewer", token_hash="deadbeef")
 
         # --- Round-trip: downgrade removes both indexes and both CHECKs ---
         _run_alembic(isolated_db_url, "downgrade", PREV_REV)

@@ -49,9 +49,7 @@ def step_npm_connector(ctx):
                 if not version:
                     raise ValueError("npm package_version query requires 'version' in filters")
                 return ConnectorResult(
-                    records=[
-                        {"name": pkg, "version": version, "dist": {"tarball": "https://registry.npmjs.org/pkg.tgz"}}
-                    ],
+                    records=[{"name": pkg, "version": version, "dist": {"tarball": "https://registry.npmjs.org/pkg.tgz"}}],
                     total=1,
                 )
             case "search":

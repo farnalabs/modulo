@@ -58,9 +58,7 @@ async def test_query_issues(connector):
 @respx.mock
 async def test_write_file(connector):
     response_body = {"content": {"sha": "def456"}, "commit": {"sha": "ghi789"}}
-    respx.put(f"{_API}/repos/owner/repo/contents/path/file.txt").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    respx.put(f"{_API}/repos/owner/repo/contents/path/file.txt").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -162,9 +160,7 @@ async def test_query_pulls_non_list_body_no_crash(connector):
 @respx.mock
 async def test_query_repos_list_with_non_dict_entries(connector):
     """Non-dict entries within a list must be dropped rather than crash the query."""
-    respx.get(f"{_API}/user/repos").mock(
-        return_value=httpx.Response(200, json=[{"id": 1, "name": "repo-a"}, "corrupt", 42])
-    )
+    respx.get(f"{_API}/user/repos").mock(return_value=httpx.Response(200, json=[{"id": 1, "name": "repo-a"}, "corrupt", 42]))
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "repo-a"

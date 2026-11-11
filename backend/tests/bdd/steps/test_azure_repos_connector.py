@@ -68,12 +68,8 @@ def azrepos_query_repos(ctx: dict) -> None:
         {"id": "repo-2", "name": "backend"},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/{_PROJECT}/_apis/git/repositories", params={"api-version": "7.0"}).mock(
-            return_value=httpx.Response(200, json={"value": repos, "count": 2})
-        )
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="repos", filters={"project": ctx["project"]}))
-        )
+        respx.get(f"{_BASE}/{_PROJECT}/_apis/git/repositories", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json={"value": repos, "count": 2}))
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="repos", filters={"project": ctx["project"]})))
 
 
 @when(parsers.parse('the connector reads "{path}" from branch "{branch}"'))
@@ -106,9 +102,7 @@ def azrepos_query_pulls(ctx: dict) -> None:
             f"{_BASE}/{_PROJECT}/_apis/git/repositories/{_REPO}/pullrequests",
             params={"searchCriteria.status": "active", "api-version": "7.0"},
         ).mock(return_value=httpx.Response(200, json={"value": prs, "count": 1}))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="pulls", filters={"project": _PROJECT, "repo": _REPO}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="pulls", filters={"project": _PROJECT, "repo": _REPO})))
 
 
 @when(parsers.parse('the connector lists commits on branch "{branch}"'))
@@ -188,11 +182,7 @@ def azrepos_write_pull(source: str, target: str, title: str, ctx: dict) -> None:
 
 @when("the connector checks health")
 def azrepos_health_check(ctx: dict) -> None:
-    response = (
-        httpx.Response(200, json={"displayName": "Duncan Tait"})
-        if ctx.get("valid", True)
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"displayName": "Duncan Tait"}) if ctx.get("valid", True) else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(_PROFILE_URL, params={"api-version": "7.0"}).mock(return_value=response)
         ctx["health_result"] = asyncio.run(ctx["connector"].health_check())

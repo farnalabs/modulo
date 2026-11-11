@@ -62,11 +62,7 @@ async def _count_fk(engine, table: str) -> list[str]:
         rows = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT conname FROM pg_constraint "
-                        "WHERE contype = 'f' "
-                        "AND conrelid = (SELECT oid FROM pg_class WHERE relname = :t)"
-                    ),
+                    text("SELECT conname FROM pg_constraint WHERE contype = 'f' AND conrelid = (SELECT oid FROM pg_class WHERE relname = :t)"),
                     {"t": table},
                 )
             )
@@ -80,11 +76,7 @@ async def _fk_delete_rule(engine, table: str, constraint: str) -> str:
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text(
-                    "SELECT confdeltype::text FROM pg_constraint "
-                    "WHERE conname = :c "
-                    "AND conrelid = (SELECT oid FROM pg_class WHERE relname = :t)"
-                ),
+                text("SELECT confdeltype::text FROM pg_constraint WHERE conname = :c AND conrelid = (SELECT oid FROM pg_class WHERE relname = :t)"),
                 {"c": constraint, "t": table},
             )
         ).scalar()

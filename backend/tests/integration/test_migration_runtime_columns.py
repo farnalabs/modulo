@@ -28,69 +28,25 @@ pytestmark = pytest.mark.integration
 
 async def test_runtime_hardening_columns_exist(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        runs_cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = 'runs' AND table_schema = 'public'"
-                    )
-                )
-            ).fetchall()
-        }
+        runs_cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'runs' AND table_schema = 'public'"))).fetchall()}
     assert {"enqueue_failed_at", "sandbox_dispatch_state", "sandbox_id"} <= runs_cols
 
 
 async def test_runs_claim_token_not_null_with_default(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        nullability = (
-            await conn.execute(
-                text(
-                    "SELECT is_nullable FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'runs' "
-                    "AND column_name = 'claim_token'"
-                )
-            )
-        ).scalar_one()
+        nullability = (await conn.execute(text("SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs' AND column_name = 'claim_token'"))).scalar_one()
         assert nullability == "NO"
 
-        default_expr = (
-            await conn.execute(
-                text(
-                    "SELECT column_default FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'runs' "
-                    "AND column_name = 'claim_token'"
-                )
-            )
-        ).scalar_one()
+        default_expr = (await conn.execute(text("SELECT column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs' AND column_name = 'claim_token'"))).scalar_one()
         assert default_expr is not None
         assert "gen_random_uuid" in default_expr
 
 
 async def test_hitl_claims_decision_payload_exists(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as conn:
-        hitl_cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = 'hitl_claims' AND table_schema = 'public'"
-                    )
-                )
-            ).fetchall()
-        }
+        hitl_cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'hitl_claims' AND table_schema = 'public'"))).fetchall()}
         assert "decision_payload" in hitl_cols
-        payload_type = (
-            await conn.execute(
-                text(
-                    "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'hitl_claims' "
-                    "AND column_name = 'decision_payload'"
-                )
-            )
-        ).scalar_one()
+        payload_type = (await conn.execute(text("SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'hitl_claims' AND column_name = 'decision_payload'"))).scalar_one()
         assert payload_type == "jsonb"
 
 
@@ -106,11 +62,7 @@ async def test_ck_runs_status_rejects_waiting_for_lock(
     async with db_engine.connect() as conn:
         with pytest.raises(DBAPIError):
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, "
-                    "trigger_type, run_number, input_hash, langgraph_thread_id) "
-                    "VALUES (:id, :oid, :pid, :sid, 'waiting_for_lock', 'manual', 1, :hash, :thread)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'waiting_for_lock', 'manual', 1, :hash, :thread)"),
                 {
                     "id": str(uuid.uuid4()),
                     "oid": str(test_org),

@@ -263,9 +263,7 @@ async def test_channel_tagged_and_run_referenced_rows_shape_the_delete_set(
         }
         assert str(by_version[5]) in remaining
         assert str(by_version[6]) in remaining
-        assert remaining == set(map(str, by_version.values())) - {
-            str(by_version[version]) for version in (2, 3, 4, 7, 8)
-        }
+        assert remaining == set(map(str, by_version.values())) - {str(by_version[version]) for version in (2, 3, 4, 7, 8)}
 
         # 4. The RESTRICT failure is a steady-state loop the operator can see:
         # the run-referenced row keeps being surfaced on the next pass instead
@@ -351,8 +349,6 @@ async def test_non_canonical_trigger_pins_are_excluded_on_postgres(
         }
         assert str(by_version[5]) in remaining
         assert str(by_version[6]) in remaining
-        assert remaining == set(map(str, by_version.values())) - {
-            str(by_version[version]) for version in (2, 3, 4, 7, 8)
-        }
+        assert remaining == set(map(str, by_version.values())) - {str(by_version[version]) for version in (2, 3, 4, 7, 8)}
     finally:
         await _cleanup(db_session, org_id=org_id, pipeline_id=pipeline_id)

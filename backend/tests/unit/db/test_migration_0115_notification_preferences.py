@@ -179,9 +179,7 @@ class TestUpgradeRolesPresent:
 
     def test_policies_split_org_select_and_per_user_writes(self) -> None:
         joined = _joined(_run("upgrade"))
-        assert "CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING" in joined, (
-            "org-scope SELECT policy missing"
-        )
+        assert "CREATE POLICY rls_org_isolation ON notification_preferences FOR SELECT USING" in joined, "org-scope SELECT policy missing"
         for verb in ("INSERT", "UPDATE", "DELETE"):
             assert f"rls_user_isolation_{verb.lower()} ON notification_preferences" in joined
         # app.user_id is the value set_rls_user_context writes; app.account_id
@@ -191,9 +189,7 @@ class TestUpgradeRolesPresent:
 
     def test_grants_dml_to_app_role(self) -> None:
         joined = _joined(_run("upgrade"))
-        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO modulo_app" in joined, (
-            "modulo_app DML grant missing"
-        )
+        assert "GRANT SELECT, INSERT, UPDATE, DELETE ON notification_preferences TO modulo_app" in joined, "modulo_app DML grant missing"
 
     def test_creates_the_two_lookup_indexes(self) -> None:
         names = {name for name, _table, _cols in _run("upgrade").created_indexes}

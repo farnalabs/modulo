@@ -137,9 +137,7 @@ def _api_key() -> MagicMock:
     return key
 
 
-def _tenant_principal(
-    *, org_role: str = "admin", via_api_key: bool = False, account_id: uuid.UUID = _ADMIN_ID
-) -> TenantPrincipal:
+def _tenant_principal(*, org_role: str = "admin", via_api_key: bool = False, account_id: uuid.UUID = _ADMIN_ID) -> TenantPrincipal:
     return TenantPrincipal(
         username="principal",
         organisation_id=_ORG_ID,
@@ -406,9 +404,7 @@ class TestListServiceAccountsQuery:
         assert total == 2
         assert rows[0][1].role == "operator"
 
-        rows_no_search, total_no_search = await _list_service_accounts(
-            session, org_id=_ORG_ID, page=1, page_size=20, search=None
-        )
+        rows_no_search, total_no_search = await _list_service_accounts(session, org_id=_ORG_ID, page=1, page_size=20, search=None)
 
         assert total_no_search == 2
         assert rows_no_search[0][0] is rows[0][0]
@@ -524,9 +520,7 @@ def self_mint_client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: _tenant_principal(
-        org_role="operator", via_api_key=True, account_id=_SA_ID
-    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: _tenant_principal(org_role="operator", via_api_key=True, account_id=_SA_ID)
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan

@@ -57,9 +57,7 @@ class McpEnv:
         e = self.engine
         async with e.begin() as conn:
             await conn.execute(
-                sa_text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
+                sa_text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                 {
                     "id": str(self.org_id),
                     "name": f"PG Org {self.org_id.hex[:8]}",
@@ -67,10 +65,7 @@ class McpEnv:
                 },
             )
             await conn.execute(
-                sa_text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, "
-                    "auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true)"
-                ),
+                sa_text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true)"),
                 {
                     "id": str(self.admin_id),
                     "email": f"pg-admin-{self.admin_id.hex[:10]}@example.com",
@@ -79,19 +74,11 @@ class McpEnv:
                 },
             )
             await conn.execute(
-                sa_text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:id, :aid, :oid, 'admin')"
-                ),
+                sa_text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"),
                 {"id": str(uuid.uuid4()), "aid": str(self.admin_id), "oid": str(self.org_id)},
             )
             await conn.execute(
-                sa_text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                sa_text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
                 {
                     "id": str(self.pipeline_id),
                     "oid": str(self.org_id),
@@ -178,10 +165,7 @@ async def test_mcp_create_persists_eval_and_gate(pg_env: McpEnv, mcp_on: SimpleN
         assert row.node_id == node_id
         assert row.eval_type == "regex"
 
-        gate = await pg_env.one(
-            "SELECT action, deleted_at FROM policy_gates WHERE eval_id = "
-            "(SELECT id FROM evals WHERE name = 'pg-created')"
-        )
+        gate = await pg_env.one("SELECT action, deleted_at FROM policy_gates WHERE eval_id = (SELECT id FROM evals WHERE name = 'pg-created')")
         assert gate.action == "warn"
         assert gate.deleted_at is None
     finally:
@@ -215,9 +199,7 @@ async def test_mcp_soft_delete_stamps_real_rows(pg_env: McpEnv, mcp_on: SimpleNa
         assert (await pg_env_sql_count(pg_env, "evals", "name = 'pg-mortal'")) == 1
 
         # Non-guardrail evals take the hard path even with hard=False.
-        plain = await create_eval_definition(
-            pipeline_id=str(pg_env.pipeline_id), node_id=None, name="pg-svelte", eval_type="regex"
-        )
+        plain = await create_eval_definition(pipeline_id=str(pg_env.pipeline_id), node_id=None, name="pg-svelte", eval_type="regex")
         assert "error" not in plain, plain
         plain_result = await delete_eval_definition(eval_id=plain["id"], hard=False)
         assert plain_result["hard_deleted"] is True
@@ -262,9 +244,7 @@ async def test_mcp_merged_update_bumps_version_keeps_one_gate(pg_env: McpEnv, mc
 # ---------------------------------------------------------------------------
 
 
-async def test_other_orgs_evals_invisible_to_rls_app_role(
-    db_engine: AsyncEngine, modulo_app_engine: AsyncEngine
-) -> None:
+async def test_other_orgs_evals_invisible_to_rls_app_role(db_engine: AsyncEngine, modulo_app_engine: AsyncEngine) -> None:
     """Criterion 11     another org's evals are invisible through the real
     ``modulo_app`` role (NOBYPASSRLS     RLS applies), the shape the MCP write
     nodes use in production (set_rls_org + set_rls_user_context)."""
@@ -281,12 +261,7 @@ async def test_other_orgs_evals_invisible_to_rls_app_role(
             {"id": str(other_org), "name": f"PG F Org {other_org.hex[:8]}", "slug": f"pgf-{other_org.hex[:8]}"},
         )
         await conn.execute(
-            sa_text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            sa_text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(other_pipeline),
                 "oid": str(other_org),
@@ -549,9 +524,5 @@ async def test_suite_scoped_non_guardrail_persists_with_no_gate(pg_env: McpEnv) 
     assert (await pg_env_sql_count(pg_env, "evals", "name = 'pg-suitescoped'")) == 1
     # Only the suite-scoped eval's gates matter; the org table already has
     # live gates from node-scoped evals of other tests on the shared DB.
-    gate_count = int(
-        await pg_env.scalar(
-            "SELECT COUNT(*) FROM policy_gates WHERE eval_id IN (SELECT id FROM evals WHERE name = 'pg-suitescoped')"
-        )
-    )
+    gate_count = int(await pg_env.scalar("SELECT COUNT(*) FROM policy_gates WHERE eval_id IN (SELECT id FROM evals WHERE name = 'pg-suitescoped')"))
     assert gate_count == 0

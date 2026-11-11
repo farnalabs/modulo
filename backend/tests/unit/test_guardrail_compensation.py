@@ -101,9 +101,7 @@ async def test_github_compensate_closes_pr():
     )
     connector = GitHubConnector(token="ghp_test_token")
     result = await connector.compensate(
-        CompensationOperation(
-            resource="pr", data={"repo": repo, "head": "b", "base": "main"}, output={"number": pr_number}
-        ),
+        CompensationOperation(resource="pr", data={"repo": repo, "head": "b", "base": "main"}, output={"number": pr_number}),
         context=_ctx(),
         error="guardrail block",
     )
@@ -388,11 +386,7 @@ async def test_compensation_failed_audit_carries_system_actor_and_summary(audit_
         executed_nodes={"node_pr": {"artifacts": [], "output": {"number": 7}}},
     )
 
-    failed = [
-        call.kwargs
-        for call in audit_patch.await_args_list
-        if call.kwargs["event_type"] == comp.EVENT_COMPENSATION_FAILED
-    ]
+    failed = [call.kwargs for call in audit_patch.await_args_list if call.kwargs["event_type"] == comp.EVENT_COMPENSATION_FAILED]
     assert failed, "a failed compensation must emit guardrail.compensation_failed"
     assert failed[0]["payload_json"]["actor"] == "system"
     assert "failed" in failed[0]["payload_json"]["summary"]
@@ -584,9 +578,7 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         yield s
 
 
-async def _seed_run(
-    session: AsyncSession, *, run_id: uuid.UUID, status: str, error_code: str | None, run_number: int
-) -> None:
+async def _seed_run(session: AsyncSession, *, run_id: uuid.UUID, status: str, error_code: str | None, run_number: int) -> None:
     session.add(
         Run(
             id=run_id,

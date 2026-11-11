@@ -133,9 +133,7 @@ def node_backend_selected(node_id: str, expected_backend: str, ctx):
 
 @then("the default backend is used for nodes without an override")
 def default_backend_applied(ctx):
-    assert ctx["selected_backend"] == ctx["default_backend"], (
-        f"Expected default {ctx['default_backend']}, got {ctx['selected_backend']}"
-    )
+    assert ctx["selected_backend"] == ctx["default_backend"], f"Expected default {ctx['default_backend']}, got {ctx['selected_backend']}"
 
 
 @then(parsers.parse('the fallback backend "{backend}" is selected'))
@@ -247,18 +245,14 @@ def pipeline_with_never_checked_backend(ctx):
 def graph_validated_at_save_time(ctx):
     err = ctx.get("last_health_check_error")
     if err:
-        ctx["validation_errors"].append(
-            f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}"
-        )
+        ctx["validation_errors"].append(f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}")
 
 
 @when("a pipeline run is created")
 def pipeline_run_created(ctx):
     err = ctx.get("last_health_check_error")
     if err:
-        ctx["validation_errors"].append(
-            f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}"
-        )
+        ctx["validation_errors"].append(f"Model backend '{ctx['backend_name']}' (id={ctx['backend_id']}) is unhealthy: {err}")
 
 
 @then("a MODEL_BACKEND_UNHEALTHY error is returned")
@@ -278,9 +272,7 @@ def error_includes_backend_name_and_detail(ctx):
 
 @then("no MODEL_BACKEND_UNHEALTHY error is returned")
 def no_model_backend_unhealthy_error(ctx):
-    unhealthy_errors = [
-        e for e in ctx.get("validation_errors", []) if "MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e)
-    ]
+    unhealthy_errors = [e for e in ctx.get("validation_errors", []) if "MODEL_BACKEND_UNHEALTHY" in str(e) or "is unhealthy" in str(e)]
     assert len(unhealthy_errors) == 0, f"Unexpected MODEL_BACKEND_UNHEALTHY errors: {unhealthy_errors}"
 
 
@@ -505,18 +497,12 @@ def _drive_model_backend_crud(
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin")
     # The model-backend CRUD routes require_permission_any_credential
     # (resolves get_current_tenant_user_or_api_key), so the admin principal
     # must satisfy that dependency too.
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin")
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
 
     try:
@@ -568,9 +554,7 @@ def post_create_model_backend(request, ctx):
         exec_specs.append(("scalar_one_or_none", _model_backend_row(ctx)))
     else:
         exec_specs.append(("scalar_one_or_none", None))
-    _drive_model_backend_crud(
-        ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs
-    )
+    _drive_model_backend_crud(ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs)
 
 
 @when("I GET /api/v1/model-backends")
@@ -703,9 +687,7 @@ def post_create_model_backend_duplicate(name: str, request, ctx):
     ctx["payload"] = payload
     # Duplicate-name precheck: the stored backend matches the posted name.
     exec_specs = [("scalar_one_or_none", _model_backend_row(ctx))]
-    _drive_model_backend_crud(
-        ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs
-    )
+    _drive_model_backend_crud(ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs)
 
 
 @then("the response contains the created model backend")
@@ -772,9 +754,7 @@ def response_reflects_updates(request, ctx):
 def model_response_status_check(expected_status: int, request):
     resp = request.node._resp
     actual = resp.status_code
-    assert actual == expected_status, (
-        f"Expected status {expected_status}, got {actual} (body: {request.node._resp_body})"
-    )
+    assert actual == expected_status, f"Expected status {expected_status}, got {actual} (body: {request.node._resp_body})"
 
 
 # ============================================================================
@@ -914,18 +894,14 @@ def error_message_includes(substring: str, ctx):
 def service_error_returned(ctx):
     err = ctx.get("invoke_error")
     assert err is not None, "Expected a service error but none occurred"
-    assert ctx.get("invoke_error_type") in ("service", "network", "rate_limit"), (
-        f"Expected service error, got {ctx.get('invoke_error_type')}"
-    )
+    assert ctx.get("invoke_error_type") in ("service", "network", "rate_limit"), f"Expected service error, got {ctx.get('invoke_error_type')}"
 
 
 @then("a rate-limit error is returned")
 def rate_limit_error_returned(ctx):
     err = ctx.get("invoke_error")
     assert err is not None, "Expected a rate-limit error but none occurred"
-    assert ctx.get("invoke_error_type") == "rate_limit", (
-        f"Expected rate_limit error, got {ctx.get('invoke_error_type')}"
-    )
+    assert ctx.get("invoke_error_type") == "rate_limit", f"Expected rate_limit error, got {ctx.get('invoke_error_type')}"
 
 
 @then("the error includes retry-after information")
@@ -945,9 +921,7 @@ def timeout_error_returned(ctx):
 def configuration_error_returned(ctx):
     err = ctx.get("init_error")
     assert err is not None, "Expected a configuration error but none occurred"
-    assert ctx.get("init_error_type") == "configuration", (
-        f"Expected configuration error, got {ctx.get('init_error_type')}"
-    )
+    assert ctx.get("init_error_type") == "configuration", f"Expected configuration error, got {ctx.get('init_error_type')}"
 
 
 # ============================================================================
@@ -1037,18 +1011,12 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin")
     # FAR-681 switched the model-backend route to require_permission_any_credential
     # (resolves get_current_tenant_user_or_api_key) so declarative apply can use mk_ keys.
     # The admin principal must satisfy that dependency too.
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="admin", organisation_id=_HC_ORG_ID, account_id=_HC_USER_ID, org_role="admin")
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
 
     health_status = "ok" if ctx.get("health_ok") else "unhealthy"

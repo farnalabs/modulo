@@ -232,10 +232,7 @@ class TestDowngrade:
     def test_restores_the_0207_unique_constraint(self) -> None:
         joined = _joined(_run("downgrade"))
         assert f"DROP INDEX IF EXISTS {_INSTALL_UNIQUE_INDEX}" in joined
-        assert (
-            f"ALTER TABLE collection_install ADD CONSTRAINT {_INSTALL_UNIQUE_INDEX} "
-            "UNIQUE (organisation_id, collection_id)" in joined
-        )
+        assert f"ALTER TABLE collection_install ADD CONSTRAINT {_INSTALL_UNIQUE_INDEX} UNIQUE (organisation_id, collection_id)" in joined
 
     def test_drops_created_by_and_deleted_at(self) -> None:
         rec = _run("downgrade")

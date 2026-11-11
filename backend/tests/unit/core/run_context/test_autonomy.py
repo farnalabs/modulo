@@ -298,12 +298,8 @@ class TestAutonomyChangePayload:
 
 class TestAutonomyRank:
     def test_levels_ordered_manual_to_fully_autonomous(self) -> None:
-        assert autonomy_level_rank(AutonomyLevel.MANUAL_APPROVAL) < autonomy_level_rank(
-            AutonomyLevel.NOTIFY_ON_COMPLETE
-        )
-        assert autonomy_level_rank(AutonomyLevel.NOTIFY_ON_COMPLETE) < autonomy_level_rank(
-            AutonomyLevel.FULLY_AUTONOMOUS
-        )
+        assert autonomy_level_rank(AutonomyLevel.MANUAL_APPROVAL) < autonomy_level_rank(AutonomyLevel.NOTIFY_ON_COMPLETE)
+        assert autonomy_level_rank(AutonomyLevel.NOTIFY_ON_COMPLETE) < autonomy_level_rank(AutonomyLevel.FULLY_AUTONOMOUS)
 
 
 class TestValidateAutonomyCeiling:

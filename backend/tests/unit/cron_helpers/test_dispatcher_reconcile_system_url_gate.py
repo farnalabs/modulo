@@ -76,10 +76,7 @@ async def test_dispatcher_reconcile_fails_closed_before_writing_any_stats(
         await ch.dispatcher_reconcile()
 
     assert not redis_cls.from_url.called, "the system-engine raise must fire before any Redis client is built"
-    assert ch._dispatcher_reconcile_stats.get("last_run_at") == last_run_before, (
-        "no heartbeat (in-process or persisted) may be written when the system URL is unset — "
-        "readiness must see 'never ran', not a fabricated last_run_at"
-    )
+    assert ch._dispatcher_reconcile_stats.get("last_run_at") == last_run_before, "no heartbeat (in-process or persisted) may be written when the system URL is unset — readiness must see 'never ran', not a fabricated last_run_at"
 
 
 @pytest.mark.asyncio

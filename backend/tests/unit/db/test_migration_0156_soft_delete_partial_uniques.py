@@ -119,16 +119,11 @@ def test_every_0156_index_is_declared_on_its_model() -> None:
         model = _import_model(model_path)
         assert model.__tablename__ == table_name
         matching = [idx for idx in model.__table__.indexes if idx.name == name]
-        assert matching, (
-            f"model/migration drift: {name} missing from {model.__name__} — "
-            f"declare it in __table_args__ (see composite_template.py)"
-        )
+        assert matching, f"model/migration drift: {name} missing from {model.__name__} — declare it in __table_args__ (see composite_template.py)"
         index = matching[0]
         assert isinstance(index, Index)
         assert index.unique is True, f"{name} on {model.__name__} must be unique"
-        assert [col.name for col in index.columns] == ["organisation_id", "name"], (
-            f"{name} on {model.__name__} must index (organisation_id, name) in that order — matching migration 0156"
-        )
+        assert [col.name for col in index.columns] == ["organisation_id", "name"], f"{name} on {model.__name__} must index (organisation_id, name) in that order — matching migration 0156"
 
 
 def test_each_model_index_carries_both_dialect_where_clauses() -> None:
@@ -138,10 +133,7 @@ def test_each_model_index_carries_both_dialect_where_clauses() -> None:
         postgres_where = index.dialect_options["postgresql"].get("where")
         sqlite_where = index.dialect_options["sqlite"].get("where")
         assert isinstance(postgres_where, TextClause), f"{name}: postgresql_where missing on {model.__name__}"
-        assert isinstance(sqlite_where, TextClause), (
-            f"{name}: sqlite_where missing on {model.__name__} — postgresql_where is ignored on SQLite, "
-            "so create_all'd schemas would build a FULL unique index"
-        )
+        assert isinstance(sqlite_where, TextClause), f"{name}: sqlite_where missing on {model.__name__} — postgresql_where is ignored on SQLite, so create_all'd schemas would build a FULL unique index"
         expected = "deleted_at IS NULL"
         assert str(postgres_where).strip() == expected, f"{name}: postgresql_where on {model.__name__}"
         assert str(sqlite_where).strip() == expected, f"{name}: sqlite_where on {model.__name__}"

@@ -196,9 +196,7 @@ async def test_trigger_rest_connector_no_local_bucket_fallback_when_redis_config
 
 async def test_trigger_rest_connector_fails_closed_on_redis_outage() -> None:
     """A Redis outage when configured FAILS CLOSED - never mints a per-worker budget."""
-    connector = _build_polling_connector(
-        "rest", _rest_config(), _REST_CREDS, redis_client=_BrokenRedis(), tenant_id="org-1"
-    )
+    connector = _build_polling_connector("rest", _rest_config(), _REST_CREDS, redis_client=_BrokenRedis(), tenant_id="org-1")
     limiter = connector._get_rate_limiter(1.0, 2)
 
     with pytest.raises(SharedBudgetUnavailableError):

@@ -19,9 +19,7 @@ from typing import Any
 import pytest
 
 _MIGRATION_NAME = "0295_decision_record_event_identity"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 
 _TMP_INDEX = "ix_tmp_policy_gate_decisions_run_gate_result"
 _PERMANENT_INDEX = "uq_policy_gate_decisions_eval_result_id"

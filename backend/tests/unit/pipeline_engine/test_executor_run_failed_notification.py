@@ -41,9 +41,7 @@ def _make_session_factory() -> MagicMock:
     return MagicMock(side_effect=lambda: _ctx())
 
 
-def _finalize_args(
-    run_id: uuid.UUID, org_id: uuid.UUID, *, final_status: str, error_code: str | None
-) -> dict[str, Any]:
+def _finalize_args(run_id: uuid.UUID, org_id: uuid.UUID, *, final_status: str, error_code: str | None) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "org_id": org_id,
@@ -247,9 +245,7 @@ async def test_pipeline_name_lookup_without_a_session_factory_is_none() -> None:
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = None
 
-    name = await executor._notification_pipeline_name(
-        org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4()
-    )
+    name = await executor._notification_pipeline_name(org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4())
 
     assert name is None
 
@@ -292,9 +288,7 @@ async def test_pipeline_name_lookup_failure_returns_none_and_logs() -> None:
         ),
         patch("farna.core.pipeline_engine.executor._log.warning") as warn,
     ):
-        name = await executor._notification_pipeline_name(
-            org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4()
-        )
+        name = await executor._notification_pipeline_name(org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), run_id=uuid.uuid4())
 
     assert name is None
     warn.assert_called_once()

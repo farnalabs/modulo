@@ -51,16 +51,7 @@ def _source() -> str:
 
 def _scaffold(conn: sa.Connection) -> None:
     """A pre-migration ``scheduled_reports`` shape (no due-scan index)."""
-    conn.execute(
-        sa.text(
-            "CREATE TABLE scheduled_reports ("
-            "id CHAR(36) PRIMARY KEY, "
-            "organisation_id CHAR(36) NOT NULL, "
-            "report_type VARCHAR(50) NOT NULL, "
-            "active BOOLEAN NOT NULL, "
-            "next_send_at TIMESTAMP)"
-        )
-    )
+    conn.execute(sa.text("CREATE TABLE scheduled_reports (id CHAR(36) PRIMARY KEY, organisation_id CHAR(36) NOT NULL, report_type VARCHAR(50) NOT NULL, active BOOLEAN NOT NULL, next_send_at TIMESTAMP)"))
 
 
 def _run(engine: sa.Engine, module: ModuleType, fn: str) -> None:

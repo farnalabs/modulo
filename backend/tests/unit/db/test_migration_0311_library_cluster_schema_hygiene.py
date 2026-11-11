@@ -178,9 +178,7 @@ class TestDowngrade:
 
     def test_recreates_both_dropped_indexes(self) -> None:
         joined = _joined(_run("downgrade"))
-        assert f"CREATE INDEX IF NOT EXISTS {_DROP_INSTALL_ENTITY_INDEX} ON collection_install_entity (install_id)" in (
-            joined
-        )
+        assert f"CREATE INDEX IF NOT EXISTS {_DROP_INSTALL_ENTITY_INDEX} ON collection_install_entity (install_id)" in (joined)
         assert f"CREATE INDEX IF NOT EXISTS {_DROP_PUBLISHER_INDEX} ON publishers (public_key_hex)" in joined
 
     def test_downgrade_emits_exactly_five_statements(self) -> None:
@@ -216,9 +214,7 @@ class TestModelParity:
         """The model CHECK and the migration CHECK must carry the SAME clause —
         a drift here is exactly the model/migration divergence that
         ``tests/integration/test_initial_migration.py`` would surface."""
-        model_sql = str(
-            next(c for c in Publisher.__table__.constraints if getattr(c, "name", None) == _TRUST_TIER_CHECK).sqltext
-        )
+        model_sql = str(next(c for c in Publisher.__table__.constraints if getattr(c, "name", None) == _TRUST_TIER_CHECK).sqltext)
         migration_sql = next(s for s in _run("upgrade").sql if "ADD CONSTRAINT" in s and _TRUST_TIER_CHECK in s)
         assert "trust_tier IN ('green', 'amber')" in model_sql, model_sql
         assert "trust_tier IN ('green', 'amber')" in migration_sql, migration_sql

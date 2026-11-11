@@ -98,11 +98,7 @@ def _signed_team_licence(*, org_id: str = "tenant-org", expires_days: int = 30) 
         "expires_at": (datetime.now(UTC) + timedelta(days=expires_days)).isoformat(),
         "org_id": org_id,
     }
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, kp["private_key"]))).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}", kp["public_key"]
 

@@ -127,9 +127,7 @@ async def _migrate_row(
         return (0, 1, 0)
 
     try:
-        schema_id, param_set_id = await _migrate_one_template(
-            session_factory, template_id, template_name, org_id, account_id, schema_name, ports_raw
-        )
+        schema_id, param_set_id = await _migrate_one_template(session_factory, template_id, template_name, org_id, account_id, schema_name, ports_raw)
         if args.verbose:
             _print(f"    -> Created schema {schema_id}, set {param_set_id}")
     except Exception as exc:

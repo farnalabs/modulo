@@ -327,9 +327,7 @@ async def test_429_is_retried_after_retry_after(plane: PlaneConnector, monkeypat
 
 
 @respx.mock
-async def test_429_fails_loud_when_retries_are_exhausted(
-    plane: PlaneConnector, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_429_fails_loud_when_retries_are_exhausted(plane: PlaneConnector, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(plane_mod, "_retry_delay", lambda attempt, response: 0.0)
     respx.get(PROJECTS).mock(
         return_value=httpx.Response(429, text="rate_limited", headers={"Retry-After": "1"}),

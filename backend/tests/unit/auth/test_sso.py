@@ -64,11 +64,7 @@ def _make_valid_license_key(tier: str = "team", *, days_from_now: int = 365) -> 
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -168,9 +164,7 @@ def client() -> Generator[TestClient, None, None]:
     _app.dependency_overrides[get_system_db_session] = _override_session
     _app.dependency_overrides[_get_engine] = lambda: MagicMock()
     _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
-    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
-        FeatureFlagRegistry(current_tier="team")
-    )
+    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team"))
     try:
         yield TestClient(_app)
     finally:
@@ -181,12 +175,8 @@ def _override_settings(**kwargs: str | bool) -> None:
     FeatureFlagRegistry._overrides.clear()
     _app.dependency_overrides[get_settings] = lambda: _override(**kwargs)
     settings = _override(**kwargs)
-    _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
-        FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
-    )
-    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
-        FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community")
-    )
+    _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community"))
+    _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="team" if settings.modulo_license_key else "community"))
 
 
 def _mock_session(scalar: object = None) -> AsyncMock:
@@ -581,12 +571,8 @@ class TestSamlEnvLicenceIndependence:
 
         _app.dependency_overrides[get_db_session] = _override_session
         _app.dependency_overrides[get_system_db_session] = _override_session
-        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(
-            FeatureFlagRegistry(current_tier="community")
-        )
-        _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(
-            FeatureFlagRegistry(current_tier="community")
-        )
+        _app.dependency_overrides[get_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
+        _app.dependency_overrides[get_anonymous_plan_context] = lambda: DbPlanContext(FeatureFlagRegistry(current_tier="community"))
         try:
             with patch("farna.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=None):
                 resp = TestClient(_app).get("/api/v1/auth/saml/login", follow_redirects=False)
@@ -633,9 +619,7 @@ class TestSamlMetadataParsing:
             mock_db.return_value = None
             mock_fetch.return_value = self.SAMPLE_IDP_METADATA
 
-            url, _req_id = await saml_get_auth_url(
-                settings, "https://modulo.example.com/api/v1/auth/saml/acs", session, session
-            )
+            url, _req_id = await saml_get_auth_url(settings, "https://modulo.example.com/api/v1/auth/saml/acs", session, session)
             assert "idp.example.com" in url
             assert "SAMLRequest" in url
 
@@ -700,11 +684,7 @@ class TestDecodeIdTokenClaims:
         from farna.auth.sso import _decode_id_token_claims
 
         header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-        payload = (
-            base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
-            .rstrip(b"=")
-            .decode()
-        )
+        payload = base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}').rstrip(b"=").decode()
         sig = base64.urlsafe_b64encode(b"signature").rstrip(b"=").decode()
         id_token = f"{header}.{payload}.{sig}"
 
@@ -792,9 +772,7 @@ class TestOidcJsonResponseShapes:
 
         with patch("farna.auth.sso.httpx.AsyncClient") as client_type:
             client_type.return_value.__aenter__.return_value = client
-            result = await _exchange_code(
-                "https://issuer.example/token", "client", "secret", "code", "callback", "verifier"
-            )
+            result = await _exchange_code("https://issuer.example/token", "client", "secret", "code", "callback", "verifier")
 
         assert result == payload
 
@@ -855,9 +833,7 @@ class TestJitProvisioningExtended:
             session.execute.side_effect = [exec_mock1, exec_mock2]
             mock_select.return_value.order_by.return_value.limit.return_value = "query"
 
-            account, _actual_org_id, org_role = await jit_provision_user(
-                session, settings, "new@example.com", "New User", "oidc", "google:456"
-            )
+            account, _actual_org_id, org_role = await jit_provision_user(session, settings, "new@example.com", "New User", "oidc", "google:456")
 
             assert account.email == "new@example.com"
             assert account.display_name == "New User"
@@ -885,9 +861,7 @@ class TestJitProvisioningExtended:
         with patch("farna.auth.sso.get_account_by_email", new_callable=AsyncMock) as mock_get:
             mock_get.return_value = existing
 
-            account, _, _ = await jit_provision_user(
-                session, settings, "existing@example.com", "Existing", "oidc", "google:789"
-            )
+            account, _, _ = await jit_provision_user(session, settings, "existing@example.com", "Existing", "oidc", "google:789")
 
             assert account is existing
             assert account.sso_subject == "google:789"
@@ -1014,9 +988,7 @@ class TestOidcGetAuthorizeUrl:
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
 
-            url, raw_state, _nonce, _code_verifier = await oidc_get_authorize_url(
-                "google", settings, "http://localhost/callback", session, session
-            )
+            url, raw_state, _nonce, _code_verifier = await oidc_get_authorize_url("google", settings, "http://localhost/callback", session, session)
 
             assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth")
             assert "client_id=google-client-id" in url
@@ -1100,9 +1072,7 @@ class TestOidcGetAuthorizeUrl:
             mock_disc.return_value = {
                 "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             }
-            url, raw_state, nonce, code_verifier = await oidc_get_authorize_url(
-                "google", settings, "http://localhost/callback", session, session
-            )
+            url, raw_state, nonce, code_verifier = await oidc_get_authorize_url("google", settings, "http://localhost/callback", session, session)
 
         params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
         assert params["nonce"] == [nonce]
@@ -1131,15 +1101,7 @@ class TestOidcProcessCallback:
 
         signed = sign_state(f"google:{raw_state}", settings.secret_key)
 
-        id_token = (
-            base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-            + "."
-            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}')
-            .rstrip(b"=")
-            .decode()
-            + "."
-            + "sig"
-        )
+        id_token = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode() + "." + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc123"}').rstrip(b"=").decode() + "." + "sig"
 
         with (
             patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
@@ -1774,15 +1736,7 @@ class TestOidcCallbackEndpointExtended:
             sign_state(f"{raw_state}:test-nonce:test-verifier", settings.secret_key),
         )
 
-        id_token = (
-            base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-            + "."
-            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}')
-            .rstrip(b"=")
-            .decode()
-            + "."
-            + "sig"
-        )
+        id_token = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode() + "." + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}').rstrip(b"=").decode() + "." + "sig"
 
         with (
             patch("farna.auth.sso._fetch_discovery", new_callable=AsyncMock) as mock_disc,
@@ -1868,15 +1822,7 @@ class TestOidcProcessCallbackDb:
         )
         session = _mock_session(scalar=provider)
         signed = sign_state("auth0:raw-state", settings.secret_key)
-        id_token = (
-            base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-            + "."
-            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}')
-            .rstrip(b"=")
-            .decode()
-            + "."
-            + "sig"
-        )
+        id_token = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode() + "." + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}').rstrip(b"=").decode() + "." + "sig"
 
         with (
             patch("farna.auth.sso._fetch_discovery_pinned", new_callable=AsyncMock) as mock_disc,
@@ -2016,9 +1962,7 @@ class TestSystemSessionProviderResolution:
         app_session = _mock_session()
 
         with patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org:
-            client_id, _client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider(
-                "auth0", system_session, app_session, settings
-            )
+            client_id, _client_secret, discovery_url, _scopes, db_provider = await _resolve_oidc_provider("auth0", system_session, app_session, settings)
 
         assert db_provider is provider
         assert db_provider.organisation_id == org_id
@@ -2040,15 +1984,7 @@ class TestSystemSessionProviderResolution:
         system_session = _mock_session(scalar=provider)
         app_session = _mock_session()
         signed = sign_state("auth0:raw-state", settings.secret_key)
-        id_token = (
-            base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
-            + "."
-            + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}')
-            .rstrip(b"=")
-            .decode()
-            + "."
-            + "sig"
-        )
+        id_token = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode() + "." + base64.urlsafe_b64encode(b'{"email":"user@example.com","name":"Test User","sub":"abc"}').rstrip(b"=").decode() + "." + "sig"
 
         with (
             patch("farna.auth.sso._fetch_discovery_pinned", new_callable=AsyncMock) as mock_disc,
@@ -2117,9 +2053,7 @@ class TestSystemSessionProviderResolution:
         app_session = _mock_session(scalar=provider)
 
         with patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org:
-            _client_id, _cs, _du, _scopes, db_provider = await _resolve_oidc_provider(
-                "auth0", system_session, app_session, settings
-            )
+            _client_id, _cs, _du, _scopes, db_provider = await _resolve_oidc_provider("auth0", system_session, app_session, settings)
 
         assert db_provider is provider
         mock_default_org.assert_awaited_once_with(app_session)
@@ -2339,9 +2273,7 @@ class TestOidcEndpointHostAllowlist:
             )
 
         assert result["access_token"] == "at"
-        mock_ex.assert_awaited_once_with(
-            "https://issuer.example/token", "cid", "client-secret", "code", "http://cb", "test-verifier"
-        )
+        mock_ex.assert_awaited_once_with("https://issuer.example/token", "cid", "client-secret", "code", "http://cb", "test-verifier")
         mock_verify.assert_awaited_once()
 
 
@@ -2570,16 +2502,12 @@ class TestSsoJoinGate:
         stack = contextlib.ExitStack()
         mocks = SimpleNamespace(
             get_acct=stack.enter_context(patch("farna.auth.sso.get_account_by_email", new_callable=AsyncMock)),
-            membership=stack.enter_context(
-                patch("farna.auth.sso.get_membership_by_account_and_org", new_callable=AsyncMock)
-            ),
+            membership=stack.enter_context(patch("farna.auth.sso.get_membership_by_account_and_org", new_callable=AsyncMock)),
             invite=stack.enter_context(patch("farna.auth.sso.get_live_for_email", new_callable=AsyncMock)),
             consume=stack.enter_context(patch("farna.auth.sso.consume_invitation", new_callable=AsyncMock)),
             create=stack.enter_context(patch("farna.auth.sso.create_membership", new_callable=AsyncMock)),
             reactivate=stack.enter_context(patch("farna.auth.sso.reactivate_membership", new_callable=AsyncMock)),
-            flag=stack.enter_context(
-                patch("farna.auth.sso.resolve_sso_unrestricted_provisioning", new_callable=AsyncMock)
-            ),
+            flag=stack.enter_context(patch("farna.auth.sso.resolve_sso_unrestricted_provisioning", new_callable=AsyncMock)),
             audit=stack.enter_context(patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)),
         )
         mocks.get_acct.return_value = None
@@ -2759,9 +2687,7 @@ class TestSsoJoinGate:
             mocks.invite.return_value = invitation
             mocks.create.return_value = SimpleNamespace(role="operator")
 
-            _account, _org_id, role = await self._join(
-                settings, session, provider, "user@corp.example.com", email_verified=False
-            )
+            _account, _org_id, role = await self._join(settings, session, provider, "user@corp.example.com", email_verified=False)
 
         assert role == "operator"
 
@@ -2807,9 +2733,7 @@ class TestSsoJoinGate:
             mocks.get_acct.side_effect = [account, account]
             mocks.membership.return_value = SimpleNamespace(role="runner", deactivated_at=None)
 
-            _account, _org_id, role = await self._join(
-                _override(), _mock_session(), _gate_provider(), "member@example.com"
-            )
+            _account, _org_id, role = await self._join(_override(), _mock_session(), _gate_provider(), "member@example.com")
 
         assert role == "runner"
         mocks.create.assert_not_awaited()
@@ -3183,9 +3107,7 @@ class TestSamlProviderScoping:
 
         # entity_id matches the audience, so the containment check accepts the
         # response and returns None (it raises SamlAuthError on any mismatch).
-        result = ModuloSamlAuth._enforce_audience_restriction(
-            encoded, "https://app.example.com/api/v1/auth/saml/okta-a"
-        )
+        result = ModuloSamlAuth._enforce_audience_restriction(encoded, "https://app.example.com/api/v1/auth/saml/okta-a")
         assert result is None
 
 
@@ -3339,9 +3261,7 @@ class TestResolveSamlConfigPerProvider:
         app_session = _mock_session()
 
         with patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org:
-            idp_metadata, entity_id, _key, _cert, db_saml = await _resolve_saml_config(
-                system_session, app_session, settings, provider_id="okta-saml"
-            )
+            idp_metadata, entity_id, _key, _cert, db_saml = await _resolve_saml_config(system_session, app_session, settings, provider_id="okta-saml")
 
         assert db_saml is provider
         assert entity_id == "https://idp.example.com/sp"
@@ -3361,9 +3281,7 @@ class TestResolveSamlConfigPerProvider:
             patch("farna.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock) as mock_get,
         ):
             mock_get.return_value = provider
-            _idp, entity_id, _key, _cert, db_saml = await _resolve_saml_config(
-                None, app_session, settings, provider_id="okta-saml"
-            )
+            _idp, entity_id, _key, _cert, db_saml = await _resolve_saml_config(None, app_session, settings, provider_id="okta-saml")
 
         assert db_saml is provider
         assert entity_id == "https://idp.example.com/sp"
@@ -3377,9 +3295,7 @@ class TestResolveSamlConfigPerProvider:
         system_session = _mock_session(scalar=provider)
 
         with patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock):
-            _idp, entity_id, _key, _cert, _db = await _resolve_saml_config(
-                system_session, _mock_session(), settings, provider_id="okta-saml"
-            )
+            _idp, entity_id, _key, _cert, _db = await _resolve_saml_config(system_session, _mock_session(), settings, provider_id="okta-saml")
 
         assert entity_id == "https://app.example.com/api/v1/auth/saml/okta-saml"
 

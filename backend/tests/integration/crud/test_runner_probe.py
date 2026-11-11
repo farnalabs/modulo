@@ -53,12 +53,7 @@ async def _seed_probe_row(
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runner_probe_cache "
-                "(id, organisation_id, machine_id, engine_reachable, images_present, "
-                "image_checks_json, engine_info_json, probe_error, probed_at) "
-                "VALUES (:id, :org, :machine, true, true, '{}'::json, '{}'::json, NULL, :probed_at)"
-            ),
+            text("INSERT INTO runner_probe_cache (id, organisation_id, machine_id, engine_reachable, images_present, image_checks_json, engine_info_json, probe_error, probed_at) VALUES (:id, :org, :machine, true, true, '{}'::json, '{}'::json, NULL, :probed_at)"),
             {
                 "id": str(uuid.uuid4()),
                 "org": str(org_id),
@@ -87,9 +82,7 @@ class TestProbeCacheRlsIsolation:
         assert len(rows) == 1
         assert rows[0].machine_id == "machine-1"
 
-    async def test_status_read_primitive_returns_only_caller_org_rows(
-        self, db_engine: AsyncEngine, app_engine: AsyncEngine
-    ) -> None:
+    async def test_status_read_primitive_returns_only_caller_org_rows(self, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
         """(b) the status endpoint's read primitive is org-scoped."""
         org_a = uuid.uuid4()
         org_b = uuid.uuid4()
@@ -106,9 +99,7 @@ class TestProbeCacheRlsIsolation:
         machines = {row.machine_id for row in rows}
         assert machines == {"machine-a"}
 
-    async def test_upsert_through_rls_session_writes_caller_org_only(
-        self, rls_session: AsyncSession, test_org: uuid.UUID
-    ) -> None:
+    async def test_upsert_through_rls_session_writes_caller_org_only(self, rls_session: AsyncSession, test_org: uuid.UUID) -> None:
         """The probe-cron write path through an RLS-scoped session lands in
         the caller's org and is immediately visible to it."""
         row = await upsert_runner_probe_cache(
@@ -161,16 +152,8 @@ class TestPoisonedOrgSavepoint:
 
         # The outer tx stayed usable: org_b's row committed; org_a's did not.
         async with factory() as session:
-            org_b_rows = (
-                (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_b)))
-                .scalars()
-                .all()
-            )
-            org_a_rows = (
-                (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_a)))
-                .scalars()
-                .all()
-            )
+            org_b_rows = (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_b))).scalars().all()
+            org_a_rows = (await session.execute(select(RunnerProbeCache).where(RunnerProbeCache.organisation_id == org_a))).scalars().all()
         assert len(org_b_rows) == 1
         assert org_b_rows[0].machine_id == "machine-sp"
         assert not org_a_rows
@@ -184,9 +167,7 @@ class TestPoisonedOrgSavepoint:
 
 
 class TestProbeRetentionPrune:
-    async def test_prune_removes_only_rows_past_retention(
-        self, db_engine: AsyncEngine, app_engine: AsyncEngine
-    ) -> None:
+    async def test_prune_removes_only_rows_past_retention(self, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
         """(corpse-row contract, qa F8): a row older than the retention
         window is pruned; a fresh row survives."""
         org = uuid.uuid4()
@@ -221,9 +202,7 @@ class TestProbeRetentionPrune:
 
 
 class TestApplyTemplateCrossOrg:
-    async def test_apply_template_cross_org_context_returns_none(
-        self, db_engine: AsyncEngine, app_engine: AsyncEngine
-    ) -> None:
+    async def test_apply_template_cross_org_context_returns_none(self, db_engine: AsyncEngine, app_engine: AsyncEngine) -> None:
         """(c) apply-template against org-A's profile from an org-B context
         finds nothing under RLS → None → the route 404s; the same call from
         org-A's own context succeeds (the None is RLS-caused, not row
@@ -236,10 +215,7 @@ class TestApplyTemplateCrossOrg:
         account_id = uuid.uuid4()
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, "
-                    "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
                 {
                     "id": str(account_id),
                     "email": f"at-a-{uuid.uuid4().hex[:8]}@test.local",

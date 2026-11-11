@@ -111,11 +111,7 @@ async def _fresh_db(db_url: str, prefix: str) -> tuple[str, str]:
 async def _drop_db(db_url: str, db_name: str) -> None:
     admin = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
     async with admin.connect() as conn:
-        await conn.execute(
-            text(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()"
-            ).bindparams(n=db_name)
-        )
+        await conn.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :n AND pid <> pg_backend_pid()").bindparams(n=db_name))
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
     await admin.dispose()
 
@@ -169,19 +165,10 @@ async def _seed_catalog(iso_url: str, flags: tuple[str, ...]) -> None:
     engine = create_async_engine(iso_url, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) VALUES "
-                    "('community', 'Community', 0, false, 'Free tier'), "
-                    "('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"
-                )
-            )
+            await conn.execute(text("INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) VALUES ('community', 'Community', 0, false, 'Free tier'), ('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"))
             for name in flags:
                 await conn.execute(
-                    text(
-                        "INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) "
-                        "VALUES (:name, :name, 'team', NULL, true) ON CONFLICT (name) DO NOTHING"
-                    ),
+                    text("INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) VALUES (:name, :name, 'team', NULL, true) ON CONFLICT (name) DO NOTHING"),
                     {"name": name},
                 )
     finally:
@@ -323,9 +310,7 @@ async def test_guarded_sql_is_noop_when_catalog_table_absent(db_url: str) -> Non
             async with engine.begin() as conn:
                 # A pre-existing, unrelated row the guarded SQL must not touch,
                 # plus no ``feature_flag_catalog`` table at all.
-                await conn.execute(
-                    text("CREATE TABLE public.tier_catalog (tier_id text PRIMARY KEY, label text NOT NULL)")
-                )
+                await conn.execute(text("CREATE TABLE public.tier_catalog (tier_id text PRIMARY KEY, label text NOT NULL)"))
                 await conn.execute(text("INSERT INTO public.tier_catalog (tier_id, label) VALUES ('team', 'Team')"))
             async with engine.begin() as conn:
                 # No ``feature_flag_catalog`` table exists — both directions must
@@ -333,9 +318,7 @@ async def test_guarded_sql_is_noop_when_catalog_table_absent(db_url: str) -> Non
                 swept = await conn.run_sync(lambda sync: module.sweep_stale_catalog_rows(sync))
                 restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
-                catalog_oid = (
-                    await conn.execute(text("SELECT to_regclass('public.feature_flag_catalog')"))
-                ).scalar_one()
+                catalog_oid = (await conn.execute(text("SELECT to_regclass('public.feature_flag_catalog')"))).scalar_one()
                 tiers = (await conn.execute(text("SELECT tier_id, label FROM public.tier_catalog"))).all()
         finally:
             await engine.dispose()
@@ -365,9 +348,7 @@ async def test_guarded_sql_is_noop_when_name_column_absent(db_url: str) -> None:
                 swept = await conn.run_sync(lambda sync: module.sweep_stale_catalog_rows(sync))
                 restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
-                sentinels = (
-                    (await conn.execute(text('SELECT legacy_id FROM public."feature_flag_catalog"'))).scalars().all()
-                )
+                sentinels = (await conn.execute(text('SELECT legacy_id FROM public."feature_flag_catalog"'))).scalars().all()
         finally:
             await engine.dispose()
         assert list(sentinels) == [42]
@@ -387,19 +368,12 @@ async def test_restore_is_noop_when_tier_catalog_table_absent(db_url: str) -> No
                 # A present catalog table with its ``name`` column but NO
                 # ``tier_catalog`` table: the restore's tier-table guard must
                 # short-circuit (an unguarded INSERT would raise 42P01).
-                await conn.execute(
-                    text(
-                        'CREATE TABLE public."feature_flag_catalog" ('
-                        "name text PRIMARY KEY, description text, tier_id text, depends_on json, is_active boolean)"
-                    )
-                )
+                await conn.execute(text('CREATE TABLE public."feature_flag_catalog" (name text PRIMARY KEY, description text, tier_id text, depends_on json, is_active boolean)'))
             async with engine.begin() as conn:
                 restored = await conn.run_sync(lambda sync: module.restore_retired_catalog_rows(sync))
             async with engine.connect() as conn:
                 tier_oid = (await conn.execute(text("SELECT to_regclass('public.tier_catalog')"))).scalar_one()
-                remaining = (
-                    await conn.execute(text('SELECT count(*) FROM public."feature_flag_catalog"'))
-                ).scalar_one()
+                remaining = (await conn.execute(text('SELECT count(*) FROM public."feature_flag_catalog"'))).scalar_one()
         finally:
             await engine.dispose()
         assert tier_oid is None

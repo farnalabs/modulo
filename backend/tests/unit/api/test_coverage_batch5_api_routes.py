@@ -140,9 +140,7 @@ class TestDashboardRouteDispatch:
             ),
         ],
     )
-    def test_dashboard_error_paths_return_structured_http_errors(
-        self, path: str, error: Exception, expected_status: int
-    ) -> None:
+    def test_dashboard_error_paths_return_structured_http_errors(self, path: str, error: Exception, expected_status: int) -> None:
         session = _session(execute=error)
         _install_common_overrides(session)
         response = TestClient(app).get(path)
@@ -175,9 +173,7 @@ class TestDashboardRouteDispatch:
             ),
         ],
     )
-    def test_other_dashboard_routes_map_database_errors(
-        self, path: str, error: Exception, expected_status: int
-    ) -> None:
+    def test_other_dashboard_routes_map_database_errors(self, path: str, error: Exception, expected_status: int) -> None:
         session = _session(execute=error)
         _install_common_overrides(session)
         response = TestClient(app).get(path)
@@ -214,9 +210,7 @@ class TestOnboardingRouteDispatch:
         empty_result = MagicMock()
         empty_result.scalar_one_or_none.return_value = None
         session = _session()
-        session.execute = AsyncMock(
-            side_effect=[progress_result, empty_result, empty_result, empty_result, empty_result, empty_result]
-        )
+        session.execute = AsyncMock(side_effect=[progress_result, empty_result, empty_result, empty_result, empty_result, empty_result])
         _install_common_overrides(session)
         response = TestClient(app).get("/api/v1/onboarding/status")
         assert response.status_code == 200
@@ -270,9 +264,7 @@ class TestScimRouteDispatch:
         )
         session = _session()
         _install_scim_overrides(session)
-        with patch(
-            "farna.api.routes.scim.scim_list_users", new_callable=AsyncMock, return_value=([account], 3)
-        ) as listing:
+        with patch("farna.api.routes.scim.scim_list_users", new_callable=AsyncMock, return_value=([account], 3)) as listing:
             response = TestClient(app).get(
                 "/scim/v2/Users?filter=userName%20eq%20%5C%22user@example.com%5C%22&startIndex=2&count=1",
                 headers={"Authorization": f"Bearer {_SCIM_TOKEN}"},
@@ -302,27 +294,21 @@ class TestScimRouteDispatch:
         session = _session()
         _install_scim_overrides(session)
         with patch("farna.api.routes.scim.scim_get_user", new_callable=AsyncMock, return_value=service):
-            response = TestClient(app).get(
-                f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
-            )
+            response = TestClient(app).get(f"/scim/v2/Users/{_USER_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         assert response.status_code == 404
 
     def test_get_group_not_found_returns_scim_error(self) -> None:
         session = _session()
         _install_scim_overrides(session)
         with patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, return_value=None):
-            response = TestClient(app).get(
-                f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
-            )
+            response = TestClient(app).get(f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         assert response.status_code == 404
 
     def test_get_group_maps_database_error(self) -> None:
         session = _session()
         _install_scim_overrides(session)
         with patch("farna.api.routes.scim.scim_get_group", new_callable=AsyncMock, side_effect=SQLAlchemyError("down")):
-            response = TestClient(app).get(
-                f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"}
-            )
+            response = TestClient(app).get(f"/scim/v2/Groups/{_GROUP_ID}", headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         assert response.status_code == 503
 
     def test_patch_group_invalid_operation_is_scim_error(self) -> None:
@@ -385,9 +371,7 @@ class TestScimRouteDispatch:
         body = {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"], "userName": "user@example.com"}
         if "Groups" in path:
             body = {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"], "displayName": "Engineering"}
-        with patch(
-            patch_target, new_callable=AsyncMock, side_effect=ProgrammingError("stmt", {}, Exception("missing"))
-        ):
+        with patch(patch_target, new_callable=AsyncMock, side_effect=ProgrammingError("stmt", {}, Exception("missing"))):
             response = TestClient(app).put(path, json=body, headers={"Authorization": f"Bearer {_SCIM_TOKEN}"})
         assert response.status_code == 501
 

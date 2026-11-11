@@ -657,16 +657,12 @@ async def test_dispatch_with_no_recipients_does_not_burn_the_marker() -> None:
     claim, _ = _approaching_gate(now)
     redis = _FakeRedis()
 
-    opted_out, send_out, _ = await _run_dispatch(
-        candidate_rows=[(claim, "My Pipeline")], recipients=[], redis_client=redis, now=now
-    )
+    opted_out, send_out, _ = await _run_dispatch(candidate_rows=[(claim, "My Pipeline")], recipients=[], redis_client=redis, now=now)
     assert not opted_out
     send_out.assert_not_awaited()
     assert not redis.keys  # marker untouched
 
-    opted_in, send_in, _ = await _run_dispatch(
-        candidate_rows=[(claim, "My Pipeline")], recipients=_RECIPIENTS, redis_client=redis, now=now
-    )
+    opted_in, send_in, _ = await _run_dispatch(candidate_rows=[(claim, "My Pipeline")], recipients=_RECIPIENTS, redis_client=redis, now=now)
     assert len(opted_in) == 1
     send_in.assert_awaited_once()
 

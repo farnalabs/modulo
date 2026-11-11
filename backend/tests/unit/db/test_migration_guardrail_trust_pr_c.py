@@ -112,9 +112,7 @@ def _assert_drift_free(
     prove-the-fix harness: feed a synthetic mismatch and it must fail.
     """
     trust_columns = trust_columns or _TRUST_COLUMNS
-    all_migration_columns = {
-        (table, column) for revision_columns in migration_columns.values() for table, column in revision_columns
-    }
+    all_migration_columns = {(table, column) for revision_columns in migration_columns.values() for table, column in revision_columns}
     for (table, column), revision in trust_columns.items():
         if table not in _NO_ORM_MODEL_TABLES:
             assert column in model_columns[table], f"model {table} is missing trust column {column}"
@@ -215,13 +213,7 @@ class TestDowngradeDataSafety:
         _run(sqlite_engine, _load_migration(_REVISION_0116), "upgrade")
         # A soft-deleted guardrail row with trust data stamped.
         with sqlite_engine.begin() as conn:
-            conn.execute(
-                sa.text(
-                    "INSERT INTO eval_definitions (id, name, deleted_at, deleted_by) "
-                    "VALUES (2, 'soft_deleted_guardrail', '2026-08-18 00:00:00', "
-                    "'0123456789abcdef0123456789abcdef')"
-                )
-            )
+            conn.execute(sa.text("INSERT INTO eval_definitions (id, name, deleted_at, deleted_by) VALUES (2, 'soft_deleted_guardrail', '2026-08-18 00:00:00', '0123456789abcdef0123456789abcdef')"))
         _run(sqlite_engine, _load_migration(_REVISION_0116), "downgrade")
         with sqlite_engine.connect() as conn:
             rows = conn.execute(sa.text("SELECT id, name FROM eval_definitions ORDER BY id")).all()
@@ -248,12 +240,8 @@ class TestDowngradeDataSafety:
         # column fails unless the index was already dropped by the downgrade.
         for revision in (_REVISION_0113, _REVISION_0116):
             source = _source(revision)
-            assert _migration_columns(source, "add_column") == _migration_columns(source, "drop_column"), (
-                f"migration {revision} downgrade must drop exactly its upgrade columns"
-            )
-            assert _index_ops(source, "create_index") == _index_ops(source, "drop_index"), (
-                f"migration {revision} downgrade must drop exactly its upgrade indexes"
-            )
+            assert _migration_columns(source, "add_column") == _migration_columns(source, "drop_column"), f"migration {revision} downgrade must drop exactly its upgrade columns"
+            assert _index_ops(source, "create_index") == _index_ops(source, "drop_index"), f"migration {revision} downgrade must drop exactly its upgrade indexes"
 
     def test_downgrades_never_drop_the_tables(self) -> None:
         for revision in (_REVISION_0113, _REVISION_0116):
@@ -297,10 +285,7 @@ class TestModelMigrationConsistency:
             "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
             "runs": set(Run.__table__.c.keys()),
         }
-        migration_columns = {
-            revision: _migration_columns(_source(revision), "add_column")
-            for revision in (_REVISION_0113, _REVISION_0116)
-        }
+        migration_columns = {revision: _migration_columns(_source(revision), "add_column") for revision in (_REVISION_0113, _REVISION_0116)}
         _assert_drift_free(model_columns, migration_columns)
 
     def test_drift_guard_catches_model_migration_mismatch(self) -> None:
@@ -316,10 +301,7 @@ class TestModelMigrationConsistency:
             "pipeline_snapshots": set(PipelineSnapshot.__table__.c.keys()),
             "runs": set(Run.__table__.c.keys()),
         }
-        real_migration_columns = {
-            revision: _migration_columns(_source(revision), "add_column")
-            for revision in (_REVISION_0113, _REVISION_0116)
-        }
+        real_migration_columns = {revision: _migration_columns(_source(revision), "add_column") for revision in (_REVISION_0113, _REVISION_0116)}
         # (a) a migration stops creating a trust column (e.g. a column dropped
         # from 0116's upgrade) — the downgrade symmetry guard would also fire.
         migration_removed = {rev: set(cols) for rev, cols in real_migration_columns.items()}

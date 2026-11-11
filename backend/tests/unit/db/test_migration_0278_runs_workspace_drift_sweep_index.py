@@ -48,21 +48,13 @@ _KEY_COLUMNS = ("id",)
 
 #: The predicate AS 0278 CREATED THE INDEX (historical; FAR-1487's migration
 #: 0284 re-created the index with ``'rejected'`` added to the IN list).
-_PREDICATE_0278 = (
-    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
-    "AND workspace_inputs_drift_detected IS NULL"
-)
+_PREDICATE_0278 = "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') AND workspace_inputs_drift_detected IS NULL"
 
 #: The sweep's WHERE clause as it must read in the index TODAY (after 0284).
 #: The IN list is the ``TERMINAL_STATUSES`` vocabulary (asserted below);
 #: parity comparisons canonicalise order so frozenset iteration can never
 #: flake them.
-_PREDICATE = (
-    "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
-    "AND workspace_inputs_drift_detected IS NULL"
-)
+_PREDICATE = "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') AND workspace_inputs_drift_detected IS NULL"
 _REJECTED_MIGRATION_PATH = _VERSIONS / "0284_add_rejected_run_status.py"
 
 
@@ -131,9 +123,7 @@ async def _sweep_select() -> Any:
 
     result = await _sweep_workspace_input_drift_flags(factory)
     assert result == {"scanned": 0, "corrected": 0}, f"sweep swallowed an error: {result}"
-    assert len(session.statements) == 1, (
-        f"expected exactly the bounded SELECT (0 rows match), got {len(session.statements)} statements"
-    )
+    assert len(session.statements) == 1, f"expected exactly the bounded SELECT (0 rows match), got {len(session.statements)} statements"
     return session.statements[0]
 
 
@@ -216,18 +206,14 @@ class TestUpgrade:
         kwargs = calls[0][1]
         pg_where = kwargs.get("postgresql_where")
         assert pg_where is not None, "upgrade must declare postgresql_where"
-        assert _canonical(str(pg_where)) == _canonical(_PREDICATE_0278), (
-            f"migration postgresql_where drifted from the sweep predicate:\n{pg_where}"
-        )
+        assert _canonical(str(pg_where)) == _canonical(_PREDICATE_0278), f"migration postgresql_where drifted from the sweep predicate:\n{pg_where}"
 
     def test_sqlite_where_matches_the_postgresql_where(self) -> None:
         calls = _migration_calls("upgrade")
         kwargs = calls[0][1]
         sqlite_where = kwargs.get("sqlite_where")
         assert sqlite_where is not None, "upgrade must declare sqlite_where (create_all'd test schemas)"
-        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE_0278), (
-            f"migration sqlite_where drifted from the sweep predicate:\n{sqlite_where}"
-        )
+        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE_0278), f"migration sqlite_where drifted from the sweep predicate:\n{sqlite_where}"
 
     def test_predicate_statuses_are_the_terminal_vocabulary(self) -> None:
         """A new TERMINAL_STATUSES member must be added to the index
@@ -271,16 +257,12 @@ class TestModelParity:
     def test_model_postgresql_where_matches_the_migration(self) -> None:
         pg_where = _model_index().dialect_options["postgresql"].get("where")
         assert pg_where is not None, f"{_INDEX_NAME} model missing postgresql_where"
-        assert _canonical(str(pg_where)) == _canonical(_PREDICATE), (
-            f"model/migration drift: postgresql_where {pg_where} != {_PREDICATE}"
-        )
+        assert _canonical(str(pg_where)) == _canonical(_PREDICATE), f"model/migration drift: postgresql_where {pg_where} != {_PREDICATE}"
 
     def test_model_sqlite_where_matches_the_migration(self) -> None:
         sqlite_where = _model_index().dialect_options["sqlite"].get("where")
         assert sqlite_where is not None, f"{_INDEX_NAME} model missing sqlite_where"
-        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE), (
-            f"model/migration drift: sqlite_where {sqlite_where} != {_PREDICATE}"
-        )
+        assert _canonical(str(sqlite_where)) == _canonical(_PREDICATE), f"model/migration drift: sqlite_where {sqlite_where} != {_PREDICATE}"
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +285,7 @@ class TestSweepPredicateParity:
         spec.loader.exec_module(rejected_migration)
         index_where = rejected_migration._DRIFT_PREDICATE_NEW
 
-        assert _canonical(sweep_where) == _canonical(index_where), (
-            "sweep predicate and index postgresql_where disagree — the index would be orphaned.\n"
-            f"sweep: {sweep_where.strip()}\nindex: {index_where}"
-        )
+        assert _canonical(sweep_where) == _canonical(index_where), f"sweep predicate and index postgresql_where disagree — the index would be orphaned.\nsweep: {sweep_where.strip()}\nindex: {index_where}"
 
     async def test_sweep_statuses_are_the_terminal_vocabulary(self) -> None:
         sweep_where = _extract_where(_compile(await _sweep_select()))

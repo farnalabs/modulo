@@ -52,15 +52,7 @@ PREV_REV = "0348_far147_legacy_run_group_backfill"
 
 _COST_COLUMNS = ("max_run_cost_cents", "spend_ceiling_cents", "org_cumulative_spend_cents")
 _CHECK_NAME = "ck_organisations_cum_spend"
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0349_drop_organisations_cost_columns.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[2] / "src" / "farna" / "db" / "migrations" / "versions" / "0349_drop_organisations_cost_columns.py"
 
 # The two stores must disagree, or "restored from organisation_cost_state" and
 # "the old organisations value survived" are indistinguishable.
@@ -147,12 +139,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 async def _insert_org(conn: AsyncConnection, slug: str, values: tuple[int, int, int]) -> str:
     org_id = str(uuid.uuid4())
     await conn.execute(
-        text(
-            "INSERT INTO organisations "
-            "(id, name, slug, settings_json, max_run_cost_cents, spend_ceiling_cents, "
-            " org_cumulative_spend_cents) "
-            "VALUES (:id, :name, :slug, CAST('{}' AS jsonb), :max_run, :ceiling, :cumulative)"
-        ),
+        text("INSERT INTO organisations (id, name, slug, settings_json, max_run_cost_cents, spend_ceiling_cents,  org_cumulative_spend_cents) VALUES (:id, :name, :slug, CAST('{}' AS jsonb), :max_run, :ceiling, :cumulative)"),
         {
             "id": org_id,
             "name": slug,
@@ -176,11 +163,7 @@ async def _seed(engine: AsyncEngine) -> None:
             (mutated_id, _SEEDED_STATE_VALUES),
         ):
             await conn.execute(
-                text(
-                    "INSERT INTO organisation_cost_state "
-                    "(org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) "
-                    "VALUES (:oid, :max_run, :ceiling, :cumulative)"
-                ),
+                text("INSERT INTO organisation_cost_state (org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:oid, :max_run, :ceiling, :cumulative)"),
                 {
                     "oid": org_id,
                     "max_run": state_values[0],
@@ -209,26 +192,14 @@ async def upgraded_db_url(db_url: str) -> AsyncGenerator[str, None]:
 
 async def _column_names(engine: AsyncEngine) -> list[str]:
     async with engine.connect() as conn:
-        return list(
-            (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'organisations'"
-                    )
-                )
-            ).scalars()
-        )
+        return list((await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'organisations'"))).scalars())
 
 
 async def _org_values(engine: AsyncEngine, slug: str) -> tuple[object, object, object]:
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text(
-                    "SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents "
-                    "FROM organisations WHERE slug = :slug"
-                ),
+                text("SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents FROM organisations WHERE slug = :slug"),
                 {"slug": slug},
             )
         ).one()
@@ -239,11 +210,7 @@ async def _state_values(engine: AsyncEngine, slug: str) -> tuple[object, object,
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text(
-                    "SELECT s.max_run_cost_cents, s.spend_ceiling_cents, s.org_cumulative_spend_cents "
-                    "FROM organisation_cost_state s JOIN organisations o ON o.id = s.org_id "
-                    "WHERE o.slug = :slug"
-                ),
+                text("SELECT s.max_run_cost_cents, s.spend_ceiling_cents, s.org_cumulative_spend_cents FROM organisation_cost_state s JOIN organisations o ON o.id = s.org_id WHERE o.slug = :slug"),
                 {"slug": slug},
             )
         ).one()
@@ -255,36 +222,14 @@ class TestSQLiteDowngrade:
         engine = sa.create_engine("sqlite://", poolclass=sa.pool.StaticPool)
         try:
             with engine.begin() as conn:
-                conn.execute(
-                    text(
-                        "CREATE TABLE organisations ("
-                        "id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, "
-                        "settings_json JSON NOT NULL)"
-                    )
-                )
-                conn.execute(
-                    text(
-                        "CREATE TABLE organisation_cost_state ("
-                        "org_id TEXT PRIMARY KEY, max_run_cost_cents INTEGER, "
-                        "spend_ceiling_cents INTEGER, org_cumulative_spend_cents INTEGER NOT NULL)"
-                    )
-                )
-                conn.execute(
-                    text(
-                        "INSERT INTO organisations (id, slug, name, settings_json) "
-                        "VALUES ('org-without-state', 'no-state', 'No state', '{}')"
-                    )
-                )
+                conn.execute(text("CREATE TABLE organisations (id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, settings_json JSON NOT NULL)"))
+                conn.execute(text("CREATE TABLE organisation_cost_state (org_id TEXT PRIMARY KEY, max_run_cost_cents INTEGER, spend_ceiling_cents INTEGER, org_cumulative_spend_cents INTEGER NOT NULL)"))
+                conn.execute(text("INSERT INTO organisations (id, slug, name, settings_json) VALUES ('org-without-state', 'no-state', 'No state', '{}')"))
 
             _run_sqlite_migration(engine, "downgrade")
 
             with engine.connect() as conn:
-                row = conn.execute(
-                    text(
-                        "SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents "
-                        "FROM organisations WHERE id = 'org-without-state'"
-                    )
-                ).one()
+                row = conn.execute(text("SELECT max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents FROM organisations WHERE id = 'org-without-state'")).one()
             assert tuple(row) == (None, None, 0)
         finally:
             engine.dispose()
@@ -297,9 +242,7 @@ class TestUpgrade:
             present = set(await _column_names(engine))
         finally:
             await engine.dispose()
-        assert present.isdisjoint(_COST_COLUMNS), (
-            f"retired cost columns still present: {sorted(present & set(_COST_COLUMNS))}"
-        )
+        assert present.isdisjoint(_COST_COLUMNS), f"retired cost columns still present: {sorted(present & set(_COST_COLUMNS))}"
 
     async def test_check_constraint_is_dropped(self, upgraded_db_url: str) -> None:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
@@ -307,10 +250,7 @@ class TestUpgrade:
             async with engine.connect() as conn:
                 found = (
                     await conn.execute(
-                        text(
-                            "SELECT count(*) FROM pg_constraint "
-                            "WHERE conname = :name AND conrelid = 'public.organisations'::regclass"
-                        ),
+                        text("SELECT count(*) FROM pg_constraint WHERE conname = :name AND conrelid = 'public.organisations'::regclass"),
                         {"name": _CHECK_NAME},
                     )
                 ).scalar_one()
@@ -332,9 +272,7 @@ class TestDowngrade:
         engine = create_async_engine(upgraded_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
-                row = (
-                    await conn.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'modulo_migrate'"))
-                ).one_or_none()
+                row = (await conn.execute(text("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'modulo_migrate'"))).one_or_none()
             assert row is not None, "0349 requires the dedicated modulo_migrate role for its cross-org restore"
             assert row[0] is True, "modulo_migrate must bypass RLS for the cross-org downgrade restore"
         finally:
@@ -347,12 +285,7 @@ class TestDowngrade:
             # downgrade must bring THESE values back, not the pre-drop ones.
             async with engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "UPDATE organisation_cost_state SET "
-                        "max_run_cost_cents = :max_run, spend_ceiling_cents = :ceiling, "
-                        "org_cumulative_spend_cents = :cumulative "
-                        "WHERE org_id = (SELECT id FROM organisations WHERE slug = :slug)"
-                    ),
+                    text("UPDATE organisation_cost_state SET max_run_cost_cents = :max_run, spend_ceiling_cents = :ceiling, org_cumulative_spend_cents = :cumulative WHERE org_id = (SELECT id FROM organisations WHERE slug = :slug)"),
                     {
                         "max_run": _MUTATED_STATE_VALUES[0],
                         "ceiling": _MUTATED_STATE_VALUES[1],
@@ -389,10 +322,7 @@ class TestDowngrade:
             async with engine.connect() as conn:
                 row = (
                     await conn.execute(
-                        text(
-                            "SELECT convalidated FROM pg_constraint "
-                            "WHERE conname = :name AND conrelid = 'public.organisations'::regclass"
-                        ),
+                        text("SELECT convalidated FROM pg_constraint WHERE conname = :name AND conrelid = 'public.organisations'::regclass"),
                         {"name": _CHECK_NAME},
                     )
                 ).one_or_none()

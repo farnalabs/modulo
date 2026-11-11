@@ -131,9 +131,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 async def _ensure_alembic_table(iso_url: str) -> None:
     engine = create_async_engine(iso_url, poolclass=NullPool)
     async with engine.connect() as conn:
-        await conn.execute(
-            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)")
-        )
+        await conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
     await engine.dispose()
 
 
@@ -167,12 +165,7 @@ async def _run_column_shapes(engine: AsyncEngine) -> dict[str, dict[str, str | N
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT column_name, is_nullable, column_default, data_type "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = 'public' AND table_name = 'runs' "
-                    "AND column_name IN (:hist, :drops)"
-                ),
+                text("SELECT column_name, is_nullable, column_default, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'runs' AND column_name IN (:hist, :drops)"),
                 {"hist": _HISTORY_COL, "drops": _DROPS_COL},
             )
         ).all()
@@ -267,11 +260,7 @@ async def round_trip_run(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:pid, :oid, 'far1714 pipeline', :uid, 10, 30, 300, '{}'::json, '[]'::json) "
-                "ON CONFLICT (id) DO NOTHING"
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:pid, :oid, 'far1714 pipeline', :uid, 10, 30, 300, '{}'::json, '[]'::json) ON CONFLICT (id) DO NOTHING"
             ),
             {"pid": PIPELINE_ID, "oid": str(test_org), "uid": str(test_user)},
         )
@@ -288,12 +277,7 @@ async def round_trip_run(
             {"sid": SNAPSHOT_ID, "pid": PIPELINE_ID, "oid": str(test_org)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id, created_at, claim_token) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :run_number, 'ih', :thread, "
-                ":created_at, :tok)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, created_at, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :run_number, 'ih', :thread, :created_at, :tok)"),
             {
                 "id": str(run_id),
                 "oid": str(test_org),
@@ -341,10 +325,7 @@ async def _read_state(db_engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UU
         await conn.execute(text(f"SET LOCAL app.organisation_id = '{org_id}'"))
         row = (
             await conn.execute(
-                text(
-                    "SELECT dispatch_phase, dispatch_phase_history, dispatch_phase_write_drops "
-                    "FROM runs WHERE id = :rid"
-                ),
+                text("SELECT dispatch_phase, dispatch_phase_history, dispatch_phase_write_drops FROM runs WHERE id = :rid"),
                 {"rid": str(run_id)},
             )
         ).one()
@@ -364,9 +345,7 @@ def _writer(db_engine: AsyncEngine, org_id: uuid.UUID, run_id: uuid.UUID, token:
 
 
 class TestRoundTrip:
-    async def test_claim_appends_the_attempt_boundary_entry(
-        self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine
-    ) -> None:
+    async def test_claim_appends_the_attempt_boundary_entry(self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine) -> None:
         org_id, run_id = round_trip_run
         assert await _claim(db_engine, org_id, run_id, _CLAIM_TOKEN)
 
@@ -381,9 +360,7 @@ class TestRoundTrip:
         assert history[0]["entered_at"] is not None
         assert state["drops"] == 0
 
-    async def test_writer_appends_timeline_and_enforces_fence(
-        self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine
-    ) -> None:
+    async def test_writer_appends_timeline_and_enforces_fence(self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine) -> None:
         org_id, run_id = round_trip_run
         assert await _claim(db_engine, org_id, run_id, _CLAIM_TOKEN)
 
@@ -413,9 +390,7 @@ class TestRoundTrip:
         assert after_fence["history"] == history
         assert after_fence["phase"] == PHASE_STREAMING
 
-    async def test_abandoned_write_increments_the_drop_counter(
-        self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine
-    ) -> None:
+    async def test_abandoned_write_increments_the_drop_counter(self, round_trip_run: tuple[uuid.UUID, uuid.UUID], db_engine: AsyncEngine) -> None:
         org_id, run_id = round_trip_run
         assert await _claim(db_engine, org_id, run_id, _CLAIM_TOKEN)
 
