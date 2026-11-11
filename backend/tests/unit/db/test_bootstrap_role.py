@@ -208,7 +208,7 @@ class TestAsyncpgAdminConnect:
         ("url", "expected"),
         [
             (
-                "postgresql+asyncpg://admin:pw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:pw@db:5432/modulo",
                 ("postgres://admin:pw@db:5432/modulo", False),
             ),
             (
@@ -787,8 +787,8 @@ class TestBootstrap:
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
 
         joined = "\n".join(fake.executed)
@@ -816,7 +816,7 @@ class TestBootstrap:
 
         monkeypatch.setenv(
             "FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL",
-            "postgresql://user:pass@host:5432/farna_control",
+            "postgresql://my_bg:bgpw@db:5432/modulo",
         )
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
@@ -869,8 +869,8 @@ class TestConcurrentBootstrap:
         monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
         # The lock is the FIRST statement and the unlock the LAST: every DDL
         # statement ran while the session-scoped lock was held.
@@ -907,8 +907,8 @@ class TestConcurrentBootstrap:
         caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
 
         assert attempts["count"] == 2  # failed once, retried once, succeeded
@@ -946,8 +946,8 @@ class TestConcurrentBootstrap:
             pytest.raises(asyncpg.InternalServerError, match="tuple concurrently updated"),
         ):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
 
         # One initial attempt + (_BOOTSTRAP_MAX_ATTEMPTS - 1) retries.
@@ -975,8 +975,8 @@ class TestConcurrentBootstrap:
             pytest.raises(asyncpg.InternalServerError, match="some other internal failure"),
         ):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
         assert attempts["count"] == 1
         assert fake.closed is True
@@ -997,8 +997,8 @@ class TestConcurrentBootstrap:
         caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
-                "postgresql+asyncpg://admin:secret@db:5432/farna_control",
-                "postgresql+asyncpg://farna_control_app:apppw@db:5432/farna_control",
+                "postgresql+asyncpg://admin:secret@db:5432/modulo",
+                "postgresql+asyncpg://farna_control_app:apppw@db:5432/modulo",
             )
         assert not any("pg_advisory_unlock" in q for q in fake.executed)
         assert any("CREATE ROLE" in q for q in fake.executed)

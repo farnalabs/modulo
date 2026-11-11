@@ -6,7 +6,7 @@ from farna.settings import Settings
 
 
 def _base_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
-    monkeypatch.setenv("DATABASE_URL", overrides.pop("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control"))
+    monkeypatch.setenv("DATABASE_URL", overrides.pop("DATABASE_URL", "postgresql+asyncpg://farna_control:farna_control@localhost:5432/farna_control"))
     monkeypatch.setenv("SECRET_KEY", overrides.pop("SECRET_KEY", "a" * 32))
     monkeypatch.setenv("FERNET_KEY", overrides.pop("FERNET_KEY", "a" * 32))
     for k, v in overrides.items():
@@ -17,11 +17,11 @@ class TestMultiBackendCustomValidators:
     def test_legacy_asyncmy_url_uses_safe_driver(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(
             monkeypatch,
-            DATABASE_URL="mysql+asyncmy://modulo:modulo@localhost:3306/farna_control",
+            DATABASE_URL="mysql+asyncmy://modulo:modulo@localhost:3306/modulo",
             MODULO_DB="mariadb",
         )
         settings = Settings()
-        assert settings.database_url == "mysql+aiopostgresql://user:pass@host:5432/farna_control"
+        assert settings.database_url == "mysql+aiomysql://modulo:modulo@localhost:3306/modulo"
 
     def test_invalid_backend_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="oracle")
@@ -36,12 +36,12 @@ class TestMultiBackendCustomValidators:
     def test_mariadb_mode_auto_sets_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="mariadb")
         settings = Settings()
-        assert settings.database_url == "mysql+aiopostgresql://user:pass@host:5432/farna_control"
+        assert settings.database_url == "mysql+aiomysql://farna_control:farna_control@localhost:5435/farna_control"
 
     def test_mysql_mode_auto_sets_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, MODULO_DB="mysql")
         settings = Settings()
-        assert settings.database_url == "mysql+aiopostgresql://user:pass@host:5432/farna_control"
+        assert settings.database_url == "mysql+aiomysql://farna_control:farna_control@localhost:5435/farna_control"
 
     def test_postgres_protocol_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch, DATABASE_URL="postgres://modulo:modulo@localhost:5432/modulo")

@@ -31,7 +31,7 @@ POSTGRES_PRESERVE_CASES = [
     # plain legacy postgres:// is rewritten to the asyncpg prefix
     (
         "postgres://modulo:pw@db.internal:5432/modulo",
-        "postgresql+asyncpg://modulo:pw@db.internal:5432/farna_control",
+        "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
     ),
     # an operator's sslmode is honoured: PRESERVED verbatim on every shape
     (
@@ -71,7 +71,7 @@ def test_fix_database_url_preserves_postgres_sslmode(url: str, expected: str) ->
 
 
 MYSQL_STRIP_CASES = [
-    ("mysql+asyncmy://modulo:modulo@localhost:3306/farna_control", "mysql+aiopostgresql://user:pass@host:5432/farna_control"),
+    ("mysql+asyncmy://modulo:modulo@localhost:3306/modulo", "mysql+aiomysql://modulo:modulo@localhost:3306/modulo"),
     # aiomysql rejects sslmode — stripped, with the known wart when first
     ("mysql+aiomysql://u:p@h:3306/db?sslmode=require&charset=utf8", "mysql+aiomysql://u:p@h:3306/db&charset=utf8"),
     (
@@ -244,25 +244,25 @@ def test_split_engine_sslmode_still_rejects_unsafe_postgres_mode() -> None:
 DERIVE_CASES = [
     # password containing @ — rpartition must split on the LAST @
     (
-        "postgresql+asyncpg://modulo:p@ss:word@db.internal:5432/farna_control",
-        "postgresql+asyncpg://farna_control_system:p@ss:word@db.internal:5432/farna_control",
+        "postgresql+asyncpg://modulo:p@ss:word@db.internal:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:p@ss:word@db.internal:5432/modulo",
     ),
     # password with %40 escape
     (
-        "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/farna_control",
-        "postgresql+asyncpg://farna_control_system:p%40ss@db.internal:5432/farna_control",
+        "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:p%40ss@db.internal:5432/modulo",
     ),
     # no password — cannot derive a matching farna_control_system credential
-    ("postgresql+asyncpg://modulo@db.internal:5432/farna_control", ""),
+    ("postgresql+asyncpg://modulo@db.internal:5432/modulo", ""),
     # explicit empty password (user:@host) — same as no password
-    ("postgresql+asyncpg://modulo:@db.internal:5432/farna_control", ""),
+    ("postgresql+asyncpg://modulo:@db.internal:5432/modulo", ""),
     # query-string preserved unchanged (incl. the operator's sslmode)
     (
         "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
         "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
     ),
     # no userinfo@ separator — nothing to swap, returns empty (caller skips)
-    ("postgresql+asyncpg://db.internal:5432/farna_control", ""),
+    ("postgresql+asyncpg://db.internal:5432/modulo", ""),
 ]
 
 
