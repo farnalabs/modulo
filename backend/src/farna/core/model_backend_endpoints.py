@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from farna.core.ssrf import validate_outbound_url_syntax
+from farna.core.ssrf import validate_outbound_url_preflight, validate_outbound_url_syntax
 from farna.util import sanitise_log_value
 
 logger = logging.getLogger(__name__)
@@ -117,7 +117,12 @@ def _validate_base_url_scheme(scheme: str, host: str, *, allow_insecure_http: bo
         )
 
 
-def validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
+def validate_base_url(
+    value: str,
+    *,
+    allow_insecure_http: bool = False,
+    allow_networks: Sequence[str] | None = None,
+) -> str:
     """Validate and normalise an operator-supplied model-backend base URL.
 
     Rules (FAR-2046):
@@ -129,10 +134,15 @@ def validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
     * ``https`` is required unless the caller explicitly opts in with
       ``allow_insecure_http`` (a separate, audited flag — never inferred from
       the hostname shape, because a name's privacy cannot be established
-      without resolving it).
+      without resolving it);
+    * private/internal targets are allowed only when the operator's global
+      ``SSRF_ALLOW_PRIVATE_RANGES`` policy (or an explicit caller overlay) names
+      their CIDR. The metadata/link-local floor remains non-negotiable.
 
-    Returns the trimmed URL. Raises :class:`BaseUrlValidationError` for any
-    violation.
+    The save-time path performs syntax and literal-IP preflight only. Hostname
+    DNS resolution remains at the runtime pinned-client boundary, where the
+    same policy is applied immediately before connection. Raises
+    :class:`BaseUrlValidationError` for any violation.
     """
     candidate = value.strip()
     _validate_base_url_length(candidate)
@@ -141,6 +151,10 @@ def validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
     _validate_base_url_no_query_fragment(parsed)
     reject_metadata_endpoint(host)
     _validate_base_url_scheme(scheme, host, allow_insecure_http=allow_insecure_http)
+    try:
+        validate_outbound_url_preflight(candidate, allow_networks=allow_networks)
+    except ValueError as exc:
+        raise BaseUrlValidationError(str(exc)) from None
     return candidate
 
 

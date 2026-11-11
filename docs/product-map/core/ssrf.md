@@ -54,6 +54,10 @@ route, so it is tracked here rather than in the manifest registry.
       overlay) may permit other private CIDRs, but can never weaken the
       hard floor; invalid entries are logged and skipped instead of failing
       config
+- [x] Model-backend save validation uses the operator-managed global policy for
+      literal private targets while hostname resolution stays at the runtime
+      pinned-client boundary; connector ``allowed_hosts`` remains a separate
+      hostname restriction rather than private-IP authorization
 - [x] Tenant-scoped ``allow_networks`` layers on top of the global base,
       deduplicated, so a single ``is this address permitted?`` path serves
       every enforcement site
