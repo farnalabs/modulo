@@ -28,8 +28,9 @@ def test_modulo_settings_have_single_canonical_prefix() -> None:
         assert not aliases[0].startswith("FARNA_CONTROL_MODULO_")
 
 
-def test_no_product_alias_uses_doubled_prefix() -> None:
+def test_no_product_canonical_alias_uses_doubled_prefix() -> None:
+    """Doubled FARNA_CONTROL_MODULO_ names remain fallbacks, never canonical."""
     for name, field in Settings.model_fields.items():
         aliases = _alias_names(field)
         if name.startswith("modulo_"):
-            assert all(not alias.startswith("FARNA_CONTROL_MODULO_") for alias in aliases[:1])
+            assert not aliases[0].startswith("FARNA_CONTROL_MODULO_")
