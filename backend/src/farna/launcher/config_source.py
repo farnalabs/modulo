@@ -61,6 +61,7 @@ __all__ = [
     "compose_config",
     "load_launcher_config_inputs",
     "render_env_file",
+    "resolve_pinned_runtime_keys",
     "write_pinned_env_file",
 ]
 
@@ -137,6 +138,20 @@ def render_env_file(composed: dict[str, str]) -> str:
     return "".join(f"{key}={composed[key]}\n" for key in sorted(composed))
 
 
+def resolve_pinned_runtime_keys(composed: dict[str, str], path: Path) -> dict[str, str]:
+    """Apply the installer's runtime-key precedence to launcher config."""
+    existing_secret, existing_fernet = _existing_runtime_keys(path)
+    if existing_secret:
+        composed["SECRET_KEY"] = existing_secret
+    if existing_fernet:
+        composed["FERNET_KEY"] = existing_fernet
+    if os.environ.get("SECRET_KEY"):
+        composed["SECRET_KEY"] = os.environ["SECRET_KEY"]
+    if os.environ.get("FERNET_KEY"):
+        composed["FERNET_KEY"] = os.environ["FERNET_KEY"]
+    return composed
+
+
 def write_pinned_env_file(
     data_dir: Path,
     state: LauncherState,
@@ -156,16 +171,7 @@ def write_pinned_env_file(
     from farna.db.bootstrap import _write_env_file
 
     path = path if path is not None else data_dir / CONFIG_ENV_FILENAME
-    composed = compose_config(state, secrets)
-    existing_secret, existing_fernet = _existing_runtime_keys(path)
-    if existing_secret:
-        composed["SECRET_KEY"] = existing_secret
-    if existing_fernet:
-        composed["FERNET_KEY"] = existing_fernet
-    if os.environ.get("SECRET_KEY"):
-        composed["SECRET_KEY"] = os.environ["SECRET_KEY"]
-    if os.environ.get("FERNET_KEY"):
-        composed["FERNET_KEY"] = os.environ["FERNET_KEY"]
+    composed = resolve_pinned_runtime_keys(compose_config(state, secrets), path)
     rendered = render_env_file(composed)
     try:
         if path.exists() and path.read_text(encoding="utf-8") != rendered:

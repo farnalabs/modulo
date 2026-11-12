@@ -920,7 +920,7 @@ ensure_runtime_keys() {
   # Persist the application keys before the first launcher start. Values from
   # the operator environment or an existing config.env win; generated values
   # are never printed and are written only to the owner-readable config file.
-  local config_path="$1" temp_path secret_key fernet_key existing
+  local config_path temp_path secret_key fernet_key existing
   mkdir -p -- "${DATA_DIR}"
   chmod 700 -- "${DATA_DIR}"
   config_path="${DATA_DIR}/config.env"

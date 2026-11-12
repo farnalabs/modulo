@@ -23,6 +23,7 @@ from farna.launcher.config_source import (
     compose_config,
     load_launcher_config_inputs,
     render_env_file,
+    resolve_pinned_runtime_keys,
     write_pinned_env_file,
 )
 from farna.launcher.secrets_file import LauncherSecrets
@@ -113,6 +114,21 @@ def test_pinned_config_preserves_existing_operator_keys(monkeypatch: pytest.Monk
     rendered = path.read_text(encoding="utf-8")
     assert "SECRET_KEY=operator-secret\n" in rendered
     assert "FERNET_KEY=operator-fernet\n" in rendered
+
+
+def test_pinned_runtime_keys_match_installer_precedence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / CONFIG_ENV_FILENAME
+    path.write_text("SECRET_KEY=file-secret\nFERNET_KEY=file-fernet\n", encoding="utf-8")
+    monkeypatch.setenv("SECRET_KEY", "environment-secret")
+    monkeypatch.setenv("FERNET_KEY", "environment-fernet")
+
+    resolved = resolve_pinned_runtime_keys(
+        {"SECRET_KEY": "generated-secret", "FERNET_KEY": "generated-fernet"},
+        path,
+    )
+
+    assert resolved["SECRET_KEY"] == "environment-secret"
+    assert resolved["FERNET_KEY"] == "environment-fernet"
 
 
 def test_compose_config_is_password_free_on_state_alone() -> None:

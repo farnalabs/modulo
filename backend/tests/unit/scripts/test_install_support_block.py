@@ -316,6 +316,17 @@ def test_oversized_transcript_is_capped_and_keeps_the_tail(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
+def test_runtime_key_helper_is_called_without_a_stale_positional_argument() -> None:
+    """The helper owns DATA_DIR and must not read a nonexistent ``$1``."""
+    source = _INSTALL_SH.read_text(encoding="utf-8")
+    helper_start = source.index("ensure_runtime_keys() {")
+    helper_end = source.index("\n}\n", helper_start) + len("\n}\n")
+    helper = source[helper_start:helper_end]
+    assert "local config_path temp_path secret_key fernet_key existing" in helper
+    assert 'local config_path="$1"' not in helper
+    assert source.count("ensure_runtime_keys\n") == 1
+
+
 def test_support_block_is_emitted_from_the_single_exit_trap() -> None:
     source = _INSTALL_SH.read_text(encoding="utf-8")
     assert source.count("trap on_exit EXIT") == 1
