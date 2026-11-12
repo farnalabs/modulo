@@ -36,7 +36,7 @@ if sys.platform == "win32":
 # Collection imports the FastAPI app before database fixtures run. Provide only
 # test-local defaults here so standalone collection never depends on a caller's
 # shell environment. ``setdefault`` still lets CI supply explicit values.
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/modulo_integration")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://farna_control_test:farna_control_test@localhost/farna_control_test")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 # A valid Fernet key (32 base64-decoded bytes). ``"a" * 32`` is NOT a valid
 # Fernet key — the executor's ModuloPostgresSaver constructs ``Fernet()`` from
@@ -257,7 +257,15 @@ async def _isolate_integration_process_engines() -> AsyncGenerator[None, None]:
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
-    with PostgresContainer("postgres:16-alpine") as pg:
+    # Use farna_control_test for user/password/database to match CI workflows
+    # (ci.yml, deploy.yml, main-integration.yml, backup-restore-nightly.yml,
+    # schemathesis-nightly.yml all use farna_control_test)
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username="farna_control_test",
+        password="farna_control_test",
+        dbname="farna_control_test",
+    ) as pg:
         yield pg
 
 

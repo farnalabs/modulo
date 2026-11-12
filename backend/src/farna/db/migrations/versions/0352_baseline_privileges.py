@@ -15,6 +15,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Table ownership changes (static, safe to run as batch)
     op.execute("""SET search_path TO public;
 
 ALTER TABLE public.agents OWNER TO farna_control_migrate;
@@ -55,19 +56,27 @@ ALTER TABLE public.system_map_relationships OWNER TO farna_control_migrate;
 ALTER TABLE public.system_map_revisions OWNER TO farna_control_migrate;
 ALTER TABLE public.system_maps OWNER TO farna_control_migrate;
 ALTER TABLE public.token_families OWNER TO farna_control_migrate;
-ALTER TABLE public.variant_batch_state OWNER TO farna_control_migrate;
+ALTER TABLE public.variant_batch_state OWNER TO farna_control_migrate;""")
 
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO farna_control_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE ON SEQUENCES TO farna_control_system;
+    # Default privileges must reference the actual superuser role that creates objects.
+    # In production this is typically 'postgres'; in testcontainers it's 'farna_control_test'.
+    # Use a DO block to dynamically determine the current role (the migration runner)
+    # and set default privileges for that role. This avoids hardcoding 'postgres'.
+    op.execute("""
+DO $$
+DECLARE
+    superuser_role text := current_user;
+BEGIN
+    -- Default privileges for sequences
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT ALL ON SEQUENCES TO farna_control_app', superuser_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE ON SEQUENCES TO farna_control_system', superuser_role);
+    -- Default privileges for tables
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, DELETE, UPDATE ON TABLES TO farna_control_app', superuser_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, DELETE, UPDATE ON TABLES TO farna_control_system', superuser_role);
+END $$;""")
 
-
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: postgres
---
-
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT,INSERT,DELETE,UPDATE ON TABLES TO farna_control_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT,INSERT,DELETE,UPDATE ON TABLES TO farna_control_system;
-
+    # Grants (static, safe to run as batch)
+    op.execute("""SET search_path TO public;
 
 --
 -- PostgreSQL database dump complete
