@@ -145,7 +145,7 @@ logic (those are Phase 3).
   and audit. A case references its dataset with `ON DELETE RESTRICT`, so a
   referenced dataset can never be hard-removed.
 
-Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
+Key guarantees (enforced by baseline migrations `0350_baseline_schema.py` / `0351_baseline_rls.py` and verified by `tests/integration/test_rls_isolation.py`):
 
 * **Storage is data-only.** `input_payload` is stored verbatim and returned
   verbatim – even when it contains prompt-injection strings it is never altered
@@ -155,7 +155,7 @@ Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
 * **Decoupled from Run retention.** The corpus stores its own payload, so
   repeatable re-runs survive Run pruning.
 * **Soft-delete + org-scoped RLS.** Both tables carry `ENABLE` + `FORCE ROW
-  LEVEL SECURITY` with a `rls_org_isolation` policy, owned by `modulo_migrate`.
+  LEVEL SECURITY` with a `rls_org_isolation` policy, owned by `farna_control_migrate`.
 * **Empty dataset is a no-op at run time.** `validate_dataset_has_cases` returns
   a count of active cases so Phase 3 can refuse to run an empty dataset.
 * **Housekeeping.** `purge_soft_deleted_eval_cases` hard-deletes soft-deleted
@@ -286,7 +286,7 @@ Execution routes through the org Model Backend with the `daily_spend_limit`
 **and** a separate per-suite cumulative cost ceiling (two independent counters).
 The per-suite ledger is a row-locked increment before each judge call so a
 read-check-write race cannot overshoot. `suite_runs` carries `ENABLE` + `FORCE
-ROW LEVEL SECURITY` + `rls_org_isolation` (owned by `modulo_migrate`), so the
+ROW LEVEL SECURITY` + `rls_org_isolation` (owned by `farna_control_migrate`), so the
 `OrgScoped` mixin alone is not the isolation boundary.
 
 ## Scheduled / event-driven eval execution – FAR-377
@@ -404,7 +404,7 @@ is never ranked on a raw score:
 ### Isolation and determinism
 
 Every query injects the explicit `organisation_id = :org` predicate, because
-`modulo_app` is BYPASSRLS, so the predicate is the ONLY isolation control
+`farna_control_app` is BYPASSRLS, so the predicate is the ONLY isolation control
 (`set_rls_org` remains defense-in-depth). Suite-run outcomes count only when the
 run is terminal (`completed`/`partial`), so the read-model is deterministic
 across two calls; legacy pipeline-path rows (no `suite_run_id`) are always

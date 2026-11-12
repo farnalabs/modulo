@@ -1,7 +1,7 @@
 """FAR-672 â€” backup/restore data-safety semantics (ADR 031 Decisions 6/7).
 
-Locks the contract added on top of the pre-epic ``modulo backup`` /
-``modulo restore`` tool: the versioned manifest, secrets exclusion by
+Locks the contract added on top of the pre-epic ``farna-control backup`` /
+``farna-control restore`` tool: the versioned manifest, secrets exclusion by
 default (loud ``--include-secrets`` opt-in), 0600 artifacts on POSIX, the
 cloud-sync warning, the persisted last-backup timestamp, the data-dir lock
 refusals, verify-before-wipe ordering (instance identity + disk
@@ -44,15 +44,12 @@ _RESTORE_OUTPUTS = "restore-outputs"
 # The app role URL is resolved BEFORE the archive is validated (FAR-2021), so
 # tests that exercise archive-level refusals with the ambient test settings
 # (whose DATABASE_URL is sqlite) must supply it explicitly.
-_APP_DB_URL = "postgresql://modulo_app:pw@127.0.0.1:5432/modulo"
+_APP_DB_URL = "postgresql://farna_control_app:pw@127.0.0.1:5432/farna_control"
 
 _FAKE_ARCHIVED_PAYLOAD = {"schema_version": 1, "postgres_port": 15432, "redis_port": 16379, "api_port": 18000}
 _DB_SQL_NAME = "database.sql"
 
-_LOCK_REFUSAL = (
-    "Refusing to start: data dir /data is locked by another launcher "
-    "(holder PID 4242, mode 'serve'); the requested acquire (mode 'backup') is refused."
-)
+_LOCK_REFUSAL = "Refusing to start: data dir /data is locked by another launcher (holder PID 4242, mode 'serve'); the requested acquire (mode 'backup') is refused."
 
 
 def _seed_data_dir(tmp_path: Path) -> Path:
@@ -107,7 +104,7 @@ def _enter_restore_patches(stack: contextlib.ExitStack, lock: MagicMock | None =
             "farna.cli.backup.get_settings",
             **{
                 "return_value.fernet_key": _FERNET_KEY,
-                "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo",
+                "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/farna_control",
             },
         ),
         # Default: the target DB probes EMPTY (a real probe would try to
@@ -276,9 +273,7 @@ def test_record_last_backup_helper_is_roundtrip_stable(tmp_path: Path) -> None:
     assert after.last_backup_at == "2026-09-10T00:00:00+00:00"
 
 
-def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The broad catch-all must never break a backup — and an unknown failure
     is a bug, so it is logged at ERROR level WITH the traceback."""
     data_dir = _seed_data_dir(tmp_path)
@@ -504,7 +499,7 @@ def test_restore_collation_drift_prints_hard_warning(tmp_path: Path) -> None:
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(patch("farna.cli.backup._ensure_restore_posture"))
         stack.enter_context(patch("farna.cli.backup.psycopg.connect", return_value=collation_conn))
-        args = ["restore", str(archive), "--yes", "--db-url", "postgresql://modulo:pw@127.0.0.1:5432/modulo"]
+        args = ["restore", str(archive), "--yes", "--db-url", "postgresql://user:pass@host:5432/farna_control"]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
     assert "COLLATION VERSION MISMATCH" in result.output
@@ -527,7 +522,7 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", posture_mock))
         stack.enter_context(patch("farna.cli.backup._check_collation_versions_sync"))
-        args = ["restore", str(archive), "--yes", "--db-url", "postgresql://modulo:pw@127.0.0.1:5432/modulo"]
+        args = ["restore", str(archive), "--yes", "--db-url", "postgresql://user:pass@host:5432/farna_control"]
         result = CliRunner().invoke(cli, args, input="y\n")
     assert result.exit_code == 0, result.output
     assert posture_mock.call_count == 1
@@ -537,9 +532,7 @@ def test_restore_reruns_promoted_posture_bootstrap(tmp_path: Path) -> None:
     assert admin_url
 
 
-def test_restore_resolves_app_role_from_configuration_not_db_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restore_resolves_app_role_from_configuration_not_db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-2021: the app role comes from DATABASE_URL, never from --db-url.
 
     A restore run through the ADMIN URL must not configure the admin role as
@@ -556,7 +549,7 @@ def test_restore_resolves_app_role_from_configuration_not_db_url(
             str(archive),
             "--yes",
             "--db-url",
-            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/farna_control",
         ]
         result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
@@ -580,53 +573,51 @@ def test_restore_app_db_url_option_overrides_configuration(tmp_path: Path, monke
             str(archive),
             "--yes",
             "--db-url",
-            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/farna_control",
             "--app-db-url",
-            "postgresql://modulo_app:apppw@127.0.0.1:5432/modulo",
+            "postgresql://farna_control_app:apppw@127.0.0.1:5432/farna_control",
         ]
         result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
     _admin_url, app_url = posture_mock.call_args[0]
-    assert urlsplit(app_url).username == "modulo_app"
+    assert urlsplit(app_url).username == "farna_control_app"
 
 
 def test_restore_fails_when_posture_verification_fails(tmp_path: Path) -> None:
     """FAR-2021: a posture failure FAILS the restore (non-zero) and names the check."""
     archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
-    failure = RestorePostureError(
-        "Role-posture verification FAILED after the restore. Failing check: RuntimeError: modulo_app can bypass RLS."
-    )
+    failure = RestorePostureError("Role-posture verification FAILED after the restore. Failing check: RuntimeError: farna_control_app can bypass RLS.")
     with contextlib.ExitStack() as stack:
         _enter_restore_patches(stack, lock=MagicMock())
         stack.enter_context(patch("farna.cli.backup._ensure_restore_posture", side_effect=failure))
         result = CliRunner().invoke(cli, ["restore", str(archive), "--yes"])
     assert result.exit_code != 0
-    assert "modulo_app can bypass RLS" in result.output
+    assert "farna_control_app can bypass RLS" in result.output
     assert "Restore complete" not in result.output
 
 
 def test_ensure_restore_posture_raises_typed_error_naming_the_check() -> None:
     """FAR-2021: the posture helper itself raises, naming the failing check."""
-    failing = AsyncMock(side_effect=RuntimeError("modulo_app has BYPASSRLS"))
+    failing = AsyncMock(side_effect=RuntimeError("farna_control_app has BYPASSRLS"))
     with patch("farna.db.bootstrap_role.bootstrap_roles", failing), pytest.raises(RestorePostureError) as excinfo:
         backup_mod._ensure_restore_posture(
-            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
-            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/farna_control",
+            "postgresql+asyncpg://farna_control_app:apppw@127.0.0.1:5432/farna_control",
         )
     assert "RuntimeError" in excinfo.value.message
-    assert "modulo_app has BYPASSRLS" in excinfo.value.message
-    assert "modulo_app" in excinfo.value.message
+    assert "farna_control_app has BYPASSRLS" in excinfo.value.message
+    assert "farna_control_app" in excinfo.value.message
 
 
 def test_ensure_restore_posture_echoes_the_application_role_on_success(capsys: pytest.CaptureFixture[str]) -> None:
     """FAR-2021: a SUCCESSFUL posture re-run says which role it configured."""
     with patch("farna.db.bootstrap_role.bootstrap_roles", AsyncMock()):
         backup_mod._ensure_restore_posture(
-            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/modulo",
-            "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo",
+            "postgresql://modulo_admin:adminpw@127.0.0.1:5432/farna_control",
+            "postgresql+asyncpg://farna_control_app:apppw@127.0.0.1:5432/farna_control",
         )
     out = capsys.readouterr().out
-    assert "modulo_app" in out
+    assert "farna_control_app" in out
     assert "Role posture re-verified via the promoted bootstrap path" in out
 
 
@@ -666,9 +657,7 @@ def test_executed_restore_does_not_rewrap_a_posture_error(tmp_path: Path, monkey
 def test_as_asyncpg_url_normalises_every_supported_prefix() -> None:
     """FAR-2021: each accepted Postgres URL prefix normalises to asyncpg."""
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgresql://", "postgres://"):
-        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == (
-            "postgresql+asyncpg://role:pw@db:5432/modulo"
-        )
+        assert backup_mod._as_asyncpg_url(f"{prefix}role:pw@db:5432/modulo") == ("postgresql+asyncpg://role:pw@db:5432/farna_control")
 
 
 def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password() -> None:
@@ -678,7 +667,7 @@ def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password(
     URL's password must never appear in it.
     """
     with pytest.raises(click.ClickException) as excinfo:
-        backup_mod._as_asyncpg_url("mysql://app_role:sup3r-s3cret@db:3306/modulo")
+        backup_mod._as_asyncpg_url("postgresql://user:pass@host:5432/farna_control")
     message = excinfo.value.message
     assert "sup3r-s3cret" not in message
     assert "mysql://" in message
@@ -700,22 +689,22 @@ def test_as_asyncpg_url_survives_an_unparseable_url() -> None:
     remediation message rather than a raw traceback.
     """
     with pytest.raises(click.ClickException) as excinfo:
-        backup_mod._as_asyncpg_url("mysql://[::1:bad-port/modulo")
+        backup_mod._as_asyncpg_url("postgresql://user:pass@host:5432/farna_control")
     assert "<unparseable URL>" in excinfo.value.message
 
 
 def test_resolve_restore_app_url_falls_back_to_the_configured_database_url() -> None:
     """FAR-2021: with no --app-db-url the settings DATABASE_URL is the source."""
-    settings = SimpleNamespace(database_url="postgresql+psycopg://modulo:pw@127.0.0.1:5432/modulo")
+    settings = SimpleNamespace(database_url="postgresql+psycopg://modulo:pw@127.0.0.1:5432/farna_control")
     resolved = backup_mod._resolve_restore_app_url(settings, None)
-    assert resolved == "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo"
+    assert resolved == "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/farna_control"
 
 
 def test_resolve_restore_app_url_prefers_the_explicit_app_db_url() -> None:
     """FAR-2021: --app-db-url wins over the configured DATABASE_URL."""
-    settings = SimpleNamespace(database_url="postgresql://from_settings:pw@127.0.0.1:5432/modulo")
-    resolved = backup_mod._resolve_restore_app_url(settings, "postgres://modulo_app:apppw@127.0.0.1:5432/modulo")
-    assert resolved == "postgresql+asyncpg://modulo_app:apppw@127.0.0.1:5432/modulo"
+    settings = SimpleNamespace(database_url="postgresql://from_settings:pw@127.0.0.1:5432/farna_control")
+    resolved = backup_mod._resolve_restore_app_url(settings, "postgres://farna_control_app:apppw@127.0.0.1:5432/modulo")
+    assert resolved == "postgresql+asyncpg://farna_control_app:apppw@127.0.0.1:5432/farna_control"
 
 
 @pytest.mark.parametrize("configured", ["", None])
@@ -726,9 +715,7 @@ def test_resolve_restore_app_url_refuses_a_missing_source(configured: Any) -> No
         backup_mod._resolve_restore_app_url(settings, None)
 
 
-def test_restore_validates_the_app_url_before_touching_the_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restore_validates_the_app_url_before_touching_the_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-2021: an invalid app URL must fail BEFORE the safety dump / wipe."""
     monkeypatch.delenv("DATABASE_ADMIN_URL", raising=False)
     archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
@@ -1133,7 +1120,7 @@ def test_restore_psql_single_transaction_and_no_password_argv(tmp_path: Path) ->
         # -1 must reach psql
         dump_input = tmp_path / "dump-input.sql"
         dump_input.write_text("-- dump", encoding="utf-8")
-        backup_mod._run_psql("postgresql://modulo:secret@127.0.0.1:5432/modulo", dump_input)
+        backup_mod._run_psql("postgresql://user:pass@host:5432/farna_control", dump_input)
     assert "-1" in seen["argv"]
     joined = " ".join(str(a) for a in seen["argv"])
     assert "secret" not in joined
@@ -1152,11 +1139,11 @@ def test_backup_pg_dump_no_password_in_argv(tmp_path: Path) -> None:
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
         stack.enter_context(patch("farna.cli.backup.subprocess.run", side_effect=_capture))
-        backup_mod._run_pg_dump("postgresql://modulo:secret@127.0.0.1:5432/modulo", output)
+        backup_mod._run_pg_dump("postgresql://user:pass@host:5432/farna_control", output)
     joined = " ".join(str(a) for a in seen["argv"])
     assert "secret" not in joined
     assert seen["env"]["PGPASSWORD"] == "secret"
-    assert seen["argv"][-1] == "postgresql://modulo@127.0.0.1:5432/modulo"
+    assert seen["argv"][-1] == "postgresql://user:pass@host:5432/farna_control"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="creation-mode guarantee is POSIX-only")
@@ -1167,7 +1154,7 @@ def test_pg_dump_output_file_is_created_private(tmp_path: Path) -> None:
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("farna.cli.backup.shutil.which", return_value="/usr/bin/pg_dump"))
         stack.enter_context(patch("farna.cli.backup.subprocess.run", return_value=MagicMock(returncode=0, stderr=b"")))
-        backup_mod._run_pg_dump("postgresql://modulo:secret@127.0.0.1:5432/modulo", output)
+        backup_mod._run_pg_dump("postgresql://user:pass@host:5432/farna_control", output)
     assert (output.stat().st_mode & 0o777) == 0o600, "the dump must be born 0600"
 
 
@@ -1254,7 +1241,7 @@ def test_backup_measure_cloud_sync_by_component_equality(tmp_path: Path) -> None
 
 #    Restore: checkpoint parameter encoding (JSONB re-adaptation, hex blobs)
 
-_TEST_DB_URL = "postgresql://modulo:pw@127.0.0.1:5432/modulo"
+_TEST_DB_URL = "postgresql://user:pass@host:5432/farna_control"
 _TEST_ORG_ID = "11111111-1111-1111-1111-111111111111"
 
 

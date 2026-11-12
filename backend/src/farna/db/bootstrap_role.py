@@ -12,28 +12,28 @@ not exist yet is created with a random placeholder that a later
 URL-configured boot reconciles.
 
 Deliverable (A) of the break-glass admin recovery plan adds:
-  * ``modulo_breakglass`` (LOGIN, BYPASSRLS) — the dedicated operator role used
+  * ``farna_control_breakglass`` (LOGIN, BYPASSRLS) — the dedicated operator role used
     by the break-glass CLI (dedicated credential from
     MODULO_BREAK_GLASS_DATABASE_URL; a placeholder password is used when the URL
     is not configured yet, replaced on a later boot once (B) ships the URL).
-  * ``modulo_migrate`` (NOSUPERUSER, NOLOGIN, BYPASSRLS) — owner of the four
+  * ``farna_control_migrate`` (NOSUPERUSER, NOLOGIN, BYPASSRLS) — owner of the four
     transferred tables (accounts, org_memberships, token_families,
     org_api_keys) and of the ``deactivate_break_glass`` SECURITY DEFINER so the
     function's cross-org reads/writes work under FORCE RLS.
   * The ``accounts`` UPDATE ALLOW-LIST re-apply (REVOKE table-level UPDATE +
     GRANT the explicit writable columns) — guarded by to_regclass so the
     before-alembic boot run cannot fail on a not-yet-existing table/column.
-  * ``modulo_breakglass`` grants per plan §0(c) — SELECT on the read surfaces
+  * ``farna_control_breakglass`` grants per plan §0(c) — SELECT on the read surfaces
     (org_memberships, token_families, org_api_keys, organisations, and
     alembic_version for migration-state triage), SELECT+INSERT on
     accounts/org_memberships, SELECT+INSERT on audit_events,
     SELECT+INSERT/UPDATE on audit_chain_heads, sequence USAGE. The three
     break-glass column UPDATE grants are deliverable (B) and are NOT applied
-    here. ``modulo_app`` is NEVER granted membership in either role.
+    here. ``farna_control_app`` is NEVER granted membership in either role.
   * Deliverable (B): after the grants are re-applied, the allow-list and role
     posture are ASSERTED (fatal): no table-level UPDATE grant on accounts for
-    modulo_app OR PUBLIC, UPDATE-grant set-equality with the allow-list, the
-    three break-glass columns not writable by modulo_app, ``rolsuper = false``
+    farna_control_app OR PUBLIC, UPDATE-grant set-equality with the allow-list, the
+    three break-glass columns not writable by farna_control_app, ``rolsuper = false``
     for the app role, ``rolbypassrls = false`` for the app role (tenant
     isolation relies on RLS policies — BYPASSRLS is only for cross-org system
     roles), and no membership in the privileged roles.
@@ -64,9 +64,9 @@ _log = logging.getLogger(__name__)
 
 REQUIRED_VARS = ["DATABASE_ADMIN_URL", "DATABASE_URL"]
 
-_BREAK_GLASS_ROLE = "modulo_breakglass"
-_MIGRATE_ROLE = "modulo_migrate"
-_SYSTEM_ROLE = "modulo_system"
+_BREAK_GLASS_ROLE = "farna_control_breakglass"
+_MIGRATE_ROLE = "farna_control_migrate"
+_SYSTEM_ROLE = "farna_control_system"
 
 # FAR-1200: serialise concurrent first-boot bootstraps (multi-replica deploys).
 # Dedicated (int4, int4) advisory-lock key — distinct from the migration lock
@@ -148,7 +148,7 @@ def _role_attributes(*, login: bool, bypassrls: bool) -> str:
     ... WITH only sets the attributes it lists, so a role that already carries
     BYPASSRLS (e.g. provisioned before the posture existed) would keep it
     forever and fail the boot-time posture assertion on every release —
-    observed on prod 2026-09-03 where ``modulo_app`` had ``rolbypassrls = true``
+    observed on prod 2026-09-03 where ``farna_control_app`` had ``rolbypassrls = true``
     and the bootstrap asserted a posture it could never repair.
     """
     if login and bypassrls:
@@ -193,8 +193,8 @@ async def _alter_role(conn: asyncpg.Connection, name: str, *, login: bool, passw
 async def _create_or_update_role(conn: asyncpg.Connection, name: str, *, login: bool, password: str | None, bypassrls: bool = True) -> None:
     """Idempotently create/update a role, optionally applying LOGIN/BYPASSRLS.
 
-    ``modulo_app`` must NEVER have BYPASSRLS — RLS policies enforce tenant
-    isolation. Only ``modulo_breakglass`` and ``modulo_migrate`` (cross-org
+    ``farna_control_app`` must NEVER have BYPASSRLS — RLS policies enforce tenant
+    isolation. Only ``farna_control_breakglass`` and ``farna_control_migrate`` (cross-org
     system roles) receive BYPASSRLS.
 
     ``password=None`` means the role's URL is not configured (FAR-1519): an
@@ -228,11 +228,11 @@ async def _existing_columns(conn: asyncpg.Connection, table: str) -> set[str]:
 
 
 async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) -> None:
-    """Re-apply the accounts UPDATE allow-list for modulo_app.
+    """Re-apply the accounts UPDATE allow-list for farna_control_app.
 
     Guards on to_regclass + information_schema so the before-alembic boot run
     never fails on a not-yet-existing table/column. The break-glass columns are
-    deliberately NOT writable by modulo_app (deliverable (A) posture: only
+    deliberately NOT writable by farna_control_app (deliverable (A) posture: only
     direct-DB / SECURITY DEFINER writes can create a break-glass row).
     """
     _validate_identifier(app_user)
@@ -251,7 +251,7 @@ async def _apply_accounts_allow_list(conn: asyncpg.Connection, app_user: str) ->
 
 
 async def _grant_break_glass(conn: asyncpg.Connection, bg_user: str) -> None:
-    """Grant modulo_breakglass the read/write surfaces it needs (plan §0(c), (A)).
+    """Grant farna_control_breakglass the read/write surfaces it needs (plan §0(c), (A)).
 
     ``alembic_version`` is part of the read surfaces: break-glass recovery
     triage must be able to read the migration state (permission denied there
@@ -295,16 +295,16 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
 
     Deliverable (B) assertions (plan §0(e)) — the allow-list boundary and role
     posture must survive every boot:
-    * no table-level UPDATE grant on ``accounts`` for ``modulo_app`` OR PUBLIC
+    * no table-level UPDATE grant on ``accounts`` for ``farna_control_app`` OR PUBLIC
       (``information_schema.role_table_grants`` is table-level only by
       construction — no ``column_name`` predicate);
-    * the set of ``accounts`` columns ``modulo_app`` can UPDATE equals the
+    * the set of ``accounts`` columns ``farna_control_app`` can UPDATE equals the
       allow-listed writable columns (inverted schema-evolution set-equality),
       and the three break-glass columns are NOT writable by it;
     * ``rolsuper = false`` for the app role;
     * ``rolbypassrls = false`` for the app role (tenant isolation relies on
       RLS policies — BYPASSRLS is only for cross-org system roles);
-    * ``modulo_app`` is not a member of ``modulo_breakglass`` / ``modulo_migrate``.
+    * ``farna_control_app`` is not a member of ``farna_control_breakglass`` / ``farna_control_migrate``.
 
     Runs only when the ``accounts`` table exists — the before-alembic boot run
     on a fresh DB has no tables yet (skip rather than false-pass).
@@ -329,14 +329,14 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
         if ok:
             granted.add(col)
     if granted != writable:
-        violations.append(f"modulo_app accounts UPDATE grant drift: granted={sorted(granted)} allow_list={sorted(writable)}")
+        violations.append(f"farna_control_app accounts UPDATE grant drift: granted={sorted(granted)} allow_list={sorted(writable)}")
 
     for col in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at"):
         if col not in cols:
             continue
         ok = await conn.fetchval("SELECT has_column_privilege($1, 'public.accounts', $2, 'UPDATE')", app_user, col)
         if ok:
-            violations.append(f"modulo_app can UPDATE break-glass column {col}")
+            violations.append(f"farna_control_app can UPDATE break-glass column {col}")
 
     if await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = $1", app_user):
         violations.append(f"app role {app_user} is a superuser")
@@ -353,10 +353,10 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
     if member_rows:
         violations.append(f"app role {app_user} is a member of: {', '.join(sorted(r['rolname'] for r in member_rows))}")
 
-    # modulo_system must have BYPASSRLS — it is the dedicated cross-org system
+    # farna_control_system must have BYPASSRLS — it is the dedicated cross-org system
     # cron role. If BYPASSRLS was stripped, system crons silently return zero rows.
     if not await conn.fetchval("SELECT rolbypassrls FROM pg_roles WHERE rolname = $1", _SYSTEM_ROLE):
-        violations.append(f"modulo_system role {_SYSTEM_ROLE} does not have BYPASSRLS — system crons need cross-org data access")
+        violations.append(f"farna_control_system role {_SYSTEM_ROLE} does not have BYPASSRLS — system crons need cross-org data access")
 
     return violations
 
@@ -428,15 +428,15 @@ async def _apply_role_ddl(
     statement is create-or-update / re-grant / re-assert.
     """
     # Idempotent role creation — skips if already exists.
-    # modulo_app must NEVER have BYPASSRLS — RLS policies enforce tenant
-    # isolation. modulo_system (cross-org system cron role) gets BYPASSRLS.
+    # farna_control_app must NEVER have BYPASSRLS — RLS policies enforce tenant
+    # isolation. farna_control_system (cross-org system cron role) gets BYPASSRLS.
     await _create_or_update_role(conn, app_user, login=True, password=app_pass, bypassrls=False)
 
     await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None, bypassrls=True)
     await _create_or_update_role(conn, bg_user, login=True, password=bg_pass, bypassrls=True)
-    # modulo_system: dedicated LOGIN BYPASSRLS role for cross-org system cron
+    # farna_control_system: dedicated LOGIN BYPASSRLS role for cross-org system cron
     # jobs (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
-    # dispatcher_reconcile). Only system crons use this role; modulo_app is
+    # dispatcher_reconcile). Only system crons use this role; farna_control_app is
     # NOBYPASSRLS for tenant isolation.
     await _create_or_update_role(conn, sys_user, login=True, password=sys_pass, bypassrls=True)
 
@@ -444,10 +444,10 @@ async def _apply_role_ddl(
     # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):
     #   - GRANT CREATE ON SCHEMA public: the migration chain (0036
     #     break-glass) transfers ownership of accounts/org_memberships/
-    #     token_families/org_api_keys to modulo_migrate via ALTER TABLE
+    #     token_families/org_api_keys to farna_control_migrate via ALTER TABLE
     #     ... OWNER TO, which requires CREATE on the owning schema; and
-    #     modulo_migrate creates the RLS-confinement tables (e.g.
-    #     cost_components, migration 0066) via SET ROLE modulo_migrate
+    #     farna_control_migrate creates the RLS-confinement tables (e.g.
+    #     cost_components, migration 0066) via SET ROLE farna_control_migrate
     #     from the superuser DATABASE_ADMIN_URL. PG15+ does not grant
     #     CREATE to PUBLIC by default, so the explicit grants are
     #     required (hit on the reset staging DB, 2026-08-04).
@@ -471,9 +471,9 @@ async def _apply_role_ddl(
     await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{sys_user}"')
-    # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
+    # farna_control_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
     # function (0036 transfers ownership) used by API-key auth. The
-    # function executes as modulo_migrate, so it needs USAGE on schema
+    # function executes as farna_control_migrate, so it needs USAGE on schema
     # public to resolve org_api_keys. Without it, every API-key request
     # fails with ``UndefinedTableError: relation "org_api_keys" does not
     # exist`` on DBs that revoke the PUBLIC default schema USAGE.
@@ -483,7 +483,7 @@ async def _apply_role_ddl(
     await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
-    # modulo_system: DML on all tables for cross-org system crons.
+    # farna_control_system: DML on all tables for cross-org system crons.
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
     await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{sys_user}"')
     # nosemgrep: raw-sql-fstring (role names validated via _validate_identifier / module constants)
@@ -501,7 +501,7 @@ async def _apply_role_ddl(
     # Re-apply the accounts UPDATE allow-list (active from deliverable A).
     await _apply_accounts_allow_list(conn, app_user)
 
-    # modulo_breakglass surface grants (A) + function EXECUTE re-apply.
+    # farna_control_breakglass surface grants (A) + function EXECUTE re-apply.
     await _grant_break_glass(conn, bg_user)
     await _grant_function_execute(conn, app_user, bg_user)
 

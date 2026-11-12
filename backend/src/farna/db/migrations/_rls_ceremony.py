@@ -11,20 +11,22 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-_MIGRATE_ROLE = "modulo_migrate"
+_MIGRATE_ROLE = "farna_control_migrate"
 
 
-def is_postgres(bind: sa.Connection) -> bool:
+def is_postgres(bind: sa.Connection) -> bool:  # vulture: ignore
     return bind.dialect.name == "postgresql"
 
 
-def role_exists(bind: sa.Connection, role: str) -> bool:
-    """Return True when the Postgres role exists (fresh dev/BDD DBs have none)."""
+def role_exists(bind: sa.Connection, role: str) -> bool:  # vulture: ignore
+    """Return whether the named migration role exists."""
     return bind.execute(sa.text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}).scalar_one_or_none() is not None
 
 
-def assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:
-    """POST-CREATE ownership assertion — the 0066 ceremony (before RLS).
+def assert_owner_is_migrate(bind: sa.Connection, table: str) -> None:  # vulture: ignore
+    """Assert that a forced-RLS table has the dedicated migration owner.
+
+    POST-CREATE ownership assertion — the historical RLS ceremony (before RLS).
 
     The app role must NOT own an RLS-FORCED org-scoped table, or it bypasses
     its own RLS.

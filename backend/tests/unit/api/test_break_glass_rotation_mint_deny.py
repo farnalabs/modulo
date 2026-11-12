@@ -37,7 +37,7 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_public_url="http://localhost:8000",
-        modulo_system_database_url="postgresql+asyncpg://localhost/system",
+        farna_control_system_database_url="postgresql+asyncpg://localhost/system",
     )
 
 
@@ -141,10 +141,10 @@ def test_normal_admin_can_rotate_key(client: TestClient) -> None:
 
 
 def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -> None:
-    """A missing modulo_system role must fail LOUDLY (503), not silently no-op.
+    """A missing farna_control_system role must fail LOUDLY (503), not silently no-op.
 
     Regression for the RLS no-op bug: rotation runs cross-org on the BYPASSRLS
-    modulo_system role; if that role is unprovisioned the factory would fall
+    farna_control_system role; if that role is unprovisioned the factory would fall
     back to the NOBYPASSRLS app role and rotate zero rows. The route must
     refuse rather than silently accept a hollow rotation.
     """
@@ -159,7 +159,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
             modulo_public_url="http://localhost:8000",
-            modulo_system_database_url="",  # system role NOT provisioned
+            farna_control_system_database_url="",  # system role NOT provisioned
         )
 
     app.dependency_overrides[get_settings] = _unprovisioned_settings
@@ -178,7 +178,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
 
 
 async def test_run_rotation_background_uses_system_factory() -> None:
-    """Prove-the-fix: rotation must run on the modulo_system (BYPASSRLS) factory.
+    """Prove-the-fix: rotation must run on the farna_control_system (BYPASSRLS) factory.
 
     This test FAILS on the pre-fix code (which opened the rotation session via
     the NOBYPASSRLS app-role ``get_or_create_session_factory`` engine and
@@ -231,7 +231,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
         patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
         patch(
             "farna.api.routes.admin_rotation.get_settings",
-            return_value=Settings(modulo_system_database_url="postgresql+asyncpg://localhost/system"),
+            return_value=Settings(farna_control_system_database_url="postgresql+asyncpg://localhost/system"),
         ),
     ):
         await admin_rotation._run_rotation_background(
@@ -243,7 +243,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
         )
 
     assert factory_calls, "rotation did not open a session via _make_system_session_factory"
-    assert captured_session.get("session") is fake_session, "rotate_all_encrypted_data did not run on the modulo_system factory session"
+    assert captured_session.get("session") is fake_session, "rotate_all_encrypted_data did not run on the farna_control_system factory session"
     assert admin_rotation._last_rotation_result["status"] == "completed"
     admin_rotation._rotation_owner = None
 

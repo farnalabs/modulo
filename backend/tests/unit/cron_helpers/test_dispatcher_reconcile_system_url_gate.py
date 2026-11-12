@@ -36,7 +36,7 @@ def _settings() -> MagicMock:
         saq_redis_pool_size=5,
         hitl_review_cancel_grace_seconds=3600,
         saq_run_claim_cap=20,
-        modulo_system_database_url="",
+        farna_control_system_database_url="",
         dispatcher_reconcile_budget_seconds=95,
         dispatcher_reconcile_terminalize_max_per_tick=25,
         dispatcher_reconcile_facts_max_per_tick=25,
@@ -48,7 +48,7 @@ def _bind_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
     The stub must come back FROM the call (`get_settings()`), not be the
     replaced name itself — binding the mock directly makes every call return
-    an auto-mock whose ``modulo_system_database_url`` is a truthy MagicMock,
+    an auto-mock whose ``farna_control_system_database_url`` is a truthy MagicMock,
     which would take the configured-URL branch instead of failing closed.
     """
     settings = _settings()
@@ -76,10 +76,7 @@ async def test_dispatcher_reconcile_fails_closed_before_writing_any_stats(
         await ch.dispatcher_reconcile()
 
     assert not redis_cls.from_url.called, "the system-engine raise must fire before any Redis client is built"
-    assert ch._dispatcher_reconcile_stats.get("last_run_at") == last_run_before, (
-        "no heartbeat (in-process or persisted) may be written when the system URL is unset — "
-        "readiness must see 'never ran', not a fabricated last_run_at"
-    )
+    assert ch._dispatcher_reconcile_stats.get("last_run_at") == last_run_before, "no heartbeat (in-process or persisted) may be written when the system URL is unset — readiness must see 'never ran', not a fabricated last_run_at"
 
 
 @pytest.mark.asyncio

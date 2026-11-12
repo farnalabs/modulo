@@ -48,10 +48,7 @@ async def _seed_tenant(
         )
         for idx, account_id in enumerate(account_ids):
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
                 {
                     "id": str(account_id),
                     "email": f"{slug}-{idx}@example.com",
@@ -64,10 +61,7 @@ async def _seed_tenant(
 async def _seed_pref_row(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID, category: str) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO notification_preferences (id, organisation_id, account_id, category) "
-                "VALUES (:id, :oid, :aid, :cat)"
-            ),
+            text("INSERT INTO notification_preferences (id, organisation_id, account_id, category) VALUES (:id, :oid, :aid, :cat)"),
             {"id": str(uuid.uuid4()), "oid": str(org_id), "aid": str(account_id), "cat": category},
         )
 
@@ -91,32 +85,15 @@ async def test_notification_preferences_forces_rls_and_splits_policies(db_engine
     """FORCE RLS is ON and the 0066-style policy split exists (0115 migration).
 
     ``relforcerowsecurity`` matters because the table's OWNER is
-    ``modulo_migrate`` — the owner bypasses ENABLE-only RLS, and the notifier's
+    ``farna_control_migrate`` — the owner bypasses ENABLE-only RLS, and the notifier's
     org-only context must still be confined by the SELECT policy.
     """
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
-                    "WHERE oid = to_regclass('public.notification_preferences')"
-                )
-            )
-        ).one()
+        row = (await conn.execute(text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = to_regclass('public.notification_preferences')"))).one()
         assert row.relrowsecurity, "ENABLE ROW LEVEL SECURITY missing"
         assert row.relforcerowsecurity, "FORCE ROW LEVEL SECURITY missing — owner would bypass RLS"
 
-        policies = {
-            (name, cmd): (qual or "", with_check or "")
-            for name, cmd, qual, with_check in (
-                await conn.execute(
-                    text(
-                        "SELECT policyname, cmd, qual, with_check FROM pg_policies "
-                        "WHERE tablename = 'notification_preferences'"
-                    )
-                )
-            ).fetchall()
-        }
+        policies = {(name, cmd): (qual or "", with_check or "") for name, cmd, qual, with_check in (await conn.execute(text("SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE tablename = 'notification_preferences'"))).fetchall()}
         assert ("rls_org_isolation", "SELECT") in policies, f"org-scope SELECT policy missing: {sorted(policies)}"
         assert ("rls_user_isolation_insert", "INSERT") in policies
         assert ("rls_user_isolation_update", "UPDATE") in policies
@@ -134,14 +111,7 @@ async def test_notification_preferences_forces_rls_and_splits_policies(db_engine
             body = _qual + with_check
             assert "app.user_id" in body, f"{name} lost the app.user_id user scope"
 
-        grants = (
-            await conn.execute(
-                text(
-                    "SELECT privilege_type FROM information_schema.role_table_grants "
-                    "WHERE grantee = 'modulo_app' AND table_name = 'notification_preferences'"
-                )
-            )
-        ).fetchall()
+        grants = (await conn.execute(text("SELECT privilege_type FROM information_schema.role_table_grants WHERE grantee = 'farna_control_app' AND table_name = 'notification_preferences'"))).fetchall()
         assert {g[0] for g in grants} >= {"SELECT", "INSERT", "UPDATE", "DELETE"}
 
 
@@ -178,9 +148,7 @@ async def test_two_org_isolation_read_and_write(db_engine: AsyncEngine, app_engi
             session.add(NotificationPreference(organisation_id=org_b, account_id=user_a, category="run.stalled"))
             with pytest.raises(ProgrammingError) as excinfo:
                 await session.flush()
-        assert excinfo.value.orig.sqlstate == "42501", (
-            f"expected RLS 42501 on cross-org insert, got {excinfo.value.orig!r}"
-        )
+        assert excinfo.value.orig.sqlstate == "42501", f"expected RLS 42501 on cross-org insert, got {excinfo.value.orig!r}"
     finally:
         await _cleanup_tenant(db_engine, org_a, [user_a])
         await _cleanup_tenant(db_engine, org_b, [user_b])

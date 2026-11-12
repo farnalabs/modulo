@@ -101,9 +101,9 @@ async def test_upsert_rejects_empty_mapping(rls_session: AsyncSession, test_org:
 
 async def test_rls_isolates_cost_state_between_orgs(
     db_engine: AsyncEngine,
-    modulo_app_engine: AsyncEngine,
+    farna_control_app_engine: AsyncEngine,
 ) -> None:
-    """FAR-1833 P4: a ``modulo_app`` session scoped to org A cannot read org B's row.
+    """FAR-1833 P4: a ``farna_control_app`` session scoped to org A cannot read org B's row.
 
     On Postgres the ORM tenant filter is a no-op, so RLS is the only DB-level
     backstop. The policy is written explicitly against ``org_id`` (this table is
@@ -123,27 +123,17 @@ async def test_rls_isolates_cost_state_between_orgs(
                 {"id": str(org_id), "cents": 7},
             )
 
-    factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    factory = async_sessionmaker(farna_control_app_engine, expire_on_commit=False)
     try:
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
-            visible = (
-                (
-                    await session.execute(
-                        select(OrganisationCostState.org_id).where(OrganisationCostState.org_id.in_([org_a, org_b]))
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            visible = (await session.execute(select(OrganisationCostState.org_id).where(OrganisationCostState.org_id.in_([org_a, org_b])))).scalars().all()
             assert set(visible) == {org_a}
 
         async with factory() as session, session.begin():
             await set_rls_org(session, org_a)
             # Even an explicit cross-org predicate returns nothing.
-            cross = await session.scalar(
-                select(OrganisationCostState.org_id).where(OrganisationCostState.org_id == org_b)
-            )
+            cross = await session.scalar(select(OrganisationCostState.org_id).where(OrganisationCostState.org_id == org_b))
             assert cross is None
     finally:
         async with db_engine.begin() as conn:

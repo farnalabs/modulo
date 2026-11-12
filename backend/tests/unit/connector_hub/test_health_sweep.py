@@ -76,9 +76,7 @@ async def sweep(tmp_path):
     with patch.object(health_sweep, "create_secrets_backend", _fake_backend_factory):
 
         async def _run() -> dict[str, Any]:
-            return await run_connector_health_checks(
-                async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
-            )
+            return await run_connector_health_checks(async_sessionmaker(engine, expire_on_commit=False, autobegin=False))
 
         async def _seeder(instances: list[ConnectorInstance]) -> None:
             maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -241,7 +239,7 @@ async def test_sweep_does_not_mutate_org_data(sweep, tmp_path) -> None:
 async def test_sweep_binds_org_context_for_real_secrets_backend(tmp_path) -> None:
     """FAR-1526: the system session factory carries NO org context.
 
-    The prod sweep runs on ``modulo_system`` (BYPASSRLS, never ``set_rls_org``),
+    The prod sweep runs on ``farna_control_system`` (BYPASSRLS, never ``set_rls_org``),
     so ``FernetSecretsBackend.get_secret`` used to raise ``RuntimeError:
     FernetSecretsBackend: RLS organisation context not set`` for EVERY instance,
     the hub skipped all of them, and the sweep recorded ``ConnectorNotFoundError``

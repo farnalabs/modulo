@@ -276,7 +276,7 @@ def suite_pass_rate(results: Sequence[EvalResult], excluded_case_count: int = 0)
 # A pure read-model over the now-structured ``SuiteRun``/``eval_results`` data.
 # It is deliberately LIVE aggregation over the existing tables — no parallel
 # materialised view, no new "scores over time" store. The isolation invariant
-# mirrors ``core/analytics``: ``modulo_app`` is NOBYPASSRLS (tenant isolation
+# mirrors ``core/analytics``: ``farna_control_app`` is NOBYPASSRLS (tenant isolation
 # relies on RLS policies), so the explicit ``organisation_id = :org`` predicate
 # injected into EVERY statement is the PRIMARY isolation control (RLS also
 # enforces org scoping; ``set_rls_org`` stays defense-in-depth).

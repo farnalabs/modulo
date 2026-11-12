@@ -237,7 +237,7 @@ class TestComputeCoverageGapOrgIsolation:
     async def test_group_path_injects_org_predicate(self) -> None:
         """The group-path loader must scope runs by ``organisation_id``.
 
-        BYPASSRLS ``modulo_app`` means the explicit predicate is the ONLY
+        BYPASSRLS ``farna_control_app`` means the explicit predicate is the ONLY
         isolation control; asserting it is present in the emitted SQL proves a
         cross-org variant group can never be read.
         """

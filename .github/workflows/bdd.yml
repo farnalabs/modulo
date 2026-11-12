@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  DATABASE_URL: "postgresql+asyncpg://modulo:${{ secrets.POSTGRES_PASSWORD || 'modulo' }}@localhost:5432/modulo"
+  DATABASE_URL: "postgresql+asyncpg://farna_control:${{ secrets.POSTGRES_PASSWORD || 'modulo' }}@localhost:5432/farna_control"
   # Dependabot PR runs never receive repository secrets (GitHub withholds them
   # for `dependabot[bot]`-authored pull_request events), so these two Settings
   # fields would arrive empty and the backend would exit at boot with
@@ -144,14 +144,14 @@ jobs:
         run: |
           docker rm -f modulo-bdd-pg 2>/dev/null || true
           docker run -d --name modulo-bdd-pg \
-            -e POSTGRES_USER=modulo \
+            -e POSTGRES_USER=farna_control \
             -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD || 'modulo' }} \
-            -e POSTGRES_DB=modulo \
+            -e POSTGRES_DB=farna_control \
             -p 5432:5432 \
             postgres:16-alpine
           echo "Waiting for Postgres..."
           for i in $(seq 1 60); do
-            if docker exec modulo-bdd-pg pg_isready -U modulo >/dev/null 2>&1; then
+            if docker exec modulo-bdd-pg pg_isready -U farna_control >/dev/null 2>&1; then
               echo "Postgres ready after ${i}s"
               exit 0
             fi
@@ -218,7 +218,7 @@ jobs:
         if: steps.detect.outputs.bdd == 'true'
         shell: bash
         run: |
-          docker exec modulo-bdd-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
+          docker exec modulo-bdd-pg psql -U farna_control -d farna_control -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
 
       - name: Run migrations
         if: steps.detect.outputs.bdd == 'true'

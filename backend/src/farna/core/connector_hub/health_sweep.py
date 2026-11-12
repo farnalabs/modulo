@@ -104,7 +104,7 @@ async def _check_instance(
 ) -> str:
     """Health-check one instance. Returns "" for ok, else a redacted failure detail.
 
-    FAR-1526: the sweep runs on the cross-org ``modulo_system`` session factory,
+    FAR-1526: the sweep runs on the cross-org ``farna_control_system`` session factory,
     which deliberately carries NO ``app.organisation_id`` (system crons are
     BYPASSRLS and never call ``set_rls_org``). ``FernetSecretsBackend.get_secret``
     requires an org context before it will read the ``secrets`` table — without

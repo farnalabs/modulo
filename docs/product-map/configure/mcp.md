@@ -310,7 +310,7 @@ applications. Built on the auth + model-backend core.
       org internals; unknown/expired/consumed states are one undifferentiated
       404). Migration 0300 widened the table's RLS policy with the
       NULL-context arm (the same contract `oauth_clients` already has) so the
-      pre-auth read is visible to the runtime `modulo_app` role. The view
+      pre-auth read is visible to the runtime `farna_control_app` role. The view
       renders each scope's raw canonical key verbatim - the same single
       labelling scheme the registration picker uses, since the grantable
       vocabulary is the whole delegable `PERMISSIONS` registry and there is no

@@ -4,9 +4,9 @@ constraint, RLS, and the MIGRATE-role owner.
 
 Runs against the migrated testcontainer (test_initial_migration harness). The
 full alembic upgrade round-trip with NOLOGIN-role provisioning is covered by
-the CI harness: conftest provisions ``modulo_migrate`` before
+the CI harness: conftest provisions ``farna_control_migrate`` before
 ``alembic upgrade heads`` and the reconciliation chain (0110_schema_pipeline_runtime)
-re-owns the table to ``modulo_migrate``.
+re-owns the table to ``farna_control_migrate``.
 """
 
 from __future__ import annotations
@@ -62,13 +62,7 @@ async def test_cost_components_table_exists(db_engine: AsyncEngine) -> None:
 
 async def test_null_distinct_unique_index(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT indexrelid::regclass::text, indisunique, "
-                "indnullsnotdistinct FROM pg_index "
-                "WHERE indexrelid = 'uq_org_daily_run_counts'::regclass"
-            )
-        )
+        result = await connection.execute(text("SELECT indexrelid::regclass::text, indisunique, indnullsnotdistinct FROM pg_index WHERE indexrelid = 'uq_org_daily_run_counts'::regclass"))
         row = result.first()
     assert row is not None, "uq_org_daily_run_counts index not found"
     assert row[1] is True
@@ -77,43 +71,28 @@ async def test_null_distinct_unique_index(db_engine: AsyncEngine) -> None:
 
 async def test_old_unique_constraint_dropped(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                "SELECT conname FROM pg_constraint "
-                "WHERE conrelid = 'public.org_daily_run_counts'::regclass "
-                "AND conname = 'uq_org_daily_run_counts_org_team_date'"
-            )
-        )
+        result = await connection.execute(text("SELECT conname FROM pg_constraint WHERE conrelid = 'public.org_daily_run_counts'::regclass AND conname = 'uq_org_daily_run_counts_org_team_date'"))
         row = result.first()
     assert row is None, "old unique constraint must be dropped"
 
 
 async def test_cost_components_owned_by_migrate_role(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.cost_components')")
-        )
+        result = await connection.execute(text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.cost_components')"))
         owner = result.scalar_one()
-    assert owner == "modulo_migrate", f"cost_components owner is {owner}, expected modulo_migrate"
+    assert owner == "farna_control_migrate", f"cost_components owner is {owner}, expected farna_control_migrate"
 
 
 async def test_cost_components_rls_enabled(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.cost_components')")
-        )
+        result = await connection.execute(text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.cost_components')"))
         relrowsecurity = result.scalar_one()
     assert relrowsecurity is True
 
 
 async def test_probe_index_exists_and_refusal_index_dropped(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        indexes = await connection.run_sync(
-            lambda sync_connection: {
-                row[0]
-                for row in sync_connection.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))
-            }
-        )
+        indexes = await connection.run_sync(lambda sync_connection: {row[0] for row in sync_connection.execute(text("SELECT indexname FROM pg_indexes WHERE tablename = 'runs'"))})
     # ix_runs_probe (organisation_id, started_at) is still required by the
     # cost-controller probe gate.
     assert "ix_runs_probe" in indexes

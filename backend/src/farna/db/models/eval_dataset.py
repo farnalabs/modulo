@@ -22,7 +22,7 @@ entities: an ``EvalCase`` references its dataset with ``ON DELETE RESTRICT`` so 
 dataset that still owns cases can never be hard-removed; a dataset itself is only
 soft-deleted here (the "referenced by a SuiteRun" hard-delete guard lands in
 Phase 3). Both tables carry org-scoped RLS (``rls_org_isolation``) owned by
-``modulo_migrate`` so the app role cannot bypass isolation.
+``farna_control_migrate`` so the app role cannot bypass isolation.
 """
 
 import uuid

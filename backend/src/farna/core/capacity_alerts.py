@@ -55,7 +55,7 @@ is reported (WARNING log + a ``state_unavailable`` count in the summary) rather
 than swallowed.
 
 The ``factory`` this sweep is given must be a **system-capable** session factory
-(the ``modulo_system`` role): the org enumeration reads ``runs`` across every
+(the ``farna_control_system`` role): the org enumeration reads ``runs`` across every
 tenant, which an org-RLS-scoped app role would silently reduce to zero rows.
 """
 

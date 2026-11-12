@@ -1,7 +1,7 @@
 """Analytics facts maintenance — backfill, reconcile, retention (ADR 020).
 
-System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
-modulo_app is NOBYPASSRLS. Non-Postgres backends no-op (the
+System cron: uses farna_control_system role (LOGIN, BYPASSRLS) for cross-org access.
+farna_control_app is NOBYPASSRLS. Non-Postgres backends no-op (the
 INSERT...SELECT anti-join and ``ON CONFLICT`` are Postgres-idiomatic).
 
 Roles:

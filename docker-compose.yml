@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: modulo
+      POSTGRES_USER: farna_control
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: modulo
+      POSTGRES_DB: farna_control
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -48,14 +48,14 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
-      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
-      # modulo_system (LOGIN, BYPASSRLS) role URL. The entrypoint's
+      DATABASE_URL: postgresql+asyncpg://farna_control_app:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
+      # farna_control_system (LOGIN, BYPASSRLS) role URL. The entrypoint's
       # bootstrap_role parses the password out of THIS URL when it creates or
       # alters the role, so the role and the URL can never disagree; the
       # backend's cross-org reads (pre-auth SSO provider lookup, Fernet key
-      # rotation) use the same URL. Same password as modulo_app by design.
-      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
+      # rotation) use the same URL. Same password as farna_control_app by design.
+      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://farna_control_system:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       # FAR-2181: FERNET_KEY encrypts every stored credential. `Settings` only
@@ -98,7 +98,7 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://farna_control_app:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       # FAR-2181: same required key as the backend service above - every process
@@ -134,13 +134,13 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://farna_control_app:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
       # Required: dispatcher_reconcile (and the other cross-org system crons)
       # build their session factory from this URL and FAIL CLOSED without it
       # (core/cron_helpers.py::_get_system_engine raises), so the cron never
       # runs, no stats heartbeat is ever written, and /healthz/ready reports
       # dispatcher_reconcile `unavailable` — which GATES readiness (503).
-      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
+      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://farna_control_system:${POSTGRES_PASSWORD:-changeme}@db:5432/farna_control
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
       # FAR-2181: same required key as the backend service above.
