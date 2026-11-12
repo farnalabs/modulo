@@ -517,7 +517,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _UnprovisionedSettings:
-            farna_control_system_database_url = ""
+            modulo_system_database_url = ""
 
         monkeypatch.setattr(deps, "get_settings", lambda: _UnprovisionedSettings())
         saved_engine = deps._SYSTEM_ASYNC_ENGINE
@@ -534,7 +534,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
-            farna_control_system_database_url = "postgresql+asyncpg://localhost/system-test"
+            modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _ProvisionedSettings())
@@ -559,7 +559,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _SqliteSettings:
-            farna_control_system_database_url = "sqlite+aiosqlite:///system-test.db"
+            modulo_system_database_url = "sqlite+aiosqlite:///system-test.db"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _SqliteSettings())
@@ -597,7 +597,7 @@ class TestSystemEnginePoolRecycle:
         from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
-            farna_control_system_database_url = "postgresql+asyncpg://localhost/system-test"
+            modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _ProvisionedSettings())
