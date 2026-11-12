@@ -80,16 +80,11 @@ async def _create_inviter(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(acc_id), "email": f"owner-{acc_id.hex[:8]}@example.com", "name": "Owner"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -163,10 +158,7 @@ async def _get_membership_role(
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT role FROM org_memberships WHERE account_id = :aid "
-                        "AND organisation_id = :oid AND deactivated_at IS NULL"
-                    ),
+                    text("SELECT role FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid AND deactivated_at IS NULL"),
                     {"aid": str(account_id), "oid": str(org_id)},
                 )
             )
@@ -311,9 +303,7 @@ class TestRealKeycloakOidcHttpFlow:
             assert authorize_url.startswith(oidc_seed["oidc_tenant"].issuer), authorize_url
             assert "client_id=" in authorize_url, authorize_url
             assert "state=" in authorize_url, "the authorize URL must carry a signed state"
-            assert f"redirect_uri={_PUBLIC_BASE}" in authorize_url.replace("%3A", ":").replace("%2F", "/"), (
-                f"authorize URL must target the per-provider redirect_uri, got {authorize_url}"
-            )
+            assert f"redirect_uri={_PUBLIC_BASE}" in authorize_url.replace("%3A", ":").replace("%2F", "/"), f"authorize URL must target the per-provider redirect_uri, got {authorize_url}"
         finally:
             await client.aclose()
 
@@ -353,15 +343,11 @@ class TestRealKeycloakOidcHttpFlow:
             )
             assert callback_resp.status_code == 307, callback_resp.text
             location = callback_resp.headers["location"]
-            assert location.startswith(_FRONTEND_BASE + "/auth/callback#"), (
-                f"redirect must target the SPA callback fragment, got {location}"
-            )
+            assert location.startswith(_FRONTEND_BASE + "/auth/callback#"), f"redirect must target the SPA callback fragment, got {location}"
             assert "access_token=" in location, location
             assert "refresh_token=" not in location, "FAR-1197: the refresh token must never leak into the redirect URL"
             cookie_names = {c.name for c in callback_resp.cookies.jar}
-            assert "modulo_refresh" in cookie_names, (
-                f"the refresh token is delivered via the httpOnly modulo_refresh cookie; got {cookie_names}"
-            )
+            assert "modulo_refresh" in cookie_names, f"the refresh token is delivered via the httpOnly modulo_refresh cookie; got {cookie_names}"
         finally:
             await client.aclose()
 

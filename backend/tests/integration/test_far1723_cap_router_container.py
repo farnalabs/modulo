@@ -104,10 +104,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -166,12 +163,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'pending')"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'pending')"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -217,10 +209,7 @@ async def _executed_node_ids(engine: AsyncEngine, run_id: uuid.UUID) -> set[str]
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT node_id FROM run_node_outputs "
-                    "WHERE run_id = :rid AND outputs_json IS NOT NULL AND outputs_json::text <> '{}'"
-                ),
+                text("SELECT node_id FROM run_node_outputs WHERE run_id = :rid AND outputs_json IS NOT NULL AND outputs_json::text <> '{}'"),
                 {"rid": str(run_id)},
             )
         ).fetchall()
@@ -376,9 +365,7 @@ async def test_router_default_rule_catches_unmatched_state_real_executor(
     """An input matching no guard falls through to the Router default target."""
     backend_id = str(uuid.uuid4())
     graph, leaf_ids = _three_leaf_router_graph(backend_id)
-    org_id, _pipeline_id, run_id = await _seed_pipeline_run(
-        db_engine, "Far1723Default", "far1723-default@test.local", graph
-    )
+    org_id, _pipeline_id, run_id = await _seed_pipeline_run(db_engine, "Far1723Default", "far1723-default@test.local", graph)
 
     calls: list[str] = []
     final = await _execute_with_hub(db_engine, migrated_db_url, org_id, run_id, [backend_id], calls, {"route": 9})
@@ -410,9 +397,7 @@ async def test_router_classifier_no_match_terminalizes_run(
         "rules": [{"label": "b", "target": leaf_two["id"]}],
     }
     graph = _router_graph(router_id=router_id, router_config=classifier_config, leaves=[leaf_one, leaf_two])
-    org_id, _pipeline_id, run_id = await _seed_pipeline_run(
-        db_engine, "Far1723NoMatch", "far1723-nomatch@test.local", graph
-    )
+    org_id, _pipeline_id, run_id = await _seed_pipeline_run(db_engine, "Far1723NoMatch", "far1723-nomatch@test.local", graph)
 
     calls: list[str] = []
     final = await _execute_with_hub(db_engine, migrated_db_url, org_id, run_id, [backend_id], calls, {"route": 1})
@@ -489,11 +474,7 @@ async def test_router_branch_hitl_gate_pauses_and_resumes_real_executor(
     decision_payload = {"action": "approved", "review_id": review_id}
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "UPDATE hitl_claims SET decision=:d, decision_at=now(), "
-                "decision_payload=CAST(:p AS json) "
-                "WHERE organisation_id=:oid AND run_id=:rid AND review_id=:gid"
-            ),
+            text("UPDATE hitl_claims SET decision=:d, decision_at=now(), decision_payload=CAST(:p AS json) WHERE organisation_id=:oid AND run_id=:rid AND review_id=:gid"),
             {
                 "d": "approved",
                 "p": json.dumps(decision_payload),

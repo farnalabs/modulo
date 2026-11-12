@@ -53,9 +53,7 @@ async def test_create_handoff_stores_hash_not_raw_token() -> None:
     settings = MagicMock()
     settings.modulo_public_url = "https://app.example.com/"
     with patch("farna.core.mcp_setup_handoff.get_settings", return_value=settings):
-        result = await create_handoff(
-            session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY
-        )
+        result = await create_handoff(session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY)
 
     record = session.add.call_args.args[0]
     raw_token = result["setup_url"].split("token=")[1]
@@ -73,9 +71,7 @@ async def test_create_handoff_builds_setup_url() -> None:
     settings = MagicMock()
     settings.modulo_public_url = "https://app.example.com"
     with patch("farna.core.mcp_setup_handoff.get_settings", return_value=settings):
-        result = await create_handoff(
-            session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY
-        )
+        result = await create_handoff(session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY)
 
     assert result["setup_url"].startswith("https://app.example.com/setup/model-backend/")
     assert str(_RESOURCE_ID) in result["setup_url"]
@@ -91,9 +87,7 @@ async def test_create_handoff_strips_trailing_slash_from_public_url() -> None:
     settings = MagicMock()
     settings.modulo_public_url = "https://app.example.com/"
     with patch("farna.core.mcp_setup_handoff.get_settings", return_value=settings):
-        result = await create_handoff(
-            session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY
-        )
+        result = await create_handoff(session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY)
 
     assert "//setup/" not in result["setup_url"]
     assert result["setup_url"].startswith("https://app.example.com/setup/")
@@ -104,9 +98,7 @@ async def test_create_handoff_ttl_metadata() -> None:
     settings = MagicMock()
     settings.modulo_public_url = "https://app.example.com"
     with patch("farna.core.mcp_setup_handoff.get_settings", return_value=settings):
-        result = await create_handoff(
-            session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY
-        )
+        result = await create_handoff(session, org_id=_ORG_ID, resource_type="model-backend", resource_id=_RESOURCE_ID, created_by=_CREATED_BY)
 
     assert result["expires_in_minutes"] == HANDOFF_TTL_MINUTES
     expiry = datetime.fromisoformat(result["expires_at"])

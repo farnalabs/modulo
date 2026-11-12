@@ -338,9 +338,7 @@ def step_github_connector(ctx):
                 )
             case "file":
                 file_path = q.filters.get("path", "")
-                if file_path.startswith(("/", "\\")) or any(
-                    part == ".." for part in file_path.replace("\\", "/").split("/")
-                ):
+                if file_path.startswith(("/", "\\")) or any(part == ".." for part in file_path.replace("\\", "/").split("/")):
                     raise ValueError(f"GitHub resource 'file': path traversal blocked: {file_path!r}")
                 return ConnectorResult(
                     records=[
@@ -353,9 +351,7 @@ def step_github_connector(ctx):
                 )
             case "tree":
                 tree_path = q.filters.get("path", "")
-                if tree_path.startswith(("/", "\\")) or any(
-                    part == ".." for part in tree_path.replace("\\", "/").split("/")
-                ):
+                if tree_path.startswith(("/", "\\")) or any(part == ".." for part in tree_path.replace("\\", "/").split("/")):
                     raise ValueError(f"GitHub resource 'tree': path traversal blocked: {tree_path!r}")
                 return ConnectorResult(
                     records=[
@@ -388,9 +384,7 @@ def step_github_connector(ctx):
     async def mock_write(payload):
         if payload.resource == "file":
             file_path = payload.data.get("path", "")
-            if file_path.startswith(("/", "\\")) or any(
-                part == ".." for part in file_path.replace("\\", "/").split("/")
-            ):
+            if file_path.startswith(("/", "\\")) or any(part == ".." for part in file_path.replace("\\", "/").split("/")):
                 raise ValueError(f"GitHub resource 'file': path traversal blocked: {file_path!r}")
             return {
                 "content": {"name": "new.md"},
@@ -403,23 +397,17 @@ def step_github_connector(ctx):
             targeted_paths: set[str] = set()
             for action in actions:
                 file_path = action.get("path", "")
-                if file_path.startswith(("/", "\\")) or any(
-                    part == ".." for part in file_path.replace("\\", "/").split("/")
-                ):
+                if file_path.startswith(("/", "\\")) or any(part == ".." for part in file_path.replace("\\", "/").split("/")):
                     raise ValueError(f"GitHub resource 'commit': path traversal blocked: {file_path!r}")
                 targets = (file_path,)
                 if action.get("action") == "move":
                     previous_path = action.get("previous_path", "")
-                    if previous_path.startswith(("/", "\\")) or any(
-                        part == ".." for part in previous_path.replace("\\", "/").split("/")
-                    ):
+                    if previous_path.startswith(("/", "\\")) or any(part == ".." for part in previous_path.replace("\\", "/").split("/")):
                         raise ValueError(f"GitHub resource 'commit': path traversal blocked: {previous_path!r}")
                     targets = (previous_path, file_path)
                 for targeted in targets:
                     if targeted in targeted_paths:
-                        raise ValueError(
-                            f"GitHub resource 'commit': path {targeted!r} is targeted more than once by the batch"
-                        )
+                        raise ValueError(f"GitHub resource 'commit': path {targeted!r} is targeted more than once by the batch")
                     targeted_paths.add(targeted)
             return {"ref": "refs/heads/main", "object": {"sha": "commit123"}}
         if payload.resource in (
@@ -791,10 +779,7 @@ def step_github_api_rate_limited_zero_quota(ctx):
     connector = ctx["connector"]
 
     async def mock_query(q):
-        raise ValueError(
-            "GitHub API HTTP 429: Rate limit exceeded "
-            "(quota: X-RateLimit-Limit=5000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)"
-        )
+        raise ValueError("GitHub API HTTP 429: Rate limit exceeded (quota: X-RateLimit-Limit=5000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)")
 
     connector.query = mock_query
     ctx["query_error"] = None
@@ -836,13 +821,7 @@ def step_connector_raises_value_error(expected, ctx):
     try:
         if operation == "write":
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                connector.write(
-                    ConnectorPayload(
-                        resource="file", data={"repo": "owner/repo", "path": "test.txt", "content": "data"}
-                    )
-                )
-            )
+            loop.run_until_complete(connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "test.txt", "content": "data"})))
         else:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
@@ -1545,9 +1524,7 @@ def step_jira_records_issue_types_with_fields(ctx):
 def step_jira_records_include_custom_fields(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert any(record.get("custom") for record in result.records), (
-        f"Expected a custom field among records but got {result.records}"
-    )
+    assert any(record.get("custom") for record in result.records), f"Expected a custom field among records but got {result.records}"
 
 
 @then("the records list issue type statuses")
@@ -1640,10 +1617,7 @@ def step_jira_connector_rate_limited_error(ctx):
     mock_connector.connector_type = "jira"
 
     async def mock_query(q):
-        raise ValueError(
-            "Jira API HTTP 429: Rate limit exceeded "
-            "(quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)"
-        )
+        raise ValueError("Jira API HTTP 429: Rate limit exceeded (quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)")
 
     async def mock_write(payload):
         raise ValueError("Jira API HTTP 429: Rate limit exceeded")
@@ -1879,9 +1853,7 @@ def step_jira_result_lists_attachments(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
     assert result.records, f"Expected attachment records but got {result.records}"
-    assert all("filename" in record for record in result.records), (
-        f"Expected filename in every attachment but got {result.records}"
-    )
+    assert all("filename" in record for record in result.records), f"Expected filename in every attachment but got {result.records}"
 
 
 @then("the write returns an uploaded attachment")
@@ -2009,9 +1981,7 @@ def step_jira_result_lists_components(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
     assert result.records, f"Expected component records but got {result.records}"
-    assert all("name" in record for record in result.records), (
-        f"Expected name in every component but got {result.records}"
-    )
+    assert all("name" in record for record in result.records), f"Expected name in every component but got {result.records}"
 
 
 @when(parsers.parse('I query versions for project "{project}"'))
@@ -2051,9 +2021,7 @@ def step_jira_result_lists_versions(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
     assert result.records, f"Expected version records but got {result.records}"
-    assert all("name" in record for record in result.records), (
-        f"Expected name in every version but got {result.records}"
-    )
+    assert all("name" in record for record in result.records), f"Expected name in every version but got {result.records}"
 
 
 @when(parsers.parse('I query attachments for issue "{key}"'))
@@ -2457,11 +2425,7 @@ def step_slack_post_message(resource, channel, text, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with channel "{channel}" and thread_ts "{thread_ts}" and text "{text}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and thread_ts "{thread_ts}" and text "{text}"'))
 def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
     from farna.connectors.base import ConnectorPayload
 
@@ -2746,9 +2710,7 @@ def step_records_contain_channel_metadata(ctx):
         assert "name" in rec, f"Record missing channel metadata: {rec}"
 
 
-@when(
-    parsers.parse('I query resource "{resource}" with channel "{channel}" and oldest "{oldest}" and latest "{latest}"')
-)
+@when(parsers.parse('I query resource "{resource}" with channel "{channel}" and oldest "{oldest}" and latest "{latest}"'))
 def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx):
     from farna.connectors.base import ConnectorQuery
 
@@ -2920,9 +2882,7 @@ def step_gitlab_connector(ctx):
                     total=2,
                 )
             case "issue":
-                return ConnectorResult(
-                    records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Bug found", "state": "opened"}]
-                )
+                return ConnectorResult(records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Bug found", "state": "opened"}])
             case "labels":
                 return ConnectorResult(
                     records=[
@@ -2932,9 +2892,7 @@ def step_gitlab_connector(ctx):
                     total=2,
                 )
             case "label":
-                return ConnectorResult(
-                    records=[{"id": int(q.filters.get("label_id", 0)), "name": "bug", "color": "#FF0000"}]
-                )
+                return ConnectorResult(records=[{"id": int(q.filters.get("label_id", 0)), "name": "bug", "color": "#FF0000"}])
             case "milestones":
                 return ConnectorResult(
                     records=[{"id": 1, "title": "Sprint 1", "state": "active"}],
@@ -2958,9 +2916,7 @@ def step_gitlab_connector(ctx):
                     total=1,
                 )
             case "merge_request":
-                return ConnectorResult(
-                    records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Fix bug", "state": "opened"}]
-                )
+                return ConnectorResult(records=[{"id": 1, "iid": int(q.filters.get("iid", 0)), "title": "Fix bug", "state": "opened"}])
             case "mr_changes":
                 return ConnectorResult(
                     records=[
@@ -3209,11 +3165,7 @@ def step_gitlab_write_issue(project, title, ctx):
         ctx["query_error"] = str(exc)
 
 
-@when(
-    parsers.parse(
-        'I write GitLab issue_update for issue "{iid}" with project "{project}" and state_event "{state_event}"'
-    )
-)
+@when(parsers.parse('I write GitLab issue_update for issue "{iid}" with project "{project}" and state_event "{state_event}"'))
 def step_gitlab_update_issue(iid, project, state_event, ctx):
     from farna.connectors.base import ConnectorPayload
 
@@ -4074,9 +4026,7 @@ def step_monday_item_available(ctx):
         from farna.connectors.base import ConnectorResult
 
         if q.resource == "item":
-            return ConnectorResult(
-                records=[{"id": str(q.filters.get("item_id", "")), "name": "Single Item", "column_values": []}]
-            )
+            return ConnectorResult(records=[{"id": str(q.filters.get("item_id", "")), "name": "Single Item", "column_values": []}])
         raise ValueError(f"Unsupported Monday.com resource: {q.resource!r}")
 
     connector.query = mock_query
@@ -4472,9 +4422,7 @@ def step_trello_single_card(ctx):
         from farna.connectors.base import ConnectorResult
 
         if q.resource == "card":
-            return ConnectorResult(
-                records=[{"id": q.filters.get("card_id", ""), "name": "Single Card", "desc": "A card"}]
-            )
+            return ConnectorResult(records=[{"id": q.filters.get("card_id", ""), "name": "Single Card", "desc": "A card"}])
         raise ValueError(f"Unsupported Trello resource: {q.resource!r}")
 
     connector.query = mock_query
@@ -4779,9 +4727,7 @@ def step_shortcut_connector(ctx):
                 story_id = q.filters.get("story_id", "")
                 if not story_id:
                     raise ValueError("Shortcut story query requires 'story_id' filter")
-                return ConnectorResult(
-                    records=[{"id": int(story_id), "name": "Single Story", "description": "A test story"}]
-                )
+                return ConnectorResult(records=[{"id": int(story_id), "name": "Single Story", "description": "A test story"}])
             case "projects":
                 return ConnectorResult(
                     records=[
@@ -5013,9 +4959,7 @@ def step_asana_single_project(ctx):
         from farna.connectors.base import ConnectorResult
 
         if q.resource == "project":
-            return ConnectorResult(
-                records=[{"gid": q.filters.get("project_id", ""), "name": "Project Alpha", "notes": "A project"}]
-            )
+            return ConnectorResult(records=[{"gid": q.filters.get("project_id", ""), "name": "Project Alpha", "notes": "A project"}])
         raise ValueError(f"Unsupported Asana resource: {q.resource!r}")
 
     connector.query = mock_query
@@ -5485,9 +5429,7 @@ def step_notion_connector(ctx):
                 database_id = q.filters.get("database_id", "")
                 if not database_id:
                     raise ValueError("Notion database query requires 'database_id' filter")
-                return ConnectorResult(
-                    records=[{"id": database_id, "title": [{"plain_text": "Project Tracker"}], "object": "database"}]
-                )
+                return ConnectorResult(records=[{"id": database_id, "title": [{"plain_text": "Project Tracker"}], "object": "database"}])
             case "pages":
                 database_id = q.filters.get("database_id", "")
                 if not database_id:
@@ -5561,9 +5503,7 @@ def step_confluence_connector(ctx):
                 page_id = q.filters.get("page_id", "")
                 if not page_id:
                     raise ValueError("Confluence page query requires 'page_id' filter")
-                return ConnectorResult(
-                    records=[{"id": page_id, "title": "Single Page", "spaceId": "s1", "version": {"number": 2}}]
-                )
+                return ConnectorResult(records=[{"id": page_id, "title": "Single Page", "spaceId": "s1", "version": {"number": 2}}])
             case "spaces":
                 space_type = q.filters.get("type", "global")
                 return ConnectorResult(
@@ -5664,9 +5604,7 @@ def step_google_docs_connector(ctx):
                 doc_id = q.filters.get("document_id", "")
                 if not doc_id:
                     raise ValueError("Google Docs document query requires 'document_id' filter")
-                return ConnectorResult(
-                    records=[{"documentId": doc_id, "title": "My Document", "body": {"content": []}}]
-                )
+                return ConnectorResult(records=[{"documentId": doc_id, "title": "My Document", "body": {"content": []}}])
             case "files":
                 return ConnectorResult(
                     records=[

@@ -118,9 +118,7 @@ def test_pr_url_provenance_vocabulary_is_the_two_agent_harvest_routes_only() -> 
     ],
     ids=["declared", "matched-marker", "no-delivery", "delivered-then-failed", "source-error"],
 )
-def test_every_classifier_verdict_stamps_agent_reported(
-    status: str, error_code: str | None, kwargs: dict[str, object]
-) -> None:
+def test_every_classifier_verdict_stamps_agent_reported(status: str, error_code: str | None, kwargs: dict[str, object]) -> None:
     """No verdict — delivered, no_delivery, or a delivered-then-failed rescue —
     can be written with any confidence other than ``agent_reported``.
 

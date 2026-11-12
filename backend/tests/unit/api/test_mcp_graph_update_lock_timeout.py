@@ -148,9 +148,7 @@ async def test_graph_update_sets_the_bounded_lock_timeout_before_its_first_lock(
     locked_at = [i for i, sql in enumerate(recorded) if "FOR UPDATE" in sql.upper()]
     assert bound_at, f"no bounded lock_timeout statement was issued; statements={recorded}"
     assert locked_at, f"the graph write never took its FOR UPDATE; statements={recorded}"
-    assert bound_at[0] < locked_at[0], (
-        f"the bound must be set BEFORE the first lock (lock_timeout at {bound_at[0]}, FOR UPDATE at {locked_at[0]})"
-    )
+    assert bound_at[0] < locked_at[0], f"the bound must be set BEFORE the first lock (lock_timeout at {bound_at[0]}, FOR UPDATE at {locked_at[0]})"
 
 
 async def test_graph_update_lock_timeout_degrades_to_a_structured_error() -> None:

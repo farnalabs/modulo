@@ -119,9 +119,7 @@ def _payload_hash(
 
 def _applied_key(data: dict, *, resource: str = _DEFAULT_RESOURCE, filters: dict | None = None) -> str:
     """The per-node key the gate derives for a write with this payload hash."""
-    return node_idempotency_key(
-        _PERSISTED_KEY, _NODE_ID, index=None, payload=_payload_hash(data, resource=resource, filters=filters)
-    )
+    return node_idempotency_key(_PERSISTED_KEY, _NODE_ID, index=None, payload=_payload_hash(data, resource=resource, filters=filters))
 
 
 async def _run_gate(
@@ -169,9 +167,7 @@ async def _run_gate(
 
 class TestConnectorPayloadHash:
     def test_same_data_same_hash(self) -> None:
-        assert _payload_hash({"name": "n1", "id": 1}) == (
-            '{"data": {"id": 1, "name": "n1"}, "provider_ref": null, "resource": "command"}'
-        )
+        assert _payload_hash({"name": "n1", "id": 1}) == ('{"data": {"id": 1, "name": "n1"}, "provider_ref": null, "resource": "command"}')
 
     def test_changed_data_different_hash(self) -> None:
         assert _payload_hash({"name": "n1", "id": 1}) != _payload_hash({"name": "n2", "id": 1})
@@ -188,9 +184,7 @@ class TestConnectorPayloadHash:
 
     def test_changed_provider_ref_different_hash(self) -> None:
         # MAJOR 2: same data, different write target (provider_ref, shell) -> different key.
-        assert _payload_hash({"name": "n1"}, filters={"provider_ref": "/a"}) != _payload_hash(
-            {"name": "n1"}, filters={"provider_ref": "/b"}
-        )
+        assert _payload_hash({"name": "n1"}, filters={"provider_ref": "/a"}) != _payload_hash({"name": "n1"}, filters={"provider_ref": "/b"})
 
 
 # ── marker attempt key: stable per node ──────────────────────────────────────
@@ -300,14 +294,8 @@ class TestConnectorWriteGate:
         item_b_key = node_idempotency_key(_PERSISTED_KEY, _NODE_ID, index=1, payload="item-b")
         assert item_a_key != item_b_key
         markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": item_b_key}}
-        assert (
-            read_before_write_suppression(markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, index=0, payload="item-a")
-            is False
-        )
-        assert (
-            read_before_write_suppression(markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, index=1, payload="item-b")
-            is True
-        )
+        assert read_before_write_suppression(markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, index=0, payload="item-a") is False
+        assert read_before_write_suppression(markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, index=1, payload="item-b") is True
 
     async def test_fails_open_when_no_session_factory(self) -> None:
         """No session factory => the gate never suppresses (write proceeds)."""
@@ -392,9 +380,7 @@ class TestConnectorWriteGate:
 
     async def test_unmatched_marker_key_not_suppressed(self) -> None:
         """A marker keyed for a DIFFERENT node/cardinality never suppresses."""
-        other = node_idempotency_key(
-            _PERSISTED_KEY, "connector-node-b", index=None, payload=_payload_hash({"name": "n1"})
-        )
+        other = node_idempotency_key(_PERSISTED_KEY, "connector-node-b", index=None, payload=_payload_hash({"name": "n1"}))
         markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": other}}
         result = await _run_gate(
             markers=markers,
@@ -1149,9 +1135,7 @@ class TestConnectorIntentMarkerLifecycle:
         slot = _connector_marker_attempt_key("run-123", _NODE_ID)
         persisted = fake_run.raw_output_markers[slot]
         assert persisted["marker_kind"] == "connector_write_intent"
-        assert persisted.get("delivery_done") is not True, (
-            "an in-flight intent must never claim a delivery it has not made"
-        )
+        assert persisted.get("delivery_done") is not True, "an in-flight intent must never claim a delivery it has not made"
         assert persisted["idempotency_key"] == _applied_key({"name": "v2"})
 
     async def test_intent_write_fails_open_on_missing_context(self) -> None:
@@ -1360,12 +1344,7 @@ class TestConnectorIntentMarkerGateStates:
             }
         }
         # read_before_write_ambiguous directly (the slot holds ONE marker).
-        assert (
-            read_before_write_ambiguous(
-                markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, payload=_payload_hash({"name": "n1"})
-            )
-            is False
-        )
+        assert read_before_write_ambiguous(markers, run_ref=_PERSISTED_KEY, node_ref=_NODE_ID, payload=_payload_hash({"name": "n1"})) is False
 
 
 class TestRaisedConnectorErrorAmbiguous:
@@ -1981,13 +1960,7 @@ class TestPayloadHashDeterminism:
         from pathlib import Path
 
         backend_src = str(Path(__file__).parents[3] / "src")
-        payload_src = (
-            "from farna.core.pipeline_engine.node_runner import "
-            "_connector_write_payload_hash as h; "
-            "data={'items': {'z', 'a', 'm'}, 'scopes': frozenset({'read', 'write'}), "
-            "'nested': {'k': {'x', 'y'}}}; "
-            "print(h(resource='command', filters={'provider_ref': None}, data=data))"
-        )
+        payload_src = "from farna.core.pipeline_engine.node_runner import _connector_write_payload_hash as h; data={'items': {'z', 'a', 'm'}, 'scopes': frozenset({'read', 'write'}), 'nested': {'k': {'x', 'y'}}}; print(h(resource='command', filters={'provider_ref': None}, data=data))"
 
         def _hash_under_seed(seed: str) -> str:
             proc = subprocess.run(  # noqa: S603 - payload_src is a trusted literal constant
@@ -2069,13 +2042,7 @@ class TestPayloadHashDeterminism:
         from pathlib import Path
 
         backend_src = str(Path(__file__).parents[3] / "src")
-        payload_src = (
-            "from farna.core.pipeline_engine.node_runner import "
-            "_connector_write_payload_hash as h; "
-            "Opaque = type('Opaque', (), {}); "
-            "data={'obj': Opaque(), 's': {'b', 'a'}}; "
-            "print(h(resource='command', filters={}, data=data))"
-        )
+        payload_src = "from farna.core.pipeline_engine.node_runner import _connector_write_payload_hash as h; Opaque = type('Opaque', (), {}); data={'obj': Opaque(), 's': {'b', 'a'}}; print(h(resource='command', filters={}, data=data))"
 
         def _hash_under_seed(seed: str) -> str:
             proc = subprocess.run(  # noqa: S603 - payload_src is a trusted literal constant

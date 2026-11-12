@@ -28,21 +28,14 @@ def test_no_generic_internal_error_payload_code() -> None:
     for path in _SOURCES:
         source = path.read_text(encoding="utf-8")
         for quote in ('"internal_error"', "'internal_error'"):
-            assert quote not in source, (
-                f"{path.relative_to(_API_ROOT.parent.parent)} still carries the generic "
-                f"{quote} payload — use a specific, branchable code (FAR-1502)."
-            )
+            assert quote not in source, f"{path.relative_to(_API_ROOT.parent.parent)} still carries the generic {quote} payload — use a specific, branchable code (FAR-1502)."
 
 
 def test_tool_error_code_parameter_is_required() -> None:
     """``_tool_error`` must not offer a default code: every call site names one."""
     source = (_API_ROOT / "mcp_server.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    defs = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "_tool_error"
-    ]
+    defs = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == "_tool_error"]
     assert len(defs) == 1, f"expected exactly one _tool_error definition, found {len(defs)}"
     args = defs[0].args
     kw_only = [arg.arg for arg in args.kwonlyargs]

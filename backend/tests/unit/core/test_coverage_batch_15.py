@@ -589,6 +589,4 @@ class TestPipelineImpactRemainingBranches:
         )
         assert any(f["severity"] == "block" for f in findings)
         assert any(f["severity"] == "warning" for f in findings)
-        assert not _check_edge_repoint_breaking(
-            {"node_id": "missing", "direction": "output", "port": "x", "edge": {}}, graph
-        )
+        assert not _check_edge_repoint_breaking({"node_id": "missing", "direction": "output", "port": "x", "edge": {}}, graph)

@@ -170,9 +170,7 @@ async def test_explicit_alembic_ini_is_used(monkeypatch: pytest.MonkeyPatch, tmp
     assert await db_is_at_migration_head(engine, alembic_ini=ini) is True
     config = _FakeConfig.instances[-1]
     assert config.config_file_name == str(ini)
-    assert config.get_main_option("script_location") == str(
-        (ini.parent / "src" / "farna" / "db" / "migrations").resolve()
-    )
+    assert config.get_main_option("script_location") == str((ini.parent / "src" / "farna" / "db" / "migrations").resolve())
 
 
 @pytest.mark.anyio

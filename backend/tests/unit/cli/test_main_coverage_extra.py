@@ -165,9 +165,7 @@ def test_support_redaction_gate_error(monkeypatch: pytest.MonkeyPatch, tmp_path:
     monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
     monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
-    result = CliRunner().invoke(
-        cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
-    )
+    result = CliRunner().invoke(cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")])
     assert result.exit_code == 2
     assert "refused: redaction gate refused member" in result.output
     assert "reason1" in result.output
@@ -182,9 +180,7 @@ def test_support_bundle_too_large(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
     monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
-    result = CliRunner().invoke(
-        cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
-    )
+    result = CliRunner().invoke(cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")])
     assert result.exit_code == 1
     assert "error: could not write bundle: too big" in result.output
 
@@ -196,9 +192,7 @@ def test_support_os_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr("farna.support.bundle.build_bundle_async", mock_build)
     monkeypatch.setattr("farna.support.bundle.generate_ref", lambda: "test-ref")
 
-    result = CliRunner().invoke(
-        cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")]
-    )
+    result = CliRunner().invoke(cli_main.cli, ["support", "--data-dir", str(tmp_path), "--out", str(tmp_path / "out.zip")])
     assert result.exit_code == 1
     assert "error: could not write bundle: permission denied" in result.output
 

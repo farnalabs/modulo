@@ -140,9 +140,7 @@ async def test_seed_emits_log_records_at_info_level(
     seeded = await seed_cost_components(factory)
 
     assert seeded == 1
-    messages = [
-        record.getMessage() for record in caplog.records if record.name == "farna.core.seed_data.cost_components"
-    ]
+    messages = [record.getMessage() for record in caplog.records if record.name == "farna.core.seed_data.cost_components"]
     assert "cost_components.seeded" in messages
     assert "cost_components.seed_complete" in messages
 

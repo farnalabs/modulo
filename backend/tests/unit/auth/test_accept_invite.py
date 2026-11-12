@@ -263,9 +263,7 @@ def test_accept_invite_invalid_token_generic_400(client: TestClient) -> None:
     "flavour",
     ["expired", "consumed", "revoked"],
 )
-def test_accept_invite_non_live_invitation_flavours_share_byte_identical_rejection(
-    client: TestClient, flavour: str
-) -> None:
+def test_accept_invite_non_live_invitation_flavours_share_byte_identical_rejection(client: TestClient, flavour: str) -> None:
     """Expired / consumed / revoked rows never match the liveness predicate, so
     ``get_valid_by_token_hash`` returns None for every non-live flavour and the
     API response is byte-identical (the lookup cannot distinguish them — by
@@ -518,9 +516,7 @@ def _lock_timeout_error() -> OperationalError:
     return OperationalError("SELECT ... FOR UPDATE", {}, _LockTimeoutDriverError("55P03"))
 
 
-def test_accept_invite_audit_lock_timeout_is_contained_by_the_outer_savepoint(
-    client: TestClient, mock_session: AsyncMock
-) -> None:
+def test_accept_invite_audit_lock_timeout_is_contained_by_the_outer_savepoint(client: TestClient, mock_session: AsyncMock) -> None:
     """A 55P03 from the audit append still answers 200; the enrollment survives.
 
     ``append_audit_event`` already contains the failed attempt in its own

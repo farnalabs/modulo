@@ -949,14 +949,8 @@ async def _refresh_metadata_row(
     if meta_row is not None and isinstance(meta_row.outputs_json, dict):
         existing_flags = meta_row.outputs_json
 
-    if outputs is not None:
-        empty_outputs = outputs == {}
-    else:
-        empty_outputs = bool(existing_flags.get("empty_outputs")) if existing_flags is not None else False
-    if telemetry is not None:
-        empty_telemetry = telemetry == {}
-    else:
-        empty_telemetry = bool(existing_flags.get("empty_telemetry")) if existing_flags is not None else False
+    empty_outputs = outputs == {} if outputs is not None else bool(existing_flags.get("empty_outputs")) if existing_flags is not None else False
+    empty_telemetry = telemetry == {} if telemetry is not None else bool(existing_flags.get("empty_telemetry")) if existing_flags is not None else False
 
     if empty_outputs or empty_telemetry:
         payload = {"empty_outputs": empty_outputs, "empty_telemetry": empty_telemetry}

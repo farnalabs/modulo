@@ -5831,10 +5831,7 @@ async def _ingest_zombie_error(
     started_at: Any,
 ) -> None:
     """Ingest SAQ error event for zombie terminalization."""
-    if node_started:
-        stable_message = "dispatcher_reconcile: node-started zombie terminal-failed (first node STARTED but no super-step completed within the nodeless window)"
-    else:
-        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+    stable_message = "dispatcher_reconcile: node-started zombie terminal-failed (first node STARTED but no super-step completed within the nodeless window)" if node_started else _NODELESS_ZOMBIE_STABLE_MESSAGE
 
     await _ingest_saq_error(
         session,

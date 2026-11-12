@@ -76,9 +76,7 @@ def _structured_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRec
 
 def _apply_common_overrides() -> None:
     """Mirror the shared webhook-endpoint client fixture's dependency stubs."""
-    principal = AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    principal = AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_current_user] = lambda: principal
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -261,9 +259,7 @@ def test_helper_explicit_level_overrides_default(
     assert records[0].levelno == logging.WARNING
 
 
-def test_receive_webhook_bootstrap_guard_logs_structured_reason(
-    failing_session_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_bootstrap_guard_logs_structured_reason(failing_session_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """Degraded system engine -> 503, and the raise site must persist WHY
     (route + reason code) before raising. The record is logged at ERROR
     explicitly: with no ``exc`` the helper's derived default is WARNING,
@@ -288,9 +284,7 @@ def test_receive_webhook_bootstrap_guard_logs_structured_reason(
     assert payload["reason"] == "system_bootstrap_degraded"
 
 
-def test_receive_webhook_db_transient_logs_structured_reason(
-    failing_session_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_db_transient_logs_structured_reason(failing_session_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """A transient DB failure at transaction begin -> designed fail-closed
     503, with a persisted structured reason (db_transient + exception class)."""
     with caplog.at_level(logging.WARNING):
@@ -310,9 +304,7 @@ def test_receive_webhook_db_transient_logs_structured_reason(
     assert payload["detail"] == "transient database error; webhook delivery failed closed"
 
 
-def test_replay_webhook_db_transient_logs_structured_reason(
-    failing_session_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_replay_webhook_db_transient_logs_structured_reason(failing_session_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """Replay fail-closes 503 on a transient DB error with the same
     structured reason record, attributed to the replay route."""
     with caplog.at_level(logging.WARNING):
@@ -331,9 +323,7 @@ def test_replay_webhook_db_transient_logs_structured_reason(
     assert payload["exception_class"] == "SQLAlchemyError"
 
 
-def test_receive_webhook_snapshot_lock_unavailable_logs_structured_reason(
-    working_session_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_receive_webhook_snapshot_lock_unavailable_logs_structured_reason(working_session_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """The engine's snapshot advisory-lock exhaustion (FAR-527) fail-closes
     503 with a persisted snapshot_lock_unavailable reason record."""
     from farna.core.exceptions import SnapshotLockNotAvailableError

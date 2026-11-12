@@ -153,12 +153,7 @@ def step_mint_ws(name: str, role: str, request) -> None:
     )
 
 
-@when(
-    parsers.parse(
-        'a refresh token is minted for user "{name}" with role "{role}" and client kind "{kind}" '
-        'in family "{family}" at sequence {seq:d}'
-    )
-)
+@when(parsers.parse('a refresh token is minted for user "{name}" with role "{role}" and client kind "{kind}" in family "{family}" at sequence {seq:d}'))
 def step_mint_refresh(name: str, role: str, kind: str, family: str, seq: int, request) -> None:
     state = _state(request)
     state["token"] = jwt_mod.create_refresh_token(
@@ -320,9 +315,7 @@ def step_principal_org(request) -> None:
     state = _state(request)
     principal = state["decoded"]
     assert principal is not None, "no principal was decoded"
-    assert str(principal.organisation_id) == state["org"], (
-        f"expected org {state['org']!r}, got {principal.organisation_id!r}"
-    )
+    assert str(principal.organisation_id) == state["org"], f"expected org {state['org']!r}, got {principal.organisation_id!r}"
 
 
 @then(parsers.parse('the principal has client kind "{kind}"'))

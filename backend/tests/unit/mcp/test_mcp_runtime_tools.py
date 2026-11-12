@@ -515,9 +515,7 @@ class TestListPendingHitl(_AuthContext):
         expires_at = datetime(2026, 1, 1, 13, 0, tzinfo=UTC)
         shared_run_id = uuid.uuid4()
         gates = [
-            _make_hitl_review(
-                review_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None, run_id=shared_run_id
-            ),
+            _make_hitl_review(review_id="gate-1", account_id=None, expires_at=expires_at, required_team_id=None, run_id=shared_run_id),
             _make_hitl_review(
                 review_id="gate-2",
                 account_id=uuid.uuid4(),
@@ -592,9 +590,7 @@ class TestListPendingHitl(_AuthContext):
         gate.context_json = context
         graph = {
             "nodes": [],
-            "edges": [
-                {"source": source, "target": target, "hitl_review_config": {"description": "MCP briefing description."}}
-            ],
+            "edges": [{"source": source, "target": target, "hitl_review_config": {"description": "MCP briefing description."}}],
         }
         count_result = MagicMock()
         count_result.scalar_one.return_value = 1
@@ -1105,9 +1101,7 @@ class TestReviewHitl(_AuthContext):
         mock_manager_cls.return_value = manager
         _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123")
 
         assert result["reconcile_status"] == "failed"
         assert "operator intervention is required" in result["detail"]
@@ -1278,9 +1272,7 @@ class TestReviewHitl(_AuthContext):
         mock_candidate.return_value = False
         _stub_resume_executor(mock_build_resume_executor)
 
-        result = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123"
-        )
+        result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok-123")
 
         assert result["reconcile_status"] == "failed"
         assert "operator intervention is required" in result["detail"]
@@ -1468,9 +1460,7 @@ class TestReviewHitl(_AuthContext):
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
-        result_reject = await review_hitl(
-            run_id=str(uuid.uuid4()), review_id="gate-1", action="reject", claim_token="tok-123", reason="nope"
-        )
+        result_reject = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="reject", claim_token="tok-123", reason="nope")
         result_manual = await review_hitl(
             run_id=str(uuid.uuid4()),
             review_id="gate-1",

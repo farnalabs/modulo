@@ -82,9 +82,7 @@ async def _count_sql_and_value(
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
-    value = await count_active_runner_dispatches_for_org(
-        session, org, exclude_run_id=exclude_run_id, host_resource_only=host_resource_only
-    )
+    value = await count_active_runner_dispatches_for_org(session, org, exclude_run_id=exclude_run_id, host_resource_only=host_resource_only)
     assert len(statements) == 1
     return _compile_with_literal_binds(statements[0]), value
 
@@ -149,9 +147,7 @@ class TestActiveWorkspaceCountPopulation:
         """A re-dispatch excluding its own run must apply ``runs.id != :param``
         so a fence-carrying stale marker cannot self-block the count."""
         exclude = uuid.uuid4()
-        sql, _ = await _count_sql_and_value(
-            flag_on=True, monkeypatch=monkeypatch, exclude_run_id=exclude, host_resource_only=False
-        )
+        sql, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, exclude_run_id=exclude, host_resource_only=False)
         assert f"runs.id != '{exclude}'" in sql
 
     async def test_host_resource_only_applies_provider_filter(self, monkeypatch: pytest.MonkeyPatch) -> None:

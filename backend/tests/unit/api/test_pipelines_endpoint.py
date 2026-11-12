@@ -1029,9 +1029,7 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         "role",
         "autonomy_recommendation",
     ):
-        assert actual.get(key) == nodes[0].get(key), (
-            f"Mismatch on key '{key}': {actual.get(key)} != {nodes[0].get(key)}"
-        )
+        assert actual.get(key) == nodes[0].get(key), f"Mismatch on key '{key}': {actual.get(key)} != {nodes[0].get(key)}"
 
 
 def _connector_node_json(connector_id: uuid.UUID) -> dict[str, object]:
@@ -1312,9 +1310,7 @@ def test_graph_save_blocks_only_the_allowlisted_connector_validation_codes() -> 
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        _reject_graph_validation_issues(
-            [_connector_issue("CONNECTOR_MISSING_OPERATIONS", "does not allow 'read' required by 'query'")]
-        )
+        _reject_graph_validation_issues([_connector_issue("CONNECTOR_MISSING_OPERATIONS", "does not allow 'read' required by 'query'")])
 
     assert excinfo.value.status_code == 422
     assert "does not allow 'read'" in str(excinfo.value.detail)
@@ -1372,9 +1368,7 @@ def test_pipeline_graph_node_single_pr_per_run_rejects_non_bool_on_sandbox_nodes
 
     # The genuine bool still round-trips (positive control: the gate is the
     # TYPE, not the field).
-    assert (
-        PipelineGraphNode.model_validate({**_sandbox_node_json(), "single_pr_per_run": True}).single_pr_per_run is True
-    )
+    assert PipelineGraphNode.model_validate({**_sandbox_node_json(), "single_pr_per_run": True}).single_pr_per_run is True
 
 
 def test_pipeline_graph_node_single_pr_per_run_rejected_off_sandbox_nodes() -> None:
@@ -1455,9 +1449,7 @@ def test_pipeline_graph_node_egress_allowlist_rejected_off_sandbox_nodes() -> No
     """FAR-1846: ``egress_allowlist`` is sandbox-only — its sole reader is the
     sandbox egress check, which never runs for any other node type."""
     with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set egress_allowlist"):
-        PipelineGraphNode.model_validate(
-            {**_minimal_node(), "egress_allowlist": [{"host": "example.com", "port": 443}]}
-        )
+        PipelineGraphNode.model_validate({**_minimal_node(), "egress_allowlist": [{"host": "example.com", "port": 443}]})
 
 
 def test_pipeline_graph_node_egress_pair_accepted_on_sandbox_nodes() -> None:
@@ -1745,9 +1737,7 @@ def test_get_pipeline_graph_returns_correction_target(client: TestClient) -> Non
         "claim_expiry_minutes": 60,
         "human_only": False,
     }
-    nodes = [
-        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}
-    ]
+    nodes = [{"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}]
 
     with (
         patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
@@ -1815,9 +1805,7 @@ def test_get_pipeline_graph_tolerates_legacy_short_gate_description(client: Test
         "claim_expiry_minutes": 60,
         "human_only": False,
     }
-    nodes = [
-        {"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}
-    ]
+    nodes = [{"id": str(node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 10, "y": 20}, "connector_binding": None}]
 
     with (
         patch("farna.api.routes.pipelines.get_pipeline_graph", return_value=(nodes, [edge])),
@@ -1870,8 +1858,7 @@ def test_replace_pipeline_graph_blocks_redact_correct_422(client: TestClient) ->
     validation = ValidationResult()
     validation.error(
         "REDACT_CORRECT_BLOCKED",
-        "Guardrail 'gr_redact' declares a 'correction' block on a 'redact'-action "
-        "guardrail — a correction on a redaction guardrail is an exfiltration channel",
+        "Guardrail 'gr_redact' declares a 'correction' block on a 'redact'-action guardrail — a correction on a redaction guardrail is an exfiltration channel",
     )
     with (
         patch("farna.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, edges)),
@@ -1929,8 +1916,7 @@ def test_replace_pipeline_graph_blocks_undescribed_node_level_hitl_review_422(cl
     validation = ValidationResult()
     validation.error(
         "HITL_REVIEW_DESCRIPTION_REQUIRED",
-        f"HITL review on node '{node_id}' requires a human-provided description "
-        f"(min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
+        f"HITL review on node '{node_id}' requires a human-provided description (min {HITL_DESCRIPTION_MIN_LENGTH} chars) explaining why this gate exists",
         node_id=str(node_id),
     )
     with (
@@ -1989,12 +1975,7 @@ def test_nonadmin_cannot_strip_guardrail_binding(operator_client: TestClient) ->
 
     denied = GuardrailBindingStripDenied(
         stripped_node_ids=[str(bound_node_id)],
-        detail=(
-            "Non-admin cannot strip a guardrail binding: removing node(s) "
-            + str(bound_node_id)
-            + " from the graph would drop a node-bound guardrail. Only an "
-            "admin can remove a node that has a bound guardrail."
-        ),
+        detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + str(bound_node_id) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
     )
 
     with (
@@ -2066,12 +2047,7 @@ def test_nonadmin_cannot_strip_guardrail_binding_via_update_graph_json(
     node = {"id": str(kept_node_id), "agent_id": str(uuid.uuid4()), "position": {"x": 0, "y": 0}}
     denied = GuardrailBindingStripDenied(
         stripped_node_ids=[str(bound_node_id)],
-        detail=(
-            "Non-admin cannot strip a guardrail binding: removing node(s) "
-            + str(bound_node_id)
-            + " from the graph would drop a node-bound guardrail. Only an "
-            "admin can remove a node that has a bound guardrail."
-        ),
+        detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + str(bound_node_id) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
     )
     pipeline = _make_pipeline()
 
@@ -2133,12 +2109,7 @@ def test_nonadmin_cannot_strip_guardrail_binding_via_snapshot_rollback(
     snapshot_id = uuid.uuid4()
     denied = GuardrailBindingStripDenied(
         stripped_node_ids=[str(bound_node_id)],
-        detail=(
-            "Non-admin cannot strip a guardrail binding: removing node(s) "
-            + str(bound_node_id)
-            + " from the graph would drop a node-bound guardrail. Only an "
-            "admin can remove a node that has a bound guardrail."
-        ),
+        detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + str(bound_node_id) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
     )
 
     with (
@@ -2254,9 +2225,7 @@ def test_nonadmin_removing_unbound_node_allowed(operator_client: TestClient) -> 
 
 
 def test_replace_pipeline_graph_rejects_excessive_node_count(client: TestClient) -> None:
-    nodes = [
-        {"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}} for i in range(501)
-    ]
+    nodes = [{"id": str(uuid.uuid4()), "agent_id": str(uuid.uuid4()), "position": {"x": i * 10, "y": 0}} for i in range(501)]
     resp = client.put(
         f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
         json={"nodes": nodes, "edges": []},
@@ -2592,8 +2561,7 @@ def test_update_pipeline_with_graph_blocks_cross_team_model_backend_binding(clie
             new=AsyncMock(
                 side_effect=HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="model_backend_team_mismatch: model backend 'eng-llm' is team-private "
-                    f"(owner team {team_a}) but pipeline is owned by team {team_b}",
+                    detail=f"model_backend_team_mismatch: model backend 'eng-llm' is team-private (owner team {team_a}) but pipeline is owned by team {team_b}",
                 )
             ),
         ) as resolve_refs,
@@ -3451,11 +3419,7 @@ class TestCompositeValidation:
     def test_invalid_regex_pattern_is_error(self) -> None:
         issues = self._run_check(
             None,
-            {
-                "eval_definitions": [
-                    {"type": "regex", "config": {"field": "x", "pattern": "("}, "failure_behaviour": "block"}
-                ]
-            },
+            {"eval_definitions": [{"type": "regex", "config": {"field": "x", "pattern": "("}, "failure_behaviour": "block"}]},
         )
         assert any(i["code"] == "COMPOSITE_VALIDATION_REGEX_INVALID" for i in issues)
 
@@ -3530,6 +3494,4 @@ class TestBenignSignaturesSurface:
         message), so the operator learns why the key is rejected — an absent
         ``error_detail_contains`` would match any detail for that code."""
         with pytest.raises(ValidationError, match="accept ONLY the keys"):
-            PipelineUpdate.model_validate(
-                {"benign_signatures": [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}]}
-            )
+            PipelineUpdate.model_validate({"benign_signatures": [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}]})

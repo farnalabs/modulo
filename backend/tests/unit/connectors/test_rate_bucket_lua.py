@@ -43,13 +43,7 @@ def _compile_via_lupa() -> str | None:
     from lupa import lua51
 
     lua = lua51.LuaRuntime(unpack_returned_tuples=True)
-    check = (
-        "function(s)\n"
-        "  local f, err\n"
-        "  if loadstring then f, err = loadstring(s) else f, err = load(s) end\n"
-        "  if not f then return tostring(err) else return nil end\n"
-        "end\n"
-    )
+    check = "function(s)\n  local f, err\n  if loadstring then f, err = loadstring(s) else f, err = load(s) end\n  if not f then return tostring(err) else return nil end\nend\n"
     return lua.eval(check)(_CONSUME_LUA)
 
 

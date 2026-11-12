@@ -204,9 +204,7 @@ async def test_output_validation_retries_valid():
 async def test_output_validation_invalid_eval_type():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "name": "e1", "type": "rubber_stamp"}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "name": "e1", "type": "rubber_stamp"}]}),
         ],
         "edges": [],
     }
@@ -218,9 +216,7 @@ async def test_output_validation_invalid_eval_type():
 async def test_output_validation_invalid_behaviour():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "name": "e1", "type": "regex", "failure_behaviour": "explode"}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "name": "e1", "type": "regex", "failure_behaviour": "explode"}]}),
         ],
         "edges": [],
     }
@@ -261,9 +257,7 @@ async def test_output_validation_valid_type_and_behaviour():
 async def test_regex_eval_missing_field():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"pattern": "^ok$"}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"pattern": "^ok$"}}]}),
         ],
         "edges": [],
     }
@@ -275,9 +269,7 @@ async def test_regex_eval_missing_field():
 async def test_regex_eval_missing_pattern():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "result"}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "result"}}]}),
         ],
         "edges": [],
     }
@@ -289,9 +281,7 @@ async def test_regex_eval_missing_pattern():
 async def test_regex_eval_empty_pattern():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": ""}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": ""}}]}),
         ],
         "edges": [],
     }
@@ -303,9 +293,7 @@ async def test_regex_eval_empty_pattern():
 async def test_regex_eval_invalid_pattern():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": "["}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": "["}}]}),
         ],
         "edges": [],
     }
@@ -317,9 +305,7 @@ async def test_regex_eval_invalid_pattern():
 async def test_regex_eval_non_string_pattern():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": 123}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": 123}}]}),
         ],
         "edges": [],
     }
@@ -331,9 +317,7 @@ async def test_regex_eval_non_string_pattern():
 async def test_regex_eval_valid_config():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": "^ok$"}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "regex", "config": {"field": "r", "pattern": "^ok$"}}]}),
         ],
         "edges": [],
     }
@@ -350,9 +334,7 @@ async def test_regex_eval_valid_config():
 async def test_json_schema_eval_missing_schema():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {}}]}),
         ],
         "edges": [],
     }
@@ -364,9 +346,7 @@ async def test_json_schema_eval_missing_schema():
 async def test_json_schema_eval_with_inline_schema():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {"schema": {"type": "object"}}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {"schema": {"type": "object"}}}]}),
         ],
         "edges": [],
     }
@@ -378,9 +358,7 @@ async def test_json_schema_eval_with_inline_schema():
 async def test_json_schema_eval_with_schema_ref():
     graph = {
         "nodes": [
-            _composite_with_output_validation(
-                {"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {"schema_ref": "abc"}}]}
-            ),
+            _composite_with_output_validation({"eval_definitions": [{"id": "e1", "type": "json_schema", "config": {"schema_ref": "abc"}}]}),
         ],
         "edges": [],
     }

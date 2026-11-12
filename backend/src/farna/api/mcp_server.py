@@ -14795,10 +14795,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
         return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
         # Mirror ``_oauth_refresh``: the detail names the grant that failed.
-        if getattr(request.state, "oauth_grant_type", "") == "refresh_token":
-            detail = "Refresh token exchange failed"
-        else:
-            detail = "Authorization code exchange failed"
+        detail = "Refresh token exchange failed" if getattr(request.state, "oauth_grant_type", "") == "refresh_token" else "Authorization code exchange failed"
         return JSONResponse(
             {"error": "invalid_grant", "detail": detail},
             status_code=400,

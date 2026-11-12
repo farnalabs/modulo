@@ -90,9 +90,7 @@ class _FakeSession:
 
 
 class _FakeClient:
-    def __init__(
-        self, manifest: dict | None, error: Exception | None = None, close_error: Exception | None = None
-    ) -> None:
+    def __init__(self, manifest: dict | None, error: Exception | None = None, close_error: Exception | None = None) -> None:
         self.manifest = manifest
         self.error = error
         self.close_error = close_error
@@ -139,9 +137,7 @@ class TestSyncLibrary:
         assert result.success is False
         assert "disabled" in (result.error or "")
 
-    async def test_stores_manifest_and_applies_revocations(
-        self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_stores_manifest_and_applies_revocations(self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         private_key, public_key = keys
         entries = [
             {"id": "agent-1", "type": "agent", "slug": "revoked-agent"},
@@ -198,9 +194,7 @@ class TestSyncLibrary:
         assert session.state is not None
         assert "manifest" in (session.state.last_error or "")
 
-    async def test_fail_open_preserves_last_good_manifest(
-        self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fail_open_preserves_last_good_manifest(self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
         private_key, public_key = keys
         good_manifest = _signed_manifest(private_key, entries=[{"id": "agent-1"}])
         good_catalog = [{"id": "agent-1", "type": "agent", "slug": "keeper"}]
@@ -244,9 +238,7 @@ class TestSyncLibrary:
         assert session.state is not None
         assert session.state.last_error == "unexpected sync failure"
 
-    async def test_raising_close_never_propagates(
-        self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_raising_close_never_propagates(self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A ``close()`` that raises is logged and swallowed on every path.
 
         The teardown sits in ``finally`` OUTSIDE the ``except Exception``

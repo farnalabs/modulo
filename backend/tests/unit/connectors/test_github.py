@@ -67,9 +67,7 @@ async def test_query_repos(connector):
 @respx.mock
 async def test_query_file(connector):
     file_data = {"name": "README.md", "content": "SGVsbG8=", "sha": "abc123", "encoding": "base64"}
-    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -91,9 +89,7 @@ async def test_query_pulls(connector):
 @respx.mock
 async def test_write_file(connector):
     response_body = {"content": {"sha": "def456"}, "commit": {"sha": "ghi789"}}
-    route = respx.put("https://api.github.com/repos/owner/repo/contents/path/file.txt").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/path/file.txt").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -120,9 +116,7 @@ async def test_write_file(connector):
 async def test_query_file_decodes_multiline_base64_content(connector) -> None:
     raw = "line1\nline2\n"
     file_data = {"name": "notes.txt", "content": base64.b64encode(raw.encode()).decode(), "encoding": "base64"}
-    respx.get("https://api.github.com/repos/owner/repo/contents/notes.txt").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/notes.txt").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "notes.txt"}))
     assert result.records[0]["content"] == raw
 
@@ -132,9 +126,7 @@ async def test_query_file_leaves_binary_content_encoded(connector) -> None:
     raw_bytes = b"\x89PNG\r\n\x1a\n"
     encoded = base64.b64encode(raw_bytes).decode()
     file_data = {"name": "img.png", "content": encoded, "encoding": "base64"}
-    respx.get("https://api.github.com/repos/owner/repo/contents/img.png").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/img.png").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "img.png"}))
     assert result.records[0]["content"] == encoded
 
@@ -142,9 +134,7 @@ async def test_query_file_leaves_binary_content_encoded(connector) -> None:
 @respx.mock
 async def test_query_file_plain_text_untouched(connector) -> None:
     file_data = {"name": "LICENSE", "content": "plain text", "encoding": "none"}
-    respx.get("https://api.github.com/repos/owner/repo/contents/LICENSE").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/LICENSE").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "LICENSE"}))
     assert result.records[0]["content"] == "plain text"
 
@@ -152,9 +142,7 @@ async def test_query_file_plain_text_untouched(connector) -> None:
 @respx.mock
 async def test_write_file_content_base64_passthrough(connector) -> None:
     response_body = {"content": {"sha": "def456"}, "commit": {"sha": "ghi789"}}
-    route = respx.put("https://api.github.com/repos/owner/repo/contents/binary.bin").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/binary.bin").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -174,9 +162,7 @@ async def test_write_file_content_base64_passthrough(connector) -> None:
 @respx.mock
 async def test_write_file_utf8_content_round_trips(connector) -> None:
     raw = "héllo wörld\n"
-    route = respx.put("https://api.github.com/repos/owner/repo/contents/utf8.txt").mock(
-        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
-    )
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/utf8.txt").mock(return_value=httpx.Response(200, json={"commit": {"sha": "abc"}}))
     await connector.write(
         ConnectorPayload(
             resource="file",
@@ -245,9 +231,7 @@ async def test_query_issues(connector):
 async def test_query_single_issue(connector):
     issue = {"number": 42, "title": "Critical bug", "state": "open"}
     respx.get("https://api.github.com/repos/owner/repo/issues/42").mock(return_value=httpx.Response(200, json=issue))
-    result = await connector.query(
-        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"})
-    )
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "42"}))
     assert result.records[0]["number"] == 42
 
 
@@ -502,9 +486,7 @@ async def test_write_pr_operations(
 
 @respx.mock
 async def test_write_pr_http_error(connector):
-    respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
-        return_value=httpx.Response(422, text="Unprocessable")
-    )
+    respx.post("https://api.github.com/repos/owner/repo/pulls").mock(return_value=httpx.Response(422, text="Unprocessable"))
     payload = ConnectorPayload(
         resource="pr",
         data={"repo": "owner/repo", "title": "Bad PR", "head": "fix", "base": "main"},
@@ -521,12 +503,8 @@ async def test_write_pr_http_error(connector):
 @respx.mock
 async def test_query_pr_commits(connector):
     commits = [{"sha": "abc123", "commit": {"message": "Fix bug"}}]
-    respx.get("https://api.github.com/repos/owner/repo/pulls/1/commits").mock(
-        return_value=httpx.Response(200, json=commits)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo", "pull_number": "1"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/1/commits").mock(return_value=httpx.Response(200, json=commits))
+    result = await connector.query(ConnectorQuery(resource="pr_commits", filters={"repo": "owner/repo", "pull_number": "1"}))
     assert len(result.records) == 1
     assert result.records[0]["sha"] == "abc123"
 
@@ -534,12 +512,8 @@ async def test_query_pr_commits(connector):
 @respx.mock
 async def test_query_pr_files(connector):
     files = [{"filename": "README.md", "status": "modified", "additions": 1, "deletions": 0}]
-    respx.get("https://api.github.com/repos/owner/repo/pulls/1/files").mock(
-        return_value=httpx.Response(200, json=files)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="pr_files", filters={"repo": "owner/repo", "pull_number": "1"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/1/files").mock(return_value=httpx.Response(200, json=files))
+    result = await connector.query(ConnectorQuery(resource="pr_files", filters={"repo": "owner/repo", "pull_number": "1"}))
     assert len(result.records) == 1
     assert result.records[0]["filename"] == "README.md"
 
@@ -568,13 +542,8 @@ async def test_custom_base_url():
 @respx.mock
 async def test_query_repos_pagination_cursor(connector):
     repos = [{"id": 1, "name": "repo-a"}]
-    link_header = (
-        '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", '
-        '<https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
-    )
-    respx.get("https://api.github.com/user/repos?per_page=5").mock(
-        return_value=httpx.Response(200, json=repos, headers={"Link": link_header})
-    )
+    link_header = '<https://api.github.com/user/repos?page=2&per_page=5>; rel="next", <https://api.github.com/user/repos?page=1&per_page=5>; rel="first"'
+    respx.get("https://api.github.com/user/repos?per_page=5").mock(return_value=httpx.Response(200, json=repos, headers={"Link": link_header}))
     result = await connector.query(ConnectorQuery(resource="repos", limit=5))
     assert result.next_cursor == "https://api.github.com/user/repos?page=2&per_page=5"
     assert len(result.records) == 1
@@ -584,9 +553,7 @@ async def test_query_repos_pagination_cursor(connector):
 async def test_query_pulls_pagination_cursor(connector):
     prs = [{"number": 1, "title": "PR 1"}]
     link_header = '<https://api.github.com/repos/owner/repo/pulls?page=2>; rel="next"'
-    respx.get("https://api.github.com/repos/owner/repo/pulls?state=open&per_page=10").mock(
-        return_value=httpx.Response(200, json=prs, headers={"Link": link_header})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls?state=open&per_page=10").mock(return_value=httpx.Response(200, json=prs, headers={"Link": link_header}))
     result = await connector.query(ConnectorQuery(resource="pulls", filters={"repo": "owner/repo"}, limit=10))
     assert result.next_cursor is not None
     assert "page=2" in result.next_cursor
@@ -599,25 +566,16 @@ async def test_query_pulls_pagination_cursor(connector):
 
 @respx.mock
 async def test_query_pr_diff(connector):
-    diff = (
-        "diff --git a/README.md b/README.md\nindex abc..def 100644\n--- a/README.md\n"
-        "+++ b/README.md\n@@ -1 +1 @@\n-hello\n+world\n"
-    )
-    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
-        return_value=httpx.Response(200, text=diff, headers={"Content-Type": "text/plain; charset=utf-8"})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="pr_diff", filters={"repo": "owner/repo", "pull_number": "42"})
-    )
+    diff = "diff --git a/README.md b/README.md\nindex abc..def 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+world\n"
+    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(return_value=httpx.Response(200, text=diff, headers={"Content-Type": "text/plain; charset=utf-8"}))
+    result = await connector.query(ConnectorQuery(resource="pr_diff", filters={"repo": "owner/repo", "pull_number": "42"}))
     assert result.total == 1
     assert result.records[0]["diff"] == diff
 
 
 @respx.mock
 async def test_query_pr_diff_sends_diff_accept_header(connector):
-    route = respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(
-        return_value=httpx.Response(200, text="+patch")
-    )
+    route = respx.get("https://api.github.com/repos/owner/repo/pulls/7").mock(return_value=httpx.Response(200, text="+patch"))
     await connector.query(ConnectorQuery(resource="pr_diff", filters={"repo": "owner/repo", "pull_number": "7"}))
     accept = route.calls.last.request.headers.get("Accept")
     assert accept == "application/vnd.github.v3.diff"
@@ -629,9 +587,7 @@ async def test_query_search_issues(connector):
         "total_count": 1,
         "items": [{"number": 9, "title": "Search hit", "html_url": "https://github.com/owner/repo/issues/9"}],
     }
-    respx.get("https://api.github.com/search/issues?q=repo%3Aowner%2Frepo+is%3Aopen&per_page=100").mock(
-        return_value=httpx.Response(200, json=body)
-    )
+    respx.get("https://api.github.com/search/issues?q=repo%3Aowner%2Frepo+is%3Aopen&per_page=100").mock(return_value=httpx.Response(200, json=body))
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "repo:owner/repo is:open"}))
     assert result.total == 1
     assert len(result.records) == 1
@@ -640,9 +596,7 @@ async def test_query_search_issues(connector):
 
 @respx.mock
 async def test_query_search_issues_empty(connector):
-    respx.get("https://api.github.com/search/issues?q=nothing&per_page=100").mock(
-        return_value=httpx.Response(200, json={"total_count": 0, "items": []})
-    )
+    respx.get("https://api.github.com/search/issues?q=nothing&per_page=100").mock(return_value=httpx.Response(200, json={"total_count": 0, "items": []}))
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "nothing"}))
     assert result.total == 0
     assert not result.records
@@ -651,9 +605,7 @@ async def test_query_search_issues_empty(connector):
 @respx.mock
 async def test_query_search_issues_corrupt_total(connector):
     """A non-finite ``total_count`` must not poison the reported total."""
-    respx.get("https://api.github.com/search/issues?q=bug&per_page=100").mock(
-        return_value=httpx.Response(200, content=b'{"total_count": 1e999, "items": [{"number": 1}]}')
-    )
+    respx.get("https://api.github.com/search/issues?q=bug&per_page=100").mock(return_value=httpx.Response(200, content=b'{"total_count": 1e999, "items": [{"number": 1}]}'))
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "bug"}))
     assert len(result.records) == 1
     assert result.total == 0
@@ -663,9 +615,7 @@ async def test_query_search_issues_corrupt_total(connector):
 async def test_query_search_issues_pagination(connector):
     body = {"total_count": 30, "items": [{"number": 1}]}
     link_header = '<https://api.github.com/search/issues?q=bug&page=2&per_page=10>; rel="next"'
-    respx.get("https://api.github.com/search/issues?q=bug&per_page=10").mock(
-        return_value=httpx.Response(200, json=body, headers={"Link": link_header})
-    )
+    respx.get("https://api.github.com/search/issues?q=bug&per_page=10").mock(return_value=httpx.Response(200, json=body, headers={"Link": link_header}))
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "bug"}, limit=10))
     assert result.next_cursor is not None
     assert "page=2" in result.next_cursor
@@ -674,9 +624,7 @@ async def test_query_search_issues_pagination(connector):
 @respx.mock
 async def test_query_search_issues_passes_optional_params(connector):
     body = {"total_count": 1, "items": [{"number": 3, "state": "open"}]}
-    respx.get("https://api.github.com/search/issues?q=bug&sort=created&order=asc&state=open&per_page=5").mock(
-        return_value=httpx.Response(200, json=body)
-    )
+    respx.get("https://api.github.com/search/issues?q=bug&sort=created&order=asc&state=open&per_page=5").mock(return_value=httpx.Response(200, json=body))
     result = await connector.query(
         ConnectorQuery(
             resource="search_issues",
@@ -712,9 +660,7 @@ async def test_query_search_issues_passes_optional_params(connector):
 )
 @respx.mock
 async def test_write_pr_merge(connector, data, expected_body):
-    route = respx.put("https://api.github.com/repos/owner/repo/pulls/1/merge").mock(
-        return_value=httpx.Response(200, json={"sha": "merged123", "merged": True})
-    )
+    route = respx.put("https://api.github.com/repos/owner/repo/pulls/1/merge").mock(return_value=httpx.Response(200, json={"sha": "merged123", "merged": True}))
     result = await connector.write(ConnectorPayload(resource="pr_merge", data=data))
     assert result["merged"] is True
     sent = json.loads(route.calls.last.request.content)
@@ -723,9 +669,7 @@ async def test_write_pr_merge(connector, data, expected_body):
 
 @respx.mock
 async def test_write_pr_review_request_reviewers(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
-        return_value=httpx.Response(201, json={"number": 1, "requested_reviewers": [{"login": "alice"}]})
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(return_value=httpx.Response(201, json={"number": 1, "requested_reviewers": [{"login": "alice"}]}))
     result = await connector.write(
         ConnectorPayload(
             resource="pr_review_request",
@@ -739,9 +683,7 @@ async def test_write_pr_review_request_reviewers(connector):
 
 @respx.mock
 async def test_write_pr_review_request_team_reviewers(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
-        return_value=httpx.Response(201, json={"number": 1})
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(return_value=httpx.Response(201, json={"number": 1}))
     await connector.write(
         ConnectorPayload(
             resource="pr_review_request",
@@ -754,9 +696,7 @@ async def test_write_pr_review_request_team_reviewers(connector):
 
 @respx.mock
 async def test_write_pr_review_request_both(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(
-        return_value=httpx.Response(201, json={"number": 1})
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/pulls/1/requested_reviewers").mock(return_value=httpx.Response(201, json={"number": 1}))
     await connector.write(
         ConnectorPayload(
             resource="pr_review_request",
@@ -780,9 +720,7 @@ async def test_write_pr_review_request_missing_reviewers(connector):
 
 @respx.mock
 async def test_write_pr_label(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/issues/1/labels").mock(
-        return_value=httpx.Response(200, json=[{"id": 1, "name": "ready"}])
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/1/labels").mock(return_value=httpx.Response(200, json=[{"id": 1, "name": "ready"}]))
     result = await connector.write(
         ConnectorPayload(
             resource="pr_label",
@@ -796,9 +734,7 @@ async def test_write_pr_label(connector):
 
 @respx.mock
 async def test_write_issue_assign(connector):
-    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/assignees").mock(
-        return_value=httpx.Response(201, json={"number": 42, "assignees": [{"login": "alice"}]})
-    )
+    route = respx.post("https://api.github.com/repos/owner/repo/issues/42/assignees").mock(return_value=httpx.Response(201, json={"number": 42, "assignees": [{"login": "alice"}]}))
     result = await connector.write(
         ConnectorPayload(
             resource="issue_assign",
@@ -823,12 +759,8 @@ async def test_query_tree_recursive(connector):
         {"path": "src", "mode": "040000", "type": "tree", "sha": "bbb", "size": 0},
         {"path": "src/main.py", "mode": "100644", "type": "blob", "sha": "ccc", "size": 42},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123", "commit": {"message": "init"}})
-    )
-    tree_route = respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123", "truncated": False, "tree": tree_entries})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "abc123", "commit": {"message": "init"}}))
+    tree_route = respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(return_value=httpx.Response(200, json={"sha": "abc123", "truncated": False, "tree": tree_entries}))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
     assert len(result.records) == 3
     assert result.records[0]["path"] == "README.md"
@@ -839,12 +771,8 @@ async def test_query_tree_recursive(connector):
 @respx.mock
 async def test_query_tree_non_recursive(connector):
     """recursive: false skips the recursive param (top-level listing only)."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123"})
-    )
-    tree_route = respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
-        return_value=httpx.Response(200, json={"tree": [{"path": "src", "type": "tree", "sha": "bbb"}]})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "abc123"}))
+    tree_route = respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(return_value=httpx.Response(200, json={"tree": [{"path": "src", "type": "tree", "sha": "bbb"}]}))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "recursive": False}))
     assert len(result.records) == 1
     assert tree_route.calls.last.request.url.params.get("recursive") is None
@@ -853,12 +781,8 @@ async def test_query_tree_non_recursive(connector):
 @respx.mock
 async def test_query_tree_custom_ref(connector):
     """A custom ref is forwarded to the commits resolution call."""
-    commit_route = respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(
-        return_value=httpx.Response(200, json={"sha": "dev123"})
-    )
-    respx.get("https://api.github.com/repos/owner/repo/git/trees/dev123").mock(
-        return_value=httpx.Response(200, json={"tree": [{"path": "a.txt", "type": "blob", "sha": "s"}]})
-    )
+    commit_route = respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(return_value=httpx.Response(200, json={"sha": "dev123"}))
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/dev123").mock(return_value=httpx.Response(200, json={"tree": [{"path": "a.txt", "type": "blob", "sha": "s"}]}))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "ref": "develop"}))
     assert result.records[0]["path"] == "a.txt"
     assert "commits/develop" in str(commit_route.calls.last.request.url)
@@ -874,12 +798,8 @@ async def test_query_tree_path_filter(connector):
         {"path": "docs/api.md", "type": "blob", "sha": "ddd"},
         {"path": "src/main.py", "type": "blob", "sha": "eee"},
     ]
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123"})
-    )
-    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
-        return_value=httpx.Response(200, json={"tree": tree_entries})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "abc123"}))
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(return_value=httpx.Response(200, json={"tree": tree_entries}))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "docs"}))
     assert [r["path"] for r in result.records] == ["docs/guide.md", "docs/api.md"]
 
@@ -893,9 +813,7 @@ async def test_query_tree_missing_repo(connector):
 @respx.mock
 async def test_query_tree_unresolvable_ref(connector):
     """A commit response without a SHA raises a descriptive ValueError."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"message": "no commit"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"message": "no commit"}))
     query = ConnectorQuery(resource="tree", filters={"repo": "owner/repo"})
     with pytest.raises(ValueError, match="could not resolve ref"):
         await connector.query(query)
@@ -908,20 +826,12 @@ async def test_query_tree_unresolvable_ref(connector):
 
 def _mock_commit_flow(repo="owner/repo", base_sha="base123", blob_shas=("blob1", "blob2")):
     """Register the commits/blobs/trees/commits/refs endpoints for a batch commit."""
-    respx.get(f"https://api.github.com/repos/{repo}/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": base_sha})
-    )
+    respx.get(f"https://api.github.com/repos/{repo}/commits/main").mock(return_value=httpx.Response(200, json={"sha": base_sha}))
     blob_route = respx.post(f"https://api.github.com/repos/{repo}/git/blobs")
     blob_route.mock(side_effect=[httpx.Response(201, json={"sha": sha}) for sha in blob_shas])
-    tree_route = respx.post(f"https://api.github.com/repos/{repo}/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    commit_route = respx.post(f"https://api.github.com/repos/{repo}/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    ref_route = respx.patch(f"https://api.github.com/repos/{repo}/git/refs/refs/heads/main").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/main", "object": {"sha": "commit123"}})
-    )
+    tree_route = respx.post(f"https://api.github.com/repos/{repo}/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    commit_route = respx.post(f"https://api.github.com/repos/{repo}/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    ref_route = respx.patch(f"https://api.github.com/repos/{repo}/git/refs/refs/heads/main").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/main", "object": {"sha": "commit123"}}))
     return blob_route, tree_route, commit_route, ref_route
 
 
@@ -981,18 +891,10 @@ async def test_write_commit_update(connector):
 @respx.mock
 async def test_write_commit_delete(connector):
     """A delete action adds a tree entry with a null SHA (no blob created)."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "base123"})
-    )
-    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/main"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "base123"}))
+    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/main"}))
     result = await connector.write(
         ConnectorPayload(
             resource="commit",
@@ -1007,25 +909,13 @@ async def test_write_commit_delete(connector):
 @respx.mock
 async def test_write_commit_move_reads_old_content(connector):
     """A move deletes the old path and blobs the old file's content at the new path."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "base123"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "base123"}))
     old_content = base64.b64encode(b"moved content").decode()
-    respx.get("https://api.github.com/repos/owner/repo/contents/old.txt?ref=main").mock(
-        return_value=httpx.Response(200, json={"content": old_content, "encoding": "base64"})
-    )
-    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(201, json={"sha": "blob1"})
-    )
-    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/main"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/old.txt?ref=main").mock(return_value=httpx.Response(200, json={"content": old_content, "encoding": "base64"}))
+    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "blob1"}))
+    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/main"}))
     await connector.write(
         ConnectorPayload(
             resource="commit",
@@ -1047,21 +937,11 @@ async def test_write_commit_move_reads_old_content(connector):
 @respx.mock
 async def test_write_commit_custom_ref_and_message(connector):
     """A custom ref is resolved and the ref update targets refs/heads/<ref>."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(
-        return_value=httpx.Response(200, json={"sha": "dev123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(201, json={"sha": "blob1"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/develop"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(return_value=httpx.Response(200, json={"sha": "dev123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "blob1"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/develop"}))
     await connector.write(
         ConnectorPayload(
             resource="commit",
@@ -1080,21 +960,11 @@ async def test_write_commit_custom_ref_and_message(connector):
 @respx.mock
 async def test_write_commit_full_git_ref_passthrough(connector):
     """An already-qualified refs/... ref is passed through unchanged."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/refs/heads/feature").mock(
-        return_value=httpx.Response(200, json={"sha": "feat123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(201, json={"sha": "blob1"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/feature").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/feature"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/refs/heads/feature").mock(return_value=httpx.Response(200, json={"sha": "feat123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "blob1"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/feature").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/feature"}))
     await connector.write(
         ConnectorPayload(
             resource="commit",
@@ -1125,21 +995,11 @@ async def test_write_files_alias(connector):
 @respx.mock
 async def test_write_commit_branch_alias(connector):
     """The 'branch' fallback is used when 'ref' is absent."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(
-        return_value=httpx.Response(200, json={"sha": "dev123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(201, json={"sha": "blob1"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
-        return_value=httpx.Response(201, json={"sha": "tree123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
-        return_value=httpx.Response(201, json={"sha": "commit123"})
-    )
-    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(
-        return_value=httpx.Response(200, json={"ref": "refs/heads/develop"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(return_value=httpx.Response(200, json={"sha": "dev123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "blob1"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(return_value=httpx.Response(201, json={"sha": "tree123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(return_value=httpx.Response(201, json={"sha": "commit123"}))
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(return_value=httpx.Response(200, json={"ref": "refs/heads/develop"}))
     await connector.write(
         ConnectorPayload(
             resource="commit",
@@ -1190,16 +1050,10 @@ async def test_write_commit_move_same_path_rejected(connector):
 @respx.mock
 async def test_write_commit_move_binary_file_raises_descriptive_error(connector):
     """Moving a non-UTF-8 binary file surfaces a descriptive ValueError, not a raw UnicodeDecodeError."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "base123"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "base123"}))
     binary_b64 = base64.b64encode(b"\x80\x81binary\xff").decode()
-    respx.get("https://api.github.com/repos/owner/repo/contents/old.bin?ref=main").mock(
-        return_value=httpx.Response(200, json={"content": binary_b64, "encoding": "base64"})
-    )
-    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(201, json={"sha": "blob1"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/contents/old.bin?ref=main").mock(return_value=httpx.Response(200, json={"content": binary_b64, "encoding": "base64"}))
+    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(201, json={"sha": "blob1"}))
     payload = ConnectorPayload(
         resource="commit",
         data={
@@ -1293,9 +1147,7 @@ async def test_write_commit_create_missing_content(connector):
 @respx.mock
 async def test_write_commit_unresolvable_ref(connector):
     """A ref that cannot be resolved to a commit SHA raises a descriptive error."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"message": "not found"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"message": "not found"}))
     with pytest.raises(ValueError, match="could not resolve ref"):
         await connector.write(
             ConnectorPayload(
@@ -1308,12 +1160,8 @@ async def test_write_commit_unresolvable_ref(connector):
 @respx.mock
 async def test_write_commit_http_error_propagates(connector):
     """An API error on blob creation surfaces as a ValueError with the status."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "base123"})
-    )
-    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
-        return_value=httpx.Response(422, text="Unprocessable")
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "base123"}))
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(return_value=httpx.Response(422, text="Unprocessable"))
     with pytest.raises(ValueError, match="422"):
         await connector.write(
             ConnectorPayload(
@@ -1444,9 +1292,7 @@ def test_retry_delay_reset_past_falls_back_to_retry_after() -> None:
 @respx.mock
 async def test_query_result_exposes_rate_limit_metadata(connector):
     repos = [{"id": 1, "name": "repo-a"}]
-    respx.get("https://api.github.com/user/repos").mock(
-        return_value=httpx.Response(200, json=repos, headers=RATE_LIMIT_HEADERS)
-    )
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=repos, headers=RATE_LIMIT_HEADERS))
     result = await connector.query(ConnectorQuery(resource="repos", limit=5))
     assert result.records[0]["name"] == "repo-a"
     meta = result.metadata.get("rate_limit", {})
@@ -1464,24 +1310,16 @@ async def test_query_result_rate_limit_metadata_absent_when_no_headers(connector
 @respx.mock
 async def test_single_resource_rate_limit_metadata(connector):
     """Single-record queries also expose the rate-limit budget."""
-    respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
-        return_value=httpx.Response(200, json={"id": 1}, headers=RATE_LIMIT_HEADERS)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(return_value=httpx.Response(200, json={"id": 1}, headers=RATE_LIMIT_HEADERS))
+    result = await connector.query(ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"}))
     assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
 
 
 @respx.mock
 async def test_query_tree_rate_limit_metadata(connector):
     """The Git Trees API response's quota headers flow through to the result."""
-    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123"})
-    )
-    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
-        return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=RATE_LIMIT_HEADERS)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(return_value=httpx.Response(200, json={"sha": "abc123"}))
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=RATE_LIMIT_HEADERS))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
     assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
 
@@ -1494,9 +1332,7 @@ async def test_query_rate_limit_resource(connector):
             "search": {"limit": 30, "remaining": 30, "reset": int(time.time()) + 60, "used": 0, "resource": "search"},
         }
     }
-    respx.get("https://api.github.com/rate_limit").mock(
-        return_value=httpx.Response(200, json=body, headers=RATE_LIMIT_HEADERS)
-    )
+    respx.get("https://api.github.com/rate_limit").mock(return_value=httpx.Response(200, json=body, headers=RATE_LIMIT_HEADERS))
     result = await connector.query(ConnectorQuery(resource="rate_limit"))
     assert len(result.records) == 1
     assert result.records[0]["core"]["remaining"] == 4999

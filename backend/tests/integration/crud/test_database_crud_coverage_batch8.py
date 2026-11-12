@@ -70,13 +70,9 @@ from farna.db.crud.tier_catalog import get_feature_flag, list_feature_flags, lis
 pytestmark = pytest.mark.integration
 
 
-async def test_pipeline_folder_crud_and_tenant_safe_moves(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pipeline_folder_crud_and_tenant_safe_moves(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     parent = await create_pipeline_folder(rls_session, org_id=test_org, name="Parent", account_id=test_user)
-    child = await create_pipeline_folder(
-        rls_session, org_id=test_org, name="Child", account_id=test_user, parent_id=parent.id
-    )
+    child = await create_pipeline_folder(rls_session, org_id=test_org, name="Child", account_id=test_user, parent_id=parent.id)
     assert [folder.name for folder in await list_pipeline_folders(rls_session)] == ["Child", "Parent"]
     assert await get_pipeline_folder(rls_session, child.id) is child
     with pytest.raises(ValueError, match="descendants"):
@@ -105,13 +101,9 @@ async def test_pipeline_folder_crud_and_tenant_safe_moves(
     assert await delete_pipeline_folder(rls_session, parent.id) is False
 
 
-async def test_schema_folder_crud_and_org_ownership_guard(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_schema_folder_crud_and_org_ownership_guard(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     parent = await create_schema_folder(rls_session, org_id=test_org, name="Schemas", account_id=test_user)
-    child = await create_schema_folder(
-        rls_session, org_id=test_org, name="Child", account_id=test_user, parent_id=parent.id
-    )
+    child = await create_schema_folder(rls_session, org_id=test_org, name="Child", account_id=test_user, parent_id=parent.id)
     assert len(await list_schema_folders(rls_session)) == 2
     assert await get_schema_folder(rls_session, child.id) is child
     assert await update_schema_folder(rls_session, child.id, {"name": "Updated", "parent_id": None}) is child
@@ -134,9 +126,7 @@ async def test_schema_folder_crud_and_org_ownership_guard(
     assert await delete_schema_folder(rls_session, parent.id) is False
 
 
-async def test_parameter_schema_crud_lifecycle_and_references(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_parameter_schema_crud_lifecycle_and_references(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     schema = await create_parameter_schema(
         rls_session,
         org_id=test_org,

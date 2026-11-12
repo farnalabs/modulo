@@ -111,18 +111,10 @@ def _backend_item(
 def _mock_state(backends: list[dict]) -> dict[str, respx.Route]:
     """Mock the list/versions/create/patch/health surfaces used by apply."""
     return {
-        "schemas_get": respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        ),
-        "backends_get": respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": backends, "total": len(backends), "page": 1, "page_size": 100}
-        ),
-        "backends_post": respx.post("https://api.test/api/v1/model-backends").respond(
-            201, json=_backend_item(base_url="https://gateway.internal/v1")
-        ),
-        "backends_patch": respx.patch(f"https://api.test/api/v1/model-backends/{_BACKEND_ID}").respond(
-            200, json=_backend_item()
-        ),
+        "schemas_get": respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100}),
+        "backends_get": respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": backends, "total": len(backends), "page": 1, "page_size": 100}),
+        "backends_post": respx.post("https://api.test/api/v1/model-backends").respond(201, json=_backend_item(base_url="https://gateway.internal/v1")),
+        "backends_patch": respx.patch(f"https://api.test/api/v1/model-backends/{_BACKEND_ID}").respond(200, json=_backend_item()),
         "mcp_post": respx.post("https://api.test/mcp/").respond(
             200,
             json={
@@ -131,9 +123,7 @@ def _mock_state(backends: list[dict]) -> dict[str, respx.Route]:
                 "result": {"content": [{"text": json.dumps({"secrets": [{"key": "local-key"}], "total": 1})}]},
             },
         ),
-        "health_post": respx.post(_HEALTH_PATH).respond(
-            200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}
-        ),
+        "health_post": respx.post(_HEALTH_PATH).respond(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}),
     }
 
 
@@ -353,13 +343,9 @@ class TestUpdate:
         assert blocked
         assert "literal api_key" in blocked[0]["reason"]
 
-    def test_unchanged_endpoint_allows_a_vault_ref_to_update_other_fields(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unchanged_endpoint_allows_a_vault_ref_to_update_other_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         report, routes = _run(
-            _credential_ref_config_with(base_url="https://same.internal/v1").replace(
-                "display_name: Local gateway", "display_name: Renamed gateway"
-            ),
+            _credential_ref_config_with(base_url="https://same.internal/v1").replace("display_name: Local gateway", "display_name: Renamed gateway"),
             current=[_backend_item(base_url="https://same.internal/v1")],
             monkeypatch=monkeypatch,
             dry_run=False,

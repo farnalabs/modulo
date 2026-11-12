@@ -41,11 +41,7 @@ class TestExportColumnContract:
         model_columns = {c.name for c in RunDailyFact.__table__.columns}
         exported = set(EXPORT_COLUMN_NAMES)
         missing = model_columns - _INTERNAL_FACT_COLUMNS - exported
-        assert not missing, (
-            "run_daily_facts carries columns the raw export does not: "
-            f"{sorted(missing)} — add them to _EXPORT_COLUMNS (or to "
-            "_INTERNAL_FACT_COLUMNS with a reason if they are plumbing)"
-        )
+        assert not missing, f"run_daily_facts carries columns the raw export does not: {sorted(missing)} — add them to _EXPORT_COLUMNS (or to _INTERNAL_FACT_COLUMNS with a reason if they are plumbing)"
 
     def test_json_export_item_covers_every_export_column(self) -> None:
         # The JSON surface validates through AnalyticsExportItem, so a column

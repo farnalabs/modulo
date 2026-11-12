@@ -41,15 +41,9 @@ class TestFingerprint:
         ("msg1", "stack1", "src1", "msg2", "stack2", "src2", "should_match"),
         [
             pytest.param("test error", None, "backend", "test error", None, "backend", True, id="same_input_same_hash"),
-            pytest.param(
-                "error one", None, "backend", "error two", None, "backend", False, id="different_message_different_hash"
-            ),
-            pytest.param(
-                "test", None, "backend", "test", None, "frontend", False, id="different_source_different_hash"
-            ),
-            pytest.param(
-                "test", "line 1\nline 2", "backend", "test", None, "backend", False, id="stacktrace_affects_hash"
-            ),
+            pytest.param("error one", None, "backend", "error two", None, "backend", False, id="different_message_different_hash"),
+            pytest.param("test", None, "backend", "test", None, "frontend", False, id="different_source_different_hash"),
+            pytest.param("test", "line 1\nline 2", "backend", "test", None, "backend", False, id="stacktrace_affects_hash"),
             pytest.param(
                 "error",
                 "traceback line 1\ntraceback line 2",

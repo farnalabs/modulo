@@ -103,10 +103,7 @@ def client() -> Generator[TestClient, None, None]:
 
 _OBJ_MSG = "retry_policy must be an object like {'on': ['stall','timeout','failure','eval_failed'], 'max_retries': 0-5}"
 _ON_LIST_MSG = "retry_policy 'on' must be a list of strings from ['stall','timeout','failure','eval_failed']"
-_BOGUS_MSG = (
-    "retry_policy 'on' contains unknown values ['bogus']; "
-    "allowed values are ['stall','timeout','failure','eval_failed']"
-)
+_BOGUS_MSG = "retry_policy 'on' contains unknown values ['bogus']; allowed values are ['stall','timeout','failure','eval_failed']"
 _BUDGET_MSG = "retry_policy 'max_retries' must be an integer between 0 and 5"
 
 

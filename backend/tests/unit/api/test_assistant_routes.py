@@ -406,14 +406,10 @@ def test_message_to_langchain_all_roles() -> None:
     assert isinstance(human, HumanMessage)
     assistant = assistant_routes._message_to_langchain(_msg("assistant", "yo"))
     assert isinstance(assistant, AIMessage)
-    tool_use = assistant_routes._message_to_langchain(
-        _msg("tool_use", "", tool_calls_json={"tool_calls": [{"name": "click", "args": {}, "id": "t1"}]})
-    )
+    tool_use = assistant_routes._message_to_langchain(_msg("tool_use", "", tool_calls_json={"tool_calls": [{"name": "click", "args": {}, "id": "t1"}]}))
     assert isinstance(tool_use, AIMessage)
     assert tool_use.tool_calls[0]["name"] == "click"
-    tool_result = assistant_routes._message_to_langchain(
-        _msg("tool_result", "ok", tool_results_json={"tool_call_id": "tc-1"})
-    )
+    tool_result = assistant_routes._message_to_langchain(_msg("tool_result", "ok", tool_results_json={"tool_call_id": "tc-1"}))
     assert isinstance(tool_result, ToolMessage)
     assert tool_result.tool_call_id == "tc-1"
     summary = assistant_routes._message_to_langchain(_msg("summary", "so far"))
@@ -727,9 +723,7 @@ def test_run_manifest_calls_without_path_returns_full_manifest() -> None:
 def test_run_manifest_calls_with_path_returns_single_route() -> None:
     manifest = {"routes": {"/a": {"name": "A"}}, "elements": {"/a": [{"testid": "create"}]}, "sidebar_groups": {}}
     with patch("farna.core.manifest.get_manifest", return_value=manifest):
-        events = _collect(
-            assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {"path": "/a"}}])
-        )
+        events = _collect(assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {"path": "/a"}}]))
     assert events[0]["tool_name"] == "get_manifest"
     assert events[0]["result"] == {"route": {"name": "A"}, "elements": [{"testid": "create"}]}
 
@@ -985,9 +979,7 @@ def test_stream_event_generator_error_handlers() -> None:
             patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, side_effect=side_effect),
         ):
             events: list[str] = []
-            gen = assistant_routes._stream_event_generator(
-                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
-            )
+            gen = assistant_routes._stream_event_generator(_make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock())
             async for event in gen:
                 events.append(event)
             return events
@@ -1142,9 +1134,7 @@ def test_stream_event_generator_http_exception_from_init() -> None:
             ),
         ):
             events: list[str] = []
-            gen = assistant_routes._stream_event_generator(
-                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
-            )
+            gen = assistant_routes._stream_event_generator(_make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock())
             async for event in gen:
                 events.append(event)
             return events
@@ -1168,9 +1158,7 @@ def test_stream_event_generator_programming_error() -> None:
             ),
         ):
             events: list[str] = []
-            gen = assistant_routes._stream_event_generator(
-                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
-            )
+            gen = assistant_routes._stream_event_generator(_make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock())
             async for event in gen:
                 events.append(event)
             return events
@@ -1190,9 +1178,7 @@ def test_stream_event_generator_backend_none_emits_error() -> None:
             patch("farna.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
         ):
             events: list[str] = []
-            gen = assistant_routes._stream_event_generator(
-                _make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock()
-            )
+            gen = assistant_routes._stream_event_generator(_make_mock_session(), MagicMock(), _principal_obj(), uuid.uuid4(), req, _make_settings(), MagicMock())
             async for event in gen:
                 events.append(event)
             return events
@@ -1262,9 +1248,7 @@ def test_persist_assistant_and_tool_messages() -> None:
     ctx = _ctx_with_id_assigning_flush()
     tool_calls = [{"id": "t1", "name": "click", "args": {}}]
     tool_results = [{"tool_call_id": "t1", "tool_name": "click", "success": True, "result": {"ok": 1}}]
-    msg_id = asyncio.run(
-        assistant_routes._persist_assistant_and_tool_messages(ctx, "response", tool_calls, tool_results, None)
-    )
+    msg_id = asyncio.run(assistant_routes._persist_assistant_and_tool_messages(ctx, "response", tool_calls, tool_results, None))
     assert uuid.UUID(msg_id)
 
 

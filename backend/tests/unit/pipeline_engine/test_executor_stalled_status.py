@@ -120,9 +120,7 @@ def test_stalled_is_a_terminal_status():
 def test_run_model_check_constraint_allows_stalled():
     """The DB CHECK constraint on runs.status accepts 'stalled'."""
     table_args = Run.__table_args__
-    check_sql = " ".join(
-        arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status"
-    )
+    check_sql = " ".join(arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status")
     assert "'stalled'" in check_sql
 
 

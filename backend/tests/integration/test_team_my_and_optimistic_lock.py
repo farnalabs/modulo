@@ -48,9 +48,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
             account_id = uuid.uuid4()
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, "
-                    "auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
                 ),
                 {"id": str(account_id), "email": email, "name": email.split("@", maxsplit=1)[0]},
             )
@@ -63,8 +61,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         if membership.first() is None:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
                 ),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
             )

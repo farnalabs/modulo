@@ -79,11 +79,7 @@ class TestExtractColumnInfo:
     """Column/table extraction from exception messages."""
 
     def test_undefined_column_error(self) -> None:
-        exc = _make_db_error(
-            "asyncpg.exceptions.UndefinedColumnError: "
-            "column organisations.updated_at does not exist\n"
-            "HINT: Perhaps you meant to reference the column"
-        )
+        exc = _make_db_error("asyncpg.exceptions.UndefinedColumnError: column organisations.updated_at does not exist\nHINT: Perhaps you meant to reference the column")
         table, column = _extract_column_info(exc)
         assert table == "organisations"
         assert column == "updated_at"

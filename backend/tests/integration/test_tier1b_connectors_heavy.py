@@ -66,8 +66,7 @@ def _gitlab_root_pat(handle: ContainerHandle) -> str:
             "runner",
             "-e",
             "production",
-            "t = PersonalAccessToken.create!(user: User.find_by(username: 'root'), "
-            "name: 'modulo-ci', scopes: [:api], expires_at: 364.days.from_now); puts t.token",
+            "t = PersonalAccessToken.create!(user: User.find_by(username: 'root'), name: 'modulo-ci', scopes: [:api], expires_at: 364.days.from_now); puts t.token",
         ]
     ).strip()
     assert token, f"expected a real GitLab PAT from rails runner, got {token!r}"
@@ -133,8 +132,7 @@ def gitlab_connector(gitlab_service: ContainerHandle) -> GitLabConnector:
     # the marker through the raw CREATE endpoint here. The roundtrip test
     # then proves the connector's own write surface against real data.
     seed = httpx.post(
-        f"{gitlab_service.base_url}/api/v4/projects/{GITLAB_PROJECT.replace('/', '%2F')}"
-        "/repository/files/tier1b%2Fmarker.md",
+        f"{gitlab_service.base_url}/api/v4/projects/{GITLAB_PROJECT.replace('/', '%2F')}/repository/files/tier1b%2Fmarker.md",
         headers={"PRIVATE-TOKEN": gitlab_service.creds["gitlab_token"]},
         data={
             "branch": "main",
@@ -160,13 +158,9 @@ async def test_gitlab_query_projects(gitlab_connector: GitLabConnector) -> None:
 
 async def test_gitlab_write_issue_then_query(gitlab_connector: GitLabConnector) -> None:
     title = "tier1b-roundtrip-issue"
-    write = await gitlab_connector.write(
-        ConnectorPayload(resource="issue", data={"project": GITLAB_PROJECT, "title": title})
-    )
+    write = await gitlab_connector.write(ConnectorPayload(resource="issue", data={"project": GITLAB_PROJECT, "title": title}))
     assert isinstance(write, dict), f"expected dict from gitlab issue write, got {type(write).__name__}"
-    result = await gitlab_connector.query(
-        ConnectorQuery(resource="issues", filters={"project": GITLAB_PROJECT, "state": "opened"})
-    )
+    result = await gitlab_connector.query(ConnectorQuery(resource="issues", filters={"project": GITLAB_PROJECT, "state": "opened"}))
     titles = {record.get("title") for record in result.records}
     assert title in titles, f"gitlab write-then-read roundtrip failed; real issues: {titles!r}"
 
@@ -186,9 +180,7 @@ async def test_gitlab_write_file_then_read(gitlab_connector: GitLabConnector) ->
         )
     )
     assert isinstance(write, dict), f"expected dict from gitlab file write, got {type(write).__name__}"
-    read = await gitlab_connector.query(
-        ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": "tier1b/marker.md", "ref": "main"})
-    )
+    read = await gitlab_connector.query(ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": "tier1b/marker.md", "ref": "main"}))
     assert isinstance(read.records, list), "gitlab file read must return real records"
 
 
@@ -213,7 +205,5 @@ async def test_gitlab_write_file_create_new_path(gitlab_connector: GitLabConnect
         )
     )
     assert isinstance(write, dict), f"expected dict from gitlab file create, got {type(write).__name__}"
-    read = await gitlab_connector.query(
-        ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": path, "ref": "main"})
-    )
+    read = await gitlab_connector.query(ConnectorQuery(resource="file", filters={"project": GITLAB_PROJECT, "path": path, "ref": "main"}))
     assert isinstance(read.records, list), "gitlab file read must return real records"

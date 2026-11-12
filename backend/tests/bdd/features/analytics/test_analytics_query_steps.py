@@ -249,9 +249,7 @@ def _perform_request(request: Any, url: str, **service_mocks: AsyncMock) -> None
     )
     client = next(client_gen)
     engine_patch = patch("farna.api.routes.analytics.get_or_create_engine", new=MagicMock())
-    service_patches = {
-        name: patch(f"farna.api.routes.analytics.{name}", new=mock) for name, mock in service_mocks.items()
-    }
+    service_patches = {name: patch(f"farna.api.routes.analytics.{name}", new=mock) for name, mock in service_mocks.items()}
     try:
         engine_patch.start()
         for p in service_patches.values():
@@ -364,9 +362,7 @@ def _when_request(request: Any, url: str) -> None:
     if "/analytics/query" in url:
         mocks["run_analytics_query"] = run_query_mock
     elif "/analytics/concurrency" in url:
-        mocks["run_concurrency_query"] = AsyncMock(
-            return_value=ctx.get("concurrency_result", dict(_CONCURRENCY_RESULT))
-        )
+        mocks["run_concurrency_query"] = AsyncMock(return_value=ctx.get("concurrency_result", dict(_CONCURRENCY_RESULT)))
     elif "/analytics/guardrails" in url:
         mocks["run_guardrail_scorecard"] = AsyncMock(return_value=ctx.get("guardrail_result", dict(_GUARDRAIL_RESULT)))
     elif "/analytics/export" in url:
@@ -451,9 +447,7 @@ def _then_pipeline_ids(request: Any) -> None:
     assert mock.await_count == 1, f"run_analytics_query awaited {mock.await_count} times"
     _, kwargs = mock.await_args
     params = kwargs["params"]
-    assert tuple(params.pipeline_ids) == (_FILTER_A, _FILTER_B), (
-        f"expected pipeline_ids ({_FILTER_A}, {_FILTER_B}), got {tuple(params.pipeline_ids)}"
-    )
+    assert tuple(params.pipeline_ids) == (_FILTER_A, _FILTER_B), f"expected pipeline_ids ({_FILTER_A}, {_FILTER_B}), got {tuple(params.pipeline_ids)}"
 
 
 @then("the response echoes the trigger_type dimension")

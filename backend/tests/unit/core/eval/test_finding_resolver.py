@@ -302,9 +302,7 @@ class TestApplyMutePolicy:
                 "total_outcomes": 10,
             }
 
-            result = await apply_mute_policy(
-                mock_session, "eval-123", "org-123", "550e8400-e29b-41d4-a716-446655440000"
-            )
+            result = await apply_mute_policy(mock_session, "eval-123", "org-123", "550e8400-e29b-41d4-a716-446655440000")
 
         assert result is not None
         assert mock_eval.is_muted is True

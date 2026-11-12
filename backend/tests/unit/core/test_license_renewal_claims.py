@@ -263,11 +263,7 @@ class TestClaimsAreSigned:
         )
         payload = _payload_of(key)
         payload["renewal_mode"] = RENEWAL_MODE_AUTO
-        tampered_payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
+        tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
         tampered = f"{tampered_payload_b64}.{key.split('.', 1)[1]}"
 
         result = parse_and_verify(tampered)
@@ -280,11 +276,7 @@ class TestClaimsAreSigned:
         key = generate_team_license("Acme", term_months=12, private_key_hex=kp["private_key"])
         payload = _payload_of(key)
         payload["term"] = 120
-        tampered_payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
+        tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
         tampered = f"{tampered_payload_b64}.{key.split('.', 1)[1]}"
 
         result = parse_and_verify(tampered)
@@ -295,11 +287,7 @@ class TestClaimsAreSigned:
         key = generate_team_license("Acme", private_key_hex=kp["private_key"], licence_id="lic-a")
         payload = _payload_of(key)
         payload["licence_id"] = "lic-b"
-        tampered_payload_b64 = (
-            base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-            .decode()
-            .rstrip("=")
-        )
+        tampered_payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
         tampered = f"{tampered_payload_b64}.{key.split('.', 1)[1]}"
 
         result = parse_and_verify(tampered)
@@ -396,9 +384,7 @@ class TestStackingBaseDate:
         # And emphatically NOT the naive "now + term" that would burn 20 days.
         assert payload["expires_at"] != "2027-06-15T12:00:00+00:00"
 
-    def test_early_renewal_extends_by_the_full_term_at_read_back(
-        self, kp: dict[str, str], frozen_now: datetime
-    ) -> None:
+    def test_early_renewal_extends_by_the_full_term_at_read_back(self, kp: dict[str, str], frozen_now: datetime) -> None:
         """The stacked expiry survives signing and verification, not just the dict."""
         previous_expiry = frozen_now + timedelta(days=20)
 
@@ -451,9 +437,7 @@ class TestStackingBaseDate:
         assert payload["issued_at"] == "2026-06-15T12:00:00+00:00"
         assert payload["expires_at"] != payload["issued_at"]
 
-    def test_a_stacked_renewal_carries_its_own_term_and_auto_mode(
-        self, kp: dict[str, str], frozen_now: datetime
-    ) -> None:
+    def test_a_stacked_renewal_carries_its_own_term_and_auto_mode(self, kp: dict[str, str], frozen_now: datetime) -> None:
         """A renewal key states what it is, so the NEXT renewal can compute too."""
         key = generate_team_license(
             "Acme",

@@ -100,9 +100,7 @@ def test_calculated_requires_formula() -> None:
 
 def test_rate_without_source_rejected() -> None:
     with pytest.raises(CostFormulaError) as exc_info:
-        validate_component_formula(
-            kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback=None
-        )
+        validate_component_formula(kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback=None)
     assert exc_info.value.code == "rate_without_source"
 
 
@@ -111,40 +109,20 @@ def test_rate_with_fallback_ok() -> None:
     # fallback used here is genuinely registered so a typo'd/renamed registry
     # entry cannot silently keep this test passing for the wrong reason.
     assert "e2b_rate" in REGISTERED_RATE_FALLBACKS
-    assert (
-        validate_component_formula(
-            kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback="e2b_rate"
-        )
-        is None
-    )  # a registered fallback satisfies the 'rate' reference
+    assert validate_component_formula(kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback="e2b_rate") is None  # a registered fallback satisfies the 'rate' reference
 
 
 def test_rate_with_rate_usd_ok() -> None:
     # The cross-field rule only fires when BOTH sources are absent — an explicit
     # rate_usd satisfies the 'rate' reference, and zero is still an explicit source.
-    assert (
-        validate_component_formula(
-            kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback=None
-        )
-        is None
-    )  # an explicit rate_usd satisfies the 'rate' reference
-    assert (
-        validate_component_formula(
-            kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal(0), rate_fallback=None
-        )
-        is None
-    )  # a zero rate_usd is still a provided source
+    assert validate_component_formula(kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback=None) is None  # an explicit rate_usd satisfies the 'rate' reference
+    assert validate_component_formula(kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal(0), rate_fallback=None) is None  # a zero rate_usd is still a provided source
 
 
 def test_rate_with_both_sources_ok() -> None:
     # Both an explicit rate_usd AND a rate_fallback are set — the 'rate'
     # reference is satisfied by either source, so the combination must not raise.
-    assert (
-        validate_component_formula(
-            kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback="e2b_rate"
-        )
-        is None
-    )
+    assert validate_component_formula(kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback="e2b_rate") is None
 
 
 # --- CRUD guards (mocked session) ---------------------------------------------

@@ -149,9 +149,7 @@ async def test_seed_modulo_users_new_user(monkeypatch: pytest.MonkeyPatch) -> No
 @pytest.mark.anyio
 async def test_seed_modulo_users_seeds_each_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     org = SimpleNamespace(id=uuid.uuid4())
-    session = _session_with_results(
-        [_result(scalar_one_or_none=org), _result(scalar_one_or_none=None), _result(scalar_one_or_none=None)]
-    )
+    session = _session_with_results([_result(scalar_one_or_none=org), _result(scalar_one_or_none=None), _result(scalar_one_or_none=None)])
     monkeypatch.setattr("farna.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
     await seed_modulo_users(_mock_factory(session), "a@example.com:pw1,b@example.com:pw2")
     assert session.add.call_count == 4  # account + membership per entry
@@ -298,9 +296,7 @@ async def test_main_users_wrapper_skips_empty_users_without_seams(
 
 
 @pytest.mark.anyio
-async def test_seed_modulo_user_records_system_actor_audit(
-    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_modulo_user_records_system_actor_audit(audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """A created account + role grant lands on the org's audit chain with the
     SYSTEM actor and an honest ``boot_seed`` actor source."""
     org = SimpleNamespace(id=uuid.uuid4())
@@ -323,9 +319,7 @@ async def test_seed_modulo_user_records_system_actor_audit(
 
 
 @pytest.mark.anyio
-async def test_seed_modulo_user_records_runner_grant_as_runner_role(
-    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_seed_modulo_user_records_runner_grant_as_runner_role(audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-admin seed records the runner role it actually granted."""
     org = SimpleNamespace(id=uuid.uuid4())
     session = _mock_session(_result(scalar_one_or_none=None))
@@ -426,9 +420,7 @@ async def test_rehash_existing_user_creates_admin_membership_records_role_grante
 
 
 @pytest.mark.anyio
-async def test_audit_failure_never_fails_the_seed(
-    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_audit_failure_never_fails_the_seed(audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The grant commits even when its record cannot be written — fail-open
     with a loud log (mirrors the admin create-user route)."""
     audit_append_spy.side_effect = RuntimeError("audit db down")
@@ -444,9 +436,7 @@ async def test_audit_failure_never_fails_the_seed(
 
 
 @pytest.mark.anyio
-async def test_audit_cancellation_is_never_swallowed(
-    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_audit_cancellation_is_never_swallowed(audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """``CancelledError`` is the one exception the fail-open record must not
     swallow — a cancelled boot seed must actually stop."""
     audit_append_spy.side_effect = asyncio.CancelledError()

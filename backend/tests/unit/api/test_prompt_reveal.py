@@ -370,9 +370,7 @@ class TestBuildMessagesFromTemplateAndState:
     def test_includes_user_message_from_input_payload(self) -> None:
         from farna.api.routes.runs import _build_messages_from_template_and_state
 
-        messages = _build_messages_from_template_and_state(
-            "You are a helpful assistant.", {"query": "hello"}, None, None, "node-a"
-        )
+        messages = _build_messages_from_template_and_state("You are a helpful assistant.", {"query": "hello"}, None, None, "node-a")
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert len(user_msgs) == 1
         assert "hello" in user_msgs[0]["content"]
@@ -388,9 +386,7 @@ class TestBuildMessagesFromTemplateAndState:
         from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-b": "previous result"}
-        messages = _build_messages_from_template_and_state(
-            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
-        )
+        messages = _build_messages_from_template_and_state("You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a")
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert len(assistant_msgs) == 1
         assert "previous result" in assistant_msgs[0]["content"]
@@ -399,9 +395,7 @@ class TestBuildMessagesFromTemplateAndState:
         from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-a": "self output", "node-b": "other output"}
-        messages = _build_messages_from_template_and_state(
-            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
-        )
+        messages = _build_messages_from_template_and_state("You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a")
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert all("self output" not in m["content"] for m in assistant_msgs)
         assert any("other output" in m["content"] for m in assistant_msgs)
@@ -410,9 +404,7 @@ class TestBuildMessagesFromTemplateAndState:
         from farna.api.routes.runs import _build_messages_from_template_and_state
 
         checkpoint_state = {"run_context": {"input": {"query": "from checkpoint"}}}
-        messages = _build_messages_from_template_and_state(
-            "You are a helpful assistant.", {"query": "from payload"}, None, checkpoint_state, "node-a"
-        )
+        messages = _build_messages_from_template_and_state("You are a helpful assistant.", {"query": "from payload"}, None, checkpoint_state, "node-a")
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert "from checkpoint" in user_msgs[0]["content"]
 
@@ -420,9 +412,7 @@ class TestBuildMessagesFromTemplateAndState:
         from farna.api.routes.runs import _build_messages_from_template_and_state
 
         outputs = {"node-b": {"summary": "agent summary", "changed_files": ["a.py"]}}
-        messages = _build_messages_from_template_and_state(
-            "You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a"
-        )
+        messages = _build_messages_from_template_and_state("You are a helpful assistant.", {"q": "hi"}, outputs, None, "node-a")
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert len(assistant_msgs) == 1
         content = assistant_msgs[0]["content"]
@@ -710,9 +700,7 @@ class TestRevealNodePrompt:
             "other-agent-only",
         ],
     )
-    def test_reveal_falls_back_to_snapshot_template_when_no_override_applies(
-        self, client: TestClient, variant_config: Any
-    ) -> None:
+    def test_reveal_falls_back_to_snapshot_template_when_no_override_applies(self, client: TestClient, variant_config: Any) -> None:
         """Every malformed/absent variant-config shape falls back to the
         snapshot node template (dispatch only overrides on a NON-EMPTY str
         for this node's own agent)."""
@@ -768,9 +756,7 @@ class TestRevealNodePrompt:
         )
         checkpoint_row = (checkpoint_data, "ckp-001")
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row))
 
         with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(
@@ -842,9 +828,7 @@ class TestRevealNodePrompt:
         encrypted = f.encrypt(checkpoint_body.encode())
         checkpoint_row = (json.dumps({"__encrypted__": True, "data": encrypted.decode()}), "ckp-002")
 
-        session.execute = AsyncMock(
-            side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row)
-        )
+        session.execute = AsyncMock(side_effect=self._make_mock_execute(run, snapshot, agent=agent, checkpoint_row=checkpoint_row))
 
         with patch("farna.api.routes.runs.get_run", return_value=run), patch("farna.api.routes.runs.set_rls_org"):
             resp = client.post(

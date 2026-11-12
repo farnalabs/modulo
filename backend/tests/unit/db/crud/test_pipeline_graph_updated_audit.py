@@ -590,9 +590,7 @@ class TestRollbackGraphUpdatedAudit:
 
 
 class TestGraphReplaceLockScope:
-    async def test_pipeline_row_lock_precedes_audit_chain_head_lock(
-        self, engine: AsyncEngine, session: AsyncSession
-    ) -> None:
+    async def test_pipeline_row_lock_precedes_audit_chain_head_lock(self, engine: AsyncEngine, session: AsyncSession) -> None:
         """The pipeline row is locked BEFORE the audit-chain-head row.
 
         This is the ordering the deadlock analysis rests on: if the audit
@@ -621,10 +619,7 @@ class TestGraphReplaceLockScope:
         audit_head_read = next((i for i, s in enumerate(statements) if "from audit_chain_heads" in s.lower()), None)
         assert pipeline_read is not None, "the graph write must read the pipeline row"
         assert audit_head_read is not None, "the audit append must touch the audit-chain-head row"
-        assert pipeline_read < audit_head_read, (
-            "lock order MUST be pipeline -> audit-chain-head; taking the audit-chain-head row "
-            "first would let a concurrent graph write form a deadlock cycle"
-        )
+        assert pipeline_read < audit_head_read, "lock order MUST be pipeline -> audit-chain-head; taking the audit-chain-head row first would let a concurrent graph write form a deadlock cycle"
 
     async def test_audit_event_commits_and_rolls_back_with_the_graph_write(self, session: AsyncSession) -> None:
         """The audit event shares the write's transaction (scope test).

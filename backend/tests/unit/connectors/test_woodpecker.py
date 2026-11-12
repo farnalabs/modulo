@@ -424,9 +424,7 @@ async def test_get_run_logs_pending_run_without_steps_is_empty(runner: Woodpecke
 async def test_list_runs(runner: WoodpeckerCIRunner) -> None:
     _mock_lookup()
     route = respx.get(f"{API}/repos/7/pipelines").mock(
-        return_value=httpx.Response(
-            200, json=[_pipeline_payload(number=41, status="success"), _pipeline_payload(number=42, status="failure")]
-        ),
+        return_value=httpx.Response(200, json=[_pipeline_payload(number=41, status="success"), _pipeline_payload(number=42, status="failure")]),
     )
 
     runs = await runner.list_runs(pipeline_id="acme/widget", limit=5)

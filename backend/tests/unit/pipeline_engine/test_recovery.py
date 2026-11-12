@@ -118,14 +118,8 @@ def _stub_blob_reader(run: Any) -> Any:
     from farna.db.crud.run_node_outputs import RunBlobs
 
     async def _read(_session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
-        outputs = (
-            run.outputs_json if isinstance(getattr(run, "outputs_json", None), dict) and run.outputs_json else None
-        )
-        telemetry = (
-            run.node_telemetry_json
-            if isinstance(getattr(run, "node_telemetry_json", None), dict) and run.node_telemetry_json
-            else None
-        )
+        outputs = run.outputs_json if isinstance(getattr(run, "outputs_json", None), dict) and run.outputs_json else None
+        telemetry = run.node_telemetry_json if isinstance(getattr(run, "node_telemetry_json", None), dict) and run.node_telemetry_json else None
         return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
 
     return _read

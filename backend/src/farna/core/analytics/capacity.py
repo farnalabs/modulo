@@ -232,10 +232,7 @@ def build_pipeline_meta_query(org_id: uuid.UUID, params: CapacityParams) -> Any:
     if params.pipeline_ids:
         stmt = stmt.where(Pipeline.id.in_(params.pipeline_ids))
     if params.team_ids is not None:
-        if not params.team_ids:
-            stmt = stmt.where(Pipeline.owner_team_id.is_(None))
-        else:
-            stmt = stmt.where(sa.or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id.in_(params.team_ids)))
+        stmt = stmt.where(Pipeline.owner_team_id.is_(None)) if not params.team_ids else stmt.where(sa.or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id.in_(params.team_ids)))
     return stmt.order_by(Pipeline.name)
 
 

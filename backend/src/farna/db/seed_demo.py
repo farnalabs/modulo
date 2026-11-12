@@ -2104,10 +2104,7 @@ async def _insert_demo_trigger_event(
             # Keep each vocabulary value a literal at the constructor so
             # the TriggerEvent write-vocabulary architecture guard can
             # statically verify it against VALIDATION_RESULT_VALUES.
-            if index % 2 == 0:
-                new_event = TriggerEvent(validation_result="accepted", **event_kwargs)
-            else:
-                new_event = TriggerEvent(validation_result="passed", **event_kwargs)
+            new_event = TriggerEvent(validation_result="accepted", **event_kwargs) if index % 2 == 0 else TriggerEvent(validation_result="passed", **event_kwargs)
             session.add(new_event)
             await session.flush()
     except IntegrityError:

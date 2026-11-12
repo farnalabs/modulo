@@ -16,10 +16,7 @@ def test_known_fixture_leak_is_reclaimed_by_the_concrete_fix() -> None:
             "-W",
             "error::RuntimeWarning",
             "-c",
-            (
-                "import gc; from unittest.mock import AsyncMock; "
-                "session = AsyncMock(); session.add('row'); del session; gc.collect()"
-            ),
+            ("import gc; from unittest.mock import AsyncMock; session = AsyncMock(); session.add('row'); del session; gc.collect()"),
         ],
         capture_output=True,
         text=True,
@@ -35,10 +32,7 @@ def test_known_fixture_leak_is_reclaimed_by_the_concrete_fix() -> None:
             "-W",
             "error::RuntimeWarning",
             "-c",
-            (
-                "import gc; from tests.bdd.conftest import make_mock_session; "
-                "session = make_mock_session(); session.add('row'); del session; gc.collect()"
-            ),
+            ("import gc; from tests.bdd.conftest import make_mock_session; session = make_mock_session(); session.add('row'); del session; gc.collect()"),
         ],
         capture_output=True,
         text=True,

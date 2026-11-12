@@ -160,9 +160,7 @@ def test_allowlist_metadata_range_still_blocked(monkeypatch: pytest.MonkeyPatch)
         ssrf.validate_outbound_url("http://127.0.0.1/")
 
 
-def test_allowlist_invalid_entry_logged_and_other_cidrs_apply(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_allowlist_invalid_entry_logged_and_other_cidrs_apply(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "not-a-cidr,10.0.0.0/8")
     assert ssrf.validate_outbound_url("http://10.1.2.3/") is None
     assert any("ssrf.invalid_allowlist_entry" in r.message for r in caplog.records)

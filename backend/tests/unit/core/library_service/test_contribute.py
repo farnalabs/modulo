@@ -608,17 +608,13 @@ class TestSubmitContributionVersion:
         created_by = uuid.uuid4()
         prim_id = uuid.uuid4()
         group_id = uuid.uuid4()
-        existing = _fake_primitive(
-            pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version="1.1", version_group_id=group_id
-        )
+        existing = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version="1.1", version_group_id=group_id)
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.2")
 
         with (
             patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch(
-                "farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim
-            ) as mock_create,
+            patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim) as mock_create,
             patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim),
         ):
             result = await submit_contribution_version(
@@ -714,18 +710,14 @@ class TestSubmitContributionVersion:
         org_id = uuid.uuid4()
         created_by = uuid.uuid4()
         prim_id = uuid.uuid4()
-        existing = _fake_primitive(
-            pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version_group_id=None, version="1.0"
-        )
+        existing = _fake_primitive(pid=prim_id, contribution_status=CONTRIBUTION_PUBLISHED, version_group_id=None, version="1.0")
         new_prim = _fake_primitive(pid=uuid.uuid4(), contribution_status=CONTRIBUTION_DRAFT, version="1.1")
 
         with (
             patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
             patch("farna.core.library_service.create_library_primitive", new_callable=AsyncMock, return_value=new_prim),
-            patch(
-                "farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim
-            ) as mock_update,
+            patch("farna.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=new_prim) as mock_update,
         ):
             await submit_contribution_version(
                 session,
@@ -788,9 +780,7 @@ class TestListContributionVersions:
         with (
             patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
             patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=existing),
-            patch(
-                "farna.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]
-            ),
+            patch("farna.core.library_service.list_primitives_by_version_group", new_callable=AsyncMock, return_value=[]),
         ):
             result = await list_contribution_versions(session, org_id, prim_id)
 

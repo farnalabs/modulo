@@ -52,16 +52,12 @@ async def test_create_model_backend(rls_session: AsyncSession, test_org: uuid.UU
     assert mb.organisation_id == test_org
 
 
-async def test_create_model_backend_defaults_to_active(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_create_model_backend_defaults_to_active(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     mb = await create_model_backend(rls_session, **_mb_kwargs(test_org, test_user, suffix="-default"))
     assert mb.status == "active"
 
 
-async def test_pending_setup_backend_becomes_active_on_credential_save(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pending_setup_backend_becomes_active_on_credential_save(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """FAR-2280: MCP creates the row pending_setup; completing setup flips it to active."""
     mb = await create_model_backend(
         rls_session,
@@ -130,9 +126,7 @@ async def test_delete_model_backend_unknown_returns_false(rls_session: AsyncSess
 
 
 @pytest_asyncio.fixture
-async def tier_scoped_session(
-    migrated_db_url: str, db_engine: AsyncEngine, test_user: uuid.UUID
-) -> AsyncGenerator[tuple[AsyncSession, uuid.UUID], None]:
+async def tier_scoped_session(migrated_db_url: str, db_engine: AsyncEngine, test_user: uuid.UUID) -> AsyncGenerator[tuple[AsyncSession, uuid.UUID], None]:
     """Isolated org + rolled-back RLS session for exact-count tier assertions.
 
     The shared ``test_org`` is touched by many integration tests across the
@@ -155,8 +149,7 @@ async def tier_scoped_session(
         # isolated org via org_memberships below rather than re-inserting it.
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(test_user), "oid": str(org_id)},
         )
@@ -277,15 +270,13 @@ async def _seed_org_and_admin(db_engine: AsyncEngine) -> tuple[uuid.UUID, uuid.U
         )
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": f"mb-{account_id.hex[:8]}@test.local", "name": "MB User"},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -423,10 +414,7 @@ async def _seed_pipeline_snapshot_run(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 300, 300, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 300, 300, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pipeline_id),
@@ -453,9 +441,7 @@ async def _seed_pipeline_snapshot_run(
         )
         await conn.execute(
             text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, langgraph_thread_id, run_number, input_hash, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :run_number, :hash, :status)",
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, status) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :run_number, :hash, :status)",
             ),
             {
                 "id": str(run_id),

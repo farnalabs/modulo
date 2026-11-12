@@ -569,9 +569,7 @@ def test_pre_auth_grant_endpoints_reach_the_exchange_when_flag_on(path: str) -> 
         patch("farna.auth.oauth.validate_client_secret", new=AsyncMock(return_value=_mock_client())),
         patch("farna.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=True)),
         patch("farna.api.mcp_server._exchange_authorization_code", new=AsyncMock(return_value=None)) as mock_exchange,
-        patch(
-            "farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=None)
-        ) as mock_exchange_refresh,
+        patch("farna.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=None)) as mock_exchange_refresh,
         _pre_auth_client() as c,
     ):
         resp = c.post(path, data=form)

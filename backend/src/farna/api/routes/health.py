@@ -519,12 +519,7 @@ def _grade_db_hygiene(
         dead = reading.n_dead_tup or 0
         table_part = f'worst table "{reading.worst_table}": {dead:,} dead of {live + dead:,} rows ({(reading.dead_ratio or 0.0) * 100:.1f}% dead)'
 
-    if bloat:
-        parts = [
-            (f"DEAD-TUPLE BLOAT: {table_part} at/above the {dead_ratio_threshold * 100:.0f}% threshold (floor {min_dead_tuples:,} dead)"),
-        ]
-    else:
-        parts = [f"dead-tuples within thresholds ({table_part}; threshold {dead_ratio_threshold * 100:.0f}%)"]
+    parts = [f"DEAD-TUPLE BLOAT: {table_part} at/above the {dead_ratio_threshold * 100:.0f}% threshold (floor {min_dead_tuples:,} dead)"] if bloat else [f"dead-tuples within thresholds ({table_part}; threshold {dead_ratio_threshold * 100:.0f}%)"]
 
     freeze_part = f"freeze age {reading.frozen_age:,}/{reading.freeze_max_age:,}"
     freeze_degraded = False
@@ -1636,10 +1631,7 @@ async def _check_fleet_system_crons() -> CheckResult:
         _consecutive_cron_stale_probes = 0
         return CheckResult(status="ok", detail="system-cron heartbeat fresh on at least one machine")
 
-    if read_failed:
-        problem = f"system-cron check undeterminable: redis read failed, probe_host={probe_host}"
-    else:
-        problem = f"no fresh fire_due_triggers cron heartbeat on any machine, probe_host={probe_host}"
+    problem = f"system-cron check undeterminable: redis read failed, probe_host={probe_host}" if read_failed else f"no fresh fire_due_triggers cron heartbeat on any machine, probe_host={probe_host}"
 
     if _in_fleet_boot_grace():
         return CheckResult(status="ok", detail=f"{problem} (within {_FLEET_BOOT_GRACE_SECONDS}s boot grace)")

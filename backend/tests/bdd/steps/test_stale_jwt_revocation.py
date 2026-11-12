@@ -18,9 +18,7 @@ ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 @given(parsers.parse('a user "{username}" exists'))
 def user_exists(username: str, request) -> None:
     state = _shared_state(request)
-    state["users"].setdefault(
-        username, {"id": str(uuid.uuid4()), "name": username, "org_role": "admin", "team_role": None}
-    )
+    state["users"].setdefault(username, {"id": str(uuid.uuid4()), "name": username, "org_role": "admin", "team_role": None})
 
 
 @given(parsers.parse('a team "{team_name}" exists'))
@@ -33,9 +31,7 @@ def team_exists(team_name: str, request) -> None:
 def user_is_member(username: str, team_name: str, request) -> None:
     state = _shared_state(request)
     state["teams"].setdefault(team_name, _mock_team(team_name))
-    state["users"].setdefault(
-        username, {"id": str(uuid.uuid4()), "name": username, "org_role": "viewer", "team_role": None}
-    )
+    state["users"].setdefault(username, {"id": str(uuid.uuid4()), "name": username, "org_role": "viewer", "team_role": None})
     state["memberships"][(username, team_name)] = "operator"
 
 
@@ -60,9 +56,7 @@ def pipeline_owned_by_team(name: str, team_name: str, visibility: str, request) 
 def user_is_member_with_role(username: str, team_name: str, role: str, request) -> None:
     state = _shared_state(request)
     state["teams"].setdefault(team_name, _mock_team(team_name))
-    state["users"].setdefault(
-        username, {"id": str(uuid.uuid4()), "name": username, "org_role": "viewer", "team_role": None}
-    )
+    state["users"].setdefault(username, {"id": str(uuid.uuid4()), "name": username, "org_role": "viewer", "team_role": None})
     state["memberships"][(username, team_name)] = role
 
 

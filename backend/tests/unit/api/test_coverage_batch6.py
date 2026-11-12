@@ -166,13 +166,9 @@ class TestAnalyticsRouteCoverage:
         with pytest.raises(cost_components.CostFormulaError, match="rate_fallback"):
             cost_components.validate_rate_fallback("missing")
         with pytest.raises(cost_components.CostFormulaError, match="rate"):
-            cost_components.validate_component_formula(
-                kind="calculated", formula="rate", rate_usd=None, rate_fallback=None
-            )
+            cost_components.validate_component_formula(kind="calculated", formula="rate", rate_usd=None, rate_fallback=None)
         with pytest.raises(ValueError, match="self_reported"):
-            cost_components._cross_field_validation(
-                kind="self_reported", rate_usd=None, rate_fallback=None, formula=None, report_key=None
-            )
+            cost_components._cross_field_validation(kind="self_reported", rate_usd=None, rate_fallback=None, formula=None, report_key=None)
         assert cost_components._map_validation_error(ValueError("duplicate_component")).status_code == 409
         assert cost_components._map_validation_error(ValueError("last_calculated guard")).status_code == 422
 

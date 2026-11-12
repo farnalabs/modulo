@@ -85,35 +85,19 @@ _SKIP_FILE = "audit_coverage.py"
 #: The ONLY reasons a background path may be exempt. Each is a decision someone
 #: can read; an exemption outside this vocabulary fails the gate.
 EXEMPT_REASONS: dict[str, str] = {
-    "trigger_bookkeeping": (
-        "per-tick trigger schedule bookkeeping (next_fire_at / last_fired_at advances); "
-        "high-frequency, non-entity state whose consequential action (the created run) is "
-        "audited at the execution seam"
-    ),
+    "trigger_bookkeeping": ("per-tick trigger schedule bookkeeping (next_fire_at / last_fired_at advances); high-frequency, non-entity state whose consequential action (the created run) is audited at the execution seam"),
     "notification_only": "emits an alert/notification and mutates no org-owned entity row",
-    "ephemeral_log_retention": (
-        "age-based purge of ephemeral delivery-log / dedup-hash rows; the retention policy "
-        "is operator-configured and the entity-bearing retention (run purge) IS audited"
-    ),
+    "ephemeral_log_retention": ("age-based purge of ephemeral delivery-log / dedup-hash rows; the retention policy is operator-configured and the entity-bearing retention (run purge) IS audited"),
     "derived_cache": "writes a derived cache/probe row re-derivable from its source of truth",
     "derived_state": ("re-derives a row from state that is already recorded elsewhere (idempotent, compare-and-set)"),
     "derived_analytics": "internal analytics facts maintenance; no user-visible entity change",
     "probe_bookkeeping": "probe watermark / cooldown state; the consequential action audits separately",
     "liveness": "per-tick liveness heartbeat or memory forensics — never audit internal bookkeeping",
-    "read_only_detection": (
-        "read-only corruption/anomaly scan: reports through structured logs, a counter and a "
-        "liveness key, and mutates no org-owned state (there is no entity change to audit)"
-    ),
+    "read_only_detection": ("read-only corruption/anomaly scan: reports through structured logs, a counter and a liveness key, and mutates no org-owned state (there is no entity change to audit)"),
     "telemetry_watermark": "opt-in outbound telemetry watermark advance",
     "internal_bookkeeping": "instance-internal scheduler/registration state, not org-owned data",
-    "boot_default_config": (
-        "idempotent creation of instance-default configuration at boot; re-runs every cold "
-        "boot, has no actor and grants no privilege"
-    ),
-    "boot_env_config": (
-        "idempotent boot seeding from an operator env var; every subsequent mutation of the "
-        "seeded rows is audited through its admin route"
-    ),
+    "boot_default_config": ("idempotent creation of instance-default configuration at boot; re-runs every cold boot, has no actor and grants no privilege"),
+    "boot_env_config": ("idempotent boot seeding from an operator env var; every subsequent mutation of the seeded rows is audited through its admin route"),
     "demo_fixture": "demo/sample data, gated off by default (MODULO_SEED_DEMO_ORGS)",
     "infra_container_gc": (
         "destroys orphaned sandbox containers rather than org rows; gated by "
@@ -149,9 +133,7 @@ class PathRecord:
         if self.classification not in {_AUDITED, _EXEMPT, _GAP}:
             raise ValueError(f"unknown classification {self.classification!r}")
         if self.classification == _EXEMPT and self.reason not in EXEMPT_REASONS:
-            raise ValueError(
-                f"exempt path must use a documented reason, got {self.reason!r}; known: {sorted(EXEMPT_REASONS)}"
-            )
+            raise ValueError(f"exempt path must use a documented reason, got {self.reason!r}; known: {sorted(EXEMPT_REASONS)}")
         if self.classification == _GAP and not self.note:
             raise ValueError("a gap must carry a note naming what is missing")
         if self.classification == _AUDITED and not self.evidence:
@@ -269,9 +251,7 @@ INVENTORY: dict[str, PathRecord] = {
         ("src/farna/core/run_admission.py", 'source="slot_reconciliation"'),
         _TERMINAL_ADVANCE,
     ),
-    "reconcile_runner_dispatch_markers": _audited(
-        ("src/farna/core/runner_capacity.py", 'event_type="run.sweep_terminalised"')
-    ),
+    "reconcile_runner_dispatch_markers": _audited(("src/farna/core/runner_capacity.py", 'event_type="run.sweep_terminalised"')),
     "reconcile_cron_registrations": _exempt("internal_bookkeeping"),
     "stale_run_recovery_sweep": _audited(
         ("src/farna/core/pipeline_execution.py", 'source="stale_run_recovery"'),
@@ -344,13 +324,7 @@ def _saq_cron_function_names() -> set[str]:
         if isinstance(node, ast.FunctionDef) and node.name == "_system_cron_jobs":
             names: set[str] = set()
             for call in ast.walk(node):
-                if (
-                    isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Name)
-                    and call.func.id == "CronJob"
-                    and call.args
-                    and isinstance(call.args[0], ast.Name)
-                ):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "CronJob" and call.args and isinstance(call.args[0], ast.Name):
                     names.add(call.args[0].id)
             return names
     raise AssertionError("_system_cron_jobs not found in saq_worker.py")
@@ -393,10 +367,7 @@ def _suite_run_entry_point_names(*, sources: list[Path] | None = None) -> set[st
     *sources* overrides the scanned files (test seam) — production callers
     pass nothing and get the whole ``src/farna`` tree.
     """
-    if sources is None:
-        scanned = list(iter_source_text(SRC_DIR))
-    else:
-        scanned = [(path, path.read_text(encoding="utf-8")) for path in sorted(sources)]
+    scanned = list(iter_source_text(SRC_DIR)) if sources is None else [(path, path.read_text(encoding="utf-8")) for path in sorted(sources)]
     callers: dict[str, set[str]] = {}
     for path, source in scanned:
         if "migrations" in path.parts:
@@ -419,14 +390,7 @@ def _boot_seed_labels() -> set[str]:
     tree = ast.parse(API_MAIN_PATH.read_text(encoding="utf-8"))
     labels: set[str] = set()
     for call in ast.walk(tree):
-        if (
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "_boot_seed"
-            and call.args
-            and isinstance(call.args[0], ast.Constant)
-            and isinstance(call.args[0].value, str)
-        ):
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "_boot_seed" and call.args and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str):
             labels.add(call.args[0].value)
     if not labels:
         raise AssertionError("no _boot_seed(...) calls found in api/main.py")
@@ -443,11 +407,7 @@ def _reconciler_function_names() -> set[str]:
             continue
         tree = ast.parse(source, filename=str(path))
         for node in tree.body:
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and not node.name.startswith("_")
-                and _RECONCILER_NAME.search(node.name)
-            ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_") and _RECONCILER_NAME.search(node.name):
                 names.add(node.name)
     if not names:
         raise AssertionError("the reconciler/seed enumeration matched nothing")
@@ -510,12 +470,7 @@ def test_every_enumerated_background_path_is_classified() -> None:
     """A NEW SAQ task, cron job, reconciler, seeder or boot seed must be
     classified before it can land — this is the ratchet."""
     missing = sorted(set(_enumerated_paths()) - set(INVENTORY))
-    assert not missing, (
-        "unclassified background write path(s) — add each to INVENTORY in "
-        "tests/architecture/test_background_audit_coverage.py as audited "
-        "(with file+marker evidence), exempt (with a documented reason from "
-        "EXEMPT_REASONS) or gap (with a note):\n  " + "\n  ".join(missing)
-    )
+    assert not missing, "unclassified background write path(s) — add each to INVENTORY in tests/architecture/test_background_audit_coverage.py as audited (with file+marker evidence), exempt (with a documented reason from EXEMPT_REASONS) or gap (with a note):\n  " + "\n  ".join(missing)
 
 
 def test_no_stale_inventory_entries() -> None:
@@ -528,9 +483,7 @@ def test_every_cron_job_is_a_registered_system_function() -> None:
     """A ``CronJob(...)`` bound to an unregistered function cannot run — and
     would be invisible to ``_system_functions``-keyed classification."""
     unregistered = sorted(_saq_cron_function_names() - _saq_system_function_names())
-    assert not unregistered, "cron jobs whose function is not registered on the system worker:\n  " + "\n  ".join(
-        unregistered
-    )
+    assert not unregistered, "cron jobs whose function is not registered on the system worker:\n  " + "\n  ".join(unregistered)
 
 
 def test_audited_paths_point_at_a_real_file_containing_their_marker() -> None:
@@ -565,9 +518,7 @@ def test_every_gap_is_visible_and_actionable() -> None:
             continue
         note = record.note.lower()
         assert len(note) > 40, f"{name}: gap note too thin to act on: {record.note!r}"
-        assert "remainder" in note or "slice" in note, (
-            f"{name}: a gap note must point at the remaining work, not just name the hole: {record.note!r}"
-        )
+        assert "remainder" in note or "slice" in note, f"{name}: a gap note must point at the remaining work, not just name the hole: {record.note!r}"
 
 
 def test_inventory_covers_both_endpoints_of_the_registration_surface() -> None:

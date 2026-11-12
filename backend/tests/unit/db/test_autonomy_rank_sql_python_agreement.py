@@ -103,10 +103,7 @@ def _expected_rank_map() -> dict[str, int]:
 
 def _sql_rank_maps(sql: str) -> list[tuple[str, dict[str, int]]]:
     """Every ``(column, rank map)`` CASE block in *sql*, in order of appearance."""
-    return [
-        (column, {level: int(rank) for level, rank in _WHEN_ARM.findall(block)})
-        for column, block in _CASE_BLOCK.findall(sql)
-    ]
+    return [(column, {level: int(rank) for level, rank in _WHEN_ARM.findall(block)}) for column, block in _CASE_BLOCK.findall(sql)]
 
 
 def test_every_declared_level_has_a_rank() -> None:
@@ -130,16 +127,9 @@ def test_sql_case_maps_match_the_python_rank(source_id: str, attr: str) -> None:
     rank check would silently cover half the invariant.
     """
     maps = _sql_rank_maps(_source_sql(source_id, attr))
-    assert len(maps) >= 2, (
-        f"{source_id}.{attr} yielded {len(maps)} CASE rank map(s) - the parser found nothing to check"
-    )
+    assert len(maps) >= 2, f"{source_id}.{attr} yielded {len(maps)} CASE rank map(s) - the parser found nothing to check"
     columns = {column for column, _found in maps}
-    assert columns == set(_EXPECTED_CASE_COLUMNS), (
-        f"{source_id}.{attr} ranks columns {columns!r}, expected {_EXPECTED_CASE_COLUMNS!r}"
-    )
+    assert columns == set(_EXPECTED_CASE_COLUMNS), f"{source_id}.{attr} ranks columns {columns!r}, expected {_EXPECTED_CASE_COLUMNS!r}"
     expected = _expected_rank_map()
     for index, (_column, found) in enumerate(maps):
-        assert found == expected, (
-            f"{source_id}.{attr} CASE #{index} ranks {found!r} but _LEVEL_RANK ranks {expected!r} - "
-            "the DB and the app disagree about autonomy ordering"
-        )
+        assert found == expected, f"{source_id}.{attr} CASE #{index} ranks {found!r} but _LEVEL_RANK ranks {expected!r} - the DB and the app disagree about autonomy ordering"

@@ -489,9 +489,7 @@ def _make_active_run_fake(run_id: uuid.UUID, **kwargs: Any) -> MagicMock:
 def active_run_with_observability(ctx, request):
     run_id = uuid.uuid4()
     capacity = {"active_runs": 2, "concurrency_limit": 4, "waiting": True}
-    child_runs = [
-        {"run_id": str(uuid.uuid4()), "run_number": 2, "status": "running", "pipeline_name": "deploy-service"}
-    ]
+    child_runs = [{"run_id": str(uuid.uuid4()), "run_number": 2, "status": "running", "pipeline_name": "deploy-service"}]
     work_item_refs = [{"kind": "pr", "ref": "farnalabs/modulo#1234", "source": "github", "status": "open"}]
     ctx["run_id"] = run_id
     ctx["run"] = _make_active_run_fake(run_id, work_item_refs=work_item_refs)

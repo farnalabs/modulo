@@ -1049,9 +1049,7 @@ class TestDeleteEvalDefinitionTwoStep:
         assert eval_def.deleted_by == _USER_ID
         mock_session.delete.assert_not_called()
 
-    def test_delete_guardrail_eval_soft_deletes_live_gate(
-        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_delete_guardrail_eval_soft_deletes_live_gate(self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """When a live PolicyGate exists for the guardrail, the soft-delete
         stamps deleted_at/deleted_by on the gate too — no orphaned gate."""
         audit = AsyncMock()
@@ -1101,9 +1099,7 @@ class TestDeleteEvalDefinitionTwoStep:
         # Step 2: purge hard-removes the soft-deleted row.
         mock_session.delete.assert_called_once()
 
-    def test_delete_guardrail_eval_soft_delete_writes_audit(
-        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_delete_guardrail_eval_soft_delete_writes_audit(self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The two-step soft-delete writes an org-scoped audit event
         (``eval_definition.soft_deleted``) carrying the eval identity + name."""
         audit = AsyncMock()
@@ -1136,9 +1132,7 @@ class TestDeleteEvalDefinitionTwoStep:
         assert kwargs["payload_json"]["name"] == "no-secrets"
         assert kwargs["payload_json"]["purge"] is False
 
-    def test_delete_guardrail_eval_purge_writes_audit(
-        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_delete_guardrail_eval_purge_writes_audit(self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The purge step writes its own audit event
         (``eval_definition.purged``) before the row is removed."""
         audit = AsyncMock()
@@ -1185,9 +1179,7 @@ class TestDeleteEvalDefinitionTwoStep:
         assert resp.status_code == 204
         mock_session.delete.assert_called_once()
 
-    def test_delete_non_guardrail_eval_writes_no_audit_event(
-        self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_delete_non_guardrail_eval_writes_no_audit_event(self, admin_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The two-step soft-delete audit applies to GUARDRAIL rows only — a
         non-guardrail eval keeps its pre-PR-B hard delete WITHOUT an audit
         event (``eval_definition.soft_deleted``/``eval_definition.purged`` are
@@ -1323,9 +1315,7 @@ class TestFar1729EvalSourcePins:
         captured = self._install_capture(session, eval_scalar=eval_row)
         principal = self._principal()
 
-        response = await evals_routes.eval_timeseries(
-            eval_id=_EVAL_DEF_ID, days=7, session=session, principal=principal
-        )
+        response = await evals_routes.eval_timeseries(eval_id=_EVAL_DEF_ID, days=7, session=session, principal=principal)
 
         assert response["eval_name"] == "post-cutover-eval"
         # The definition lookup is the ORM select against ``evals`` (the raw

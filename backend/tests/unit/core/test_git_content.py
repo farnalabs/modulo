@@ -581,9 +581,7 @@ def test_git_process_env_preserves_operator_ssh_command(monkeypatch: pytest.Monk
     assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
-async def test_fetch_git_content_spawns_git_with_prompts_off_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_spawns_git_with_prompts_off_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Every subprocess of the full fetch flow carries the prompts-off env (prove-the-fix)."""
     _allow_all_hosts(monkeypatch)
     envs: list[dict[str, str]] = []
@@ -604,9 +602,7 @@ async def test_fetch_git_content_spawns_git_with_prompts_off_env(
         assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
 
 
-async def test_fetch_git_content_shallow_blobless_strategy_first(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_shallow_blobless_strategy_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Pinned-SHA fetch: shallow + blobless probe leads; content served at the end."""
     _allow_all_hosts(monkeypatch)
     calls: list[object] = []
@@ -627,9 +623,7 @@ async def test_fetch_git_content_shallow_blobless_strategy_first(
     assert not await asyncio.to_thread(Path(str(calls[0]["cwd"])).exists)
 
 
-async def test_fetch_git_content_falls_back_to_larger_strategies(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_falls_back_to_larger_strategies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A server rejecting shallow/SHA-want fetches falls back — same bounds apply."""
     _allow_all_hosts(monkeypatch)
     seen_attempts: list[object] = []
@@ -647,9 +641,7 @@ async def test_fetch_git_content_falls_back_to_larger_strategies(
     assert "full" in str(seen_attempts)
 
 
-async def test_fetch_git_content_all_strategies_fail_is_typed_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_all_strategies_fail_is_typed_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allow_all_hosts(monkeypatch)
     show_called = False
 
@@ -678,9 +670,7 @@ async def test_fetch_git_content_non_utf8_is_typed_error(monkeypatch: pytest.Mon
         await fetch_git_content(_REPO, _SHA_A, "prompts/x.md", cache_dir=tmp_path)
 
 
-async def test_fetch_git_content_reuses_cache_for_same_repo_ref_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_reuses_cache_for_same_repo_ref_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Same (repo, sha, path) is served from cache — no second clone (prove-the-fix)."""
     _allow_all_hosts(monkeypatch)
     calls: list[object] = []
@@ -728,9 +718,7 @@ async def test_fetch_git_content_use_cache_false_skips_cache(monkeypatch: pytest
     assert not await asyncio.to_thread(lambda: list(tmp_path.glob("*.json")))
 
 
-async def test_fetch_git_content_does_not_cache_oversized_value(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_does_not_cache_oversized_value(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Content above CONTENT_CACHE_MAX_VALUE_BYTES is returned but never cached."""
     _allow_all_hosts(monkeypatch)
     oversized = b"x" * (git_content.CONTENT_CACHE_MAX_VALUE_BYTES + 1)
@@ -744,9 +732,7 @@ async def test_fetch_git_content_does_not_cache_oversized_value(
     assert not await asyncio.to_thread(lambda: list(tmp_path.glob("*.json")))
 
 
-async def test_fetch_git_content_oversized_clone_is_typed_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_fetch_git_content_oversized_clone_is_typed_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allow_all_hosts(monkeypatch)
     show_called = False
     fetched: list[str] = []

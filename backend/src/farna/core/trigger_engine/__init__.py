@@ -1724,10 +1724,7 @@ class TriggerEngine:
         cfg = delivery.trigger.config_json or {}
         accepted_events: list[str] | None = cfg.get("accepted_events")
         if accepted_events:
-            if use_dot_notation:
-                has_accepted_event = any(isinstance(_extract_field(delivery.raw_payload, event), dict) for event in accepted_events)
-            else:
-                has_accepted_event = any(isinstance(delivery.raw_payload.get(event), dict) for event in accepted_events)
+            has_accepted_event = any(isinstance(_extract_field(delivery.raw_payload, event), dict) for event in accepted_events) if use_dot_notation else any(isinstance(delivery.raw_payload.get(event), dict) for event in accepted_events)
             if not has_accepted_event:
                 _log.info(
                     "%s event type not accepted for trigger %s (accepted=%s, payload_keys=%s)",

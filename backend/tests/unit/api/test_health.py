@@ -153,9 +153,7 @@ class TestReadiness:
     def test_healthz_ready_degraded_overall(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
-            patch(
-                "farna.api.routes.health._check_redis", AsyncMock(return_value=_degraded_check("redis not configured"))
-            ),
+            patch("farna.api.routes.health._check_redis", AsyncMock(return_value=_degraded_check("redis not configured"))),
             patch("farna.api.routes.health._check_checkpointer", AsyncMock(return_value=_ok_check("checkpointer"))),
             patch("farna.api.routes.health._check_migrations", AsyncMock(return_value=_ok_check("migrations"))),
             patch("farna.api.routes.health._check_db_hygiene", AsyncMock(return_value=_ok_check("db_hygiene"))),
@@ -611,9 +609,7 @@ class TestFetchLatestDeployRunUrl:
 
     async def test_uses_path_based_workflow_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
-        client = _FakeGitHubClient(
-            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/42"}]})
-        )
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/42"}]}))
         factory = AsyncMock(return_value=client)
         with patch("farna.api.routes.health.pinned_async_client", factory):
             url = await _fetch_latest_deploy_run_url(settings)
@@ -630,9 +626,7 @@ class TestFetchLatestDeployRunUrl:
 
     async def test_falls_back_to_get_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
-        client = _FakeGitHubClient(
-            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/1"}]})
-        )
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/1"}]}))
         with (
             patch("farna.api.routes.health.get_settings", return_value=settings),
             patch("farna.api.routes.health.pinned_async_client", AsyncMock(return_value=client)),
@@ -643,9 +637,7 @@ class TestFetchLatestDeployRunUrl:
 
     async def test_success_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = self._settings(monkeypatch)
-        client = _FakeGitHubClient(
-            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/7"}]})
-        )
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/7"}]}))
         factory = AsyncMock(return_value=client)
         with patch("farna.api.routes.health.pinned_async_client", factory):
             first = await _fetch_latest_deploy_run_url(settings)
@@ -660,9 +652,7 @@ class TestFetchLatestDeployRunUrl:
 
         settings = self._settings(monkeypatch)
         health_mod._DEPLOY_RUN_URL_CACHE = ("https://stale", time.time() - 301)
-        client = _FakeGitHubClient(
-            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/9"}]})
-        )
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/9"}]}))
         factory = AsyncMock(return_value=client)
         with patch("farna.api.routes.health.pinned_async_client", factory):
             url = await _fetch_latest_deploy_run_url(settings)
@@ -1559,10 +1549,7 @@ class TestEventLoopStallGuard:
             result = await _check_migrations()
         assert result.status == "ok"
         assert _GET_HEADS_THREAD_IDS, "get_heads never ran — the probe did not parse the migration tree"
-        assert _GET_HEADS_THREAD_IDS[0] != loop_thread, (
-            "get_heads() ran on the event-loop thread; the alembic parse must go through "
-            "asyncio.to_thread so it can never block /healthz/ready (FAR-1439)"
-        )
+        assert _GET_HEADS_THREAD_IDS[0] != loop_thread, "get_heads() ran on the event-loop thread; the alembic parse must go through asyncio.to_thread so it can never block /healthz/ready (FAR-1439)"
 
     async def test_heads_parsed_once_then_served_from_process_cache(self) -> None:
         """Second and later probes must reuse the process-wide heads cache."""
@@ -1588,9 +1575,7 @@ class TestEventLoopStallGuard:
             second = await _check_migrations()
         assert first.status == "ok"
         assert second.status == "ok"
-        assert script.get_heads.call_count == 1, (
-            "second probe re-parsed the migration tree instead of using the process cache"
-        )
+        assert script.get_heads.call_count == 1, "second probe re-parsed the migration tree instead of using the process cache"
 
     def test_readiness_reports_advisory_event_loop_lag_check_when_healthy(self, client: TestClient) -> None:
         """A stall-free probe surfaces an ok ``event_loop_lag`` check."""
@@ -1765,16 +1750,7 @@ class TestEventLoopStallGuard:
         answers 200, and the stall warning still fires WITHOUT an
         attribution (the pre-FAR-1771 line) instead of erroring the probe.
         """
-        if isinstance(report_result, Exception):
-            report_patch = patch(
-                "farna.api.routes.health.report_event_loop_stall_attribution",
-                side_effect=report_result,
-            )
-        else:
-            report_patch = patch(
-                "farna.api.routes.health.report_event_loop_stall_attribution",
-                return_value=report_result,
-            )
+        report_patch = patch("farna.api.routes.health.report_event_loop_stall_attribution", side_effect=report_result) if isinstance(report_result, Exception) else patch("farna.api.routes.health.report_event_loop_stall_attribution", return_value=report_result)
         with (
             patch("farna.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
             patch("farna.api.routes.health._check_redis", new=_stalling_redis_check),
@@ -1798,12 +1774,7 @@ class TestEventLoopStallGuard:
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
-        stall_logs = [
-            record
-            for record in caplog.records
-            if record.levelno >= logging.WARNING
-            and ("event-loop stall" in record.getMessage() or "event_loop_stall" in record.getMessage())
-        ]
+        stall_logs = [record for record in caplog.records if record.levelno >= logging.WARNING and ("event-loop stall" in record.getMessage() or "event_loop_stall" in record.getMessage())]
         assert len(stall_logs) == 1, [record.getMessage() for record in stall_logs]
         message = stall_logs[0].getMessage()
         assert "event-loop stall detected" in message
@@ -1834,13 +1805,8 @@ class TestEventLoopStallGuard:
             second = health_mod._load_repo_heads(_make_settings())
         assert first == set()
         assert second == set()
-        assert health_mod._REPO_HEADS_CACHE is None, (
-            "an empty head set must not populate the process-wide cache — a transient parse "
-            "failure has to be retried on the next probe (FAR-1439)"
-        )
-        assert script.get_heads.call_count == 2, (
-            "an empty (uncached) load must re-parse on the next probe, not be served from cache"
-        )
+        assert health_mod._REPO_HEADS_CACHE is None, "an empty head set must not populate the process-wide cache — a transient parse failure has to be retried on the next probe (FAR-1439)"
+        assert script.get_heads.call_count == 2, "an empty (uncached) load must re-parse on the next probe, not be served from cache"
 
 
 # --- FAR-1445: database-hygiene sub-check --------------------------------
@@ -2093,9 +2059,7 @@ class TestDbHygieneGradingBoundaries:
 class TestDbHygieneCheck:
     """``_check_db_hygiene`` end-to-end over a canned query result."""
 
-    async def _run(
-        self, row: dict[str, object] | None, **settings_updates: object
-    ) -> tuple[CheckResult, _FakeHygieneEngine]:
+    async def _run(self, row: dict[str, object] | None, **settings_updates: object) -> tuple[CheckResult, _FakeHygieneEngine]:
         settings = _make_settings().model_copy(update=settings_updates)
         engine = _FakeHygieneEngine(row)
         with (

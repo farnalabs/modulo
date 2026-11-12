@@ -62,9 +62,7 @@ def _make_account(*, is_break_glass: bool = True, live: bool = True) -> MagicMoc
     account.is_break_glass = is_break_glass
     account.active = True
     account.break_glass_deactivated_at = None
-    account.break_glass_expires_at = (
-        datetime.now(UTC) + timedelta(hours=1) if live else datetime.now(UTC) - timedelta(hours=1)
-    )
+    account.break_glass_expires_at = datetime.now(UTC) + timedelta(hours=1) if live else datetime.now(UTC) - timedelta(hours=1)
     return account
 
 

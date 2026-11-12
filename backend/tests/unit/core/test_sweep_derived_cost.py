@@ -197,9 +197,7 @@ async def _run_sweep(
     # ``_attribute_swept_run_derived_cost`` opens its session through the
     # module-level ``async_sessionmaker``; bind it to the fixture engine so the
     # REAL booking path (not a stub) runs against the reaped rows.
-    monkeypatch.setattr(
-        pe, "async_sessionmaker", lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
-    )
+    monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False))
     conn = _SqliteBackedConn(db_session)
     result = await stale_run_recovery_sweep(_Engine(conn))  # type: ignore[arg-type]
     return result, advanced

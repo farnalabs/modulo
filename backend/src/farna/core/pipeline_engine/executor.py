@@ -2939,10 +2939,7 @@ class PipelineExecutor:
         acceptable over-demotion, never lost work.
         """
         try:
-            if snapshot_id is not None:
-                has_sandbox = _sandbox_agent_for_snapshot(snapshot_id, graph_json)
-            else:
-                has_sandbox = _graph_contains_sandbox_agent(graph_json)
+            has_sandbox = _sandbox_agent_for_snapshot(snapshot_id, graph_json) if snapshot_id is not None else _graph_contains_sandbox_agent(graph_json)
         except asyncio.CancelledError:
             raise
         except Exception:

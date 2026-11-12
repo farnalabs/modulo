@@ -176,9 +176,7 @@ class TestExportPipelineSingleTransaction:
             patch("farna.api.routes.library.set_rls_org", AsyncMock()),
             patch("farna.api.routes.library.set_rls_user_context", AsyncMock()),
         ):
-            response = await export_pipeline_endpoint(
-                pipeline_id=pipeline_id, session=mock_session, principal=mock_principal
-            )
+            response = await export_pipeline_endpoint(pipeline_id=pipeline_id, session=mock_session, principal=mock_principal)
 
         # session.begin should have been called exactly once
         assert mock_session.begin.call_count == 1, "export_pipeline_endpoint should use a single session.begin()"

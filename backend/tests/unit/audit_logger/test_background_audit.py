@@ -367,9 +367,7 @@ async def test_one_organisation_failure_never_blocks_the_next() -> None:
 
 
 async def test_one_event_failure_keeps_its_siblings(caplog: pytest.LogCaptureFixture) -> None:
-    session = _session_returning(
-        [_run(_RUN_ONE, _ORG_A, status="hitl_parked"), _run(_RUN_TWO, _ORG_A, status="hitl_parked")]
-    )
+    session = _session_returning([_run(_RUN_ONE, _ORG_A, status="hitl_parked"), _run(_RUN_TWO, _ORG_A, status="hitl_parked")])
     factory = _factory(session)
 
     with (

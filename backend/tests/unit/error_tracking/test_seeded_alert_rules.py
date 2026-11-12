@@ -67,9 +67,7 @@ def _rule_mock(**overrides: object) -> MagicMock:
     return rule
 
 
-def _seed_session(
-    *, tombstoned: set[str] | None = None, existing_rules: list[MagicMock | None] | None = None
-) -> AsyncMock:
+def _seed_session(*, tombstoned: set[str] | None = None, existing_rules: list[MagicMock | None] | None = None) -> AsyncMock:
     """Session whose ``execute`` dispatches by table name.
 
     ``deleted_defaults`` queries return *tombstoned* signals; per-signal rule
@@ -214,9 +212,7 @@ class TestSeedAllOrgs:
             seeded = await seed_default_alert_rules(factory)
 
         assert seeded == len(DEFAULT_ALERT_RULES)
-        system_config_added = any(
-            getattr(call.args[0], "key", None) == "seeded_defaults_version" for call in session.add.call_args_list
-        )
+        system_config_added = any(getattr(call.args[0], "key", None) == "seeded_defaults_version" for call in session.add.call_args_list)
         assert system_config_added
 
     async def test_second_seed_returns_zero(self) -> None:
@@ -352,9 +348,7 @@ class TestEmitSignalEvent:
             patch("farna.core.error_tracking.upsert_error_group", AsyncMock(return_value=group)),
             patch("farna.core.error_tracking._get_alert_engine", AsyncMock(return_value=engine)),
         ):
-            result = await emit_signal_event(
-                session, _ORG_ID, signal="contract.schema", pipeline_id=None, message="x", level="warning"
-            )
+            result = await emit_signal_event(session, _ORG_ID, signal="contract.schema", pipeline_id=None, message="x", level="warning")
         assert "group_id" in result
         assert "error_tracking.signal_alert_evaluation_failed" in caplog.text
 
@@ -448,9 +442,7 @@ class TestEmitAlertResolved:
         session.execute = AsyncMock(return_value=rule_result)
         group_id = uuid.uuid4()
 
-        with patch(
-            "farna.core.error_tracking.alert_dispatcher.dispatch_alert_resolved", new=AsyncMock()
-        ) as resolved_mock:
+        with patch("farna.core.error_tracking.alert_dispatcher.dispatch_alert_resolved", new=AsyncMock()) as resolved_mock:
             await emit_alert_resolved(session, _ORG_ID, signal="agent.failed", group_id=group_id, reason="superseded")
 
         resolved_mock.assert_awaited_once()
@@ -468,7 +460,5 @@ class TestEmitAlertResolved:
             "farna.core.error_tracking.alert_dispatcher.dispatch_alert_resolved",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ):
-            await emit_alert_resolved(
-                session, _ORG_ID, signal="agent.failed", group_id=uuid.uuid4(), reason="superseded"
-            )
+            await emit_alert_resolved(session, _ORG_ID, signal="agent.failed", group_id=uuid.uuid4(), reason="superseded")
         assert "error_tracking.alert_resolved_dispatch_failed" in caplog.text

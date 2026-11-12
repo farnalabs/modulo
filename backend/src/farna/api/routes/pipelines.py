@@ -2788,10 +2788,7 @@ def _construct_graph_edge(edge_dict: Any) -> PipelineGraphEdge:
     attribute objects (ORM rows) — a legacy edge whose ``hitl_review_config``
     fails the current schema is still evidence worth preserving.
     """
-    if isinstance(edge_dict, dict):
-        fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields}
-    else:
-        fallback_fields = {name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)}
+    fallback_fields = {k: v for k, v in edge_dict.items() if k in PipelineGraphEdge.model_fields} if isinstance(edge_dict, dict) else {name: getattr(edge_dict, name) for name in PipelineGraphEdge.model_fields if hasattr(edge_dict, name)}
     raw_id = _edge_field(edge_dict, "id")
     fallback_fields["id"] = uuid.UUID(str(raw_id)) if raw_id else uuid.uuid4()
     fallback_fields["source_node_id"] = uuid.UUID(str(_edge_field(edge_dict, "source_node_id")))

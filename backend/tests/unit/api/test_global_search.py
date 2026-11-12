@@ -246,9 +246,7 @@ class TestGlobalSearchEndpoint:
         query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
         assert query_params[0]["include_lifecycle_maps"] is True
 
-    def test_ordinary_admin_audit_search_excludes_lifecycle_map_events(
-        self, client: TestClient, mock_db: AsyncMock
-    ) -> None:
+    def test_ordinary_admin_audit_search_excludes_lifecycle_map_events(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
         with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
             resp = client.get("/api/v1/admin/search?q=lifecycle&type=audit")
@@ -258,9 +256,7 @@ class TestGlobalSearchEndpoint:
         assert query_params[0]["include_lifecycle_maps"] is False
         assert query_params[1]["include_lifecycle_maps"] is False
 
-    def test_ordinary_admin_audit_search_excludes_lifecycle_map_version_events(
-        self, client: TestClient, mock_db: AsyncMock
-    ) -> None:
+    def test_ordinary_admin_audit_search_excludes_lifecycle_map_version_events(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
         with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
             resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
@@ -270,9 +266,7 @@ class TestGlobalSearchEndpoint:
         assert query_params[0]["include_lifecycle_maps"] is False
         assert query_params[1]["include_lifecycle_maps"] is False
 
-    def test_internal_admin_audit_search_includes_lifecycle_map_events(
-        self, client: TestClient, mock_db: AsyncMock
-    ) -> None:
+    def test_internal_admin_audit_search_includes_lifecycle_map_events(self, client: TestClient, mock_db: AsyncMock) -> None:
         mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
         with patch("farna.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
             resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
@@ -349,10 +343,7 @@ class TestGlobalSearchEndpoint:
             ]
             for r in rows:
                 await conn.execute(
-                    sa_text(
-                        "INSERT INTO audit_events VALUES ("
-                        ":id, :org_id, :event_type, :resource_type, :payload_json, :created_at)"
-                    ),
+                    sa_text("INSERT INTO audit_events VALUES (:id, :org_id, :event_type, :resource_type, :payload_json, :created_at)"),
                     {
                         "id": r[0],
                         "org_id": r[1],
@@ -381,9 +372,7 @@ class TestGlobalSearchEndpoint:
                 assert items[0][1].title == "lifecycle_event — non_lifecycle_resource"
 
                 # When include_lifecycle_maps is True (internal access), all matching records are returned
-                items_internal, count_internal = await _search_audit(
-                    session, search_params, include_lifecycle_maps=True
-                )
+                items_internal, count_internal = await _search_audit(session, search_params, include_lifecycle_maps=True)
                 assert count_internal == 4
                 assert len(items_internal) == 4
                 titles = {item[1].title for item in items_internal}

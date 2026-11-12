@@ -115,16 +115,8 @@ _DEDICATED = "dedicated"
 #: reader can check against the model; an exemption outside this vocabulary, or
 #: one naming no lawful recovery, fails the gate.
 EXEMPT_REASONS: dict[str, str] = {
-    "operator_driven_recovery": (
-        "the model documents this as a recovery state an operator reconciles by "
-        "re-running with the SAME persisted idempotency_key; there is no automatic "
-        "terminaliser, and reclassification is required if a production writer is added"
-    ),
-    "unreachable_legacy_state": (
-        "no production code path creates this state (it survives from a historical "
-        "migration/repair); it cannot strand a live run, and reclassification is "
-        "required the moment a writer is introduced"
-    ),
+    "operator_driven_recovery": ("the model documents this as a recovery state an operator reconciles by re-running with the SAME persisted idempotency_key; there is no automatic terminaliser, and reclassification is required if a production writer is added"),
+    "unreachable_legacy_state": ("no production code path creates this state (it survives from a historical migration/repair); it cannot strand a live run, and reclassification is required the moment a writer is introduced"),
     "operator_decision_recovery": (
         "the park sweep moves a gate-expired run out of awaiting_human into a "
         "NON-terminal parked state so it stops occupying review state; the gate stays "
@@ -173,9 +165,7 @@ class StatusCoverage:
         if self.classification not in {_COVERED, _EXEMPT, _GAP}:
             raise ValueError(f"unknown classification {self.classification!r}")
         if self.classification == _EXEMPT and self.reason not in EXEMPT_REASONS:
-            raise ValueError(
-                f"exempt status must use a documented reason, got {self.reason!r}; known: {sorted(EXEMPT_REASONS)}"
-            )
+            raise ValueError(f"exempt status must use a documented reason, got {self.reason!r}; known: {sorted(EXEMPT_REASONS)}")
         if self.classification == _GAP and not self.note:
             raise ValueError("a gap must carry a note naming what is missing")
         if self.classification == _COVERED and not self.paths:
@@ -381,18 +371,9 @@ def _dispatch_phase_constants() -> dict[str, str]:
     exported: set[str] = set()
     values: dict[str, str] = {}
     for node in tree.body:
-        if (
-            isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)
-            and isinstance(node.value, ast.List)
-        ):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets) and isinstance(node.value, ast.List):
             exported = {e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-        if (
-            isinstance(node, ast.Assign)
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        ):
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
             values[node.targets[0].id] = node.value.value
     if not exported:
         raise AssertionError("dispatch_phases.__all__ not found")
@@ -414,11 +395,7 @@ def _batch_terminalizer_keys() -> set[str]:
 def _batch_terminalizer_coroutines() -> set[str]:
     """Coroutine names that actually run, keyed through the batch registry."""
     batch_keys = _batch_terminalizer_keys()
-    names = {
-        spec.coroutine_name
-        for spec in _terminalizer_specs()
-        if spec.key in batch_keys and spec.coroutine_name is not None
-    }
+    names = {spec.coroutine_name for spec in _terminalizer_specs() if spec.key in batch_keys and spec.coroutine_name is not None}
     return {name for name in names if name}
 
 
@@ -428,13 +405,7 @@ def _system_cron_function_names() -> set[str]:
         if isinstance(node, ast.FunctionDef) and node.name == "_system_cron_jobs":
             names: set[str] = set()
             for call in ast.walk(node):
-                if (
-                    isinstance(call, ast.Call)
-                    and isinstance(call.func, ast.Name)
-                    and call.func.id == "CronJob"
-                    and call.args
-                    and isinstance(call.args[0], ast.Name)
-                ):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "CronJob" and call.args and isinstance(call.args[0], ast.Name):
                     names.add(call.args[0].id)
             return names
     raise AssertionError("_system_cron_jobs not found in saq_worker.py")
@@ -575,10 +546,7 @@ def _exempt_justification_violations(
     note = record.note.strip()
     violations: list[str] = []
     if len(note) < _MIN_EXEMPT_JUSTIFICATION:
-        violations.append(
-            f"status:{status} exempt justification too thin to review "
-            f"({len(note)} < {_MIN_EXEMPT_JUSTIFICATION}): {record.note!r}"
-        )
+        violations.append(f"status:{status} exempt justification too thin to review ({len(note)} < {_MIN_EXEMPT_JUSTIFICATION}): {record.note!r}")
     anchors = list(_PY_ANCHOR_RE.finditer(note))
     if not anchors:
         violations.append(f"status:{status} exempt justification cites no source anchor (*.py path): {record.note!r}")
@@ -592,10 +560,7 @@ def _exempt_justification_violations(
         if start is not None:
             bound = int(end) if end is not None else int(start)
             if not any(len(path.read_text(encoding="utf-8").splitlines()) >= bound for path in resolved):
-                violations.append(
-                    f"status:{status} exempt anchor {fragment!r} points past the end of every "
-                    f"matching file (needs line {bound})"
-                )
+                violations.append(f"status:{status} exempt anchor {fragment!r} points past the end of every matching file (needs line {bound})")
     return violations
 
 
@@ -660,14 +625,7 @@ def _registered_running_terminalizer_sql() -> list[str]:
     from farna.core import cron_helpers as ch
 
     tree = ast.parse(Path(ch.__file__).read_text(encoding="utf-8"))
-    constants = {
-        node.targets[0].id: node.value.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and isinstance(node.targets[0], ast.Name)
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str)
-    }
+    constants = {node.targets[0].id: node.value.value for node in tree.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)}
     registered = {spec.coroutine_name for spec in _terminalizer_specs() if spec.coroutine_name}
     sqls: list[str] = []
     for node in tree.body:
@@ -728,11 +686,7 @@ def test_status_sets_partition_the_model_vocabulary() -> None:
     active, terminal = _model_status_sets()
     vocabulary = _model_status_vocabulary()
     assert not (active & terminal), f"statuses in both sets: {sorted(active & terminal)}"
-    assert active | terminal == vocabulary, (
-        "the model status sets do not partition the ck_runs_status vocabulary; "
-        f"unclassified: {sorted(vocabulary - (active | terminal))}; "
-        f"unknown: {sorted((active | terminal) - vocabulary)}"
-    )
+    assert active | terminal == vocabulary, f"the model status sets do not partition the ck_runs_status vocabulary; unclassified: {sorted(vocabulary - (active | terminal))}; unknown: {sorted((active | terminal) - vocabulary)}"
 
 
 def test_terminalizer_registry_is_consistent_and_batch_wired() -> None:
@@ -750,15 +704,8 @@ def test_terminalizer_registry_is_consistent_and_batch_wired() -> None:
     batch_keys = _batch_terminalizer_keys()
     assert batch_keys <= keys, f"batch terminalizer(s) not registered: {sorted(batch_keys - keys)}"
     missing = sorted(spec.key for spec in specs if spec.coroutine_name is not None and spec.key not in batch_keys)
-    assert not missing, (
-        "terminalizer spec(s) declare a coroutine but never run (absent from "
-        "_BATCH_TERMINALIZER_SPECS):\n  " + "\n  ".join(missing)
-    )
-    unresolved = sorted(
-        spec.coroutine_name
-        for spec in specs
-        if spec.coroutine_name is not None and not hasattr(ch, spec.coroutine_name)
-    )
+    assert not missing, "terminalizer spec(s) declare a coroutine but never run (absent from _BATCH_TERMINALIZER_SPECS):\n  " + "\n  ".join(missing)
+    unresolved = sorted(spec.coroutine_name for spec in specs if spec.coroutine_name is not None and not hasattr(ch, spec.coroutine_name))
     assert not unresolved, f"terminalizer coroutine name(s) do not resolve in cron_helpers: {unresolved}"
 
 
@@ -830,9 +777,7 @@ def test_recovery_only_status_recovers_into_a_covered_status() -> None:
             continue
         target = _STATUS_COVERAGE.get(record.recovered_into)
         assert target is not None, f"status:{status} recovers into unknown status {record.recovered_into!r}"
-        assert target.classification == _COVERED, (
-            f"status:{status} recovers into {record.recovered_into!r}, which is not covered"
-        )
+        assert target.classification == _COVERED, f"status:{status} recovers into {record.recovered_into!r}, which is not covered"
 
 
 def test_exempt_statuses_use_only_documented_reasons() -> None:
@@ -868,24 +813,17 @@ def test_synthetic_bare_exempt_justification_is_flagged() -> None:
     """
     files = _anchor_source_files()
     bare = StatusCoverage(_EXEMPT, reason="operator_driven_recovery")
-    assert _exempt_justification_violations("synthetic", bare, anchor_files=files), (
-        "an exemption with no justification passed the anchor gate"
-    )
+    assert _exempt_justification_violations("synthetic", bare, anchor_files=files), "an exemption with no justification passed the anchor gate"
     unanchored = StatusCoverage(
         _EXEMPT,
         reason="operator_driven_recovery",
         note="a long enough justification that nevertheless names no source file anywhere at all",
     )
-    assert _exempt_justification_violations("synthetic", unanchored, anchor_files=files), (
-        "an exemption whose justification cites no source anchor passed the anchor gate"
-    )
+    assert _exempt_justification_violations("synthetic", unanchored, anchor_files=files), "an exemption whose justification cites no source anchor passed the anchor gate"
     anchored = StatusCoverage(
         _EXEMPT,
         reason="operator_driven_recovery",
-        note=(
-            "db/models/run.py:62-65 documents the operator-recovery contract this synthetic "
-            "status relies on for its exemption decision"
-        ),
+        note=("db/models/run.py:62-65 documents the operator-recovery contract this synthetic status relies on for its exemption decision"),
     )
     assert not _exempt_justification_violations("synthetic", anchored, anchor_files=files)
     # The mirror of the line above: a cited ``*.py`` path that resolves to no
@@ -894,14 +832,9 @@ def test_synthetic_bare_exempt_justification_is_flagged() -> None:
     nonexistent = StatusCoverage(
         _EXEMPT,
         reason="operator_driven_recovery",
-        note=(
-            "db/models/this_anchor_file_does_not_exist.py documents the operator-recovery "
-            "contract this synthetic status relies on for its exemption decision"
-        ),
+        note=("db/models/this_anchor_file_does_not_exist.py documents the operator-recovery contract this synthetic status relies on for its exemption decision"),
     )
-    assert _exempt_justification_violations("synthetic", nonexistent, anchor_files=files), (
-        "an exemption citing a *.py path that resolves to no file passed the anchor gate"
-    )
+    assert _exempt_justification_violations("synthetic", nonexistent, anchor_files=files), "an exemption citing a *.py path that resolves to no file passed the anchor gate"
 
 
 def test_resolve_py_anchor_normalises_separators_both_directions() -> None:
@@ -944,10 +877,7 @@ def test_every_status_gap_is_visible_and_actionable() -> None:
     deliberately thin note and asserts it is flagged, so the branch that
     adjudicates a FUTURE gap can still fail here today.
     """
-    assert _gap_note_violations("synthetic", "a remainder"), (
-        "the gap-actionability predicate failed to flag a thin synthetic note — the gate "
-        "would pass vacuously over an empty gap set"
-    )
+    assert _gap_note_violations("synthetic", "a remainder"), "the gap-actionability predicate failed to flag a thin synthetic note — the gate would pass vacuously over an empty gap set"
     violations: list[str] = []
     for status, record in sorted(_STATUS_COVERAGE.items()):
         if record.classification != _GAP:
@@ -964,11 +894,7 @@ def test_every_status_gap_is_visible_and_actionable() -> None:
 def test_every_dispatch_phase_is_classified() -> None:
     """A NEW durable dispatch phase must be classified before it can land."""
     missing = _unclassified(_PHASE_COVERAGE, _dispatch_phase_constants())
-    assert not missing, (
-        "unclassified dispatch phase(s) — add each to _PHASE_COVERAGE in "
-        "tests/architecture/test_run_terminalisation_coverage.py as generic (collected by the "
-        "generic running terminalisers) or dedicated (naming the leg that admits it):\n  " + "\n  ".join(missing)
-    )
+    assert not missing, "unclassified dispatch phase(s) — add each to _PHASE_COVERAGE in tests/architecture/test_run_terminalisation_coverage.py as generic (collected by the generic running terminalisers) or dedicated (naming the leg that admits it):\n  " + "\n  ".join(missing)
 
 
 def test_no_stale_phase_inventory_entries() -> None:
@@ -1008,9 +934,7 @@ def test_dedicated_phases_carry_a_note_and_a_generic_baseline() -> None:
             continue
         assert record.note, f"phase:{phase} is dedicated but carries no note"
         functions = {path.function for path in record.paths}
-        assert "_terminalize_mid_graph_wedges" in functions, (
-            f"phase:{phase} is dedicated but does not ride the generic running collector"
-        )
+        assert "_terminalize_mid_graph_wedges" in functions, f"phase:{phase} is dedicated but does not ride the generic running collector"
 
 
 # ---------------------------------------------------------------------------
@@ -1097,11 +1021,7 @@ def test_a_dead_executor_node_started_row_is_admitted_by_a_running_terminaliser(
     sqls = _registered_running_terminalizer_sql()
     shields = [sql for sql in sqls if _NODE_STARTED_SHIELD_ANCHOR in sql]
     violations = [sql for sql in shields if not _node_started_shield_is_liveness_gated(sql)]
-    assert not violations, (
-        "a registered running terminaliser excludes a node-started row behind an "
-        "unconditional shield (no heartbeat-vs-now() liveness bound): a run whose "
-        "executor died would be selected by no terminaliser (FAR-1803).\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "a registered running terminaliser excludes a node-started row behind an unconditional shield (no heartbeat-vs-now() liveness bound): a run whose executor died would be selected by no terminaliser (FAR-1803).\n  " + "\n  ".join(violations)
 
 
 def test_synthetic_pre_far1803_shield_is_flagged_by_the_predicate() -> None:
@@ -1116,10 +1036,6 @@ def test_synthetic_pre_far1803_shield_is_flagged_by_the_predicate() -> None:
     assert _node_started_shield_is_liveness_gated(sql) is True
     start = sql.index(_NODE_STARTED_SHIELD_ANCHOR)
     end = sql.index(_NODE_STARTED_SHIELD_END, start)
-    pre_fix_shield = (
-        "NOT (dispatch_phase = :first_node_phase "
-        "AND runs.sandbox_dispatch_state IS NOT NULL "
-        "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone) "
-    )
+    pre_fix_shield = "NOT (dispatch_phase = :first_node_phase AND runs.sandbox_dispatch_state IS NOT NULL AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone) "
     synthetic = sql[:start] + pre_fix_shield + sql[end:]
     assert _node_started_shield_is_liveness_gated(synthetic) is False

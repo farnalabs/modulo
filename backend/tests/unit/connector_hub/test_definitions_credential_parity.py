@@ -47,12 +47,8 @@ EXCLUDED_TYPES: dict[str, str] = {
     "jira": "JiraConnector consumes the whole creds dict (multi-field auth), no per-field read",
     "confluence": "ConfluenceConnector consumes the whole creds dict (multi-field auth), no per-field read",
     "rest": "RestConnector consumes the whole creds dict (multi-field auth), no per-field read",
-    "ci_runner": (
-        "definitions connector_type 'ci_runner' is a family label; the hub builds github_actions_ci / gitlab_ci"
-    ),
-    "custom": (
-        "custom connector types (prometheus, elastic, terraform, kubernetes, docker) build via the plugin registry"
-    ),
+    "ci_runner": ("definitions connector_type 'ci_runner' is a family label; the hub builds github_actions_ci / gitlab_ci"),
+    "custom": ("custom connector types (prometheus, elastic, terraform, kubernetes, docker) build via the plugin registry"),
 }
 
 # Minimal valid config per type so the builder passes its config validation.
@@ -77,11 +73,7 @@ class _FakeCI:
 
 
 def _definition_for(connector_type: str) -> dict[str, Any]:
-    matches = [
-        getattr(integration_defs, name)
-        for name in integration_exports
-        if getattr(integration_defs, name)["connector_type"] == connector_type
-    ]
+    matches = [getattr(integration_defs, name) for name in integration_exports if getattr(integration_defs, name)["connector_type"] == connector_type]
     assert len(matches) == 1, f"Expected one definition for {connector_type!r}, got {len(matches)}"
     return matches[0]
 
@@ -134,9 +126,7 @@ def test_parity_checkable_types_declare_credential_fields(connector_type: str) -
     fields would contribute zero probes; this guards the partition against that
     silent drift.
     """
-    assert _definition_for(connector_type)["credential_fields"], (
-        f"definition for {connector_type!r} declares no credential_fields to probe"
-    )
+    assert _definition_for(connector_type)["credential_fields"], f"definition for {connector_type!r} declares no credential_fields to probe"
 
 
 @pytest.mark.parametrize("connector_type", _parity_checkable_types())
@@ -155,9 +145,7 @@ async def test_connector_configured_via_definitions_is_resolvable(connector_type
     with patch.object(backend, "get_secret", return_value=json.dumps(creds)):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
-    assert ci.id in hub.connector_ids, (
-        f"connector {connector_type!r} configured via its definition credentials was silently skipped at initialise"
-    )
+    assert ci.id in hub.connector_ids, f"connector {connector_type!r} configured via its definition credentials was silently skipped at initialise"
 
 
 @pytest.mark.parametrize(
@@ -191,15 +179,9 @@ async def test_definition_credential_fields_are_load_bearing(connector_type: str
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     summary = hub.skipped.get(ci.id)
-    assert summary is not None, (
-        f"removing {removed_key!r} from {connector_type!r} credentials did not skip the connector at initialise"
-    )
-    assert summary.startswith("ValueError: Missing credential key "), (
-        f"removing {removed_key!r} from {connector_type!r} produced an unexpected skip: {summary!r}"
-    )
-    assert f"'{removed_key}'" in summary.split("Missing credential key")[1], (
-        f"skip summary for {connector_type!r} does not name the missing field {removed_key!r}: {summary!r}"
-    )
+    assert summary is not None, f"removing {removed_key!r} from {connector_type!r} credentials did not skip the connector at initialise"
+    assert summary.startswith("ValueError: Missing credential key "), f"removing {removed_key!r} from {connector_type!r} produced an unexpected skip: {summary!r}"
+    assert f"'{removed_key}'" in summary.split("Missing credential key")[1], f"skip summary for {connector_type!r} does not name the missing field {removed_key!r}: {summary!r}"
 
 
 @pytest.mark.parametrize("connector_type", _single_field_types())
@@ -226,9 +208,7 @@ async def test_bare_scalar_ciphertext_heals_under_definition_key(connector_type:
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     summary = hub.skipped.get(ci.id)
-    assert ci.id in hub.connector_ids, (
-        f"bare scalar for single-field definition type {connector_type!r} failed to initialise: {summary!r}"
-    )
+    assert ci.id in hub.connector_ids, f"bare scalar for single-field definition type {connector_type!r} failed to initialise: {summary!r}"
 
 
 @pytest.mark.parametrize(
@@ -254,9 +234,7 @@ async def test_bare_scalar_ciphertext_heals_under_definition_key(connector_type:
         "rest-no-password",
     ],
 )
-async def test_whole_dict_types_missing_field_does_not_look_like_bare_wrap_failure(
-    connector_type: str, removed_key: str
-) -> None:
+async def test_whole_dict_types_missing_field_does_not_look_like_bare_wrap_failure(connector_type: str, removed_key: str) -> None:
     """Negative probe for whole-dict types: a missing declared key fails via their
     own construction path — never with the per-field "Missing credential key" skip
     signature. If a whole-dict type ever grows an internal per-field read, this
@@ -275,10 +253,7 @@ async def test_whole_dict_types_missing_field_does_not_look_like_bare_wrap_failu
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
     summary = hub.skipped.get(ci.id)
-    assert summary is None or "Missing credential key" not in summary, (
-        f"{connector_type!r} missing {removed_key!r} produced a per-field missing-key skip "
-        f"(it is declared whole-dict): {summary!r}"
-    )
+    assert summary is None or "Missing credential key" not in summary, f"{connector_type!r} missing {removed_key!r} produced a per-field missing-key skip (it is declared whole-dict): {summary!r}"
 
 
 def test_excluded_types_are_real_definition_types() -> None:

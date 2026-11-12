@@ -146,28 +146,16 @@ async def test_save_discovery_revision_persists_current_system_map_entities(
             updated_by=test_user,
         )
 
-        revision = (
-            await session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision_id))
-        ).scalar_one()
-        nodes = list(
-            (await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == revision_id))).scalars()
-        )
-        relationships = list(
-            (
-                await session.execute(
-                    select(SystemMapRelationship).where(SystemMapRelationship.revision_id == revision_id)
-                )
-            ).scalars()
-        )
+        revision = (await session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision_id))).scalar_one()
+        nodes = list((await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == revision_id))).scalars())
+        relationships = list((await session.execute(select(SystemMapRelationship).where(SystemMapRelationship.revision_id == revision_id))).scalars())
 
     assert saved_map.updated_by == test_user
     assert revision_number == 1
     assert revision.system_map_id == draft.id
     assert revision.content_json == content
     assert [(node.node_key, node.node_type) for node in nodes] == [("build", "pipeline")]
-    assert [(edge.source_node_key, edge.target_node_key, edge.relationship_type) for edge in relationships] == [
-        ("build", "build", "flow")
-    ]
+    assert [(edge.source_node_key, edge.target_node_key, edge.relationship_type) for edge in relationships] == [("build", "build", "flow")]
 
 
 async def test_save_identical_discovery_reuses_revision_without_duplicate_children(
@@ -201,16 +189,8 @@ async def test_save_identical_discovery_reuses_revision_without_duplicate_childr
             content=content,
             updated_by=test_user,
         )
-        revisions = list(
-            (
-                await session.execute(select(SystemMapRevision).where(SystemMapRevision.system_map_id == draft.id))
-            ).scalars()
-        )
-        nodes = list(
-            (
-                await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == first_revision_id))
-            ).scalars()
-        )
+        revisions = list((await session.execute(select(SystemMapRevision).where(SystemMapRevision.system_map_id == draft.id))).scalars())
+        nodes = list((await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == first_revision_id))).scalars())
 
     expected_revision_id = uuid.uuid5(_DISCOVERY_NAMESPACE, f"{draft.id}:fingerprint-stable")
     assert first_map is second_map

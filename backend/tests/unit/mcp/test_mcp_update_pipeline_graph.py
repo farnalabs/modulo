@@ -94,12 +94,7 @@ class TestUpdatePipelineGraphGuardrailStrip:
         mock_session.return_value.__aenter__.return_value = make_session_scope()
         mock_replace_graph.side_effect = GuardrailBindingStripDenied(
             stripped_node_ids=[str(bound_node_id)],
-            detail=(
-                "Non-admin cannot strip a guardrail binding: removing node(s) "
-                + str(bound_node_id)
-                + " from the graph would drop a node-bound guardrail. Only an "
-                "admin can remove a node that has a bound guardrail."
-            ),
+            detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + str(bound_node_id) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
         )
 
         result = await update_pipeline_graph(
@@ -430,9 +425,7 @@ class TestMcpGraphMaskingParity:
         from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
         secret_node = {**_MASK_SECRET_NODE}
-        mock_get_pipeline.return_value = MagicMock(
-            id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**secret_node}]
-        )
+        mock_get_pipeline.return_value = MagicMock(id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**secret_node}])
         mock_replace_graph.return_value = ([{**secret_node}], [])
         mock_session.return_value.__aenter__.return_value = make_session_scope()
 
@@ -474,9 +467,7 @@ class TestMcpGraphMaskingParity:
         from farna.api.mcp_server import update_pipeline_graph
         from farna.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
-        mock_get_pipeline.return_value = MagicMock(
-            id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**_MASK_SECRET_NODE}]
-        )
+        mock_get_pipeline.return_value = MagicMock(id=uuid.uuid4(), owner_team_id=None, graph_nodes_json=[{**_MASK_SECRET_NODE}])
         mock_replace_graph.return_value = ([{**_MASK_SECRET_NODE}], [])
         mock_session.return_value.__aenter__.return_value = make_session_scope()
 
@@ -644,9 +635,7 @@ class TestUpdatePipelineGraphConnectorNode:
         # the mismatch check to ``[]`` alone passed even if a ``connector``
         # node's binding were silently dropped before the gate.
         mock_find_mismatches.assert_awaited_once()
-        assert mock_find_mismatches.await_args.kwargs["connector_bindings"] == [
-            {"node_id": node["id"], "connector_instance_id": node["connector_binding"]["instance_id"]}
-        ]
+        assert mock_find_mismatches.await_args.kwargs["connector_bindings"] == [{"node_id": node["id"], "connector_instance_id": node["connector_binding"]["instance_id"]}]
 
     async def test_a_connector_node_without_a_binding_is_rejected(self) -> None:
         """A binding-less connector node is refused before any DB work.
