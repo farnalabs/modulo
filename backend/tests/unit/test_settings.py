@@ -32,18 +32,30 @@ def test_saq_run_timeout_default() -> None:
     assert _make().saq_run_timeout == 7200
 
 
-def test_product_setting_accepts_canonical_and_legacy_aliases_with_canonical_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_product_setting_accepts_all_three_aliases_with_canonical_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FARNA_CONTROL_DB", "sqlite")
     monkeypatch.setenv("MODULO_DB", "mariadb")
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DB", "mysql")
 
     settings = Settings(**_BASE_ENV)
 
     assert settings.modulo_db == "sqlite"
 
 
-def test_product_setting_accepts_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_product_setting_accepts_original_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FARNA_CONTROL_DB", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_MODULO_DB", raising=False)
     monkeypatch.setenv("MODULO_DB", "sqlite")
+
+    settings = Settings(**_BASE_ENV)
+
+    assert settings.modulo_db == "sqlite"
+
+
+def test_product_setting_accepts_doubled_legacy_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FARNA_CONTROL_DB", raising=False)
+    monkeypatch.delenv("MODULO_DB", raising=False)
+    monkeypatch.setenv("FARNA_CONTROL_MODULO_DB", "sqlite")
 
     settings = Settings(**_BASE_ENV)
 
