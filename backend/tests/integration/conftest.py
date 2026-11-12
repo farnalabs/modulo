@@ -45,8 +45,12 @@ os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
-os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
-os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
+# Settings fields with NO explicit alias (modulo_csrf_enabled, modulo_auth_rate_limit_enabled,
+# modulo_dev_mode) derive their env names as MODULO_CSRF_ENABLED, MODULO_AUTH_RATE_LIMIT_ENABLED,
+# MODULO_DEV_MODE (without the FARNA_CONTROL_ prefix). Use the names the code actually reads.
+os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("MODULO_DEV_MODE", "true")
 
 BACKEND_ROOT = Path(__file__).parents[2]
 
@@ -302,7 +306,12 @@ def db_url(
     # creates the role LOGIN BYPASSRLS with exactly this password, which
     # mirrors production: deploy/fly/bootstrap_db.derive_system_database_url
     # swaps the runtime URL's username to ``farna_control_system``.
-    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "farna_control_system", "syspass"))
+    #
+    # The Settings field ``modulo_system_database_url`` has NO explicit alias, so
+    # pydantic derives its env name as ``MODULO_SYSTEM_DATABASE_URL`` (not the
+    # launcher's ``FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL``). Use the name
+    # the code actually reads.
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "farna_control_system", "syspass"))
     return url
 
 
@@ -411,9 +420,11 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         await eng.dispose()
 
     # Persist for the session: settings consumers (cron_helpers/saq_worker
-    # system engine) read get_settings().farna_control_system_database_url at test
+    # system engine) read get_settings().modulo_system_database_url at test
     # time, after the per-test get_settings.cache_clear().
-    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
+    # The Settings field ``modulo_system_database_url`` has NO explicit alias,
+    # so pydantic derives its env name as ``MODULO_SYSTEM_DATABASE_URL``.
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
 
     async def _patch_schema() -> None:
         """Add the test-only schema surface the migrations don't cover.
