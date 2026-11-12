@@ -1,5 +1,5 @@
 {{- if .Values.redis.embedded }}
-{{- $redisPassword := include "modulo.redisPassword" . }}
+{{- $redisPassword := include "farna-control.redisPassword" . }}
 {{- $redisPassword = required "redis.password or redis.existingSecret is required when redis.embedded=true" $redisPassword }}
 {{- /* FAR-2002: volatile-lru evicts ONLY TTL-bearing keys. The SAQ queue's
 structural keys (queued/active lists, incomplete zset) carry no TTL and must
@@ -8,24 +8,24 @@ never be evicted; an allkeys-* policy can lose them with nothing to repair. */}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "modulo.fullname" . }}-redis
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-redis
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      {{- include "farna-control.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: redis
   template:
     metadata:
       labels:
-        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        {{- include "farna-control.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
-      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      serviceAccountName: {{ include "farna-control.serviceAccountName" . }}
       # Redis never calls the Kubernetes API, so its token stays unmounted
       # unconditionally (kubernetes:S6865) — Kubernetes would otherwise
       # default this to true and mount a bearer token into the queue backend.
@@ -62,7 +62,7 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: REDIS_PASSWORD
           {{- end }}
           livenessProbe:

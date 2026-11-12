@@ -17,7 +17,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 # -- Image Pull Secrets -----------------------------------------------------
-# Required for private GHCR images (ghcr.io/farnalabs/modulo/*).
+# Required for private GHCR images (ghcr.io/farnalabs/farna-control/*).
 # Example: imagePullSecrets: [{name: ghcr-secret}]
 # Public images would remove the need for this.
 imagePullSecrets: []
@@ -139,7 +139,7 @@ postgres:
   # The RESTRICTED runtime role used for application queries (DATABASE_URL).
   # bootstrap_role creates/modifies this role on startup with DML-only grants.
   # (postgres.systemUsername below is the third role — system crons.)
-  username: modulo_app
+  username: farna_control_app
   # The admin/superuser role used for migrations and role bootstrap
   # (DATABASE_ADMIN_URL). The operator must provision this role with
   # superuser (or at minimum CREATEROLE + CREATEDB) rights so
@@ -148,7 +148,7 @@ postgres:
   # The cross-org system-cron role (LOGIN, BYPASSRLS) used by
   # MODULO_SYSTEM_DATABASE_URL; created by bootstrap_role with the shared
   # postgres.password. See README "Required Values" for why it is mandatory.
-  systemUsername: modulo_system
+  systemUsername: farna_control_system
   # Password reference: use existingSecret or set password (rendered into Secret).
   # Shared between app and admin roles; split if your setup requires it.
   existingSecret: ""
@@ -173,7 +173,7 @@ backend:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     # Digest takes precedence over tag when both are set.
     # Example: sha256:abc123...
     digest: ""
@@ -241,7 +241,7 @@ saqRunner:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.
@@ -274,7 +274,7 @@ saqSystem:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.
@@ -309,7 +309,7 @@ frontend:
   replicaCount: 1
 
   image:
-    repository: ghcr.io/farnalabs/modulo/frontend
+    repository: ghcr.io/farnalabs/farna-control/frontend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag);
     # set an explicit tag only to pin a different build.

@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: {{ include "modulo.fullname" . }}-quota
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-quota
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
 spec:
   hard:
     {{- toYaml .Values.resourceQuota.hard | nindent 4 }}

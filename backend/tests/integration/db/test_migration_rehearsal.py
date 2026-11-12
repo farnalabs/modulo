@@ -7,9 +7,7 @@ proving migrations against real data with zero persistence. Born from the
 while fresh-DB CI passed vacuously), where the only reliable diagnostic was
 executing the failing statements in a transaction and rolling back.
 
-Runs against its own testcontainer Postgres (built from scratch, mirroring
-``test_migration_0194_uuid_pk_server_defaults.py``'s fresh-migration-db
-pattern) and proves:
+Runs against its own testcontainer Postgres (built from scratch) and proves:
 
   * a SUCCESSFUL rehearsal leaves the database byte-identical: the
     ``alembic_version`` value is unchanged and every public table keeps its
@@ -44,9 +42,9 @@ pytestmark = [pytest.mark.integration]
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
 #: The rehearsal starts from the real chain applied up to this revision and
-#: covers every later migration (0195..head) — a meaty, evolving rehearsal,
+#: covers every later baseline migration (0351..head) — a meaty, evolving rehearsal,
 #: matching what a deploy rehearses (prod at revision N, image at N+k).
-_INTERMEDIATE = "0194_uuid_pk_server_defaults"
+_INTERMEDIATE = "0350_baseline_schema"
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -130,7 +128,7 @@ def _version_column_max_len(sync_db_url: str) -> int | None:
 def _seed_representative_data(sync_db_url: str) -> None:
     """Committed rows in two long-lived tables (the data the chain must not lose).
 
-    ``system_config`` rides the 0194 ``gen_random_uuid()`` PK default (no id
+    ``system_config`` rides the baseline schema's ``gen_random_uuid()`` PK default (no id
     supplied) — exactly the raw-INSERT shape that broke migration 0191.
     """
     engine = sa.create_engine(sync_db_url)
@@ -194,19 +192,19 @@ def rehearsal_migration_db(monkeypatch):
     def _provision():
         eng = sa.create_engine(_sync_url(raw))
         with eng.connect() as conn:
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_migrate"'))
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_breakglass"'))
-            conn.execute(sa.text('DROP ROLE IF EXISTS "modulo_app"'))
-            conn.execute(sa.text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
-            conn.execute(sa.text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
-            conn.execute(sa.text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_migrate"'))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_breakglass"'))
+            conn.execute(sa.text('DROP ROLE IF EXISTS "farna_control_app"'))
+            conn.execute(sa.text("CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+            conn.execute(sa.text("CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+            conn.execute(sa.text("CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
             conn.commit()
         eng.dispose()
 
     _provision()
 
-    app_url = _with_credentials(raw, "modulo_app", "apppass")
-    bg_url = _with_credentials(raw, "modulo_breakglass", "bgpass")
+    app_url = _with_credentials(raw, "farna_control_app", "apppass")
+    bg_url = _with_credentials(raw, "farna_control_breakglass", "bgpass")
     config = _alembic_config(raw)
     with monkeypatch.context() as m:
         m.setenv("DATABASE_URL", raw)

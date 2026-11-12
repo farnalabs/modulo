@@ -227,9 +227,7 @@ def test_split_postgres_sslmode_refuses_non_postgres_scheme(url: str) -> None:
         ),
     ],
 )
-def test_split_engine_sslmode_gates_on_driver_scheme(
-    url: str, expected_url: str, expected_ssl: str | bool | None
-) -> None:
+def test_split_engine_sslmode_gates_on_driver_scheme(url: str, expected_url: str, expected_ssl: str | bool | None) -> None:
     assert split_engine_sslmode(url) == (expected_url, expected_ssl)
 
 
@@ -247,21 +245,21 @@ DERIVE_CASES = [
     # password containing @ — rpartition must split on the LAST @
     (
         "postgresql+asyncpg://modulo:p@ss:word@db.internal:5432/modulo",
-        "postgresql+asyncpg://modulo_system:p@ss:word@db.internal:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:p@ss:word@db.internal:5432/modulo",
     ),
     # password with %40 escape
     (
         "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/modulo",
-        "postgresql+asyncpg://modulo_system:p%40ss@db.internal:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:p%40ss@db.internal:5432/modulo",
     ),
-    # no password — cannot derive a matching modulo_system credential
+    # no password — cannot derive a matching farna_control_system credential
     ("postgresql+asyncpg://modulo@db.internal:5432/modulo", ""),
     # explicit empty password (user:@host) — same as no password
     ("postgresql+asyncpg://modulo:@db.internal:5432/modulo", ""),
     # query-string preserved unchanged (incl. the operator's sslmode)
     (
         "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
-        "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
+        "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo?connect_timeout=10&sslmode=require",
     ),
     # no userinfo@ separator — nothing to swap, returns empty (caller skips)
     ("postgresql+asyncpg://db.internal:5432/modulo", ""),
@@ -279,4 +277,4 @@ def test_derivation_runs_on_the_fixed_database_url() -> None:
     fixed = fix_database_url("postgres://modulo:pw@db.internal:5432/modulo?sslmode=require")
     assert fixed == "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?sslmode=require"
     derived = derive_system_database_url(fixed)
-    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?sslmode=require"
+    assert derived == "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo?sslmode=require"

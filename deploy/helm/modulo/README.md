@@ -16,7 +16,7 @@ Vendor-neutral Helm chart for the Modulo stack. Deploys backend API, SAQ workers
 helm install modulo ./deploy/helm/modulo \
   --set postgres.host=your-rds-host \
   --set postgres.password=your-password \
-  --set postgres.username=modulo_app \
+  --set postgres.username=farna_control_app \
   --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=$(openssl rand -hex 32) \
   --set backend.env.FERNET_KEY=$(openssl rand -hex 32) \
@@ -33,10 +33,10 @@ The chart does NOT deploy Postgres by default. Modulo requires **two distinct Po
 
 | Role | Purpose | Used by |
 |------|---------|---------|
-| `modulo_app` | Restricted runtime role — DML only, no superuser, no BYPASSRLS | `DATABASE_URL` (backend, SAQ workers) |
+| `farna_control_app` | Restricted runtime role — DML only, no superuser, no BYPASSRLS | `DATABASE_URL` (backend, SAQ workers) |
 | `modulo` | Admin/superuser role — migrations, role bootstrap, DDL | `DATABASE_ADMIN_URL` (entrypoint only) |
 
-The `modulo_app` role is **created automatically** by `bootstrap_role` on startup — the operator only needs to provision the admin role with sufficient privileges (superuser or CREATEROLE + CREATEDB). A third role, `modulo_system` (LOGIN, BYPASSRLS — see `postgres.systemUsername`), is created by the same bootstrap with the shared password; the chart wires it into `MODULO_SYSTEM_DATABASE_URL`, without which the `dispatcher_reconcile` system cron refuses to run and backend readiness stays 503 forever.
+The `farna_control_app` role is **created automatically** by `bootstrap_role` on startup — the operator only needs to provision the admin role with sufficient privileges (superuser or CREATEROLE + CREATEDB). A third role, `farna_control_system` (LOGIN, BYPASSRLS — see `postgres.systemUsername`), is created by the same bootstrap with the shared password; the chart wires it into `MODULO_SYSTEM_DATABASE_URL`, without which the `dispatcher_reconcile` system cron refuses to run and backend readiness stays 503 forever.
 
 Set these values:
 
@@ -45,7 +45,7 @@ postgres:
   host: your-rds-host.amazonaws.com
   port: 5432
   database: modulo
-  username: modulo_app       # Restricted runtime role (DATABASE_URL)
+  username: farna_control_app       # Restricted runtime role (DATABASE_URL)
   adminUsername: modulo      # Admin/superuser role (DATABASE_ADMIN_URL)
   existingSecret: modulo-secrets  # Secret with "password" key
 ```
@@ -121,7 +121,7 @@ The chart supports digest-pinned images for reproducibility:
 ```yaml
 backend:
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: sha256:abc123...  # Preferred: immutable reference
     tag: ""                   # Empty: defaults to the chart's appVersion
 ```
@@ -150,7 +150,7 @@ startup error instead. `REDIS_PASSWORD` is rendered only when
 
 ### Image Pull Secrets (Private GHCR Images)
 
-The GHCR images (`ghcr.io/farnalabs/modulo/backend`, `.../frontend`) are private.
+The GHCR images (`ghcr.io/farnalabs/farna-control/backend`, `.../frontend`) are private.
 Set `imagePullSecrets` to pull them:
 
 ```yaml
@@ -289,7 +289,7 @@ helm install modulo ./deploy/helm/modulo \
   --set redis.password=replace-with-a-development-password \
   --set postgres.host=host.docker.internal \
   --set postgres.password=changeme \
-  --set postgres.username=modulo_app \
+  --set postgres.username=farna_control_app \
   --set postgres.adminUsername=modulo \
   --set backend.env.SECRET_KEY=dev-secret-key-not-for-production-32b! \
   --set backend.env.FERNET_KEY=dev-fernet-key-not-for-production-32b!! \

@@ -1,7 +1,7 @@
 """Unit tests for the top-level ``modulo`` CLI group (FAR-671 slice 2).
 
-Locks the published-surface compatibility: bare ``modulo backup`` /
-``modulo restore`` / ``modulo apply`` keep working through the new group
+Locks the published-surface compatibility: bare ``farna-control backup`` /
+``farna-control restore`` / ``modulo apply`` keep working through the new group
 (the backup commands are lifted onto it and an unrecognised first token
 falls back to ``backup``), plus the start/stop/status/version/env surface
 with mocked launcher internals and the credential redaction discipline.
@@ -152,14 +152,14 @@ def test_version_flag_and_subcommand() -> None:
 def test_env_redacts_every_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     result = CliRunner().invoke(cli_main.cli, ["env"])
     assert result.exit_code == 0
     assert "super-secret" not in result.output
     assert SECRET_KEY not in result.output
     assert FERNET_KEY not in result.output
     assert "<redacted>@db-host:5432/modulo" in result.output
-    assert "postgresql://<redacted>@db-host:5432/modulo" in result.output
+    assert "postgresql://user:pass@host:5432/farna_control" in result.output
     assert "fernet_key=<redacted>" in result.output
     assert "secret_key=<redacted>" in result.output
 
@@ -167,11 +167,11 @@ def test_env_redacts_every_credential(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_env_json_redacts_every_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     result = CliRunner().invoke(cli_main.cli, ["env", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["database_url"] == "postgresql://<redacted>@db-host:5432/modulo"
+    assert payload["database_url"] == "postgresql://user:pass@host:5432/farna_control"
     assert payload["fernet_key"] == "<redacted>"
 
 
@@ -185,7 +185,7 @@ _LICENSE_KEY = "lic-live-0123456789abcdef"
 def _set_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     monkeypatch.setenv("REDIS_URL", "redis://:redis-secret@cache-host:16379/0")
     monkeypatch.setenv("FARNA_CONTROL_MODULO_USERS", f"admin@modulo.run:{_USER_PASSWORD}")
     monkeypatch.setenv(
@@ -575,7 +575,7 @@ def test_doctor_report_writes_redacted_zip(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_env_raw_prints_unredacted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     result = CliRunner().invoke(cli_main.cli, ["env", "--raw"])
     assert result.exit_code == 0
     assert SECRET_KEY in result.output
@@ -584,7 +584,7 @@ def test_env_raw_prints_unredacted(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_env_raw_with_json_still_raw(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SECRET_KEY", SECRET_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app-user:super-secret@db-host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     result = CliRunner().invoke(cli_main.cli, ["env", "--raw", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)

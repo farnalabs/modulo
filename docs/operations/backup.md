@@ -167,19 +167,19 @@ This page documents two backup tools. They produce different artifacts and are
 | Tool | Produces | Restored by | Encrypted |
 |------|----------|-------------|-----------|
 | `scripts/backup.py` | one `modulo-backup-<org>-<timestamp>.tar.gz.enc` file | `scripts/restore.py --input` | Yes - AES-256-CBC (PBKDF2, 600K iterations) |
-| `modulo backup` | a **directory** holding `database.sql`, the three checkpoint JSON exports, `credentials_references.json` and `backup-info.json` | `modulo restore <directory>` | **No** - the directory is written unencrypted |
+| `farna-control backup` | a **directory** holding `database.sql`, the three checkpoint JSON exports, `credentials_references.json` and `backup-info.json` | `farna-control restore <directory>` | **No** - the directory is written unencrypted |
 
 `scripts/restore.py --input` reads only a `scripts/backup.py` archive, and
-`modulo restore` reads only a directory written by `modulo backup`. The
+`farna-control restore` reads only a directory written by `farna-control backup`. The
 version-upgrade procedure in
 [`docs/upgrade-process.md`](../upgrade-process.md) uses the `scripts/backup.py`
 / `scripts/restore.py` pair - the encrypted archive - so that is the pair to
-use when following that procedure. The `modulo backup` / `modulo restore` pair
+use when following that procedure. The `farna-control backup` / `farna-control restore` pair
 described below is the in-product database-level dump; the AES-256-CBC claim in
-the Overview applies to `scripts/backup.py` only, so store a `modulo backup`
+the Overview applies to `scripts/backup.py` only, so store a `farna-control backup`
 directory on encrypted media if the archive itself must be encrypted.
 `scripts/backup-prune.py` prunes only `modulo-backup-*.tar.gz.enc` files, so it
-does NOT prune `modulo backup` directories - delete those yourself.
+does NOT prune `farna-control backup` directories - delete those yourself.
 
 The `modulo` and `alembic` commands in this section run from `backend/`, where
 `alembic.ini` and the `modulo` entry point live (step 1 changes into it).
@@ -188,14 +188,14 @@ The `modulo` and `alembic` commands in this section run from `backend/`, where
 
 ```bash
 cd /opt/modulo/backend
-uv run modulo backup --db-url "$DATABASE_URL" \
+uv run farna-control backup --db-url "$DATABASE_URL" \
   --output-dir "/backups/pre-upgrade-$(date +%Y%m%d-%H%M%S)"
 ```
 
 Give every dump its own directory. `--output-dir` creates the directory when it
 is missing but reuses it when it exists, and the files inside it are
 overwritten - so a fixed path silently replaces the previous recovery point.
-(Without `--output-dir`, `modulo backup` creates a fresh
+(Without `--output-dir`, `farna-control backup` creates a fresh
 `./modulo-backup-<timestamp>-<rand>` directory in the current directory.)
 
 That writes `database.sql` (a `pg_dump` of schema and data), the three
@@ -222,8 +222,8 @@ Check the archive first, then restore it (substituting the timestamped
 directory you dumped in step 1):
 
 ```bash
-uv run modulo restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --dry-run
-uv run modulo restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --yes
+uv run farna-control restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --dry-run
+uv run farna-control restore /backups/pre-upgrade-<timestamp> --db-url "$DATABASE_URL" --yes
 ```
 
 `restore` verifies every file against the manifest's checksums before it
@@ -236,7 +236,7 @@ Note the two different versions in play. The manifest's `schema_versions` field
 records the **migration head of the code that wrote the backup** (`alembic`
 script heads), not the database's `alembic_version` row. The two differ whenever
 the dump is taken after deploying a new release but before
-`alembic upgrade heads` runs. `modulo restore` refuses an archive whose
+`alembic upgrade heads` runs. `farna-control restore` refuses an archive whose
 recorded versions are not a subset of the running code's heads - which, in a
 linear chain, means **the restore must run the same release that wrote the
 dump**:
@@ -293,11 +293,11 @@ throwaway Postgres 16 it:
    one row in each of `checkpoints`, `checkpoint_blobs` and `checkpoint_writes`,
    so the checkpoint exports and restore path are not exercised on empty
    tables;
-4. runs `modulo backup` and asserts all six artifacts were produced and that
+4. runs `farna-control backup` and asserts all six artifacts were produced and that
    `database.sql` is non-empty;
-5. runs `modulo restore` into a second, empty database and asserts the seeded
+5. runs `farna-control restore` into a second, empty database and asserts the seeded
    rows and all three checkpoint rows are intact;
-6. re-applies the promoted first-boot posture path with the real `modulo_app`
+6. re-applies the promoted first-boot posture path with the real `farna_control_app`
    role and asserts `NOBYPASSRLS` plus the expected schema, table and column
    grants (the posture is deliberately broken before the restore, so this
    assertion cannot pass vacuously);
@@ -319,7 +319,7 @@ package from there. Running it from `backend/` fails to find the script.
 The script creates and drops its own scratch databases (`<db>_backup_src` and
 `<db>_restored`) on the server it is pointed at, and leaves the database named
 in the URL untouched. It also **resets the runtime roles** the migration chain
-needs (`modulo_app`, `modulo_migrate`, `modulo_breakglass`) with `DROP ROLE` /
+needs (`farna_control_app`, `farna_control_migrate`, `farna_control_breakglass`) with `DROP ROLE` /
 `CREATE ROLE` and fixed passwords. Roles are **cluster-scoped, not
 database-scoped**, so on a shared server that rotates the role passwords of
 every deployment living on it. The script therefore refuses to start unless the
@@ -331,11 +331,11 @@ throwaway server.
 ```bash
 NAME=modulo-dr-gate-$(date +%Y%m%d-%H%M%S)
 docker run -d --rm --name "$NAME" \
-  -e POSTGRES_USER=modulo_test -e POSTGRES_PASSWORD=modulo_test \
-  -e POSTGRES_DB=modulo_test -p 0:5432 postgres:16-alpine
+  -e POSTGRES_USER=farna_control_test -e POSTGRES_PASSWORD=farna_control_test \
+  -e POSTGRES_DB=farna_control_test -p 0:5432 postgres:16-alpine
 PORT=$(docker port "$NAME" 5432/tcp | tail -1 | sed 's/.*://')
 
-export DATABASE_URL=postgresql+asyncpg://modulo_test:modulo_test@localhost:$PORT/modulo_test
+export DATABASE_URL=postgresql+asyncpg://farna_control_test:farna_control_test@localhost:$PORT/farna_control_test
 uv run --project backend python scripts/verify_backup_restore.py
 ```
 
@@ -401,9 +401,9 @@ If restoring to a new environment, update `FERNET_KEY` and `SECRET_KEY` in
 the application `.env` file. All existing encrypted data (connector
 credentials, audit chains) will be re-encrypted on first access.
 
-## `modulo restore`: database roles and posture
+## `farna-control restore`: database roles and posture
 
-`modulo restore <backup-dir>` finishes by re-running the same first-boot role
+`farna-control restore <backup-dir>` finishes by re-running the same first-boot role
 bootstrap the application runs, so the restored cluster ends up with the
 posture the application expects: the app role cannot bypass RLS, the system and
 break-glass roles can, and every grant is re-applied.
@@ -413,8 +413,7 @@ break-glass roles can, and every grant is re-applied.
   settings. `--db-url` (and `DATABASE_ADMIN_URL`) is the privileged connection
   the restore itself writes through; using it as the app role would configure
   the admin role and leave the real app role untouched.
-- **A posture failure fails the restore.** If the bootstrap raises, `modulo
-  restore` exits non-zero and names the failing check. The data is already
+- **A posture failure fails the restore.** If the bootstrap raises, `farna-control restore` exits non-zero and names the failing check. The data is already
   restored at that point, but the cluster must not serve traffic until the
   posture is fixed: correct the reported problem, then run
   `uv run python -m farna.db.bootstrap_role` (with `DATABASE_ADMIN_URL` and

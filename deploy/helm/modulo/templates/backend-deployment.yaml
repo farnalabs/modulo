@@ -1,28 +1,28 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "modulo.fullname" . }}-backend
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-backend
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
   replicas: {{ .Values.backend.replicaCount }}
   selector:
     matchLabels:
-      {{- include "modulo.selectorLabels" . | nindent 6 }}
+      {{- include "farna-control.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: backend
   template:
     metadata:
       labels:
-        {{- include "modulo.selectorLabels" . | nindent 8 }}
+        {{- include "farna-control.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: backend
       {{- with .Values.backend.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      serviceAccountName: {{ include "farna-control.serviceAccountName" . }}
       # Opt-in via serviceAccount.automountServiceAccountToken (default
       # false): the Kubernetes runtime provider has this workload
       # create/exec/log workspace pods in-cluster, so operators enabling that
@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: {{ include "modulo.image" (dict "image" .Values.backend.image "appVersion" .Chart.AppVersion) | quote }}
+          image: {{ include "farna-control.image" (dict "image" .Values.backend.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - name: http-backend
@@ -56,32 +56,32 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: DATABASE_URL
             - name: DATABASE_ADMIN_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: DATABASE_ADMIN_URL
             - name: MODULO_SYSTEM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: MODULO_SYSTEM_DATABASE_URL
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: REDIS_URL
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: SECRET_KEY
             - name: FERNET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "modulo.fullname" . }}-secrets
+                  name: {{ include "farna-control.fullname" . }}-secrets
                   key: FERNET_KEY
             {{- range $key, $value := .Values.backend.env }}
             {{- if and (ne $key "DATABASE_URL") (ne $key "DATABASE_ADMIN_URL") (ne $key "MODULO_SYSTEM_DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") }}
@@ -91,7 +91,7 @@ spec:
             {{- end }}
           envFrom:
             - configMapRef:
-                name: {{ include "modulo.fullname" . }}-config
+                name: {{ include "farna-control.fullname" . }}-config
           {{- with .Values.backend.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

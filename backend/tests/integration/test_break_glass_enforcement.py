@@ -3,7 +3,7 @@
 The break-glass enforcement surface (reconciliation chain
 0110_schema_pipeline_runtime) + the SQL-predicate deny, against a real
 Postgres (testcontainers): the accounts UPDATE allow-list holds for
-``modulo_app`` AND PUBLIC, ``modulo_breakglass`` has the three break-glass
+``farna_control_app`` AND PUBLIC, ``farna_control_breakglass`` has the three break-glass
 column grants only (no DELETE, no other UPDATE), and the deny predicate in
 ``resolve_role_from_membership`` folds denied break-glass accounts to None
 (expired / NULL-expiry / deactivated / inactive) while live ones resolve
@@ -49,11 +49,7 @@ async def _create_account(
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, "
-                "is_break_glass, break_glass_expires_at, break_glass_deactivated_at) "
-                "VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp, :deactivated)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, is_break_glass, break_glass_expires_at, break_glass_deactivated_at) VALUES (:id, :email, :name, 'hash', 'local', :active, :bg, :exp, :deactivated)"),
             {
                 "id": str(acc_id),
                 "email": f"enf-{acc_id.hex[:12]}@example.com",
@@ -67,9 +63,7 @@ async def _create_account(
     return acc_id
 
 
-async def _create_membership(
-    engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin"
-) -> None:
+async def _create_membership(engine: AsyncEngine, *, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, :role)"),
@@ -82,11 +76,11 @@ async def _pg_connect(migrated_db_url: str) -> asyncpg.Connection:
     return await asyncpg.connect(url, ssl=False)
 
 
-# ── modulo_breakglass column grants ──────────────────────────────────
+# ── farna_control_breakglass column grants ──────────────────────────────────
 
 
-async def test_modulo_breakglass_has_only_break_glass_column_updates(db_engine: AsyncEngine) -> None:
-    """Assert the SHIPPED modulo_breakglass accounts posture.
+async def test_farna_control_breakglass_has_only_break_glass_column_updates(db_engine: AsyncEngine) -> None:
+    """Assert the SHIPPED farna_control_breakglass accounts posture.
 
     The bootstrap deliberately does NOT apply the plan's break-glass column
     UPDATE grants yet ("deliverable (B) ... are NOT applied here",
@@ -103,28 +97,26 @@ async def test_modulo_breakglass_has_only_break_glass_column_updates(db_engine: 
         for priv in ("SELECT", "INSERT"):
             granted = (
                 await conn.execute(
-                    text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', :priv)"),
+                    text("SELECT has_table_privilege('farna_control_breakglass', 'public.accounts', :priv)"),
                     {"priv": priv},
                 )
             ).scalar_one()
-            assert granted is True, f"modulo_breakglass should have {priv} on accounts"
+            assert granted is True, f"farna_control_breakglass should have {priv} on accounts"
 
         for col in (*_BG_COLS, "email", "password_hash", "active", "display_name"):
             granted = (
                 await conn.execute(
-                    text("SELECT has_column_privilege('modulo_breakglass', 'public.accounts', :col, 'UPDATE')"),
+                    text("SELECT has_column_privilege('farna_control_breakglass', 'public.accounts', :col, 'UPDATE')"),
                     {"col": col},
                 )
             ).scalar_one()
-            assert granted is False, f"modulo_breakglass must NOT UPDATE {col} (deliverable (B) grants not shipped)"
+            assert granted is False, f"farna_control_breakglass must NOT UPDATE {col} (deliverable (B) grants not shipped)"
 
-        has_delete = (
-            await conn.execute(text("SELECT has_table_privilege('modulo_breakglass', 'public.accounts', 'DELETE')"))
-        ).scalar_one()
-        assert has_delete is False, "modulo_breakglass must not DELETE from accounts"
+        has_delete = (await conn.execute(text("SELECT has_table_privilege('farna_control_breakglass', 'public.accounts', 'DELETE')"))).scalar_one()
+        assert has_delete is False, "farna_control_breakglass must not DELETE from accounts"
 
 
-# ── allow-list boundary (modulo_app + PUBLIC) ────────────────────────
+# ── allow-list boundary (farna_control_app + PUBLIC) ────────────────────────
 
 
 async def test_no_table_level_update_on_accounts_for_app_or_public(db_engine: AsyncEngine) -> None:
@@ -132,50 +124,30 @@ async def test_no_table_level_update_on_accounts_for_app_or_public(db_engine: As
     predicate. Runs on the superuser engine (an unrelated role would see zero
     rows and false-pass)."""
     async with db_engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT grantee FROM information_schema.role_table_grants "
-                    "WHERE table_schema = 'public' AND table_name = 'accounts' "
-                    "AND privilege_type = 'UPDATE' AND grantee IN ('modulo_app', 'PUBLIC')"
-                )
-            )
-        ).fetchall()
+        rows = (await conn.execute(text("SELECT grantee FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name = 'accounts' AND privilege_type = 'UPDATE' AND grantee IN ('farna_control_app', 'PUBLIC')"))).fetchall()
         assert rows == [], f"accounts has a table-level UPDATE grant: {rows}"
 
 
 async def test_allow_list_set_equality(db_engine: AsyncEngine) -> None:
-    """Inverted schema-evolution test: the set of accounts columns modulo_app
+    """Inverted schema-evolution test: the set of accounts columns farna_control_app
     can UPDATE equals the single-sourced allow-listed constant, and the three
     break-glass columns are NOT writable by it."""
     async with db_engine.connect() as conn:
-        cols = {
-            row[0]
-            for row in (
-                await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'accounts'"
-                    )
-                )
-            ).fetchall()
-        }
+        cols = {row[0] for row in (await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'accounts'"))).fetchall()}
         granted: set[str] = set()
         for col in sorted(cols):
             ok = (
                 await conn.execute(
-                    text("SELECT has_column_privilege('modulo_app', 'public.accounts', :col, 'UPDATE')"),
+                    text("SELECT has_column_privilege('farna_control_app', 'public.accounts', :col, 'UPDATE')"),
                     {"col": col},
                 )
             ).scalar_one()
             if ok:
                 granted.add(col)
 
-        assert granted == set(ACCOUNTS_WRITABLE_COLUMNS), (
-            f"modulo_app UPDATE-grant drift: granted={sorted(granted)} allow_list={sorted(ACCOUNTS_WRITABLE_COLUMNS)}"
-        )
+        assert granted == set(ACCOUNTS_WRITABLE_COLUMNS), f"farna_control_app UPDATE-grant drift: granted={sorted(granted)} allow_list={sorted(ACCOUNTS_WRITABLE_COLUMNS)}"
         for col in _BG_COLS:
-            assert col not in granted, f"modulo_app must not UPDATE {col}"
+            assert col not in granted, f"farna_control_app must not UPDATE {col}"
 
 
 async def test_allow_list_positive_control(migrated_db_url: str) -> None:
@@ -183,16 +155,16 @@ async def test_allow_list_positive_control(migrated_db_url: str) -> None:
     allow-list assertion detect a violation (iteration-17 positive control)."""
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert not await _find_allow_list_violations(conn, "modulo_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
 
         await conn.execute("GRANT UPDATE ON public.accounts TO PUBLIC")
         try:
-            violations = await _find_allow_list_violations(conn, "modulo_app")
+            violations = await _find_allow_list_violations(conn, "farna_control_app")
             assert any("PUBLIC" in v for v in violations), violations
         finally:
             await conn.execute("REVOKE UPDATE ON public.accounts FROM PUBLIC")
 
-        assert not await _find_allow_list_violations(conn, "modulo_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
     finally:
         await conn.close()
 
@@ -205,9 +177,7 @@ async def enf_org(db_engine: AsyncEngine) -> uuid.UUID:
     return await _create_org(db_engine)
 
 
-async def test_denied_break_glass_resolves_none_live_resolves_role(
-    db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID
-) -> None:
+async def test_denied_break_glass_resolves_none_live_resolves_role(db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID) -> None:
     future = datetime.now(UTC) + timedelta(hours=1)
     past = datetime.now(UTC) - timedelta(seconds=1)
     live = await _create_account(db_engine, is_break_glass=True, expires_at=future)
@@ -229,9 +199,7 @@ async def test_denied_break_glass_resolves_none_live_resolves_role(
         assert resolved is None, f"denied break-glass account {denied} must resolve None, got {resolved!r}"
 
 
-async def test_recovery_cycle_deny_at_canonical_site(
-    db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID
-) -> None:
+async def test_recovery_cycle_deny_at_canonical_site(db_engine: AsyncEngine, db_session: AsyncSession, enf_org: uuid.UUID) -> None:
     """The full recovery-cycle deny: expired / NULL-expiry / deactivated
     break-glass memberships all return None at the canonical site
     (resolve_role_from_membership), and a live one still resolves."""

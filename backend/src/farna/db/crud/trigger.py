@@ -133,11 +133,11 @@ async def load_trigger_and_org_global(
     Slack deliveries there is no principal org at all), and the HMAC/slack
     signing secret needed to authenticate the delivery lives on the trigger row
     itself — a chicken-and-egg bootstrap. On Postgres the app session runs as
-    ``modulo_app`` (NOBYPASSRLS, non-owner), so a pre-context read of the
+    ``farna_control_app`` (NOBYPASSRLS, non-owner), so a pre-context read of the
     org-scoped ``triggers`` table matches ZERO rows and every delivery 404s
     (the FAR-457 silent-empty failure class; the BDD/integration harnesses
     connect as the table owner, where RLS does not apply, so they cannot catch
-    it). The system session (``modulo_system``, BYPASSRLS) resolves the
+    it). The system session (``farna_control_system``, BYPASSRLS) resolves the
     bootstrap row instance-globally — the same mechanism as the pre-auth SSO
     provider resolution. The caller pins the app session to the returned org
     with ``set_rls_org`` and still enforces authenticity AFTER this read and

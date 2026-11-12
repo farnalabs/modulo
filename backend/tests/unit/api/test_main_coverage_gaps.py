@@ -147,9 +147,7 @@ async def test_seed_sso_providers_empty(monkeypatch: pytest.MonkeyPatch) -> None
 
 @pytest.mark.anyio
 async def test_seed_sso_providers_already_exist(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _make_settings(
-        modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]'
-    )
+    settings = _make_settings(modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]')
     session = _mock_session(_result(scalar_one_or_none=MagicMock()))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     await main._seed_sso_providers(settings)
@@ -158,9 +156,7 @@ async def test_seed_sso_providers_already_exist(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.anyio
 async def test_seed_sso_providers_no_org(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _make_settings(
-        modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]'
-    )
+    settings = _make_settings(modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]')
     session = _mock_session(_result(scalar_one_or_none=None))
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
     await main._seed_sso_providers(settings)
@@ -189,9 +185,7 @@ async def test_seed_sso_providers_entry_missing_fields_skipped(monkeypatch: pyte
 
 @pytest.mark.anyio
 async def test_seed_sso_providers_valid_entry_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _make_settings(
-        modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]'
-    )
+    settings = _make_settings(modulo_oidc_providers='[{"provider_id": "p1", "client_id": "c1", "client_secret": "s1", "discovery_url": "https://d"}]')
     org = SimpleNamespace(id=uuid.uuid4())
     session = _session_with_results([_result(scalar_one_or_none=None), _result(scalar_one_or_none=org)])
     _patch_db_seams(monkeypatch, _mock_engine(), _mock_factory(session))
@@ -438,9 +432,7 @@ async def test_register_shutdown_manager_and_shutdown(monkeypatch: pytest.Monkey
     assert engine.dispose.await_count == 1
 
 
-def test_register_shutdown_manager_failure_is_non_fatal(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_register_shutdown_manager_failure_is_non_fatal(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setattr(main, "get_or_create_engine", MagicMock(side_effect=RuntimeError("boom")))
     with caplog.at_level(logging.WARNING, logger="farna.api.main"):
         main._register_shutdown_manager(_make_settings())
@@ -764,9 +756,7 @@ async def test_db_is_at_migration_head_false_when_scriptdir_raises(monkeypatch: 
 
 
 @pytest.mark.anyio
-async def test_alembic_head_guard_single_head_logs_info(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_alembic_head_guard_single_head_logs_info(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Single head → info log, no warning, no error."""
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value=["abc123"])
@@ -783,9 +773,7 @@ async def test_alembic_head_guard_single_head_logs_info(
 
 
 @pytest.mark.anyio
-async def test_alembic_head_guard_multiple_heads_logs_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_alembic_head_guard_multiple_heads_logs_warning(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Multiple heads → loud WARNING (non-fatal, not a crash)."""
     script_dir = MagicMock()
     script_dir.get_heads = MagicMock(return_value=["head_a", "head_b"])
@@ -801,9 +789,7 @@ async def test_alembic_head_guard_multiple_heads_logs_warning(
 
 
 @pytest.mark.anyio
-async def test_alembic_head_guard_get_heads_returns_list_not_string(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_alembic_head_guard_get_heads_returns_list_not_string(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """get_heads() returning list[str] must NOT raise AttributeError.
 
     Before the fix, _get_heads called .split(",") on the list, which raised
@@ -824,9 +810,7 @@ async def test_alembic_head_guard_get_heads_returns_list_not_string(
 
 
 @pytest.mark.anyio
-async def test_alembic_head_guard_exception_logs_error_not_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_alembic_head_guard_exception_logs_error_not_warning(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """When the guard itself fails, the error must be observable at ERROR level."""
     monkeypatch.setattr("alembic.script.ScriptDirectory.from_config", MagicMock(side_effect=RuntimeError("broken")))
     monkeypatch.setattr("farna.db.migrations.env._to_sync_url", lambda url: url)
@@ -851,9 +835,7 @@ def test_alembic_head_guard_old_code_would_raise_attribute_error() -> None:
 
 
 @pytest.mark.anyio
-async def test_alembic_head_guard_get_heads_returns_string(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_alembic_head_guard_get_heads_returns_string(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A legacy string return from ``get_heads()`` is split, not iterated.
 
     Covers the ``isinstance(heads, str)`` compatibility arm: an older/broken
@@ -906,7 +888,7 @@ async def test_run_migrations_bootstraps_even_when_already_at_head(monkeypatch: 
 
     The head fast-path skips the alembic run and the migration lock — but the
     bootstrap sits BEFORE it so a warm boot that later adds
-    MODULO_SYSTEM_DATABASE_URL reconciles the modulo_system password without a
+    MODULO_SYSTEM_DATABASE_URL reconciles the farna_control_system password without a
     manual ``python -m farna.db.bootstrap_role`` step.
     """
     monkeypatch.setattr(main, "_db_is_at_migration_head", AsyncMock(return_value=True))
@@ -993,9 +975,7 @@ async def test_run_bootstrap_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_run_bootstrap_break_glass_posture_is_non_fatal(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_run_bootstrap_break_glass_posture_is_non_fatal(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setattr(
         "farna.db.bootstrap_role.bootstrap_roles",
         AsyncMock(side_effect=RuntimeError("Break-glass role posture assertion FAILED: superuser")),
@@ -1022,9 +1002,7 @@ async def test_run_break_glass_watchdog_ok(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.anyio
 async def test_run_break_glass_watchdog_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "farna.settings.validate_break_glass_boot", MagicMock(side_effect=RuntimeError("missing config"))
-    )
+    monkeypatch.setattr("farna.settings.validate_break_glass_boot", MagicMock(side_effect=RuntimeError("missing config")))
     with pytest.raises(RuntimeError, match="missing config"):
         await main._run_break_glass_watchdog(_make_settings())
 

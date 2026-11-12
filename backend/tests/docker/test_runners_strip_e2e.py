@@ -17,10 +17,10 @@ app's ``GET /api/v1/runners/status`` read model:
 The split is deliberate and mirrors production posture:
 
 - the probe WRITES org-scoped cache rows as the DB superuser (BYPASSRLS —
-  the testcontainer equivalent of ``modulo_system``);
+  the testcontainer equivalent of ``farna_control_system``);
 - the status read runs on the FastAPI app wired to a NON-superuser engine
   that ``SET ROLE``s to a dedicated ``modulo_runners_e2e_app`` role, so RLS
-  actually scopes what the strip sees, exactly like the ``modulo_app``
+  actually scopes what the strip sees, exactly like the ``farna_control_app``
   runtime role in production.
 
 Scenario 1 needs only a reachable local engine (the autouse ``_require_engine``
@@ -171,12 +171,12 @@ def migrated_db_url(db_url: str) -> str:
                 await conn.execute(
                     text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"),
                 )
-                await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
-                await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
-                await conn.execute(text('DROP ROLE IF EXISTS "modulo_app"'))
-                await conn.execute(text("CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
-                await conn.execute(text("CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
-                await conn.execute(text("CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
+                await conn.execute(text('DROP ROLE IF EXISTS "farna_control_migrate"'))
+                await conn.execute(text('DROP ROLE IF EXISTS "farna_control_breakglass"'))
+                await conn.execute(text('DROP ROLE IF EXISTS "farna_control_app"'))
+                await conn.execute(text("CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS"))
+                await conn.execute(text("CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'"))
+                await conn.execute(text("CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'"))
                 await conn.commit()
             with patch.dict(os.environ, {"DATABASE_ADMIN_URL": db_url, "DATABASE_URL": db_url}):
                 command.upgrade(config, "heads")
@@ -219,7 +219,7 @@ def probe_session_factory(
 async def app_engine(migrated_db_url: str) -> AsyncEngine:
     """Engine whose connections SET ROLE to the non-superuser app role.
 
-    RLS therefore applies on every read, mirroring ``modulo_app`` production
+    RLS therefore applies on every read, mirroring ``farna_control_app`` production
     posture for the HTTP strip.
     """
     engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)

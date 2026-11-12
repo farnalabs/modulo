@@ -77,7 +77,7 @@ postgres:
   host: modulo-db.cluster-xxxxxx.us-east-1.rds.amazonaws.com
   port: 5432
   database: modulo
-  username: modulo_app       # Restricted runtime role (DATABASE_URL)
+  username: farna_control_app       # Restricted runtime role (DATABASE_URL)
   adminUsername: modulo      # Admin/superuser role (DATABASE_ADMIN_URL)
   existingSecret: modulo-secrets
 
@@ -93,7 +93,7 @@ redis:
 backend:
   replicaCount: 2
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag).
     tag: ""
@@ -124,7 +124,7 @@ backend:
 saqRunner:
   replicaCount: 2
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag).
     tag: ""
@@ -146,7 +146,7 @@ saqRunner:
 saqSystem:
   replicaCount: 1
   image:
-    repository: ghcr.io/farnalabs/modulo/backend
+    repository: ghcr.io/farnalabs/farna-control/backend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag).
     tag: ""
@@ -165,7 +165,7 @@ saqSystem:
 frontend:
   replicaCount: 2
   image:
-    repository: ghcr.io/farnalabs/modulo/frontend
+    repository: ghcr.io/farnalabs/farna-control/frontend
     digest: ""
     # Empty means "use the chart's appVersion" (the released image tag).
     tag: ""

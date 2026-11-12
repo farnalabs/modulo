@@ -1810,7 +1810,7 @@ class TestLogEvent:
             trigger=trigger,
             org_id=uuid.uuid4(),
             result="poll_error",
-            error_detail="poll query failed postgresql://user:supersecret@db.example/modulo",
+            error_detail="poll query failed postgresql://user:pass@host:5432/farna_control",
         )
 
         assert "supersecret" not in event.error_detail
@@ -2919,7 +2919,7 @@ class TestCatchupReviewFindings:
 
 class TestGetSystemEngine:
     def test_creates_system_engine_with_ssl_disabled(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2936,7 +2936,7 @@ class TestGetSystemEngine:
             ch._SYSTEM_ENGINE = None
 
     def test_translates_sslmode_require_for_the_system_engine(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2948,7 +2948,7 @@ class TestGetSystemEngine:
             args, kwargs = create_engine.call_args
             # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
             # leaving it in the URL raises TypeError at first connect (FAR-1440).
-            assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/modulo"
+            assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/farna_control"
             assert kwargs["connect_args"] == {"timeout": 10, "ssl": "require", "statement_cache_size": 0}
         finally:
             ch._SYSTEM_ENGINE = None
@@ -2956,7 +2956,7 @@ class TestGetSystemEngine:
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require'
         (TLS required, fail-closed), never silently downgraded to ssl=False."""
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2973,7 +2973,7 @@ class TestGetSystemEngine:
 
     def test_fails_closed_on_downgrading_sslmode(self) -> None:
         """sslmode=prefer/allow refuse loudly — no silent plaintext downgrade."""
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -2989,7 +2989,7 @@ class TestGetSystemEngine:
     def test_non_postgres_url_gets_no_ssl_args(self) -> None:
         """The ssl/statement_cache_size connect args are asyncpg-only: a
         non-Postgres system URL passes through with no asyncpg knobs."""
-        mock_settings = _settings(modulo_system_database_url="sqlite+aiosqlite:///tmp/system.db")
+        mock_settings = _settings(farna_control_system_database_url="sqlite+aiosqlite:///tmp/system.db")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -3004,7 +3004,7 @@ class TestGetSystemEngine:
             ch._SYSTEM_ENGINE = None
 
     def test_fails_closed_when_url_empty(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="")
+        mock_settings = _settings(farna_control_system_database_url="")
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
             with (
@@ -3020,7 +3020,7 @@ class TestGetSystemEngine:
             ch._SYSTEM_ENGINE = None
 
     def test_logs_error_when_unset(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="")
+        mock_settings = _settings(farna_control_system_database_url="")
         ch._SYSTEM_ENGINE = None  # reset singleton
         errors: list[tuple[object, object]] = []
         try:
@@ -3043,7 +3043,7 @@ class TestGetSystemEngine:
         and must stay strictly below the Fly HAProxy 30m session window
         (1800 s) — never age-unbounded, never the old 3600 s pattern. Mirrors
         the saq_worker system-engine pin."""
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         mock_settings.db_pool_recycle_seconds = 1500
         ch._SYSTEM_ENGINE = None  # reset singleton
         try:
@@ -4526,7 +4526,7 @@ class TestSystemEnginePoolKnobs:
         ch._SYSTEM_ENGINE = None
         try:
             with (
-                patch.object(ch, "get_settings", return_value=_settings(modulo_system_database_url=url)),
+                patch.object(ch, "get_settings", return_value=_settings(farna_control_system_database_url=url)),
                 patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
             ):
                 ch._get_system_engine()
@@ -4535,7 +4535,7 @@ class TestSystemEnginePoolKnobs:
             ch._SYSTEM_ENGINE = None
 
     def test_pool_knobs_mirror_the_shared_engine_factory(self) -> None:
-        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/modulo")
+        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/farna_control")
         # Explicit, so a saturated checkout fails as a CATCHABLE
         # sqlalchemy.exc.TimeoutError after pool_timeout (counted by
         # org_pool_timeouts) instead of hanging on SQLAlchemy's implicit
@@ -4553,7 +4553,7 @@ class TestSystemEnginePoolKnobs:
         ``org_timeouts`` and ``org_pool_timeouts`` would be unreachable at
         default config. The bound must therefore sit strictly under the coded
         default for ``dispatcher_reconcile_org_budget_seconds``."""
-        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/modulo")
+        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/farna_control")
         assert kwargs["pool_timeout"] == ch._SYSTEM_POOL_TIMEOUT_SECONDS
         assert kwargs["pool_timeout"] < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS
 

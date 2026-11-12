@@ -51,14 +51,14 @@ _ORG = SimpleNamespace(
 
 def _make_settings(**overrides: object) -> Settings:
     base: dict[str, object] = {
-        "database_url": "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo",
+        "database_url": "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control",
         "secret_key": "a" * 32,
         "fernet_key": "a" * 32,
         "modulo_admin_password": "test",
         "redis_url": "",
         "modulo_break_glass_secret": "p" * 32,
         "modulo_break_glass_standby_secret": "s" * 32,
-        "modulo_break_glass_database_url": "postgresql+asyncpg://modulo_breakglass:bgpass@localhost:5432/modulo",
+        "modulo_break_glass_database_url": "postgresql+asyncpg://farna_control_breakglass:bgpass@localhost:5432/farna_control",
     }
     base.update(overrides)
     return Settings(**base)
@@ -517,7 +517,7 @@ class TestSmoke:
         settings = _make_settings()
         with patch(
             "farna.cli.break_glass.smoke",
-            AsyncMock(return_value={"connectivity": "ok", "session_user": "modulo_breakglass"}),
+            AsyncMock(return_value={"connectivity": "ok", "session_user": "farna_control_breakglass"}),
         ) as core:
             result = _invoke(["smoke"], settings)
         assert result.exit_code == 0

@@ -222,24 +222,24 @@ multi-tenant isolation.
 Create a dedicated role for the application – never use the Postgres superuser:
 
 ```sql
-CREATE ROLE modulo_app WITH LOGIN PASSWORD '<random>';
-GRANT CONNECT ON DATABASE modulo TO modulo_app;
-GRANT USAGE ON SCHEMA public TO modulo_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO modulo_app;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO modulo_app;
+CREATE ROLE farna_control_app WITH LOGIN PASSWORD '<random>';
+GRANT CONNECT ON DATABASE modulo TO farna_control_app;
+GRANT USAGE ON SCHEMA public TO farna_control_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO farna_control_app;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO farna_control_app;
 -- For Alembic migrations in startup hook:
-GRANT CREATE ON SCHEMA public TO modulo_app;
+GRANT CREATE ON SCHEMA public TO farna_control_app;
 ```
 
 **For migration-only operations** (separate user for safety):
 
 ```sql
-CREATE ROLE modulo_migrate WITH LOGIN PASSWORD '<random>';
-GRANT modulo_app TO modulo_migrate;
-GRANT CREATE ON SCHEMA public TO modulo_migrate;
+CREATE ROLE farna_control_migrate WITH LOGIN PASSWORD '<random>';
+GRANT farna_control_app TO farna_control_migrate;
+GRANT CREATE ON SCHEMA public TO farna_control_migrate;
 ```
 
-Then use `modulo_migrate` in migration contexts and `modulo_app` for runtime.
+Then use `farna_control_migrate` in migration contexts and `farna_control_app` for runtime.
 
 ### 3.4 Migration Safety
 

@@ -284,7 +284,7 @@ class TestExpiredWebhookDedupPurgeCron:
 
     @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql"])
     async def test_non_postgres_uses_plain_factory(self, non_pg_db: str) -> None:
-        """On non-PostgreSQL backends (no RLS, no modulo_system role) the job
+        """On non-PostgreSQL backends (no RLS, no farna_control_system role) the job
         must drain on the PLAIN factory and never touch the system engine."""
         factory, _ = _make_factory_with_session()
 
@@ -319,9 +319,7 @@ class TestExpiredWebhookDedupPurgeEndToEnd:
     async def autobegin_false_factory(self) -> AsyncGenerator[async_sessionmaker, None]:
         engine = create_async_engine("sqlite+aiosqlite://", echo=False)
         async with engine.begin() as conn:
-            await conn.run_sync(
-                lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[WebhookDedupHash.__table__])
-            )
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[WebhookDedupHash.__table__]))
         factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
         try:
             yield factory
@@ -336,13 +334,7 @@ class TestExpiredWebhookDedupPurgeEndToEnd:
         """Return (total rows, expired rows) still in the table."""
         async with factory() as session, session.begin():
             total = (await session.execute(select(func.count()).select_from(WebhookDedupHash))).scalar_one()
-            expired = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(WebhookDedupHash)
-                    .where(WebhookDedupHash.expires_at <= datetime.now(UTC))
-                )
-            ).scalar_one()
+            expired = (await session.execute(select(func.count()).select_from(WebhookDedupHash).where(WebhookDedupHash.expires_at <= datetime.now(UTC)))).scalar_one()
         return total, expired
 
     async def test_cron_purges_expired_across_orgs(self, autobegin_false_factory: async_sessionmaker) -> None:

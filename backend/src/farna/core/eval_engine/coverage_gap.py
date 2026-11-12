@@ -10,7 +10,7 @@ This is a **pure read-model** over the existing
 ``VariantGroup -> Run -> EvalResult`` lineage (see ``data model`` in the module
 docstring below) — there is **no new table, no migration**. It is deterministic
 (terminal runs only, canonical serialisation, stable ordering) and org-scoped:
-every query injects the explicit ``organisation_id`` predicate (``modulo_app``
+every query injects the explicit ``organisation_id`` predicate (``farna_control_app``
 is NOBYPASSRLS so RLS also enforces org scoping; the predicate is the PRIMARY
 isolation control; ``set_rls_org`` remains defense-in-depth).
 
@@ -515,7 +515,7 @@ async def compute_coverage_gap(
     """Load a batch/group org-scoped and evaluate the coverage-gap signal.
 
     Every query injects the explicit ``organisation_id`` predicate (the only
-    isolation control for BYPASSRLS ``modulo_app``). Exactly one of
+    isolation control for BYPASSRLS ``farna_control_app``). Exactly one of
     ``batch_id`` / ``variant_group_id`` must be supplied.
     """
     if batch_id is None and variant_group_id is None:
