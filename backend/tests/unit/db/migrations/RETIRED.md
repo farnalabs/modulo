@@ -105,3 +105,27 @@ The following broader unit-test files were also retired because their migration-
 | `tests/unit/db/test_run_cancel_reason.py` | Historical migration vocabulary/column/revision tests. | `0350_baseline_schema.py` |
 | `tests/unit/db/test_run_status_vocabulary.py` | Historical widening migration and downgrade tests. | `0350_baseline_schema.py` |
 | `tests/unit/db/test_trigger_event_vocabulary.py` | Historical trigger-event vocabulary migration tests. | `0350_baseline_schema.py` |
+
+## Retired integration tests
+
+The following integration tests were retired because they exercised deleted historical revision modules, downgrade paths, migration-chain positions, intermediate backfills, or one-time data transformations belonging only to the historical chain. Final-state schema and data coverage remains in the baseline catalogue-equivalence verification and the surviving model/runtime tests.
+
+| File | What it asserted | Why it is no longer verifiable | Baseline coverage |
+|---|---|---|---|
+| `tests/integration/db/test_migration_0126_eval_suite.py` | Historical eval-suite entity migration upgrade/downgrade and RLS backfill at 0130. | Revisions 0129/0130 and their intermediate states disappeared. | `0350_baseline_schema.py` / `0351_baseline_rls.py` |
+| `tests/integration/db/test_migration_0191_bundled_runner_seed_backfill.py` | One-off bundled-runner seed backfill and downgrade at 0191. | Fresh baseline data has no legacy rows requiring that transform; revision 0191 disappeared. | `0353_baseline_seed_data.py` |
+| `tests/integration/db/test_migration_0215_drop_runs_blob_columns.py` | Historical blob-column drop and downgrade at 0215. | Revision 0215 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0222_journey_provenance.py` | Journey provenance migration upgrade/downgrade at 0222. | Revision 0222 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0262_hitl_gate_to_review_vocabulary.py` | HITL gate vocabulary rewrite migration at 0262. | Revision 0262 and its chain-specific source contract disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0291_invitations_lookup_constraints.py` | Invitation lookup constraints migration and round-trip at 0291. | Revision 0291 and its intermediate constraint state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0302_runs_run_grouping.py` | Run-grouping backfill and idempotence at 0302. | Revision 0302 and its intermediate state disappeared; the backfill logic is not part of the baseline. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0306_trigger_secret_encryption.py` | Trigger secret encryption migration no-op downgrade at 0306. | Revision 0306 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0315_service_accounts_lifecycle.py` | Service-account lifecycle migration upgrade/downgrade at 0315. | Revision 0315 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0317_drop_retired_pipeline_diff_rollback_flag.py` | Retired pipeline diff rollback flag drop at 0317. | Revision 0317 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0321_organisation_cost_state.py` | Organisation cost state backfill at 0321. | Revision 0321 and its one-time backfill disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0324_purge_eval_definitions.py` | Eval definitions purge at 0324. | Revision 0324 and its intermediate state disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0339_triggers_name_not_null.py` | Trigger-name NOT NULL transition and uniqueness at 0339. | Revision 0339 and its intermediate transition disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_migration_0348_far147_run_group_backfill.py` | Legacy run-group backfill at 0348 (FAR-147). | Revision 0348 and its recursive CTE backfill disappeared; not part of baseline. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_system_map_migrations.py` | System maps name integrity migration chain 0340–0345. | Revisions 0340–0345 and their intermediate states disappeared. | `0350_baseline_schema.py` |
+| `tests/integration/db/test_policy_gate_sweep_0266.py` | Guardrail→PolicyGate sweep at 0266, seeded at 0265. | Revisions 0265/0266 and their sweep-specific predicates disappeared. | `0350_baseline_schema.py` / `0351_baseline_rls.py` |
+| `tests/integration/test_migration_0349_drop_org_cost_columns.py` | Organisations cost columns drop and cross-org downgrade restore at 0349. | Revision 0349 and its dependency on 0348 (deleted) disappeared; the cross-org restore is not part of baseline. | `0350_baseline_schema.py` |
