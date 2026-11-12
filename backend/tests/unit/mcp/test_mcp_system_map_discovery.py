@@ -419,7 +419,7 @@ def rest_client() -> Generator[TestClient, None, None]:
         key_grants=frozenset({"system_maps_access"}),
     )
 
-    app.dependency_overrides[get_settings] = lambda: _make_settings()
+    app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = lambda: _Plan()
@@ -876,7 +876,7 @@ async def test_system_map_overview_drives_the_real_handler_on_a_real_session() -
 
     assert result["system_map_id"] == str(_MAP_ID)
     assert result["revision_id"] == str(_REVISION_ID)
-    assert result["nodes"] == []
+    assert not result["nodes"]
     repository.get_full_revision_graph.assert_awaited_once()
 
 
