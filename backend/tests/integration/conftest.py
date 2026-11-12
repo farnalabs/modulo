@@ -47,10 +47,16 @@ os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("FARNA_CONTROL_MODULO_ADMIN_PASSWORD", "test")
 # Settings fields with NO explicit alias (modulo_csrf_enabled, modulo_auth_rate_limit_enabled,
 # modulo_dev_mode) derive their env names as MODULO_CSRF_ENABLED, MODULO_AUTH_RATE_LIMIT_ENABLED,
-# MODULO_DEV_MODE (without the FARNA_CONTROL_ prefix). Use the names the code actually reads.
+# MODULO_DEV_MODE (without the FARNA_CONTROL_ prefix). The launcher uses the
+# FARNA_CONTROL_MODULO_* prefix. Integration tests must set BOTH spellings because
+# different consumers read different names: pydantic-settings reads the MODULO_*
+# names; some test fixtures read the FARNA_CONTROL_MODULO_* names directly.
 os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
+os.environ.setdefault("FARNA_CONTROL_MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("MODULO_DEV_MODE", "true")
+os.environ.setdefault("FARNA_CONTROL_MODULO_DEV_MODE", "true")
 
 BACKEND_ROOT = Path(__file__).parents[2]
 
@@ -309,9 +315,13 @@ def db_url(
     #
     # The Settings field ``modulo_system_database_url`` has NO explicit alias, so
     # pydantic derives its env name as ``MODULO_SYSTEM_DATABASE_URL`` (not the
-    # launcher's ``FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL``). Use the name
-    # the code actually reads.
-    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", _with_credentials(url, "farna_control_system", "syspass"))
+    # launcher's ``FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL``). Integration tests
+    # must set BOTH spellings because different consumers read different names:
+    # pydantic-settings reads the MODULO_* name; some test fixtures read the
+    # FARNA_CONTROL_MODULO_* name directly via os.environ subscript.
+    sys_url = _with_credentials(url, "farna_control_system", "syspass")
+    session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
+    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
     return url
 
 
@@ -406,6 +416,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
                         "DATABASE_ADMIN_URL": db_url,
                         "FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL": bg_url,
                         "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": sys_url,
+                        "MODULO_SYSTEM_DATABASE_URL": sys_url,
                     },
                 ):
                     await bootstrap_roles(db_url, app_url)
@@ -424,7 +435,12 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
     # time, after the per-test get_settings.cache_clear().
     # The Settings field ``modulo_system_database_url`` has NO explicit alias,
     # so pydantic derives its env name as ``MODULO_SYSTEM_DATABASE_URL``.
+    # Integration tests must set BOTH spellings because different consumers read
+    # different names: pydantic-settings reads the MODULO_* name; some test
+    # fixtures read the FARNA_CONTROL_MODULO_* name directly via os.environ
+    # subscript.
     session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
+    session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
 
     async def _patch_schema() -> None:
         """Add the test-only schema surface the migrations don't cover.
