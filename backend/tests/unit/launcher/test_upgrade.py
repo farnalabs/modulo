@@ -225,7 +225,7 @@ def test_main_prints_the_snapshot_path(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_snapshot_carries_the_restore_compatible_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`farna-control restore` hard-requires backup-info.json: the snapshot carries
+    """`modulo restore` hard-requires backup-info.json: the snapshot carries
     BOTH manifests so the installer's printed command works verbatim."""
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -296,7 +296,7 @@ def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.Monk
         pre_upgrade_dump(data_dir)
     joined = " ".join(str(a) for a in seen["argv"])
     assert "pw" not in joined
-    assert seen["argv"][-1] == "postgresql://user:pass@host:5432/farna_control"
+    assert seen["argv"][-1] == "postgresql://modulo@127.0.0.1:15432/modulo"
     assert seen["env"]["PGPASSWORD"] == "pw"
 
 
@@ -345,11 +345,11 @@ def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
     reason="farna.cli import chain builds Settings (DATABASE_URL/SECRET_KEY/FERNET_KEY) at import — exported by CI",
 )
 def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """E2E: pre_upgrade_dump -> `farna-control restore <snapshot> --yes` succeeds,
+    """E2E: pre_upgrade_dump -> `modulo restore <snapshot> --yes` succeeds,
     exactly as the installer's printed hint advertises."""
     from click.testing import CliRunner
 
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:pw@127.0.0.1:15432/farna_control")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:pw@127.0.0.1:15432/modulo")
     monkeypatch.setenv("SECRET_KEY", "dev-secret-key-not-a-real-production-value-0001")
     monkeypatch.setenv("FERNET_KEY", "MrqQRrGCmUJ8YjA1OZ0mu23deGU0ZgGLT9oFyVAmA_k=")
 
@@ -376,7 +376,7 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
                     # DATABASE_URL (never from --db-url), so the patched
                     # settings must carry a real string — a bare MagicMock
                     # attribute is rejected and fails the restore.
-                    "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:15432/farna_control",
+                    "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:15432/modulo",
                 },
             )
         )
@@ -710,7 +710,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
     assert "pre-upgrade-dump-fake-1" in refusal_text
     restore_line = _upgrade_restore_head(refusal_text)
     assert restore_line.startswith("ln -sfn versions/1.1.0")
-    assert f"farna-control restore {data_dir / 'pre-upgrade-dump-fake-1'}" in restore_line
+    assert f"modulo restore {data_dir / 'pre-upgrade-dump-fake-1'}" in restore_line
     # The EMITTED restore command executes VERBATIM (the shim records argv).
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
@@ -1172,26 +1172,26 @@ def test_run_boot_failing_child_reports_clean_upgrade_error(tmp_path):
 
 class TestDecredentialUrl:
     def test_no_password_returns_original(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://modulo@127.0.0.1:5432/modulo"
         result, pwd = upgrade_module._decredential_url(url)
         assert result == url
         assert pwd is None
 
     def test_with_password_strips_from_url(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://modulo:secret123@127.0.0.1:5432/modulo"
         result, pwd = upgrade_module._decredential_url(url)
         assert "secret123" not in result
         assert pwd == "secret123"
         assert "modulo@" in result
 
     def test_with_password_and_port(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://modulo:p%40ss@127.0.0.1:15432/modulo"
         result, pwd = upgrade_module._decredential_url(url)
         assert pwd == "p@ss"
         assert ":15432" in result
 
     def test_no_username_with_password(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://:secret@127.0.0.1:5432/modulo"
         result, pwd = upgrade_module._decredential_url(url)
         assert pwd == "secret"
         assert "127.0.0.1" in result
@@ -1341,7 +1341,7 @@ class TestRestoreGuidance:
             data_dir=tmp_path / "data",
         )
         assert str(snapshot) in result
-        assert "farna-control restore" in result
+        assert "modulo restore" in result
 
     def test_with_prior_link_target(self, tmp_path):
         result = upgrade_module.restore_guidance(
