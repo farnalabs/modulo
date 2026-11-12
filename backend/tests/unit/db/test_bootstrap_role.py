@@ -395,8 +395,8 @@ class TestUnconfiguredPasswordPreserve:
 
     async def test_bootstrap_preserves_system_password_when_url_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _clean_posture_conn()
-        monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
@@ -408,8 +408,8 @@ class TestUnconfiguredPasswordPreserve:
 
     async def test_bootstrap_sets_system_password_from_configured_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _clean_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgres://farna_control_system:syspw@db:5432/modulo")
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", "postgres://farna_control_system:syspw@db:5432/modulo")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await _bootstrap(
                 "postgres://admin:secret@db:5432/modulo",
@@ -784,7 +784,7 @@ class TestBootstrap:
             "audit_chain_heads",
         }
 
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
@@ -815,7 +815,7 @@ class TestBootstrap:
         }
 
         monkeypatch.setenv(
-            "FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL",
+            "FARNA_CONTROL_BREAK_GLASS_DATABASE_URL",
             "postgresql://my_bg:bgpw@db:5432/modulo",
         )
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
@@ -838,7 +838,7 @@ class TestBootstrap:
                 raise RuntimeError("boom")
 
         fake.sql_hook = _hook
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         with (
             patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)),
             pytest.raises(RuntimeError, match="boom"),
@@ -866,7 +866,7 @@ class TestConcurrentBootstrap:
 
     async def test_serialises_ddl_behind_advisory_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _fresh_db_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         with patch("farna.db.bootstrap_role.asyncpg.connect", new=AsyncMock(return_value=fake)):
             await bootstrap_roles(
                 "postgresql+asyncpg://admin:secret@db:5432/modulo",
@@ -893,7 +893,7 @@ class TestConcurrentBootstrap:
         failure mode stays reachable).
         """
         fake = _fresh_db_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
 
@@ -929,7 +929,7 @@ class TestConcurrentBootstrap:
         fails the bootstrap loudly instead of silently succeeding.
         """
         fake = _fresh_db_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_RETRY_BACKOFF_SECONDS", 0)
         target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
@@ -960,7 +960,7 @@ class TestConcurrentBootstrap:
     async def test_non_concurrent_postgres_errors_are_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The retry is scoped to the FAR-1200 error — anything else raises at once."""
         fake = _fresh_db_posture_conn()
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         target = 'GRANT SELECT, INSERT ON public.accounts TO "farna_control_breakglass"'
         attempts = {"count": 0}
 
@@ -991,7 +991,7 @@ class TestConcurrentBootstrap:
         attempt to release a lock it never acquired."""
         fake = _fresh_db_posture_conn()
         fake.lock_available = False
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
         monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_ATTEMPTS", 3)
         monkeypatch.setattr("farna.db.bootstrap_role._BOOTSTRAP_LOCK_POLL_INTERVAL", 0)
         caplog.set_level("WARNING", logger="farna.db.bootstrap_role")
@@ -1032,7 +1032,7 @@ class TestMain:
     ) -> None:
         monkeypatch.setenv("DATABASE_ADMIN_URL", "postgres://admin:secret@db:5432/modulo")
         monkeypatch.setenv("DATABASE_URL", "postgres://farna_control_app:apppw@db:5432/modulo")
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
 
         async def _fail(admin_url: str, app_url: str) -> None:
             raise RuntimeError("boom")
@@ -1050,7 +1050,7 @@ class TestMain:
         caplog.set_level("INFO", logger="farna.db.bootstrap_role")
         monkeypatch.setenv("DATABASE_ADMIN_URL", "postgres://admin:secret@db:5432/modulo")
         monkeypatch.setenv("DATABASE_URL", "postgres://farna_control_app:apppw@db:5432/modulo")
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+        monkeypatch.setenv("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
 
         async def _ok(admin_url: str, app_url: str) -> None:
             assert "modulo" in admin_url

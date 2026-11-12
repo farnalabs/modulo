@@ -49,7 +49,7 @@ _REDIS_DB = "0"
 _COMPOSED_FIELDS: dict[str, str] = {
     "DATABASE_URL": "database_url",
     "REDIS_URL": "redis_url",
-    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "modulo_system_database_url",
+    "FARNA_CONTROL_SYSTEM_DATABASE_URL": "modulo_system_database_url",
 }
 
 # The launcher-owned public surface (consumed by the entry; vulture's
@@ -102,7 +102,7 @@ def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, 
         "DATABASE_URL": database_url,
         "DATABASE_ADMIN_URL": database_url,
         "REDIS_URL": f"redis://:{secrets.redis_password}@{POSTGRES_HOST}:{state.redis_port}/{_REDIS_DB}",
-        "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": system_url or "",
+        "FARNA_CONTROL_SYSTEM_DATABASE_URL": system_url or "",
         "SECRET_KEY": secret_key,
         "FERNET_KEY": fernet_key,
     }
@@ -178,7 +178,7 @@ class LauncherConfigSource:
         state, secrets = load_launcher_config_inputs(self.data_dir)
         composed = compose_config(state, secrets)
         operator_database_url = os.environ.get("DATABASE_URL")
-        operator_system_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
+        operator_system_url = os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL")
         derived_system = _derive_operator_system_url(operator_database_url, operator_system_url)
         resolved: dict[str, Any] = {}
         for env_name, field_name in _COMPOSED_FIELDS.items():
@@ -224,7 +224,7 @@ def _resolve_composed_field(
         # the branch below (derived from the operator's URL so the pair stays
         # on one Postgres instance).
         return None
-    if env_name == "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" and operator_database_url:
+    if env_name == "FARNA_CONTROL_SYSTEM_DATABASE_URL" and operator_database_url:
         return derived_system
     value = composed.get(env_name, "")
     if not value:

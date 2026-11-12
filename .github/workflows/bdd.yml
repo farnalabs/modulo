@@ -26,11 +26,11 @@ env:
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
   REDIS_URL: "redis://localhost:6379/0"
-  MODULO_PUBLIC_URL: "http://localhost:8000"
-  MODULO_USERS: "admin:admin"
+  FARNA_CONTROL_PUBLIC_URL: "http://localhost:8000"
+  FARNA_CONTROL_USERS: "admin:admin"
   CORS_ORIGINS: "http://localhost:4173"
-  MODULO_PLUGIN_DISCOVERY: "false"
-  MODULO_CSRF_ENABLED: "false"
+  FARNA_CONTROL_PLUGIN_DISCOVERY: "false"
+  FARNA_CONTROL_CSRF_ENABLED: "false"
 
 concurrency:
   group: bdd-${{ github.ref }}

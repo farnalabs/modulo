@@ -88,7 +88,7 @@ def test_main_warns_when_system_url_derivation_fails(
         "postgresql+asyncpg://admin:pw@db.internal:5432/farna_control",
     )
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/farna_control")
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
 
     def _skip_bootstrap(coro) -> None:
         # Avoid the "coroutine was never awaited" RuntimeWarning (a CI error).
@@ -120,7 +120,7 @@ def test_main_warns_when_system_url_derivation_fails(
     [
         (
             "postgres://modulo:pw@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/farna_control",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
         ),
         # sslmode PRESERVED on postgres URLs (FAR-1440 — honoured upstream)
         (
@@ -138,8 +138,8 @@ def test_main_warns_when_system_url_derivation_fails(
         ),
         # already-async URL with no postgres:// prefix is left otherwise untouched
         (
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/farna_control",
-            "postgresql+asyncpg://modulo:pw@db.internal:5432/farna_control",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo",
         ),
         # sslmode FIRST followed by others — untouched on postgres (no wart)
         (
@@ -157,7 +157,7 @@ def test_fix_database_url_scheme_and_sslmode(
 
 
 def test_set_path_fixes_system_url_like_database_url(bootstrap_db) -> None:
-    # MODULO_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
+    # FARNA_CONTROL_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
     set_url = "postgres://farna_control_system:s3cret@db.internal:5432/modulo?sslmode=require"
     assert bootstrap_db.fix_database_url(set_url) == ("postgresql+asyncpg://farna_control_system:s3cret@db.internal:5432/modulo?sslmode=require")
 
