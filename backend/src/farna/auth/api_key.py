@@ -463,7 +463,7 @@ async def revoke_run_api_key_sweep(
     The executor path already seals at finalization; this sweep is the backstop.
 
     Bounded: ``batch_size`` keys per org, ``budget_seconds`` wall-clock budget,
-    never raises. Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS — the
+    never raises. Runs system-scoped (farna_control_system role, LOGIN, BYPASSRLS — the
     dedicated cross-org system cron role); the sweep processes each org under its
     own RLS context when ``org_ids`` is None (self-selects all orgs). Each run's
     seal is isolated: a fail-closed stop on one run (credential revoke could not

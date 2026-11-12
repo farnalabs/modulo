@@ -349,7 +349,7 @@ async def _run_migrations(settings: Settings) -> None:
     The role bootstrap below runs on EVERY boot — warm boots included (it sits
     BEFORE the fast-path return, FAR-1519): it is the reconcile point for role
     credentials, so an upgrade-in-place that later adds
-    ``MODULO_SYSTEM_DATABASE_URL`` repairs the ``modulo_system`` password on
+    ``MODULO_SYSTEM_DATABASE_URL`` repairs the ``farna_control_system`` password on
     the next restart instead of leaving readiness red until an operator runs
     ``python -m modulo.db.bootstrap_role`` by hand. The fast-path still skips
     exactly what it exists to skip — the alembic run and the migration
@@ -1067,7 +1067,7 @@ async def _start_background_tasks(settings: Settings) -> dict[str, Any]:
 
     # NOTE: no in-process trigger-event cleanup loop here (FAR-523). The SAQ
     # system crons ``webhook_dedup_cleanup`` / ``trigger_events_cleanup`` own
-    # retention, running hourly on the modulo_system session factory. The
+    # retention, running hourly on the farna_control_system session factory. The
     # removed web-process loop ran on the plain app factory with no RLS org
     # context, so on Postgres every batch silently matched zero rows — a
     # duplicated no-op.

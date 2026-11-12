@@ -35,7 +35,7 @@ def _read(path: Path) -> str:
 
 def test_quickstart_sets_the_system_database_url() -> None:
     text = _read(_QUICKSTART_DOC)
-    assert "MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://modulo_system:" in text
+    assert "MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://farna_control_system:" in text
 
 
 def test_quickstart_documents_the_readiness_ok_check() -> None:

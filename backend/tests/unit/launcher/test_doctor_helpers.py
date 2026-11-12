@@ -220,7 +220,7 @@ def test_default_probes_service_probes_connect_with_mocks(tmp_path: Path, monkey
         return []
 
     monkeypatch.setattr(bootstrap_role, "_find_allow_list_violations", _fake_violations)
-    monkeypatch.setattr(bootstrap_role, "_parse_role", lambda _u: "modulo_app")
+    monkeypatch.setattr(bootstrap_role, "_parse_role", lambda _u: "farna_control_app")
     monkeypatch.setitem(sys.modules, "redis", _FakeRedis)
 
     async def _fake_at_head(_e: object) -> bool:

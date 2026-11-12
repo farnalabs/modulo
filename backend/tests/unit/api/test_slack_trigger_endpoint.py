@@ -191,9 +191,7 @@ def client() -> Generator[TestClient, None, None]:
         yield mock_system_session
 
     async def override_optional_principal() -> AuthenticatedPrincipal | None:
-        return AuthenticatedPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        return AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
@@ -480,9 +478,7 @@ def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) ->
     from farna.api.dependencies import get_current_tenant_user_optional
 
     app.dependency_overrides[get_system_db_session] = override_system_session
-    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(
-        username="attacker", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_optional] = lambda: AuthenticatedPrincipal(username="attacker", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     body = _event_body()
     ts = str(int(time.time()))
     try:
@@ -505,7 +501,7 @@ def test_app_mention_other_org_trigger_returns_404_no_run(client: TestClient) ->
 
 
 def test_receive_slack_event_degraded_system_engine_returns_503(client: TestClient) -> None:
-    """When the modulo_system role is not provisioned the bootstrap would
+    """When the farna_control_system role is not provisioned the bootstrap would
     silently 404 every delivery. The route must refuse loudly with a 503
     (log code slack.system_bootstrap_degraded) — distinguishable from a 404."""
     with patch("farna.api.routes.slack.system_engine_is_fallback", return_value=True):

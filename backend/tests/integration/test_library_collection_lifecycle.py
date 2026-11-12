@@ -69,13 +69,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true) "
-                "ON CONFLICT (email) DO UPDATE SET id = accounts.id "
-                "RETURNING id"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true) ON CONFLICT (email) DO UPDATE SET id = accounts.id RETURNING id"),
             {"id": str(account_id), "email": email, "name": email},
         )
         existing = await conn.execute(
@@ -89,10 +83,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         )
         if membership.first() is None:
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
                 {"mid": str(uuid.uuid4()), "aid": str(resolved_id), "oid": str(org_id)},
             )
     return resolved_id
@@ -132,13 +123,7 @@ async def _seed_schema(
     content = {"definition_json": definition or {"type": "object", "properties": {}}}
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO library_primitives "
-                "(id, organisation_id, source, primitive_type, name, slug, "
-                "author, version, tags, content_json, visibility, tier) "
-                "VALUES (:id, :oid, 'local', 'schema', :name, :slug, "
-                "'test', :version, '[]'::json, :content, 'org', 'native')"
-            ),
+            text("INSERT INTO library_primitives (id, organisation_id, source, primitive_type, name, slug, author, version, tags, content_json, visibility, tier) VALUES (:id, :oid, 'local', 'schema', :name, :slug, 'test', :version, '[]'::json, :content, 'org', 'native')"),
             {
                 "id": str(prim_id),
                 "oid": str(org_id),
@@ -171,13 +156,7 @@ async def _seed_agent(
     }
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO library_primitives "
-                "(id, organisation_id, source, primitive_type, name, slug, "
-                "author, version, tags, content_json, visibility, tier) "
-                "VALUES (:id, :oid, 'local', 'agent', :name, :slug, "
-                "'test', :version, '[]'::json, :content, 'org', 'native')"
-            ),
+            text("INSERT INTO library_primitives (id, organisation_id, source, primitive_type, name, slug, author, version, tags, content_json, visibility, tier) VALUES (:id, :oid, 'local', 'agent', :name, :slug, 'test', :version, '[]'::json, :content, 'org', 'native')"),
             {
                 "id": str(prim_id),
                 "oid": str(org_id),
@@ -264,10 +243,7 @@ async def _count_entities(
 ) -> dict[str, int]:
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT entity_type, count(*) FROM collection_install_entity "
-                "WHERE install_id = :iid GROUP BY entity_type"
-            ),
+            text("SELECT entity_type, count(*) FROM collection_install_entity WHERE install_id = :iid GROUP BY entity_type"),
             {"iid": str(install_id)},
         )
         return {r[0]: r[1] for r in row.all()}
@@ -417,9 +393,7 @@ async def test_full_install_verify_uninstall_round_trip(
 
     # ...while the row itself SURVIVES with a deleted_at stamp (the
     # collection_install_entity children below must survive with it).
-    retired = await db_session.scalar(
-        include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id))
-    )
+    retired = await db_session.scalar(include_soft_deleted(select(CollectionInstall).where(CollectionInstall.install_id == install_id)))
     assert retired is not None
     assert retired.deleted_at is not None
 
@@ -464,7 +438,7 @@ async def test_full_install_verify_uninstall_round_trip(
 async def test_install_response_entity_list_matches_child_rows(
     db_engine: AsyncEngine,
     db_session: AsyncSession,
-    modulo_app_engine: AsyncEngine,
+    farna_control_app_engine: AsyncEngine,
     org: uuid.UUID,
     user: uuid.UUID,
     schemas: list[uuid.UUID],
@@ -479,7 +453,7 @@ async def test_install_response_entity_list_matches_child_rows(
     ``db_engine`` runs as the testcontainer SUPERUSER (BYPASSRLS), which
     cannot catch a derivation that silently returns zero rows when the
     transaction-scoped ``app.organisation_id`` GUC is unset, so the load is
-    exercised on the real ``modulo_app`` (NOBYPASSRLS) role here: visible
+    exercised on the real ``farna_control_app`` (NOBYPASSRLS) role here: visible
     with the owning org's context set (the fix), hidden without it (proof the
     policy is genuinely enforced on this connection). The GET endpoint
     function is then driven DIRECTLY on that role so the endpoint's own
@@ -499,9 +473,7 @@ async def test_install_response_entity_list_matches_child_rows(
     install_id = install.install_id
 
     # Ground truth: the child rows as read by the BYPASSRLS superuser.
-    child_result = await db_session.execute(
-        select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id)
-    )
+    child_result = await db_session.execute(select(CollectionInstallEntity).where(CollectionInstallEntity.install_id == install_id))
     child_rows = child_result.scalars().all()
     # 2 schemas + 1 agent + 1 materialised pipeline, each stamped by
     # ``_stamp_install_id`` (proven by the round-trip test above) — a
@@ -510,7 +482,7 @@ async def test_install_response_entity_list_matches_child_rows(
     assert len(child_rows) == 4
     expected = sorted((row.entity_type, str(row.entity_id)) for row in child_rows)
 
-    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    app_factory = async_sessionmaker(farna_control_app_engine, expire_on_commit=False)
 
     # Negative control: NO org context on the RLS-enforced role — the
     # parent-derived policy fails closed and hides every child row. This is
@@ -548,9 +520,7 @@ async def test_install_response_entity_list_matches_child_rows(
             session=endpoint_session,
             principal=principal,
         )
-    endpoint_reported = sorted(
-        (entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or []
-    )
+    endpoint_reported = sorted((entry["entity_type"], entry["entity_id"]) for entry in endpoint_response.installed_entities or [])
     assert endpoint_reported
     assert endpoint_reported == expected
 
@@ -576,7 +546,7 @@ async def test_install_response_entity_list_matches_child_rows(
 async def test_install_facts_read_under_org_rls_not_post_transaction(
     db_engine: AsyncEngine,
     db_session: AsyncSession,
-    modulo_app_engine: AsyncEngine,
+    farna_control_app_engine: AsyncEngine,
     org: uuid.UUID,
     user: uuid.UUID,
     schemas: list[uuid.UUID],
@@ -592,7 +562,7 @@ async def test_install_facts_read_under_org_rls_not_post_transaction(
     sees zero rows: ``runnable`` is always ``False`` and ``update_available``
     always ``False`` with no error and no log. The suite's normal ``db_engine``
     is the testcontainer SUPERUSER (BYPASSRLS) and cannot catch that class, so
-    the reads are exercised on the real ``modulo_app`` (NOBYPASSRLS) role here:
+    the reads are exercised on the real ``farna_control_app`` (NOBYPASSRLS) role here:
 
     * negative control — with NO org context the org-scoped reads are invisible
       (``_org_has_model_backend`` False, facts ``runnable=False``) even though
@@ -623,7 +593,7 @@ async def test_install_facts_read_under_org_rls_not_post_transaction(
     await db_session.commit()
     install_id = install.install_id
 
-    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    app_factory = async_sessionmaker(farna_control_app_engine, expire_on_commit=False)
 
     # Negative control: NO org RLS context — exactly what a post-transaction
     # read sees. The seeded active model backend is invisible and the install
@@ -785,10 +755,7 @@ async def test_reinstall_same_version_idempotent(
     # cleaned up by uninstall, which only handles entities)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "DELETE FROM library_primitives WHERE organisation_id = :oid "
-                "AND primitive_type = 'workflow' AND source = 'local'"
-            ),
+            text("DELETE FROM library_primitives WHERE organisation_id = :oid AND primitive_type = 'workflow' AND source = 'local'"),
             {"oid": str(org)},
         )
 
@@ -950,7 +917,7 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
     org: uuid.UUID,
     user: uuid.UUID,
     model_backend: uuid.UUID,
-    modulo_app_engine: AsyncEngine,
+    farna_control_app_engine: AsyncEngine,
 ) -> None:
     """Install the shipped github-pr-reviewer collection and prove the new
     persistence contract end-to-end against real RLS:
@@ -960,11 +927,11 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
        the source of truth for pin content.
     2. ``collection_install.collection_id`` points at the DB row that actually
        exists (tuple-keyed upsert, not the registry id).
-    3. The sentinel Organisation row is readable by the REAL ``modulo_app``
+    3. The sentinel Organisation row is readable by the REAL ``farna_control_app``
        role under the installing org's RLS context — the ``organisations``
        table has no RLS, so the install-path sentinel lookup cannot be blocked
        by tenancy.
-    4. The sentinel-owned collection row is readable by ``modulo_app`` ONLY
+    4. The sentinel-owned collection row is readable by ``farna_control_app`` ONLY
        under the sentinel org's RLS context (library_primitives RLS is
        org-scoped) — proving the install path's RLS-context switch is real.
     5. A second install in the same org is refused ("already installed") and
@@ -980,9 +947,7 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
     # 1 + 2: exactly one sentinel-owned library_primitives row — the collection.
     async with db_engine.connect() as conn:
         rows = await conn.execute(
-            text(
-                "SELECT id, organisation_id, source, slug, version FROM library_primitives WHERE organisation_id = :oid"
-            ),
+            text("SELECT id, organisation_id, source, slug, version FROM library_primitives WHERE organisation_id = :oid"),
             {"oid": str(MODULO_ORG_ID)},
         )
         sentinel_rows = rows.all()
@@ -994,7 +959,7 @@ async def test_shipped_install_persists_only_collection_row_under_sentinel_rls(
     assert install.collection_id == persisted.id
 
     # 3: sentinel org readable by the app role under the TEST org's RLS context.
-    app_factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    app_factory = async_sessionmaker(farna_control_app_engine, expire_on_commit=False)
     async with app_factory() as app_session:
         await app_session.execute(text("SELECT 1"))  # begin the RLS-scoped transaction
         await set_rls_org(app_session, org)
@@ -1100,9 +1065,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
         {"slug": "clean-agent", "version": "1.1"},
         {"slug": "edited-agent", "version": "1.1"},
     ]
-    collection_v2 = await _seed_collection(
-        db_engine, org, pins_v2, slug="upgrade-collection", version="1.1", version_group_id=collection_v1
-    )
+    collection_v2 = await _seed_collection(db_engine, org, pins_v2, slug="upgrade-collection", version="1.1", version_group_id=collection_v1)
 
     # --- Detection: "update available" with a per-entity-type delta ---
     report = await detect_collection_update(db_session, org, install_id, collection_v1)
@@ -1153,10 +1116,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
     # --- Verify: reconciled entities match the new pin content ---
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT sv.definition_json FROM schema_versions sv "
-                "WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"
-            ),
+            text("SELECT sv.definition_json FROM schema_versions sv WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"),
             {"sid": str(input_local)},
         )
         upgraded_def = row.scalar_one()
@@ -1171,10 +1131,7 @@ async def test_collection_upgrade_surfaces_delta_reconciles_and_preserves_modifi
     # --- Verify: modified entities are untouched ---
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT sv.definition_json FROM schema_versions sv "
-                "WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"
-            ),
+            text("SELECT sv.definition_json FROM schema_versions sv WHERE sv.schema_id = :sid ORDER BY sv.version_number DESC LIMIT 1"),
             {"sid": str(output_local)},
         )
         assert row.scalar_one() == def_b

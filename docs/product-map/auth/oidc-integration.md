@@ -45,7 +45,7 @@ the SSO callback flow (`feat-sso`).
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` (real-Postgres
   multi-org RLS regression for the per-provider OIDC surface, closing the
   `feat-sso` deferral). Proves the system leg resolves an OIDC provider owned by
-  a non-first org via the real `modulo_system` role, unknown slugs fail closed
+  a non-first org via the real `farna_control_system` role, unknown slugs fail closed
   all-None (never RuntimeError→500), the app fallback resolves only the first
   org's provider inside a scoped transaction (FAR-1058 parity - the resolver now
   opens its own `session.begin()` when the caller has none), an unbound app

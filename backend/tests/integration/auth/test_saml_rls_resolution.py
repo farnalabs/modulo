@@ -16,7 +16,7 @@ policy on ``sso_providers`` returns ZERO rows for a session with no
 helpers called with whatever session they were handed) so both failure
 shapes are invisible: a MagicMock never raises from ``set_config``, and a
 mocked provider list ignores live RLS filtering. Only a real Postgres with
-the real ``modulo_app`` (NOBYPASSRLS) / ``modulo_system`` (BYPASSRLS) roles
+the real ``farna_control_app`` (NOBYPASSRLS) / ``farna_control_system`` (BYPASSRLS) roles
 exercises the actual contract.
 
 Proven here:
@@ -170,7 +170,7 @@ async def _create_oidc_provider(
 
 @pytest_asyncio.fixture
 async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
-    """Engine on the real ``modulo_system`` role (BYPASSRLS).
+    """Engine on the real ``farna_control_system`` role (BYPASSRLS).
 
     The integration conftest provisions the role and exports
     ``MODULO_SYSTEM_DATABASE_URL`` exactly like production settings do.
@@ -186,7 +186,7 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 @pytest_asyncio.fixture
 async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``.
+    """Session on the ``farna_control_system`` role — mirrors ``get_system_db_session``.
 
     Closed on teardown: a session that is merely returned leaks its checked-out
     asyncpg connection (``engine.dispose()`` cannot reap an in-use connection,
@@ -199,9 +199,9 @@ async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSess
 
 
 @pytest_asyncio.fixture
-async def app_session_factory(modulo_app_engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    """Session factory on the real ``modulo_app`` role (NOBYPASSRLS, RLS applies)."""
-    yield async_sessionmaker(modulo_app_engine, expire_on_commit=False, autobegin=False)
+async def app_session_factory(farna_control_app_engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """Session factory on the real ``farna_control_app`` role (NOBYPASSRLS, RLS applies)."""
+    yield async_sessionmaker(farna_control_app_engine, expire_on_commit=False, autobegin=False)
 
 
 # Two committed orgs: org_a created a DECADE earlier (it is reliably the
@@ -232,7 +232,7 @@ async def two_orgs(db_engine: AsyncEngine) -> dict[str, str]:
 
 
 class TestSystemLegResolution:
-    """Per-provider resolution through the ``modulo_system`` role (FAR-1001)."""
+    """Per-provider resolution through the ``farna_control_system`` role (FAR-1001)."""
 
     @pytest.mark.asyncio
     async def test_resolves_provider_owned_by_non_first_org(
@@ -347,7 +347,7 @@ class _AllFeatures:
 async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session: AsyncSession) -> AsyncClient:
     """ASGI client like conftest's ``integration_client`` but with:
     - ``modulo_multi_org_enabled=True`` (org-login routes otherwise 404 per ADR 005),
-    - a REAL system session override (exercises the modulo_system leg),
+    - a REAL system session override (exercises the farna_control_system leg),
     - an anonymous plan-context override (pre-auth feature gate)."""
     from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
     from farna.api.main import app

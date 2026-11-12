@@ -200,7 +200,7 @@ def _derive_operator_system_url(
     """Derive the system URL from the operator's app URL when only that is set."""
     if operator_database_url is not None and not operator_system_url:
         # derive_system_database_url returns '' for a password-free URL —
-        # that must be OMITTED (the caller falls back to modulo_app), never
+        # that must be OMITTED (the caller falls back to farna_control_app), never
         # written through as a blank system URL.
         return derive_system_database_url(operator_database_url) or None
     return None

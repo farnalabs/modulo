@@ -288,13 +288,13 @@ class Settings(BaseSettings):
     # ENABLED) AND re-enforced at CLI invocation time.
     modulo_break_glass_ttl_minutes: int = Field(default=1440, ge=1)
     modulo_break_glass_max_ttl_minutes: int = Field(default=4320, ge=1, le=4320)
-    # Dedicated modulo_breakglass LOGIN engine URL (the CLI connects as this
+    # Dedicated farna_control_breakglass LOGIN engine URL (the CLI connects as this
     # role — never the app database_url).
     modulo_break_glass_database_url: str = Field(default="")
-    # Dedicated modulo_system LOGIN engine URL for cross-org system cron jobs
+    # Dedicated farna_control_system LOGIN engine URL for cross-org system cron jobs
     # (analytics_facts_maintenance, journey_reconcile, retention_cleanup,
     # dispatcher_reconcile). When set, system crons use this URL to connect as
-    # the modulo_system role (LOGIN, BYPASSRLS) instead of modulo_app.
+    # the farna_control_system role (LOGIN, BYPASSRLS) instead of farna_control_app.
     modulo_system_database_url: str = Field(default="")
     # warn|fail — the URL/secret-presence boot checks are warn-in-warn-mode;
     # the allow-list/role-posture assertions (bootstrap_role.py) are FATAL in
@@ -1283,7 +1283,7 @@ class Settings(BaseSettings):
         elif self.modulo_db.lower() in ("mariadb", "mysql"):
             _log.warning("settings.mariadb_mode")
             if self.database_url.startswith(_POSTGRES_ASYNC_PREFIX):
-                self.database_url = "mysql+aiomysql://modulo:modulo@localhost:5435/modulo"
+                self.database_url = "mysql+aiomysql://farna_control:farna_control@localhost:5435/farna_control"
                 _log.info("settings.database_url_auto_set", extra={"database_url": self.database_url})
         return self
 

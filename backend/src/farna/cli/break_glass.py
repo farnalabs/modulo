@@ -8,7 +8,7 @@ Usage::
   farna-control break-glass force-last-admin <org-id|org-slug> --reason TEXT
   farna-control break-glass smoke
 
-Connects as ``farna_breakglass`` via ``FARNA_CONTROL_BREAK_GLASS_DATABASE_URL`` — a
+Connects as ``farna_control_breakglass`` via ``FARNA_CONTROL_BREAK_GLASS_DATABASE_URL`` — a
 dedicated LAZY engine (importing this module connects to nothing). The
 caller-bound SECURITY DEFINER ``deactivate_break_glass`` (0036) is the sole
 write path for deactivation / force-last-admin. Operator authentication is a
@@ -65,7 +65,7 @@ EXIT_DEACTIVATE_ATOMICITY_FAILURE = 8
 EXIT_CREDENTIAL_PRINT_FAILURE = 9
 
 # The CLI calls the SECURITY DEFINER with a sentinel caller id; authorization is
-# carried entirely by the session_user operator branch (farna_breakglass only).
+# carried entirely by the session_user operator branch (farna_control_breakglass only).
 _CALLER_SENTINEL = uuid.UUID(int=0)
 
 _OPERATOR_PRIMARY_ACTOR = "operator"
@@ -540,8 +540,8 @@ async def smoke(session: AsyncSession) -> dict[str, Any]:
         if one != 1:
             raise SmokeFailureError("connectivity probe SELECT 1 did not return 1")
         role: str = (await session.execute(text("SELECT session_user"))).scalar_one()
-        if role != "farna_breakglass":
-            raise SmokeFailureError(f"session_user is {role!r}, expected 'farna_breakglass'")
+        if role != "farna_control_breakglass":
+            raise SmokeFailureError(f"session_user is {role!r}, expected 'farna_control_breakglass'")
         function: str | None = (await session.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)')"))).scalar_one()
         if not function:
             raise SmokeFailureError("deactivate_break_glass SECURITY DEFINER not found")
@@ -626,7 +626,7 @@ def _render_status(rows: list[dict[str, Any]], *, as_json: bool) -> None:
 )
 @click.pass_context
 def cli(ctx: click.Context, secret: str | None) -> None:
-    """Break-glass admin recovery — emergency org access via farna_breakglass."""
+    """Break-glass admin recovery — emergency org access via farna_control_breakglass."""
     ctx.ensure_object(dict)
     settings = _settings_from_ctx(ctx)
     if "actor" not in ctx.obj:

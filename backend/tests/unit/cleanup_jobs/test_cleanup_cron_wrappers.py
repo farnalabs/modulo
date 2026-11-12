@@ -5,7 +5,7 @@
 report the total deleted count, and both must pick the session factory by
 dialect: on PostgreSQL the purge is cross-org by design and must drain on the
 SYSTEM session factory (``_cleanup_session_factory`` →
-``_make_system_session_factory``, FAR-523) because the plain ``modulo_app``
+``_make_system_session_factory``, FAR-523) because the plain ``farna_control_app``
 factory is NOBYPASSRLS and silently matched zero rows; on non-PostgreSQL
 backends (no RLS) the plain factory is correct.
 
@@ -88,7 +88,7 @@ class TestCleanupCronDrainLoop:
     @pytest.mark.parametrize("case", JOB_CASES)
     @pytest.mark.parametrize("non_pg_db", ["sqlite", "mariadb", "mysql"])
     async def test_non_postgres_uses_plain_factory(self, case: JobCase, non_pg_db: str) -> None:
-        """On non-PostgreSQL backends (no RLS, no modulo_system role) the job
+        """On non-PostgreSQL backends (no RLS, no farna_control_system role) the job
         must drain on the PLAIN factory and never touch the system engine."""
         factory, _ = make_factory_with_session()
 
@@ -118,9 +118,7 @@ class TestCleanupCronAutobeginTransaction:
     """
 
     @pytest.mark.parametrize("case", JOB_CASES)
-    async def test_cron_deletes_old_rows_against_autobegin_false_session(
-        self, case: JobCase, autobegin_false_factory
-    ) -> None:
+    async def test_cron_deletes_old_rows_against_autobegin_false_session(self, case: JobCase, autobegin_false_factory) -> None:
         async with autobegin_false_factory() as session, session.begin():
             session.add(make_trigger_event(case.seed_age_days))
 
@@ -151,9 +149,7 @@ class TestCleanupCronAutobeginTransaction:
         assert len(await _select_all(autobegin_false_factory)) == 1
 
     @pytest.mark.parametrize("case", JOB_CASES)
-    async def test_cron_zero_batch_against_autobegin_false_session(
-        self, case: JobCase, autobegin_false_factory
-    ) -> None:
+    async def test_cron_zero_batch_against_autobegin_false_session(self, case: JobCase, autobegin_false_factory) -> None:
         """Even an empty table must not raise: the SELECT needs an active
         transaction on an autobegin=False session."""
         with (
