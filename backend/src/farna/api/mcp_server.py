@@ -11224,8 +11224,9 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
     description=(
         "Read the observed health, loop metrics and bottlenecks for a published System Maps "
         "revision (mirrors GET /api/v1/system-maps/{map_id}/overview). Requires the system_maps_read "
-        "feature and system_map.overview permission; internal callers may select a draft or historical "
-        "revision, while ordinary callers see published revisions only."
+        "feature (system_maps for internal callers) and system_map.overview permission; internal "
+        "callers may select a draft or historical revision, while ordinary callers see published "
+        "revisions only."
     ),
 )
 @mcp_audited("system_map_overview_read", "system_map", fail_closed=False)
