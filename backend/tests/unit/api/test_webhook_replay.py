@@ -165,12 +165,8 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -364,9 +360,7 @@ def test_replay_webhook_github_signature_bad_returns_401(client: TestClient) -> 
 
 
 def test_replay_webhook_github_signature_over_other_body_returns_401(client: TestClient) -> None:
-    resp, engine = _replay_unauthenticated(
-        client, {"X-Hub-Signature-256": _gh_replay_signature(body=b'{"other": true}')}
-    )
+    resp, engine = _replay_unauthenticated(client, {"X-Hub-Signature-256": _gh_replay_signature(body=b'{"other": true}')})
     assert resp.status_code == 401
     assert engine.await_count == 0
 
@@ -411,7 +405,7 @@ def test_replay_webhook_bootstrap_reads_trigger_via_system_session(client: TestC
     """Regression (FAR-523): the replay bootstrap read must go through the
     system session BEFORE any app-session RLS org context exists — a
     pre-context read of the org-scoped ``triggers`` table on the app session
-    matches zero rows under production RLS (modulo_app is NOBYPASSRLS)."""
+    matches zero rows under production RLS (farna_control_app is NOBYPASSRLS)."""
     system_mock = make_system_session_mock(trigger_config={"hmac_secret": _HMAC_SECRET})
 
     async def override_system() -> AsyncGenerator[AsyncMock, None]:
@@ -692,9 +686,7 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
                 )
                 raise EventNotAcceptedError(
                     _TRIGGER_ID,
-                    reason=(
-                        "event value filters {'review.state': ['approved']} not satisfied by replayed webhook payload"
-                    ),
+                    reason=("event value filters {'review.state': ['approved']} not satisfied by replayed webhook payload"),
                 )
 
             m.side_effect = _engine_side_effect
@@ -723,11 +715,7 @@ def test_replay_webhook_event_not_accepted_returns_400(client: TestClient) -> No
     aexit = begin_cm.__aexit__
     assert aexit.await_args_list[-1].args == (None, None, None)
     # The audit event with event_type_not_accepted was added to the session.
-    assert any(
-        isinstance(c.args[0], TriggerEvent)
-        and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
-        for c in session.add.call_args_list
-    )
+    assert any(isinstance(c.args[0], TriggerEvent) and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_replay_busy_path_without_org_returns_none() -> None:
@@ -882,9 +870,7 @@ def test_replay_webhook_paused_org_missing_event_returns_404(client: TestClient)
     m.assert_not_called()
 
 
-def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1735 bounded shim on the unauthenticated replay path: a NON-token
     stored hmac_secret is legacy pre-0306 plaintext — accepted so a replay
     signed against it still verifies (mirrors receive_webhook), but ONLY with
@@ -913,9 +899,7 @@ def test_replay_webhook_legacy_plaintext_secret_accepted_with_dated_warning(
     assert "hmac_secret" in caplog.text
 
 
-def test_replay_webhook_undecryptable_token_secret_fails_closed(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_replay_webhook_undecryptable_token_secret_fails_closed(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1735 fail-closed on the unauthenticated replay path: a token-shaped
     hmac_secret that CANNOT be decrypted under the configured key is refused
     (500) — the ciphertext is NEVER used as the HMAC key. The REAL decode
@@ -1311,12 +1295,8 @@ def test_replay_webhook_inactive_trigger_skips_pause_precheck() -> None:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = override_system_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan

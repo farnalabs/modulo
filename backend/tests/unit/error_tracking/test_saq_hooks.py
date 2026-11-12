@@ -119,11 +119,7 @@ class TestClassify:
 class TestAfterProcess:
     @pytest.mark.asyncio
     async def test_failed_execute_marks_run_failed_guarded(self) -> None:
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -183,9 +179,7 @@ class TestAfterProcess:
 
     @pytest.mark.asyncio
     async def test_failed_execute_none_error_writes_null_detail(self) -> None:
-        ctx = {
-            "job": _job("farna.core.saq_worker.execute_run", Status.FAILED, None, {"run_id": RUN_ID, "org_id": ORG_ID})
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, None, {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -204,9 +198,7 @@ class TestAfterProcess:
 
     @pytest.mark.asyncio
     async def test_failed_execute_non_str_error_coerced(self) -> None:
-        ctx = {
-            "job": _job("farna.core.saq_worker.execute_run", Status.FAILED, 12345, {"run_id": RUN_ID, "org_id": ORG_ID})
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, 12345, {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -226,11 +218,7 @@ class TestAfterProcess:
     @pytest.mark.asyncio
     async def test_failed_execute_sanitizes_secrets_in_error_detail(self) -> None:
         leaked = "OpenAI call failed with sk-abc1234567890; auth Bearer tok12345xyz"
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, leaked, {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, leaked, {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -251,11 +239,7 @@ class TestAfterProcess:
 
     @pytest.mark.asyncio
     async def test_guard_rejected_rowcount_zero_skips_facts(self) -> None:
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=0)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -271,11 +255,7 @@ class TestAfterProcess:
 
     @pytest.mark.asyncio
     async def test_facts_failure_is_fail_open_after_mark(self) -> None:
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID})}
         mark_session = _mark_session(rowcount=1)
         with (
             patch.object(saq_hooks, "_open_factory") as factory,
@@ -374,11 +354,7 @@ class TestAfterProcess:
 
     @pytest.mark.asyncio
     async def test_db_down_logs_and_leaves_for_reconcile(self) -> None:
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID})}
         with (
             patch.object(saq_hooks, "_open_factory", side_effect=RuntimeError("db down")),
             patch.object(saq_hooks._log, "exception") as log_exc,
@@ -389,7 +365,7 @@ class TestAfterProcess:
 
 
 class TestGetEnginePrepPing:
-    base_url = "postgresql+asyncpg://worker:pw@db:5432/modulo"
+    base_url = "postgresql+asyncpg://worker:pw@db:5432/farna_control"
 
     def test_engine_created_with_pool_pre_ping(self) -> None:
         saved = saq_hooks._ENGINE
@@ -645,11 +621,7 @@ class TestMarkRunFailedLockBoundFAR1601:
         from asyncpg import exceptions as asyncpg_exceptions
         from sqlalchemy.exc import OperationalError
 
-        ctx = {
-            "job": _job(
-                "farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
-            )
-        }
+        ctx = {"job": _job("farna.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID})}
         lock_timeout = OperationalError(
             "UPDATE runs ...",
             {},

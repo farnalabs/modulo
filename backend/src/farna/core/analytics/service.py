@@ -5,7 +5,7 @@ MCP tool both funnel through this service so the org predicate, rate limit,
 statement timeout, validation, bucketing, and error semantics stay identical
 across surfaces.
 
-Isolation invariant (CRITICAL — carried over from the route): ``modulo_app``
+Isolation invariant (CRITICAL — carried over from the route): ``farna_control_app``
 is NOBYPASSRLS (tenant isolation relies on RLS policies) and the ORM tenant
 filter is NOT registered on Postgres — the explicit ``organisation_id = :org``
 predicate injected by the builder is the PRIMARY isolation control (RLS also
@@ -551,7 +551,7 @@ async def _resolve_pool_reference(
       number most likely to explain starvation), and ``None`` only when the org
       has no pipelines at all.
 
-    Reads use the explicit org predicate because ``modulo_app`` is NOBYPASSRLS
+    Reads use the explicit org predicate because ``farna_control_app`` is NOBYPASSRLS
     (tenant isolation relies on RLS policies) — the predicate is the PRIMARY
     isolation control (RLS also enforces org scoping), and ``session.get``
     alone would not scope it.

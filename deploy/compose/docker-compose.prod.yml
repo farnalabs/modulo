@@ -2,8 +2,8 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: modulo
-      POSTGRES_USER: modulo
+      POSTGRES_DB: farna_control
+      POSTGRES_USER: farna_control
       # REQUIRED - no default. `changeme` used to be interpolated here, so a
       # production stack whose operator never set the variable silently got a
       # publicly-known database password AND the same string embedded in the
@@ -83,11 +83,11 @@ services:
     # rename anything here without that test agreeing.
     environment:
       # Settings.database_url.
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      DATABASE_URL: postgresql+asyncpg://farna_control_app:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/farna_control
       # Not a Settings field, but read directly from os.environ by
       # db/bootstrap.py, db/migrations/env.py and api/main.py (the
       # superuser/migration URL) - alembic runs under it at container start.
-      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/farna_control
       # Settings.redis_url - REQUIRED at runtime (the API refuses to boot when
       # it resolves empty) and previously never reached the container, because
       # the compose passed MODULO_REDIS_URL, which nothing reads: the backend
@@ -123,7 +123,7 @@ services:
       # FAR-1506. Fail fast here instead, naming the variable.
       SAQ_AUTH_USERNAME: ${SAQ_AUTH_USERNAME:?SAQ_AUTH_USERNAME is required - the SAQ system worker refuses to boot without it, see .env.prod.example}
       SAQ_AUTH_PASSWORD: ${SAQ_AUTH_PASSWORD:?SAQ_AUTH_PASSWORD is required - the SAQ system worker refuses to boot without it, see .env.prod.example}
-      # Settings.modulo_system_database_url - the modulo_system (LOGIN,
+      # Settings.farna_control_system_database_url - the farna_control_system (LOGIN,
       # BYPASSRLS) role URL. REQUIRED now that this container runs the SAQ
       # system worker (FAR-1509): `dispatcher_reconcile` builds its session
       # factory from this URL and FAILS CLOSED without it
@@ -138,7 +138,7 @@ services:
       # db/bootstrap.py's derive_system_database_url computes from
       # DATABASE_URL; here it is wired explicitly because supervisord's
       # children inherit the container env as-is).
-      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://farna_control_system:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/farna_control
       # Settings.saq_worker_db_pool_size - the bundled postgres:16-alpine
       # defaults to max_connections=100, while Settings' own default (65, sized
       # for Fly's 300-connection Postgres) would let the runs worker and the
@@ -152,7 +152,7 @@ services:
       # (1) the runs worker's SAQ pool - this setting; (2) the system worker's
       # SAQ pool - the same setting, so 20 each at the default; (3) the system
       # worker's THIRD pool, cron_helpers._get_system_engine (pool_size 20 +
-      # max_overflow 10, up to 30 connections) which the modulo_system role
+      # max_overflow 10, up to 30 connections) which the farna_control_system role
       # URL above feeds to dispatcher_reconcile and its sibling system crons.
       # Pool (3) is a CEILING, not a reservation: its real concurrent demand is
       # ~1, because the reconcile org loop is sequential - one org pass at a

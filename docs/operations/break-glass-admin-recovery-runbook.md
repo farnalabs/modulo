@@ -45,14 +45,14 @@ Before an incident, confirm all of the following hold:
    `MODULO_BREAK_GLASS_DATABASE_URL` is populated. `MODULO_BREAK_GLASS_ENABLED=true`
    with both secrets empty is a startup error; `TTL < 1` or `MAX_TTL < MIN_TTL`
    is a startup error regardless of `ENABLED`.
-2. **`modulo_breakglass` role provisioned** – created idempotently by
+2. **`farna_control_breakglass` role provisioned** – created idempotently by
    `bootstrap_role.py` on every boot (LOGIN, BYPASSRLS, dedicated credential
    from `MODULO_BREAK_GLASS_DATABASE_URL`). Bootstrap failure is FATAL when
    `ENABLED=true`. The role requires a superuser to grant BYPASSRLS – a
    managed-Postgres platform without superuser is a hard platform constraint
    (see ADR-047/018).
 3. **CLI installed** – `modulo-break-glass` (registered console script, mirrors
-   `modulo-migrate`'s `asyncio.run` wrapper). Connects as `modulo_breakglass`
+   `modulo-migrate`'s `asyncio.run` wrapper). Connects as `farna_control_breakglass`
    via a dedicated lazy engine – never the app `database_url`.
 4. **Operator holds the secret** – the operator running the CLI must possess
    `MODULO_BREAK_GLASS_SECRET` / `_STANDBY_SECRET` (actor derived from which
@@ -65,7 +65,7 @@ modulo-break-glass smoke
 ```
 
 Exit 0 = connectivity (`SELECT 1`) + posture assertions (`session_user =
-modulo_breakglass`, `deactivate_break_glass` exists) OK. Exit 7 = smoke
+farna_control_breakglass`, `deactivate_break_glass` exists) OK. Exit 7 = smoke
 failure (see §6). A CLI whose `activate` is disabled (`ENABLED=false`) can
 still run `deactivate`, `force-last-admin`, `status`, and `smoke` while
 secrets + URL are present.
@@ -165,7 +165,7 @@ modulo-break-glass force-last-admin <org> --reason "<ticket-ref>"
 - Same org advisory lock and the same out-of-band verification protocol as
   `activate` (§5).
 - Appends a `last_admin_forcibly_removed` audit row in the same transaction.
-- The `force` parameter is honored ONLY for the `modulo_breakglass` session
+- The `force` parameter is honored ONLY for the `farna_control_breakglass` session
   (`session_user` gate in the SECURITY DEFINER) – an org admin cannot invoke it.
 - **Distinct from `deactivate --force`:** `deactivate --force` overrides the
   refuse-while-live-activation-exists guard; `force-last-admin` overrides the
@@ -248,7 +248,7 @@ the daily-sweep signal wired to alerting (§8).
   operable across a secret rotation. Only NEW `activate` invocations require
   the rotated secret.
 - **`MODULO_BREAK_GLASS_DATABASE_URL` also needs rotation** + fresh-DB sync:
-  `ALTER ROLE modulo_breakglass ... PASSWORD` (or equivalent), update the vault,
+  `ALTER ROLE farna_control_breakglass ... PASSWORD` (or equivalent), update the vault,
   and run the URL-in-vault-matches-`.env` check.
 - **Both-lost recovery:** if primary AND standby secrets are lost, set fresh
   secrets via `fly secrets set`, restart the app, then run
@@ -264,7 +264,7 @@ Runtime detection is a **daily operator sweep** (the always-on external
 consumer is a scheduled follow-up task, tracked in Linear):
 
 - **Executor:** a GitHub Actions scheduled workflow (or a harness scheduled
-  task), connecting as `modulo_breakglass` with secrets from the vault.
+  task), connecting as `farna_control_breakglass` with secrets from the vault.
 - **Command:** `modulo-break-glass status --all --json`.
 - **Alert:** the non-zero-exit-on-live-rows condition (`5`) is wired to an
   alert. Live rows carry an explicit `reason`, so the alert is actionable.
@@ -363,7 +363,7 @@ daily sweep (§8) is the ongoing monitoring surface.
 | Symptom | Meaning | Action |
 |---|---|---|
 | `smoke` exits `7` | Connectivity or posture failure | Check `MODULO_BREAK_GLASS_DATABASE_URL`, role provisioning (`bootstrap_role.py`), BYPASSRLS grant |
-| REST returns `403` | `M2010` – caller not authorized (e.g. `force` param via `modulo_app`) | Use the operator CLI (`modulo_breakglass` session) for operator-only operations |
+| REST returns `403` | `M2010` – caller not authorized (e.g. `force` param via `farna_control_app`) | Use the operator CLI (`farna_control_breakglass` session) for operator-only operations |
 | REST returns `422` | `M2020` – deactivation would orphan the org (last-admin invariant) | Provision a replacement admin first, or use `force-last-admin` deliberately |
 | REST returns `404` | `M2040` – target account does not exist | Verify the `--account-id` / target |
 | SCIM returns `409` | `M2010`/`M2020` on the SCIM surface – no replacement admin / caller not authorized | Provision a replacement admin via the IdP (§9); retries are idempotent |
@@ -377,7 +377,7 @@ operation. Audit rows are immutable via the 0005 append-only triggers – every
 role (including BYPASSRLS) can INSERT but never UPDATE/DELETE them, so the
 host log is the authoritative signal and INSERT-only forgery is the documented
 residual. The CLI writes these via the existing Python `append_audit_event` on
-the `modulo_breakglass` session (actor in `payload_json`, `account_id` NULL).
+the `farna_control_breakglass` session (actor in `payload_json`, `account_id` NULL).
 
 ---
 

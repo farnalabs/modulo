@@ -1,7 +1,7 @@
 # Disaster Recovery — Modulo Self-Hosted
 
 This document covers backup and restore procedures for self-hosted Modulo
-instances using the `modulo backup` / `modulo restore` CLI.
+instances using the `farna-control backup` / `farna-control restore` CLI.
 
 ---
 
@@ -29,7 +29,7 @@ psql --version
 
 ```bash
 cd /path/to/modulo/backend
-modulo backup
+farna-control backup
 ```
 
 Creates `./modulo-backup-<YYYYMMDD-HHMMSS>/` containing:
@@ -43,13 +43,13 @@ Creates `./modulo-backup-<YYYYMMDD-HHMMSS>/` containing:
 ### Custom output directory
 
 ```bash
-modulo backup --output-dir /mnt/backups/modulo-20250215
+farna-control backup --output-dir /mnt/backups/modulo-20250215
 ```
 
 ### Override database URL
 
 ```bash
-modulo backup --db-url "postgresql://user:pass@remote-host:5432/modulo"
+farna-control backup --db-url "postgresql://user:pass@host:5432/farna_control"
 ```
 
 The `DATABASE_URL` environment variable is also respected.
@@ -61,7 +61,7 @@ The `DATABASE_URL` environment variable is also respected.
 ### Standard restore
 
 ```bash
-modulo restore ./modulo-backup-20250215-143022
+farna-control restore ./modulo-backup-20250215-143022
 ```
 
 The command will:
@@ -77,7 +77,7 @@ Before running an irreversible restore, preview every step without touching
 the database:
 
 ```bash
-modulo restore ./modulo-backup-20250215-143022 --dry-run
+farna-control restore ./modulo-backup-20250215-143022 --dry-run
 ```
 
 The dry run validates `backup-info.json`, verifies all file checksums, and
@@ -90,13 +90,13 @@ real restore, and never prompts for confirmation because no changes are made.
 ### Skip confirmation prompt
 
 ```bash
-modulo restore ./modulo-backup-20250215-143022 --yes
+farna-control restore ./modulo-backup-20250215-143022 --yes
 ```
 
 ### Override database URL
 
 ```bash
-modulo restore ./modulo-backup-20250215-143022 --db-url "postgresql://user:pass@new-host:5432/modulo"
+farna-control restore ./modulo-backup-20250215-143022 --db-url "postgresql://user:pass@new-host:5432/farna_control"
 ```
 
 ### Restore with credential re-encryption
@@ -105,7 +105,7 @@ If the `FERNET_KEY` has changed since the backup was taken, you must provide
 the previous key:
 
 ```bash
-modulo restore ./modulo-backup-20250215-143022 --previous-fernet-key "<old-key>"
+farna-control restore ./modulo-backup-20250215-143022 --previous-fernet-key "<old-key>"
 ```
 
 The restore will:
@@ -147,7 +147,7 @@ For full confidence, restore the backup to a separate Postgres instance:
 
 ```bash
 createdb modulo-test
-modulo restore ./modulo-backup-* --db-url "postgresql://user:pass@localhost:5432/modulo-test" --yes
+farna-control restore ./modulo-backup-* --db-url "postgresql://user:pass@localhost:5432/modulo-test" --yes
 ```
 
 ---
@@ -168,11 +168,11 @@ modulo restore ./modulo-backup-* --db-url "postgresql://user:pass@localhost:5432
 
 ```bash
 # 1. Back up with old key
-modulo backup
+farna-control backup
 
 # 2. Update FERNET_KEY in .env
 # 3. Restore with re-encryption
-modulo restore ./modulo-backup-* --previous-fernet-key "<old-key>"
+farna-control restore ./modulo-backup-* --previous-fernet-key "<old-key>"
 ```
 
 ---
@@ -183,17 +183,17 @@ modulo restore ./modulo-backup-* --previous-fernet-key "<old-key>"
 
 1. Provision a new Postgres instance
 2. Configure `DATABASE_URL` in `.env`
-3. Run `modulo restore <backup-dir> --yes`
+3. Run `farna-control restore <backup-dir> --yes`
 4. Start the Modulo API server
 5. Verify login and pipeline execution
 
 ### Point-in-time recovery
 
-The `modulo backup` command creates point-in-time snapshots. To recover to a
+The `farna-control backup` command creates point-in-time snapshots. To recover to a
 specific point:
 
 1. Identify the relevant backup directory by timestamp
-2. Restore that specific backup: `modulo restore ./modulo-backup-<timestamp>`
+2. Restore that specific backup: `farna-control restore ./modulo-backup-<timestamp>`
 3. If the DB supports PITR (e.g. WAL archiving), apply WAL segments after the
    pg_dump restore
 
@@ -206,7 +206,7 @@ If only LangGraph checkpoint data was lost:
 cp ./modulo-backup-*/checkpoint_blobs.json /tmp/
 
 # Use the restore command against the live DB
-modulo restore ./modulo-backup-* --yes
+farna-control restore ./modulo-backup-* --yes
 ```
 
 ### Credential key rotation without full restore
@@ -215,11 +215,11 @@ To rotate `FERNET_KEY` without a full backup/restore cycle:
 
 ```bash
 # 1. Take a pre-rotation backup
-modulo backup --output-dir ./pre-rotation-backup
+farna-control backup --output-dir ./pre-rotation-backup
 
 # 2. Update FERNET_KEY in .env
 # 3. Restore only the credential re-encryption
-modulo restore ./pre-rotation-backup --previous-fernet-key "<old-key>" --yes
+farna-control restore ./pre-rotation-backup --previous-fernet-key "<old-key>" --yes
 ```
 
 ---

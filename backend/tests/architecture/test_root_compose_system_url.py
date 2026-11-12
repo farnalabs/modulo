@@ -10,7 +10,7 @@ deployment never becomes ready.
 
 * ``saq-system`` runs the cron and needs the URL to authenticate.
 * ``backend`` needs it too: the entrypoint's ``bootstrap_role`` reconciles
-  the ``modulo_system`` password from this URL when it creates/alters the
+  the ``farna_control_system`` password from this URL when it creates/alters the
   role, so a backend that creates the role without it would leave a random
   placeholder the worker's URL could never authenticate against (FAR-1519: an
   unconfigured URL no longer re-randomises an existing credential - it only
@@ -57,5 +57,5 @@ def test_service_wires_the_system_database_url(service: str) -> None:
     )
     assert isinstance(value, str)
     assert value.startswith("postgresql+asyncpg://"), f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
-    assert "modulo_system:" in value, f"MODULO_SYSTEM_DATABASE_URL must authenticate as the modulo_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
+    assert "farna_control_system:" in value, f"MODULO_SYSTEM_DATABASE_URL must authenticate as the farna_control_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
     assert "${POSTGRES_PASSWORD" in value, f"MODULO_SYSTEM_DATABASE_URL must interpolate the same POSTGRES_PASSWORD the other URLs use so the role password and the URL can never disagree, got {value!r}"

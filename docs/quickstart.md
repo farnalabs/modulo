@@ -28,7 +28,7 @@ export FERNET_KEY=$(uv run --with cryptography --no-project python -c "from cryp
 
 # The backend .env below logs in with password `modulo`, so start Postgres with
 # the same password (the compose default is `changeme`).
-POSTGRES_PASSWORD=modulo docker compose -f docker-compose.local.yml up -d
+POSTGRES_PASSWORD=farna_control docker compose -f docker-compose.local.yml up -d
 ```
 
 This starts:
@@ -70,12 +70,12 @@ uv sync
 # FERNET_KEY is the value exported in step 1 – a different key here cannot
 # decrypt the credentials the workers stored.
 cat > .env <<EOF
-DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
+DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/farna_control
 # Cross-org system crons (dispatcher_reconcile gates /healthz/ready) connect as
-# the dedicated modulo_system role; the API boot creates that role with this
+# the dedicated farna_control_system role; the API boot creates that role with this
 # password. Without it the system worker refuses those crons and readiness
 # never reaches "ok".
-MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://modulo_system:modulo@localhost:5434/modulo
+MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://farna_control_system:modulo@localhost:5434/farna_control
 MODULO_DB=postgres
 SECRET_KEY=local-dev-secret-key-not-for-production
 FERNET_KEY=$FERNET_KEY

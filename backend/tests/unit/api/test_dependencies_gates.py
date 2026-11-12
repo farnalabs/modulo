@@ -98,11 +98,7 @@ def _signed_team_licence(*, org_id: str = "tenant-org", expires_days: int = 30) 
         "expires_at": (datetime.now(UTC) + timedelta(days=expires_days)).isoformat(),
         "org_id": org_id,
     }
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, kp["private_key"]))).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}", kp["public_key"]
 
@@ -521,7 +517,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _UnprovisionedSettings:
-            modulo_system_database_url = ""
+            farna_control_system_database_url = ""
 
         monkeypatch.setattr(deps, "get_settings", lambda: _UnprovisionedSettings())
         saved_engine = deps._SYSTEM_ASYNC_ENGINE
@@ -538,7 +534,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
-            modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
+            farna_control_system_database_url = "postgresql+asyncpg://localhost/system-test"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _ProvisionedSettings())
@@ -563,7 +559,7 @@ class TestSystemEngineIsFallback:
         from farna.api import dependencies as deps
 
         class _SqliteSettings:
-            modulo_system_database_url = "sqlite+aiosqlite:///system-test.db"
+            farna_control_system_database_url = "sqlite+aiosqlite:///system-test.db"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _SqliteSettings())
@@ -601,7 +597,7 @@ class TestSystemEnginePoolRecycle:
         from farna.api import dependencies as deps
 
         class _ProvisionedSettings:
-            modulo_system_database_url = "postgresql+asyncpg://localhost/system-test"
+            farna_control_system_database_url = "postgresql+asyncpg://localhost/system-test"
             db_pool_recycle_seconds = 1500
 
         monkeypatch.setattr(deps, "get_settings", lambda: _ProvisionedSettings())

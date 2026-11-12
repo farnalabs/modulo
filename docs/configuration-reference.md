@@ -8,7 +8,7 @@ Complete reference for all environment variables supported by Farna Control. Var
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DATABASE_URL` | Async PostgreSQL connection string | `postgresql+asyncpg://modulo:pass@localhost:5434/modulo` |
+| `DATABASE_URL` | Async PostgreSQL connection string | `postgresql+asyncpg://modulo:pass@localhost:5434/farna_control` |
 | `SECRET_KEY` | JWT signing key, minimum 32 bytes | `openssl rand -base64 32` |
 | `FERNET_KEY` | Fernet encryption key, 44-char base64 | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 
@@ -21,9 +21,9 @@ The application refuses to start if any required variable is absent or invalid.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
-| `DATABASE_ADMIN_URL` | No | – | Privileged owner-role connection string read directly by Alembic from the process environment, the launcher-pinned config, or the `.env` file in `backend/` (not a `Settings` field). When set it wins over `DATABASE_URL` for migrations, so `uv run alembic upgrade heads` runs as the table owner rather than the RLS-bound app role. It is also the privileged connection for the role bootstrap (`python -m farna.db.bootstrap_role` requires it) and the URL `modulo restore --db-url` points at. If neither it nor `DATABASE_URL` is set, migrations refuse to run instead of defaulting to a local database (FAR-2183). |
+| `DATABASE_ADMIN_URL` | No | – | Privileged owner-role connection string read directly by Alembic from the process environment, the launcher-pinned config, or the `.env` file in `backend/` (not a `Settings` field). When set it wins over `DATABASE_URL` for migrations, so `uv run alembic upgrade heads` runs as the table owner rather than the RLS-bound app role. It is also the privileged connection for the role bootstrap (`python -m farna.db.bootstrap_role` requires it) and the URL `farna-control restore --db-url` points at. If neither it nor `DATABASE_URL` is set, migrations refuse to run instead of defaulting to a local database (FAR-2183). |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
-| `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). The system worker's cross-org crons (including `dispatcher_reconcile`, which gates `/healthz/ready`) **require** a value and fail closed without one: there is no silent fallback to the RLS-bound `DATABASE_URL`, which would read zero rows. The shipped compose files and the native launcher supply it; a plain-process deployment must set it explicitly (in SQLite dev mode, point it at the same SQLite file). |
+| `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`farna_control_system` role). The system worker's cross-org crons (including `dispatcher_reconcile`, which gates `/healthz/ready`) **require** a value and fail closed without one: there is no silent fallback to the RLS-bound `DATABASE_URL`, which would read zero rows. The shipped compose files and the native launcher supply it; a plain-process deployment must set it explicitly (in SQLite dev mode, point it at the same SQLite file). |
 
 `MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).
 `MODULO_DB=mariadb` or `mysql` uses the aiomysql driver. Both values are accepted by
@@ -871,7 +871,7 @@ is best-effort and never gates readiness: it is skipped when no `GITHUB_TOKEN` /
 Operator-controlled emergency admin recovery for orgs whose only admin is
 locked out (see
 `docs/operations/break-glass-admin-recovery-runbook.md`). The CLI connects to
-the database as the dedicated `modulo_breakglass` role via
+the database as the dedicated `farna_control_breakglass` role via
 `MODULO_BREAK_GLASS_DATABASE_URL` – never the application `DATABASE_URL`.
 
 | Variable | Required | Default | Description |
@@ -881,7 +881,7 @@ the database as the dedicated `modulo_breakglass` role via
 | `MODULO_BREAK_GLASS_STANDBY_SECRET` | Yes (when ENABLED) | – | Standby operator secret for rotation |
 | `MODULO_BREAK_GLASS_TTL_MINUTES` | No | `1440` | Default credential TTL in minutes (min 1, ≤ `MODULO_BREAK_GLASS_MAX_TTL_MINUTES`) |
 | `MODULO_BREAK_GLASS_MAX_TTL_MINUTES` | No | `4320` | Hard TTL cap (72h) |
-| `MODULO_BREAK_GLASS_DATABASE_URL` | Yes (when ENABLED) | – | Dedicated `modulo_breakglass` role connection string (BYPASSRLS; never the app `DATABASE_URL`) |
+| `MODULO_BREAK_GLASS_DATABASE_URL` | Yes (when ENABLED) | – | Dedicated `farna_control_breakglass` role connection string (BYPASSRLS; never the app `DATABASE_URL`) |
 | `MODULO_BREAK_GLASS_BOOT_FAILURE_MODE` | No | `warn` | `warn` or `fail` for URL/secret-presence checks; the allow-list/role assertions are FATAL in both modes |
 
 Operational procedure: `docs/operations/break-glass-admin-recovery-runbook.md`.
@@ -892,7 +892,7 @@ Operational procedure: `docs/operations/break-glass-admin-recovery-runbook.md`.
 
 ```env
 # Required
-DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
+DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/farna_control
 SECRET_KEY=<random-64-char-string>
 FERNET_KEY=<random-44-char-base64>
 

@@ -383,8 +383,8 @@ async def rotate_all_encrypted_data(
 
     Args:
         session: An active SQLAlchemy async session. Must be CROSS-ORG: pass a
-            session on the ``modulo_system`` (BYPASSRLS) role. On the app role
-            (``modulo_app``, NOBYPASSRLS) the org-scoped ``rls_org_isolation``
+            session on the ``farna_control_system`` (BYPASSRLS) role. On the app role
+            (``farna_control_app``, NOBYPASSRLS) the org-scoped ``rls_org_isolation``
             policies on ``secrets``/``connector_instances``/``model_backends``/
             ``notification_endpoints`` have no ``app.organisation_id`` context,
             so those tables fail-closed to zero rows and the rotation silently

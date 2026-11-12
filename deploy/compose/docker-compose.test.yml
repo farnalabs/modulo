@@ -2,15 +2,15 @@ services:
   db-test:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: modulo_test
-      POSTGRES_PASSWORD: modulo_test
-      POSTGRES_DB: modulo_test
+      POSTGRES_USER: farna_control_test
+      POSTGRES_PASSWORD: farna_control_test
+      POSTGRES_DB: farna_control_test
     ports:
       - "127.0.0.1:5433:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U modulo_test"]
+      test: ["CMD-SHELL", "pg_isready -U farna_control_test"]
       interval: 2s
       timeout: 5s
       retries: 10

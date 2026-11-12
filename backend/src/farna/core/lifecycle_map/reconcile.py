@@ -37,7 +37,7 @@ reconciled run is a no-op — the sweep is idempotent.
 
 FAIL-OPEN per run: a per-run advance failure is logged and counted in the
 returned error tally — one bad run never aborts the sweep. The caller owns
-the session and its transaction; the system cron uses the modulo_system role
+the session and its transaction; the system cron uses the farna_control_system role
 (LOGIN, BYPASSRLS) for cross-org access, and the stage lookup inside
 ``advance_journeys`` is explicitly org-filtered.
 

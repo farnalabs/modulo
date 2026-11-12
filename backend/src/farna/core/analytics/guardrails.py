@@ -23,7 +23,7 @@ FAR-218 (deferred); this module deliberately does not build one — every rate
 is labelled advisory and returned alongside a note stating it is not a gate.
 
 Isolation invariant (same as the rest of ``modulo.core.analytics``):
-``modulo_app`` is NOBYPASSRLS (tenant isolation relies on RLS policies) and the
+``farna_control_app`` is NOBYPASSRLS (tenant isolation relies on RLS policies) and the
 ORM tenant filter is NOT registered on
 Postgres, so every statement carries an explicit ``organisation_id`` predicate
 — that predicate is the PRIMARY isolation control (RLS also enforces org

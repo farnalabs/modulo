@@ -4,7 +4,7 @@ The CI regression gate = the boot-time allow-list assertion + the connectivity
 smoke that fails boot when ENABLED AND boot-failure-mode=fail. Tagged
 ``breakglass_gate`` and run by the ``break-glass-deploy-gate`` CI job against
 testcontainers Postgres with the PRODUCTION ``bootstrap_role.py`` (the
-session-scoped conftest provisions modulo_app / modulo_breakglass / modulo_migrate
+session-scoped conftest provisions farna_control_app / farna_control_breakglass / farna_control_migrate
 and runs bootstrap BEFORE and AFTER alembic upgrade heads).
 
 The boot-gate contract under test (break-glass plan §3, "Deploy gate = acceptance
@@ -80,9 +80,7 @@ async def _boot_gate(
                 await asyncio.sleep(backoffs[attempt])
     else:
         if mode == "fail":
-            raise _BootGateError(
-                f"connectivity probe failed after {attempts} attempts (backoff {backoffs}): {last_error}"
-            ) from last_error
+            raise _BootGateError(f"connectivity probe failed after {attempts} attempts (backoff {backoffs}): {last_error}") from last_error
 
     violations = await allow_list_violations()
     if violations:
@@ -102,8 +100,8 @@ async def test_clean_boot_passes_allow_list_assertion(migrated_db_url: str) -> N
     """A clean post-bootstrap config passes every boot-time assertion."""
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert not await _find_allow_list_violations(conn, "modulo_app")
-        await _assert_role_posture(conn, "modulo_app")  # must not raise
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
+        await _assert_role_posture(conn, "farna_control_app")  # must not raise
     finally:
         await conn.close()
 
@@ -118,17 +116,17 @@ async def test_rogue_table_level_grant_fails_boot(migrated_db_url: str) -> None:
     """
     conn = await _pg_connect(migrated_db_url)
     try:
-        assert not await _find_allow_list_violations(conn, "modulo_app")
-        await conn.execute("GRANT UPDATE ON public.accounts TO modulo_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
+        await conn.execute("GRANT UPDATE ON public.accounts TO farna_control_app")
         try:
-            violations = await _find_allow_list_violations(conn, "modulo_app")
-            assert any("table-level" in v and "modulo_app" in v for v in violations), violations
+            violations = await _find_allow_list_violations(conn, "farna_control_app")
+            assert any("table-level" in v and "farna_control_app" in v for v in violations), violations
             with pytest.raises(RuntimeError, match="Break-glass role posture assertion FAILED"):
-                await _assert_role_posture(conn, "modulo_app")
+                await _assert_role_posture(conn, "farna_control_app")
         finally:
-            await conn.execute("REVOKE UPDATE ON public.accounts FROM modulo_app")
-            await _apply_accounts_allow_list(conn, "modulo_app")
-        assert not await _find_allow_list_violations(conn, "modulo_app")
+            await conn.execute("REVOKE UPDATE ON public.accounts FROM farna_control_app")
+            await _apply_accounts_allow_list(conn, "farna_control_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
     finally:
         await conn.close()
 
@@ -137,21 +135,21 @@ async def test_rogue_rolsuper_and_privileged_membership_fail_boot(migrated_db_ur
     """Positive control: a superuser app role and privileged-role membership fail boot."""
     conn = await _pg_connect(migrated_db_url)
     try:
-        await conn.execute("ALTER ROLE modulo_app SUPERUSER")
+        await conn.execute("ALTER ROLE farna_control_app SUPERUSER")
         try:
-            violations = await _find_allow_list_violations(conn, "modulo_app")
+            violations = await _find_allow_list_violations(conn, "farna_control_app")
             assert any("superuser" in v for v in violations), violations
         finally:
-            await conn.execute("ALTER ROLE modulo_app NOSUPERUSER")
+            await conn.execute("ALTER ROLE farna_control_app NOSUPERUSER")
 
-        await conn.execute("GRANT modulo_migrate TO modulo_app")
+        await conn.execute("GRANT farna_control_migrate TO farna_control_app")
         try:
-            violations = await _find_allow_list_violations(conn, "modulo_app")
+            violations = await _find_allow_list_violations(conn, "farna_control_app")
             assert any("member of" in v for v in violations), violations
         finally:
-            await conn.execute("REVOKE modulo_migrate FROM modulo_app")
+            await conn.execute("REVOKE farna_control_migrate FROM farna_control_app")
 
-        assert not await _find_allow_list_violations(conn, "modulo_app")
+        assert not await _find_allow_list_violations(conn, "farna_control_app")
     finally:
         await conn.close()
 
@@ -162,7 +160,7 @@ def test_allow_list_constant_is_the_eleven_writable_columns() -> None:
     ``must_change_password`` is app-writable: the admin create-user /
     reset-password routes set it true and the forced-change flow clears it
     (me.py), so its omission denied those UPDATEs on every deployment whose
-    ``modulo_app`` role carries the column allow-list (the staging @regression
+    ``farna_control_app`` role carries the column allow-list (the staging @regression
     create-user 501).
     """
     assert tuple(sorted(ACCOUNTS_WRITABLE_COLUMNS)) == (
@@ -244,7 +242,7 @@ async def test_transient_vs_fatal_discriminator() -> None:
 
     async def violations() -> list[str]:
         assertion_calls.append(1)
-        return ["accounts has a table-level UPDATE grant for: modulo_app"]
+        return ["accounts has a table-level UPDATE grant for: farna_control_app"]
 
     async def ok_probe() -> None:
         return None
@@ -284,7 +282,7 @@ async def test_db_reachable_but_allow_list_violation_fails_boot(migrated_db_url:
                 raise ConnectionError(f"SELECT 1 returned {value!r}")
 
         async def violations() -> list[str]:
-            return await _find_allow_list_violations(conn, "modulo_app")
+            return await _find_allow_list_violations(conn, "farna_control_app")
 
         await conn.execute("GRANT UPDATE ON public.accounts TO PUBLIC")
         try:

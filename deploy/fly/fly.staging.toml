@@ -104,7 +104,7 @@ kill_timeout = 180
   # keeping app.modulo.run alerting (same value as fly.toml).
   ALERT_ENVIRONMENTS = "production"
   # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
-  # derives it from DATABASE_URL with the modulo_system role (LOGIN, BYPASSRLS)
+  # derives it from DATABASE_URL with the farna_control_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.
   MODULO_PUBLIC_URL = "https://staging.modulo.run"
   MODULO_PLUGIN_DISCOVERY = "false"

@@ -9,7 +9,7 @@ transaction to the caller's current org would silently skip cross-org families a
 leave stale refresh tokens live after a password change (a token-invalidation gap).
 
 Drives the real ``change_password`` handler against a NOBYPASSRLS role (the
-production ``modulo_app`` scenario) and asserts every family ends up blacklisted.
+production ``farna_control_app`` scenario) and asserts every family ends up blacklisted.
 
 Requires a real Postgres (Testcontainers) — see conftest. The unit tests mock the
 CRUD so they cannot catch the RLS-scoping regression; only a real Postgres path can.
@@ -39,7 +39,7 @@ _NEW_PW = "new-strong-password-42"
 async def rls_session(app_engine: AsyncEngine) -> AsyncSession:
     """Session whose connections run as a NOBYPASSRLS role, so RLS applies.
 
-    Mirrors production where the app connects as ``modulo_app`` (NOBYPASSRLS).
+    Mirrors production where the app connects as ``farna_control_app`` (NOBYPASSRLS).
     The handler establishes its own org context for the audit write; the
     token-family reads intentionally run with the org context unset.
     """
@@ -68,8 +68,7 @@ async def _create_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUI
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :pw, 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :pw, 'local', true)",
             ),
             {
                 "id": str(account_id),
@@ -80,8 +79,7 @@ async def _create_account(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUI
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -93,8 +91,7 @@ async def _create_family(db_engine: AsyncEngine, account_id: uuid.UUID, org_id: 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) "
-                "VALUES (:fid, :aid, :oid, 0, false)",
+                "INSERT INTO token_families (family_id, account_id, organisation_id, max_sequence, is_blacklisted) VALUES (:fid, :aid, :oid, 0, false)",
             ),
             {
                 "fid": str(family_id),

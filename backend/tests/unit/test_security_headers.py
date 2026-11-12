@@ -16,7 +16,7 @@ from farna.settings import Settings
 
 class TestSecurityHeadersMiddleware:
     def test_default_csp_contains_expected_sources_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
@@ -30,7 +30,7 @@ class TestSecurityHeadersMiddleware:
             assert "connect-src" in middleware._csp
 
     def test_ws_wss_absent_in_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "false")
@@ -44,7 +44,7 @@ class TestSecurityHeadersMiddleware:
             assert "connect-src" in middleware._csp
 
     def test_custom_domains_included_in_csp(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv(
@@ -59,7 +59,7 @@ class TestSecurityHeadersMiddleware:
             assert "*.ingest.sentry.io" in middleware._csp
 
     def test_multiple_custom_domains_in_csp(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv(
@@ -74,7 +74,7 @@ class TestSecurityHeadersMiddleware:
             assert "https://sentry.mycompany.com" in middleware._csp
 
     def test_empty_domains_omits_custom_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("FARNA_CONTROL_MODULO_MONITOR_DOMAINS", "")
@@ -85,7 +85,7 @@ class TestSecurityHeadersMiddleware:
             assert "https://" not in middleware._csp or middleware._csp.count("https://") == 0
 
     def test_csp_contains_default_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
@@ -104,7 +104,7 @@ class TestSecurityHeadersMiddleware:
             assert "form-action 'self'" in middleware._csp
 
     def test_upgrade_insecure_requests_absent_in_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "true")
@@ -115,7 +115,7 @@ class TestSecurityHeadersMiddleware:
             assert "upgrade-insecure-requests" not in middleware._csp
 
     def test_upgrade_insecure_requests_present_in_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://modulo:modulo@localhost:5432/farna_control")
         monkeypatch.setenv("SECRET_KEY", "a" * 32)
         monkeypatch.setenv("FERNET_KEY", "a" * 32)
         monkeypatch.setenv("DEBUG", "false")

@@ -41,7 +41,7 @@ _MIN_KEY_LEN = 32
 # session-scoped — they release when the acquiring DB session ends and
 # acquire/release must share one connection in a single transaction.  This
 # lock must outlive the HTTP request and be held by a background task that runs
-# on its own modulo_system session, so a session-scoped advisory lock cannot
+# on its own farna_control_system session, so a session-scoped advisory lock cannot
 # span it.  The Redis key is schema-level (SET NX + TTL) and self-heals.
 _ROTATION_LOCK_KEY = "modulo:fernet_rotation:lock"
 _ROTATION_LOCK_TTL_SECONDS = 1800  # 30 minutes — generous for large orgs
@@ -126,7 +126,7 @@ async def rotate_key(
 
     old_key = req.old_fernet_key or settings.fernet_key
 
-    # Rotation runs cross-org on the modulo_system (BYPASSRLS) role. If that
+    # Rotation runs cross-org on the farna_control_system (BYPASSRLS) role. If that
     # role is not provisioned (MODULO_SYSTEM_DATABASE_URL empty) the system
     # session factory silently falls back to the NOBYPASSRLS app role, which
     # makes the rotation a zero-row no-op. Refuse loudly rather than
@@ -134,7 +134,7 @@ async def rotate_key(
     if not settings.modulo_system_database_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=("Fernet key rotation is unavailable: the modulo_system role is not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."),
+            detail=("Fernet key rotation is unavailable: the farna_control_system role is not provisioned (MODULO_SYSTEM_DATABASE_URL is unset)."),
         )
 
     # Cross-process atomic guard: Redis SET NX + TTL.  The asyncio.Lock
@@ -345,8 +345,8 @@ async def _run_rotation_background(
     """Run the full rotation in the background and store the result.
 
     Rotation is inherently cross-org ("rotate all encrypted data"), so it runs on
-    the ``modulo_system`` cross-org session factory (BYPASSRLS). The app role
-    ``modulo_app`` is NOBYPASSRLS: on the org-scoped tables (``secrets``,
+    the ``farna_control_system`` cross-org session factory (BYPASSRLS). The app role
+    ``farna_control_app`` is NOBYPASSRLS: on the org-scoped tables (``secrets``,
     ``connector_instances``, ``model_backends``, ``notification_endpoints``) the
     ``rls_org_isolation`` policy compares ``organisation_id`` against
     ``app.organisation_id``, which is empty here — so the UPDATEs fail-closed to
@@ -358,7 +358,7 @@ async def _run_rotation_background(
     settings = get_settings()
 
     try:
-        # Defensive guard: if the modulo_system role is unprovisioned, the system
+        # Defensive guard: if the farna_control_system role is unprovisioned, the system
         # factory silently falls back to the NOBYPASSRLS app role and the rotation
         # becomes a zero-row no-op (the exact bug this fix prevents). Refuse loudly
         # instead of reporting a hollow "completed" with 0 rows.
@@ -369,7 +369,7 @@ async def _run_rotation_background(
             )
             _last_rotation_result = {
                 "status": "failed",
-                "error": ("modulo_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); rotation refused to avoid a silent no-op."),
+                "error": ("farna_control_system role unprovisioned (MODULO_SYSTEM_DATABASE_URL unset); rotation refused to avoid a silent no-op."),
             }
             return
 

@@ -1,7 +1,7 @@
 """Retention-driven garbage collection for the artifact store (FAR-811).
 
 Runs from ``saq_worker.retention_cleanup`` under the system role
-(``modulo_system``, BYPASSRLS) so the run-existence lookups are not RLS-filtered
+(``farna_control_system``, BYPASSRLS) so the run-existence lookups are not RLS-filtered
 per organisation.  It scans the on-disk artifact store for run directories
 whose run no longer exists in ``runs`` and deletes their files, so retained
 FAR-811 full-transcript artifacts (and stale FAR-582 side-cars) are removed by

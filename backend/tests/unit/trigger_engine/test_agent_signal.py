@@ -445,9 +445,7 @@ class TestFireAgentSignal:
         assert len(results) == 1
         assert results[0]["status"] == "error"
         assert results[0]["reason"] == "create_run_failed"
-        assert any(
-            getattr(c[0][0], "validation_result", None) == "validation_failed" for c in mock_session.add.call_args_list
-        )
+        assert any(getattr(c[0][0], "validation_result", None) == "validation_failed" for c in mock_session.add.call_args_list)
 
     async def test_create_run_cancelled_error_propagates(
         self,
@@ -489,9 +487,7 @@ class TestFireAgentSignal:
             source_node_id="my-node",
         )
         _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
-        mock_create_run.side_effect = TriggersPausedError(
-            trigger_id=trigger.id, org_id=org_id, trigger_type="agent_signal"
-        )
+        mock_create_run.side_effect = TriggersPausedError(trigger_id=trigger.id, org_id=org_id, trigger_type="agent_signal")
 
         results = await fire_agent_signal(
             mock_session,
@@ -811,7 +807,7 @@ async def test_log_signal_event_sanitizes_error_detail(mock_session: MagicMock) 
         trigger,
         uuid.uuid4(),
         result="validation_failed",
-        error_detail="create run failed postgresql://user:supersecret@db.example/modulo",
+        error_detail="create run failed postgresql://user:pass@host:5432/farna_control",
     )
 
     assert "supersecret" not in event.error_detail

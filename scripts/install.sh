@@ -49,12 +49,12 @@
 #   3. The swap itself reuses the versioned dir + `current` symlink
 #      primitive from step 3 above; the PATH shim never changes.
 #
-# Migrating from Docker Compose (pg_dump -> `modulo restore`):
+# Migrating from Docker Compose (pg_dump -> `farna-control restore`):
 #   docker compose exec postgres pg_dump -U modulo --clean --if-exists \
 #            --no-owner --no-acl modulo > modulo-backup.sql
 #   docker compose down
 #   bash modulo-install.sh            # fresh native install
-#   modulo restore <backup-dir> --data-dir <fresh-data-dir> --yes
+#   farna-control restore <backup-dir> --data-dir <fresh-data-dir> --yes
 #   (or restore the SQL directly: pg_restore-free plain SQL is replayed via
 #   psql by the backup CLI). The compose cluster is alpine/musl and the
 #   native one is glibc — the restore hard-warns on collation-version drift
@@ -518,7 +518,7 @@ run_pre_upgrade_dump() {
   [[ -d "${snapshot_path}" ]] || die "pre-upgrade pg_dump succeeded but the snapshot path is missing: '${snapshot_path}'"
   UPGRADE_SNAPSHOT_PATH="${snapshot_path}"
   info "Pre-upgrade snapshot verified: ${UPGRADE_SNAPSHOT_PATH}"
-  info "  Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
+  info "  Restore later with: farna-control restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
 }
 
 resolve_latest_tag() {
@@ -896,7 +896,7 @@ if [[ -f "${DATA_DIR}/state.json" ]]; then
       if [[ -n "${newest_snapshot}" ]]; then
         UPGRADE_SNAPSHOT_PATH="${newest_snapshot}"
         info "Newest pre-upgrade snapshot found in ${DATA_DIR}: ${UPGRADE_SNAPSHOT_PATH}"
-        info "Restore later with: modulo restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
+        info "Restore later with: farna-control restore ${UPGRADE_SNAPSHOT_PATH} --data-dir ${DATA_DIR} --yes"
       else
         info "No pre-upgrade snapshot directory found in ${DATA_DIR} — verify manually that a snapshot exists before continuing."
       fi
