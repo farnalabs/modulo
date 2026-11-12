@@ -174,9 +174,7 @@ def test_generate_schema_threads_session_into_model_backend(client: TestClient) 
     # must build the secrets backend with the DB session — this is the exact
     # regression the PR-Reviewer MAJOR flagged for schemas.py:1073.
     assert captured_backends, "ModelBackendHub.initialise was never called"
-    assert all(b is not None and getattr(b, "_session", None) is not None for b in captured_backends), (
-        "model-backend secrets backend must carry the DB session"
-    )
+    assert all(b is not None and getattr(b, "_session", None) is not None for b in captured_backends), "model-backend secrets backend must carry the DB session"
 
 
 def test_generate_schema_threads_session_into_model_backend_decrypt(client: TestClient) -> None:
@@ -224,19 +222,14 @@ def test_generate_schema_threads_session_into_model_backend_decrypt(client: Test
 
     assert resp.status_code == 200
     assert backend_sessions, "ModelBackendHub must receive a secrets backend for the model-backend decrypt"
-    assert all(s is not None for s in backend_sessions), (
-        "model-backend decrypt secrets backend must carry the DB session, or credentials never decrypt"
-    )
+    assert all(s is not None for s in backend_sessions), "model-backend decrypt secrets backend must carry the DB session, or credentials never decrypt"
     # ORG-SCOPE AT DECRYPT (MAJOR regression): the decrypt is the only secrets
     # backend built by the generate path. It must re-assert the org scope AFTER
     # building that backend (the endpoint-context loader scope is transaction-
     # local and gone once it commits). A missing re-assert leaves no set_rls_org
     # call after the final backend build.
     last_backend_build = next(i for i, (kind, _) in reversed(list(enumerate(events))) if kind == "create_backend")
-    assert any(kind == "rls" and org == _ORG_ID for i, (kind, org) in enumerate(events) if i > last_backend_build), (
-        "model-backend decrypt must re-assert the org scope (set_rls_org) in the same "
-        "transaction as the credential decrypt"
-    )
+    assert any(kind == "rls" and org == _ORG_ID for i, (kind, org) in enumerate(events) if i > last_backend_build), "model-backend decrypt must re-assert the org scope (set_rls_org) in the same transaction as the credential decrypt"
     # Sanity: the endpoint-context loader re-assert happens before the build.
     assert mock_rls.call_count >= 2
 

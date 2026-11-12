@@ -393,10 +393,7 @@ class TestQualifiedUpsertRegression:
 
     def test_do_update_arm_column_refs_are_table_qualified(self) -> None:
         bare = _bare_column_refs_in_do_update_arm(str(_ADVANCE_SQL))
-        assert bare == [], (
-            "FAR-622: _ADVANCE_SQL's DO UPDATE SET arm contains bare target-table "
-            f"column references (Postgres 17 raises AmbiguousColumnError): {bare}"
-        )
+        assert bare == [], f"FAR-622: _ADVANCE_SQL's DO UPDATE SET arm contains bare target-table column references (Postgres 17 raises AmbiguousColumnError): {bare}"
 
 
 class TestEvidenceTimestampBind:
@@ -452,9 +449,7 @@ class TestNonAdvancing:
         assert journey.updated_at == _T1
 
     @pytest.mark.parametrize("status", ["cancelled", "stalled"])
-    async def test_cancelled_or_stalled_mints_missing_journey_without_evidence(
-        self, session: AsyncSession, status: str
-    ) -> None:
+    async def test_cancelled_or_stalled_mints_missing_journey_without_evidence(self, session: AsyncSession, status: str) -> None:
         advanced = await _advance(session, status=status, completed_at=_T2)
         assert advanced == 0
 
@@ -579,9 +574,7 @@ class TestStageResolution:
         await _seed_journey(session, latest_terminal_run_id=uuid.uuid4(), run_count=1, updated_at=_T1)
 
         run_id = uuid.uuid4()
-        advanced = await _advance(
-            session, run_id=run_id, pipeline_id=_MAP_PIPELINE, status="complete", completed_at=_T2
-        )
+        advanced = await _advance(session, run_id=run_id, pipeline_id=_MAP_PIPELINE, status="complete", completed_at=_T2)
         assert advanced == 1
 
         journey = await _read_journey(session)
@@ -866,9 +859,7 @@ class TestFinalizeJourneyHook:
         assert refs == [{"kind": "github_pr", "ref": "123", "source": "derived"}]
         assert await _read_journey_by_kind(session, "github_pr", "789") is None
 
-    async def test_fail_open_logs_and_does_not_raise(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_fail_open_logs_and_does_not_raise(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
         run_id = run.id
 
@@ -980,9 +971,7 @@ class TestAgentMintFlagFinalize:
         assert agent_counts["minted"] == 0
         assert agent_counts["suppressed"] == 1
 
-    async def test_confirmed_agent_claim_advances_even_when_flag_off(
-        self, session: AsyncSession, agent_counts: dict
-    ) -> None:
+    async def test_confirmed_agent_claim_advances_even_when_flag_off(self, session: AsyncSession, agent_counts: dict) -> None:
         """Flag OFF preserves today's confirmed-claim behaviour: an agent ref
         confirmed against a PRE-EXISTING journey still advances (evidence +
         run_count), and is NOT counted as a suppressed mint (the row exists)."""
@@ -1032,9 +1021,7 @@ class TestAgentMintFlagFinalize:
 class TestFinalizeCostWiring:
     """finalize_cost fires the hook on the terminal paths."""
 
-    async def test_early_return_terminal_advances_from_stamped_refs(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_early_return_terminal_advances_from_stamped_refs(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_finalize_machinery(monkeypatch)
         run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
         run_id = run.id
@@ -1053,9 +1040,7 @@ class TestFinalizeCostWiring:
         assert journey.latest_terminal_run_id == run_id
         assert journey.run_count == 1
 
-    async def test_main_path_confirms_self_report_and_advances(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_main_path_confirms_self_report_and_advances(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_finalize_machinery(monkeypatch)
         run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
         run_id = run.id
@@ -1073,9 +1058,7 @@ class TestFinalizeCostWiring:
             org_id=_ORG,
             status="complete",
             segment_node_token_usage={"node1": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}},
-            segment_completed_node_outputs={
-                "node1": {"output": {"work_item_refs": [{"kind": "github_pr", "ref": "#456", "status": "done"}]}}
-            },
+            segment_completed_node_outputs={"node1": {"output": {"work_item_refs": [{"kind": "github_pr", "ref": "#456", "status": "done"}]}}},
             node_type_map={},
             is_terminal=True,
         )
@@ -1089,9 +1072,7 @@ class TestFinalizeCostWiring:
         assert journey is not None
         assert journey.latest_terminal_run_id == run_id
 
-    async def test_hook_failure_never_blocks_terminal_write(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_hook_failure_never_blocks_terminal_write(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         _patch_finalize_machinery(monkeypatch)
 
         async def _boom(*_a: Any, **_k: Any) -> int:
@@ -1126,9 +1107,7 @@ class TestJourneyFactsDenominators:
         await _seed_journey_by_kind(session, "github_pr", "456")
         captured: dict[str, Any] = {}
 
-        async def _fake_fact(
-            session_: Any, run_: Any, writer: str, parse_failures: int, finalise_attempts: int
-        ) -> None:
+        async def _fake_fact(session_: Any, run_: Any, writer: str, parse_failures: int, finalise_attempts: int) -> None:
             captured.update(writer=writer, parse_failures=parse_failures, finalise_attempts=finalise_attempts)
 
         monkeypatch.setattr(

@@ -244,10 +244,7 @@ class _CallRecorder:
 
         assert enforcement_idx is not None, f"enforcement_insert never called; call log: {self.calls}"
         assert terminal_idx is not None, f"terminal_update never called; call log: {self.calls}"
-        assert enforcement_idx < terminal_idx, (
-            f"enforcement_write (idx={enforcement_idx}) must precede "
-            f"terminal_update (idx={terminal_idx}); full log: {self.calls}"
-        )
+        assert enforcement_idx < terminal_idx, f"enforcement_write (idx={enforcement_idx}) must precede terminal_update (idx={terminal_idx}); full log: {self.calls}"
 
 
 def _classify_statement(stmt: Any) -> str:
@@ -465,9 +462,7 @@ class TestTerminalFailureEnforcementRecord:
         """A plain ``ValueError`` (no FAR-902 context) builds no record."""
         from farna.core.pipeline_engine.node_runner import _build_error_enforcement_record
 
-        assert (
-            _build_error_enforcement_record(ValueError("unrelated"), resolved_profile=None, native_output=False) is None
-        )
+        assert _build_error_enforcement_record(ValueError("unrelated"), resolved_profile=None, native_output=False) is None
 
     @pytest.mark.asyncio
     async def test_persist_helper_noops_without_record(self) -> None:

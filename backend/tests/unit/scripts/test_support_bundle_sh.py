@@ -357,9 +357,7 @@ class TestStackDown:
         lines = proc.stdout.strip().splitlines()
         assert lines[0].startswith("modulo support bundle 1 ref=MSB-1-")
         assert lines[1].startswith(f"bundle: {out} (")
-        assert lines[2] == (
-            "Log tails were withheld because redaction via farna.support.bundle was unavailable (3 service(s))."
-        )
+        assert lines[2] == ("Log tails were withheld because redaction via farna.support.bundle was unavailable (3 service(s)).")
         assert "before sending" in lines[3]
 
     def test_app_failure_reason_is_recorded_not_swallowed(self, tmp_path: Path) -> None:

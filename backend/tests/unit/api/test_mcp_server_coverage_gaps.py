@@ -743,9 +743,7 @@ class TestVerifyTokenFamilyAndScopeHelpers(_AuthContext):
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=None)
         with patch.object(ms, "_session", return_value=_make_session_context(session)):
-            result = await _node_allowed_tools_for_key(
-                org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1"
-            )
+            result = await _node_allowed_tools_for_key(org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1")
         assert result is None
 
     async def test_node_allowed_tools_none_when_snapshot_missing(self) -> None:
@@ -753,9 +751,7 @@ class TestVerifyTokenFamilyAndScopeHelpers(_AuthContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=uuid.uuid4())
         session.get.return_value = None
         with patch.object(ms, "_session", return_value=_make_session_context(session)):
-            result = await _node_allowed_tools_for_key(
-                org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1"
-            )
+            result = await _node_allowed_tools_for_key(org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1")
         assert result is None
 
     async def test_node_allowed_tools_none_when_node_not_in_graph(self) -> None:
@@ -765,18 +761,14 @@ class TestVerifyTokenFamilyAndScopeHelpers(_AuthContext):
         session.execute.return_value = _make_execute_result(scalar_one_or_none=uuid.uuid4())
         session.get.return_value = snapshot
         with patch.object(ms, "_session", return_value=_make_session_context(session)):
-            result = await _node_allowed_tools_for_key(
-                org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1"
-            )
+            result = await _node_allowed_tools_for_key(org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1")
         assert result is None
 
     async def test_node_allowed_tools_swallows_db_error(self) -> None:
         session = _mock_session()
         session.execute.side_effect = SQLAlchemyError("down")
         with patch.object(ms, "_session", return_value=_make_session_context(session)):
-            result = await _node_allowed_tools_for_key(
-                org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1"
-            )
+            result = await _node_allowed_tools_for_key(org_id=_ORG_ID, run_id=uuid.uuid4(), key_name="run:abc:node:node-1")
         assert result is None
 
     def test_parse_basic_auth_header_malformed(self) -> None:
@@ -794,9 +786,7 @@ class TestVerifyTokenFamilyAndScopeHelpers(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
-def _make_starlette_request(
-    *, method: str = "GET", path: str = "/", headers: dict | None = None, query: bytes = b"", body: bytes = b""
-) -> Any:
+def _make_starlette_request(*, method: str = "GET", path: str = "/", headers: dict | None = None, query: bytes = b"", body: bytes = b"") -> Any:
     from starlette.requests import Request
 
     raw_headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
@@ -833,9 +823,7 @@ class TestOauthAuthorizeHandler:
 
         return _make_starlette_request(path="/mcp/oauth/authorize", query=urlencode(params).encode())
 
-    async def _call(
-        self, params: dict[str, str] | None = None, patches: dict[str, dict[str, Any]] | None = None
-    ) -> Any:
+    async def _call(self, params: dict[str, str] | None = None, patches: dict[str, dict[str, Any]] | None = None) -> Any:
         patches = patches or {}
         params = params if params is not None else self._VALID_PARAMS
         request = self._request(params)
@@ -862,9 +850,7 @@ class TestOauthAuthorizeHandler:
         assert response.status_code == 400
 
     async def test_settings_error_when_public_url_missing(self) -> None:
-        response = await self._call(
-            patches={"farna.api.mcp_server.get_settings": {"return_value": MagicMock(modulo_public_url=None)}}
-        )
+        response = await self._call(patches={"farna.api.mcp_server.get_settings": {"return_value": MagicMock(modulo_public_url=None)}})
         assert response.status_code == 500
 
     async def test_unknown_client(self) -> None:
@@ -1353,9 +1339,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("farna.settings.get_settings", return_value=settings),
-            patch(
-                "farna.db.crud.model_backend.list_model_backends", side_effect=ProgrammingError("s", {}, Exception())
-            ),
+            patch("farna.db.crud.model_backend.list_model_backends", side_effect=ProgrammingError("s", {}, Exception())),
         ):
             result = await infer_schema(input_sample={"a": 1})
         assert result["error"] == "migration_required"
@@ -1606,9 +1590,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
-            patch(
-                "farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
-            ),
+            patch("farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())),
         ):
             result = await create_secret(key="k", value="v")
         assert result["error"] == "migration_required"
@@ -1634,9 +1616,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("farna.settings.get_settings", return_value=MagicMock(fernet_key="k")),
-            patch(
-                "farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())
-            ),
+            patch("farna.core.secrets_backend.create_secrets_backend", side_effect=ProgrammingError("s", {}, Exception())),
         ):
             result = await delete_secret(key="k")
         assert result["error"] == "migration_required"
@@ -1991,9 +1971,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
 class TestBindConnectorToNode(_AuthContext):
     async def test_auth_expired(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
-            result = await bind_connector_to_node(
-                pipeline_id=str(uuid.uuid4()), node_id="n", connector_type="t", connector_instance_id=str(uuid.uuid4())
-            )
+            result = await bind_connector_to_node(pipeline_id=str(uuid.uuid4()), node_id="n", connector_type="t", connector_instance_id=str(uuid.uuid4()))
         assert result["error"] == "auth_expired"
 
     @pytest.mark.parametrize(
@@ -2051,9 +2029,7 @@ class TestBindConnectorToNode(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "check_tool_scope", side_effect=MCPAuthorizationError("no")),
         ):
-            result = await bind_connector_to_node(
-                pipeline_id=str(uuid.uuid4()), node_id="n", connector_type="t", connector_instance_id=str(uuid.uuid4())
-            )
+            result = await bind_connector_to_node(pipeline_id=str(uuid.uuid4()), node_id="n", connector_type="t", connector_instance_id=str(uuid.uuid4()))
         assert result["error"] == "insufficient_scope"
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
@@ -2264,9 +2240,7 @@ class TestBindConnectorEditSnapshot(_AuthContext):
 class TestTriggerPipelinePaths(_AuthContext):
     async def test_create_manual_run_pipeline_not_found(self) -> None:
         with patch.object(ms, "get_pipeline", new=AsyncMock(return_value=None)):
-            run_id, _thread_id, err = await _create_manual_run(
-                _mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {}
-            )
+            run_id, _thread_id, err = await _create_manual_run(_mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {})
         assert run_id is None
         assert err is not None
         assert err["error"] == "pipeline_not_found"
@@ -2278,9 +2252,7 @@ class TestTriggerPipelinePaths(_AuthContext):
             patch.object(ms, "get_pipeline", new=AsyncMock(return_value=pipeline)),
             patch("farna.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new=AsyncMock(return_value=None)),
         ):
-            _run_id, _thread_id, err = await _create_manual_run(
-                _mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {}
-            )
+            _run_id, _thread_id, err = await _create_manual_run(_mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {})
         assert err is not None
         assert err["error"] == "snapshot_failed"
 
@@ -2296,9 +2268,7 @@ class TestTriggerPipelinePaths(_AuthContext):
                 new=AsyncMock(return_value=snapshot),
             ),
         ):
-            _run_id, _thread_id, err = await _create_manual_run(
-                _mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {}
-            )
+            _run_id, _thread_id, err = await _create_manual_run(_mock_session(), _ORG_ID, uuid.uuid4(), str(uuid.uuid4()), {})
         assert err is not None
         assert err["error"] == "validation_failed"
 
@@ -2430,16 +2400,12 @@ class TestEvalDefinitionTools(_AdminContext):
         # shell no longer accepts the parameter, so the call fails rather than
         # silently applying an unvalidated behaviour.
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", failure_behaviour="retry"
-            )
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", failure_behaviour="retry")
         assert result.get("error"), result
 
     async def test_create_rejects_bad_pass_threshold(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", pass_threshold=2.0
-            )
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", pass_threshold=2.0)
         assert result["error"] == "invalid_pass_threshold"
 
     async def test_create_rejects_invalid_pipeline_id(self) -> None:
@@ -2449,9 +2415,7 @@ class TestEvalDefinitionTools(_AdminContext):
 
     async def test_create_rejects_invalid_node_id(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="model_judge"
-            )
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="model_judge")
         assert result["error"] == "invalid_id"
 
     async def test_create_guardrail_validation_failure(self) -> None:
@@ -2462,9 +2426,7 @@ class TestEvalDefinitionTools(_AdminContext):
                 side_effect=StarletteHTTPException(422, "bad guardrail"),
             ),
         ):
-            result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), name="n", eval_type="guardrail", config_json={}
-            )
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="guardrail", config_json={})
         assert result["error"] == "validation_failed"
 
     async def test_create_pipeline_not_found(self) -> None:
@@ -2815,9 +2777,7 @@ class TestHitlHelpers(_AuthContext):
     async def test_dispatch_hitl_action_reject_with_reason(self) -> None:
         mgr = MagicMock()
         mgr.reject = AsyncMock(return_value=None)
-        result = await _dispatch_hitl_action(
-            mgr, _mock_session(), "reject", uuid.uuid4(), "gate", _ORG_ID, _USER_ID, "tok", None, "nope"
-        )
+        result = await _dispatch_hitl_action(mgr, _mock_session(), "reject", uuid.uuid4(), "gate", _ORG_ID, _USER_ID, "tok", None, "nope")
         assert result["status"] == "rejected"
         payload = mgr.reject.await_args.kwargs["decision_payload"]
         assert payload["reason"] == "nope"
@@ -2831,9 +2791,7 @@ class TestHitlHelpers(_AuthContext):
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "get_run", new=AsyncMock(return_value=None)),
         ):
-            result = await _review_hitl_impl(
-                run_id=str(uuid.uuid4()), review_id="gate", action="claim", claim_token=None, reason=None, output=None
-            )
+            result = await _review_hitl_impl(run_id=str(uuid.uuid4()), review_id="gate", action="claim", claim_token=None, reason=None, output=None)
         assert result["error"] == "review_not_found"
 
     async def test_review_impl_degenerate_parse(self) -> None:
@@ -2994,9 +2952,7 @@ class TestTriggerToolGaps(_AuthContext):
         session = _mock_session()
         session.get.return_value = pipeline
         with patch("farna.core.trigger_validation.validate_ongoing_config", return_value=None):
-            changed, err = await _validate_ongoing_trigger_update(
-                session, trigger, None, None, {"scan_interval_seconds": 90}, None, False
-            )
+            changed, err = await _validate_ongoing_trigger_update(session, trigger, None, None, {"scan_interval_seconds": 90}, None, False)
         assert changed is True
         assert err is None
 
@@ -3095,9 +3051,7 @@ class TestTriggerToolGaps(_AuthContext):
         cp.has_more = True
         paginator_cls.return_value.paginate = AsyncMock(return_value=cp)
         with patch("farna.db.crud.pagination.CursorPaginator", paginator_cls):
-            items, next_cursor, has_more = await _paginate_trigger_events(
-                _mock_session(), MagicMock(), cursor="abc", lim=10
-            )
+            items, next_cursor, has_more = await _paginate_trigger_events(_mock_session(), MagicMock(), cursor="abc", lim=10)
         assert len(items) == 1
         assert next_cursor == "cursor-token"
         assert has_more is True
@@ -3242,9 +3196,7 @@ class TestResourceGaps(_AuthContext):
         assert "release" in result
 
     def test_render_snapshot_node_line(self) -> None:
-        line = ms._render_snapshot_node_line(
-            {"id": "n1", "node_type": "agent", "agent_id": "a1", "prompt_template": "do things"}
-        )
+        line = ms._render_snapshot_node_line({"id": "n1", "node_type": "agent", "agent_id": "a1", "prompt_template": "do things"})
         assert "n1" in line
         assert "do things" in line
 
@@ -3583,9 +3535,7 @@ class TestRemainingAuthPathGaps(_AuthContext):
     def test_extract_refresh_credentials_malformed_basic_header(self) -> None:
         request = MagicMock()
         request.headers = {"Authorization": "Basic %%%not-base64%%%"}
-        creds, err = ms._extract_oauth_refresh_credentials(
-            request, {"grant_type": "refresh_token", "refresh_token": "r"}
-        )
+        creds, err = ms._extract_oauth_refresh_credentials(request, {"grant_type": "refresh_token", "refresh_token": "r"})
         assert not creds
         assert err is not None
 

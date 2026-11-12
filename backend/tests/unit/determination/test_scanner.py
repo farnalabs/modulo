@@ -111,9 +111,7 @@ def _stub_gitlab(*, projects: httpx.Response, mrs: httpx.Response | None = None)
     respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
     respx.get(f"{_GITLAB_API}/projects").mock(projects)
     respx.get(path__regex=r".*merge_requests.*").mock(mrs or httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
-    respx.get("https://gitlab.com/oauth/token/info").mock(
-        httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]})
-    )
+    respx.get("https://gitlab.com/oauth/token/info").mock(httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]}))
 
 
 @respx.mock

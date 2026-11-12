@@ -26,9 +26,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _RUN_ID = uuid.uuid4()
 
-_EXPECTED_410_DETAIL = (
-    "The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."
-)
+_EXPECTED_410_DETAIL = "The workspace lease API was removed; workspace state is tracked via the run's sandbox dispatch state."
 
 
 def _make_settings() -> Settings:

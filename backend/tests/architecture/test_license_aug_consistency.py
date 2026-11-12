@@ -104,10 +104,7 @@ def _expresses_hosted_carve_out(text: str) -> bool:
 
 
 def _carve_out_reaches_derivatives(text: str) -> bool:
-    return any(
-        _matches_any(window, _RESTRICTION_MARKERS) and _matches_any(window, _DERIVATIVE_WORKS)
-        for window in _windows_around(text, _HOSTED_PHRASES)
-    )
+    return any(_matches_any(window, _RESTRICTION_MARKERS) and _matches_any(window, _DERIVATIVE_WORKS) for window in _windows_around(text, _HOSTED_PHRASES))
 
 
 def _qualifies_the_hosted_restriction(text: str) -> bool:
@@ -120,9 +117,7 @@ def _qualifies_the_hosted_restriction(text: str) -> bool:
 
 
 def _carve_out_names_third_parties(text: str) -> bool:
-    return any(
-        re.search(_THIRD_PARTY_RECIPIENT, window, re.IGNORECASE) for window in _windows_around(text, _HOSTED_PHRASES)
-    )
+    return any(re.search(_THIRD_PARTY_RECIPIENT, window, re.IGNORECASE) for window in _windows_around(text, _HOSTED_PHRASES))
 
 
 _CONCEPT_CHECKS: dict[str, Callable[[str], bool]] = {
@@ -235,11 +230,7 @@ def test_artefact_expresses_the_substance_the_licence_grants(relative_path: str)
     required = _AUG_ARTEFACTS[relative_path]
     expressed = _expressed_concepts(_read(_REPO_ROOT / relative_path))
     missing = sorted(required - expressed)
-    assert not missing, (
-        f"{relative_path} does not express {missing} about the Additional Use Grant; "
-        "either update it to match LICENSE or drop the concept from the registry in "
-        f"{Path(__file__).name}"
-    )
+    assert not missing, f"{relative_path} does not express {missing} about the Additional Use Grant; either update it to match LICENSE or drop the concept from the registry in {Path(__file__).name}"
 
 
 @pytest.mark.parametrize("relative_path", sorted(_AUG_ARTEFACTS))
@@ -248,20 +239,11 @@ def test_artefact_does_not_claim_more_than_the_licence_grants(relative_path: str
     granted = _expressed_concepts(_licence_additional_use_grant())
     expressed = _expressed_concepts(_read(_REPO_ROOT / relative_path))
     overclaimed = sorted(expressed - granted)
-    assert not overclaimed, (
-        f"{relative_path} expresses {overclaimed}, which LICENSE's Additional Use Grant does not grant"
-    )
+    assert not overclaimed, f"{relative_path} expresses {overclaimed}, which LICENSE's Additional Use Grant does not grant"
 
 
 def test_every_doc_quoting_the_additional_use_grant_is_registered() -> None:
     """Structural anti-drift: a new doc that quotes the AUG must be checked."""
     registered = {_REPO_ROOT / path for path in _AUG_ARTEFACTS} | {_LICENCE}
-    unregistered = [
-        str(path.relative_to(_REPO_ROOT))
-        for path in _scanned_doc_paths()
-        if path not in registered and _AUG_MENTION.search(_read(path))
-    ]
-    assert not unregistered, (
-        f"these docs quote the Additional Use Grant but are not in _AUG_ARTEFACTS: "
-        f"{unregistered} - register each one so it is checked against LICENSE"
-    )
+    unregistered = [str(path.relative_to(_REPO_ROOT)) for path in _scanned_doc_paths() if path not in registered and _AUG_MENTION.search(_read(path))]
+    assert not unregistered, f"these docs quote the Additional Use Grant but are not in _AUG_ARTEFACTS: {unregistered} - register each one so it is checked against LICENSE"

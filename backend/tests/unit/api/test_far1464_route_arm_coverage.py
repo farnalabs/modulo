@@ -270,9 +270,7 @@ class _FakeRedisFactory:
 
 async def test_admin_tiers_arm_guard_session_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(admin_tiers, "Redis", _FakeRedisFactory)
-    await _assert_500(
-        admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=_RaisingSession())
-    )
+    await _assert_500(admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=_RaisingSession()))
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +280,7 @@ async def test_admin_tiers_arm_guard_session_contract(monkeypatch: pytest.Monkey
 
 async def test_admin_license_arm_guard_session_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(admin_license, "_read_license_cache", AsyncMock(return_value=None))
-    await _assert_500(
-        admin_license.get_license_status(
-            settings=_settings(), session=_RaisingSession(), current_user=_tenant(org_role="admin")
-        )
-    )
+    await _assert_500(admin_license.get_license_status(settings=_settings(), session=_RaisingSession(), current_user=_tenant(org_role="admin")))
 
 
 # ---------------------------------------------------------------------------
@@ -297,16 +291,8 @@ async def test_admin_license_arm_guard_session_contract(monkeypatch: pytest.Monk
 async def test_admin_email_arms_guard_session_contract() -> None:
     org_id = uuid.uuid4()
     await _assert_500(admin_email.admin_get_email_settings(org_id=org_id, _=_principal(), session=_RaisingSession()))
-    await _assert_500(
-        admin_email.admin_update_email_settings(
-            org_id=org_id, req=None, _=_principal(), session=_RaisingSession(), settings=_settings()
-        )
-    )
-    await _assert_500(
-        admin_email.admin_test_email_settings(
-            org_id=org_id, req=None, _=_principal(), session=_RaisingSession(), settings=_settings()
-        )
-    )
+    await _assert_500(admin_email.admin_update_email_settings(org_id=org_id, req=None, _=_principal(), session=_RaisingSession(), settings=_settings()))
+    await _assert_500(admin_email.admin_test_email_settings(org_id=org_id, req=None, _=_principal(), session=_RaisingSession(), settings=_settings()))
 
 
 async def test_admin_email_update_write_arm_guard_session_contract(
@@ -340,11 +326,7 @@ async def test_admin_email_update_write_arm_guard_session_contract(
 
 async def test_admin_feature_flags_arms_guard_session_contract() -> None:
     user = _principal()
-    await _assert_500(
-        admin_feature_flags.get_feature_flag(
-            flag_name="f", settings=_settings(), session=_RaisingSession(), current_user=user
-        )
-    )
+    await _assert_500(admin_feature_flags.get_feature_flag(flag_name="f", settings=_settings(), session=_RaisingSession(), current_user=user))
     await _assert_500(
         admin_feature_flags.toggle_feature_flag(
             flag_name="f",
@@ -354,9 +336,7 @@ async def test_admin_feature_flags_arms_guard_session_contract() -> None:
             current_user=user,
         )
     )
-    await _assert_500(
-        admin_feature_flags.get_org_flag_override(flag_name="f", current_user=user, session=_RaisingSession())
-    )
+    await _assert_500(admin_feature_flags.get_org_flag_override(flag_name="f", current_user=user, session=_RaisingSession()))
     await _assert_500(
         admin_feature_flags.set_org_flag_override(
             flag_name="f",
@@ -366,11 +346,7 @@ async def test_admin_feature_flags_arms_guard_session_contract() -> None:
             session=_RaisingSession(),
         )
     )
-    await _assert_500(
-        admin_feature_flags.clear_org_flag_override(
-            flag_name="f", settings=_settings(), current_user=user, session=_RaisingSession()
-        )
-    )
+    await _assert_500(admin_feature_flags.clear_org_flag_override(flag_name="f", settings=_settings(), current_user=user, session=_RaisingSession()))
 
 
 # ---------------------------------------------------------------------------
@@ -379,12 +355,8 @@ async def test_admin_feature_flags_arms_guard_session_contract() -> None:
 
 
 async def test_admin_orgs_arms_guard_session_contract() -> None:
-    await _assert_500(
-        admin_orgs.admin_set_org_license(org_id=uuid.uuid4(), req=None, _=_principal(), session=_RaisingSession())
-    )
-    await _assert_500(
-        admin_orgs.admin_remove_org_license(org_id=uuid.uuid4(), _=_principal(), session=_RaisingSession())
-    )
+    await _assert_500(admin_orgs.admin_set_org_license(org_id=uuid.uuid4(), req=None, _=_principal(), session=_RaisingSession()))
+    await _assert_500(admin_orgs.admin_remove_org_license(org_id=uuid.uuid4(), _=_principal(), session=_RaisingSession()))
 
 
 async def test_admin_orgs_set_license_inner_fetch_arm_guard_session_contract(
@@ -460,9 +432,7 @@ async def test_admin_notifications_arm_helpers_guard_session_contract() -> None:
     ep = MagicMock()
     resp = MagicMock()
     await _assert_500(admin_notifications._record_delivery_result(session, principal, delivery, ep, resp))
-    await _assert_500(
-        admin_notifications._record_delivery_error(session, principal, delivery, ep, RuntimeError("boom"))
-    )
+    await _assert_500(admin_notifications._record_delivery_error(session, principal, delivery, ep, RuntimeError("boom")))
 
 
 # ---------------------------------------------------------------------------
@@ -499,9 +469,7 @@ async def test_api_keys_arms_guard_session_contract() -> None:
     await _assert_500(api_keys._mint_api_key(_RaisingSession(), principal, "n", "admin", None, None, "org"))
     await _assert_500(api_keys.list_api_keys_endpoint(session=_RaisingSession(), principal=principal))
     await _assert_500(api_keys._apply_key_update(_RaisingSession(), uuid.uuid4(), principal, None, None, None, None))
-    await _assert_500(
-        api_keys.revoke_api_key_endpoint(key_id=uuid.uuid4(), session=_RaisingSession(), principal=principal)
-    )
+    await _assert_500(api_keys.revoke_api_key_endpoint(key_id=uuid.uuid4(), session=_RaisingSession(), principal=principal))
 
 
 # ---------------------------------------------------------------------------
@@ -523,9 +491,7 @@ async def test_audit_arms_guard_session_contract() -> None:
             principal=_tenant(),
         )
     )
-    await _assert_500(
-        audit.batch_detail_endpoint(req=SimpleNamespace(event_ids=[]), session=_RaisingSession(), principal=_tenant())
-    )
+    await _assert_500(audit.batch_detail_endpoint(req=SimpleNamespace(event_ids=[]), session=_RaisingSession(), principal=_tenant()))
 
 
 # ---------------------------------------------------------------------------
@@ -553,29 +519,11 @@ async def test_community_library_arm_guard_session_contract(monkeypatch: pytest.
 async def test_contributions_arms_guard_session_contract() -> None:
     principal = _tenant()
     await _assert_500(contributions.create_contribution(req=None, session=_RaisingSession(), principal=principal))
-    await _assert_500(
-        contributions.submit_for_review(primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal)
-    )
-    await _assert_500(
-        contributions.publish_contribution_endpoint(
-            primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal
-        )
-    )
-    await _assert_500(
-        contributions.submit_contribution_version_endpoint(
-            primitive_id=uuid.uuid4(), req=None, session=_RaisingSession(), principal=principal
-        )
-    )
-    await _assert_500(
-        contributions.list_contribution_versions_endpoint(
-            primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal
-        )
-    )
-    await _assert_500(
-        contributions.list_contributions_endpoint(
-            page=1, page_size=20, contribution_status=None, session=_RaisingSession(), principal=principal
-        )
-    )
+    await _assert_500(contributions.submit_for_review(primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal))
+    await _assert_500(contributions.publish_contribution_endpoint(primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal))
+    await _assert_500(contributions.submit_contribution_version_endpoint(primitive_id=uuid.uuid4(), req=None, session=_RaisingSession(), principal=principal))
+    await _assert_500(contributions.list_contribution_versions_endpoint(primitive_id=uuid.uuid4(), session=_RaisingSession(), principal=principal))
+    await _assert_500(contributions.list_contributions_endpoint(page=1, page_size=20, contribution_status=None, session=_RaisingSession(), principal=principal))
 
 
 # ---------------------------------------------------------------------------
@@ -584,9 +532,7 @@ async def test_contributions_arms_guard_session_contract() -> None:
 
 
 async def test_environment_profiles_arm_guard_session_contract() -> None:
-    await _assert_500(
-        environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=_RaisingSession(), principal=_tenant())
-    )
+    await _assert_500(environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=_RaisingSession(), principal=_tenant()))
 
 
 # ---------------------------------------------------------------------------
@@ -596,14 +542,8 @@ async def test_environment_profiles_arm_guard_session_contract() -> None:
 
 async def test_error_forwarder_config_arms_guard_session_contract() -> None:
     await _assert_500(error_forwarder_config._merge_stored_forwarder_config(_RaisingSession(), _ORG_ID, "sentry", {}))
-    await _assert_500(
-        error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=_RaisingSession(), principal=_tenant())
-    )
-    await _assert_500(
-        error_forwarder_config.restore_forwarder(
-            forwarder_type="sentry", session=_RaisingSession(), principal=_tenant()
-        )
-    )
+    await _assert_500(error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=_RaisingSession(), principal=_tenant()))
+    await _assert_500(error_forwarder_config.restore_forwarder(forwarder_type="sentry", session=_RaisingSession(), principal=_tenant()))
 
 
 # ---------------------------------------------------------------------------
@@ -628,14 +568,10 @@ async def test_mcp_oauth_arms_guard_session_contract(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(mcp_oauth, "normalize_redirect_uris", lambda uris: uris)
     principal = _tenant()
     req = SimpleNamespace(scopes=["read"], redirect_uris=["https://x/cb"], name="c")
-    await _assert_500(
-        mcp_oauth.register_oauth_client(req=req, session=_RaisingSession(), principal=principal, settings=_settings())
-    )
+    await _assert_500(mcp_oauth.register_oauth_client(req=req, session=_RaisingSession(), principal=principal, settings=_settings()))
     await _assert_500(mcp_oauth.list_oauth_clients_endpoint(session=_RaisingSession(), principal=principal))
     await _assert_500(mcp_oauth.remove_oauth_client(client_id="c", session=_RaisingSession(), principal=principal))
-    await _assert_500(
-        mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=_RaisingSession(), principal=principal)
-    )
+    await _assert_500(mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=_RaisingSession(), principal=principal))
     await _assert_500(mcp_oauth.consent_context(state="s", session=_RaisingSession()))
 
 
@@ -646,13 +582,9 @@ async def test_mcp_oauth_arms_guard_session_contract(monkeypatch: pytest.MonkeyP
 
 async def test_metrics_arms_guard_session_contract() -> None:
     user = _tenant(org_role="viewer")
-    await _assert_500(
-        metrics.ingest_web_vitals(req=SimpleNamespace(events=[object()]), current_user=user, session=_RaisingSession())
-    )
+    await _assert_500(metrics.ingest_web_vitals(req=SimpleNamespace(events=[object()]), current_user=user, session=_RaisingSession()))
     await _assert_500(metrics.get_web_vitals_summary(days=7, current_user=user, session=_RaisingSession()))
-    await _assert_500(
-        metrics.get_web_vitals_timeseries(metric_name="LCP", days=7, current_user=user, session=_RaisingSession())
-    )
+    await _assert_500(metrics.get_web_vitals_timeseries(metric_name="LCP", days=7, current_user=user, session=_RaisingSession()))
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +816,4 @@ async def test_dependencies_target_org_role_check_guard_session_contract() -> No
 
 async def test_dependencies_team_scope_check_guard_session_contract() -> None:
     dep = deps._team_membership_or_admin_dep(AsyncMock(), deps.get_current_tenant_user)
-    await _assert_500(
-        dep.dependency(request=SimpleNamespace(), principal=_tenant(org_role="operator"), session=_RaisingSession())
-    )
+    await _assert_500(dep.dependency(request=SimpleNamespace(), principal=_tenant(org_role="operator"), session=_RaisingSession()))

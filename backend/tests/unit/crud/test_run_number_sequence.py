@@ -114,14 +114,8 @@ async def file_engine(tmp_path) -> AsyncGenerator[AsyncEngine, None]:
         # Raw DDL matching the reconciliation chain's run_number_counters
         # surface (0110_schema_pipeline_runtime) — the ORM
         # RunNumberCounter model no longer exists (FAR-253 dead-code cleanup).
-        await conn.exec_driver_sql(
-            "CREATE TABLE run_number_counters ("
-            "organisation_id VARCHAR(32) NOT NULL PRIMARY KEY, "
-            "next_run_number INTEGER NOT NULL DEFAULT 1)"
-        )
-        await conn.exec_driver_sql(
-            "CREATE TABLE runs (organisation_id VARCHAR(32) NOT NULL, run_number INTEGER NOT NULL)"
-        )
+        await conn.exec_driver_sql("CREATE TABLE run_number_counters (organisation_id VARCHAR(32) NOT NULL PRIMARY KEY, next_run_number INTEGER NOT NULL DEFAULT 1)")
+        await conn.exec_driver_sql("CREATE TABLE runs (organisation_id VARCHAR(32) NOT NULL, run_number INTEGER NOT NULL)")
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield engine
     await engine.dispose()

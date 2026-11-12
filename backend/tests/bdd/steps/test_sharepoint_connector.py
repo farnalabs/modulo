@@ -48,11 +48,7 @@ def sharepoint_connector_invalid(ctx: dict) -> None:
 
 @when("the connector checks health")
 def sharepoint_health_check(ctx: dict) -> None:
-    response = (
-        httpx.Response(200, json={"id": "root", "displayName": "Contoso Portal"})
-        if ctx["valid"]
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"id": "root", "displayName": "Contoso Portal"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/sites/root").mock(return_value=response)
         ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
@@ -85,26 +81,16 @@ def sharepoint_query_list_items(list_id: str, site_id: str, ctx: dict) -> None:
     }
     with respx.mock:
         respx.get(f"{_BASE}/sites/{site_id}/lists/{list_id}/items").mock(return_value=httpx.Response(200, json=items))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(
-                ConnectorQuery(resource="list_items", filters={"site_id": site_id, "list_id": list_id})
-            )
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="list_items", filters={"site_id": site_id, "list_id": list_id})))
 
 
-@when(
-    parsers.parse(
-        'the connector creates a list item in list "{list_id}" of site "{site_id}" with fields Title "{title}"'
-    )
-)
+@when(parsers.parse('the connector creates a list item in list "{list_id}" of site "{site_id}" with fields Title "{title}"'))
 def sharepoint_write_list_item(list_id: str, site_id: str, title: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     created = {"id": "new-item-1", "fields": {"Title": title}}
     with respx.mock:
-        respx.post(f"{_BASE}/sites/{site_id}/lists/{list_id}/items").mock(
-            return_value=httpx.Response(201, json=created)
-        )
+        respx.post(f"{_BASE}/sites/{site_id}/lists/{list_id}/items").mock(return_value=httpx.Response(201, json=created))
         ctx["write_result"] = asyncio.run(
             ctx["connector"].write(
                 ConnectorPayload(
@@ -121,9 +107,7 @@ def sharepoint_query_file(path: str, site_id: str, drive_id: str, ctx: dict) -> 
 
     content = "Hello, SharePoint!"
     with respx.mock:
-        respx.get(f"{_BASE}/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content").mock(
-            return_value=httpx.Response(200, text=content)
-        )
+        respx.get(f"{_BASE}/sites/{site_id}/drives/{drive_id}/root:/{path.strip('/')}:/content").mock(return_value=httpx.Response(200, text=content))
         ctx["query_result"] = asyncio.run(
             ctx["connector"].query(
                 ConnectorQuery(

@@ -196,10 +196,7 @@ def _resolved_pair(pair: tuple[str, str]) -> tuple[str, str]:
 def _migration_source(migration_name: str) -> str:
     """Read the named migration's source, failing loudly on a bad reference."""
     path = _MIGRATION_PATH.parent / f"{migration_name}.py"
-    assert path.exists(), (
-        f"_DROPPED_0147_PAIRS names migration {migration_name!r}, but {path} does not exist — "
-        "the migration reference is wrong"
-    )
+    assert path.exists(), f"_DROPPED_0147_PAIRS names migration {migration_name!r}, but {path} does not exist — the migration reference is wrong"
     return path.read_text(encoding="utf-8")
 
 
@@ -250,9 +247,7 @@ def _module_string_expressions(tree: ast.Module) -> dict[str, ast.expr]:
     return expressions
 
 
-def _loop_sequence_bindings(
-    tree: ast.Module, sequences: dict[str, tuple[str | tuple[str, ...], ...]]
-) -> dict[int, dict[str, tuple[str, ...]]]:
+def _loop_sequence_bindings(tree: ast.Module, sequences: dict[str, tuple[str | tuple[str, ...], ...]]) -> dict[int, dict[str, tuple[str, ...]]]:
     """Loop variables in scope at each execute call, when they iterate a constant.
 
     Deliberately shallow: ONLY ``for <name> in <CONSTANT>`` whose iterable is a
@@ -260,11 +255,7 @@ def _loop_sequence_bindings(
     ``COLUMNS``). A loop over a call, an attribute or any computed iterable is
     left unresolved — the declaration net then demands the DDL be justified.
     """
-    string_sequences = {
-        name: tuple(element for element in value if isinstance(element, str))
-        for name, value in sequences.items()
-        if value and all(isinstance(element, str) for element in value)
-    }
+    string_sequences = {name: tuple(element for element in value if isinstance(element, str)) for name, value in sequences.items() if value and all(isinstance(element, str) for element in value)}
     bindings: dict[int, dict[str, tuple[str, ...]]] = {}
 
     def visit(current: ast.AST, env: dict[str, tuple[str, ...]]) -> None:
@@ -286,9 +277,7 @@ def _loop_sequence_bindings(
     return bindings
 
 
-def _render_sql_renderings(
-    node: ast.expr, module_values: dict[str, ast.expr], env: dict[str, tuple[str, ...]]
-) -> list[tuple[str, tuple[str, ...]]]:
+def _render_sql_renderings(node: ast.expr, module_values: dict[str, ast.expr], env: dict[str, tuple[str, ...]]) -> list[tuple[str, tuple[str, ...]]]:
     """``(shape, concrete renderings)`` for every string *node* produces.
 
     *shape* replaces each interpolation with ``__INTERP__`` so a declaration
@@ -307,13 +296,7 @@ def _render_sql_renderings(
             if isinstance(part, ast.Constant) and isinstance(part.value, str):
                 shape_parts.append(part.value)
                 concretes = tuple(concrete + part.value for concrete in concretes)
-            elif (
-                isinstance(part, ast.FormattedValue)
-                and part.conversion == -1
-                and part.format_spec is None
-                and isinstance(part.value, ast.Name)
-                and part.value.id in env
-            ):
+            elif isinstance(part, ast.FormattedValue) and part.conversion == -1 and part.format_spec is None and isinstance(part.value, ast.Name) and part.value.id in env:
                 shape_parts.append(_INTERP)
                 concretes = tuple(concrete + value for concrete in concretes for value in env[part.value.id])
             else:
@@ -324,9 +307,7 @@ def _render_sql_renderings(
         combined: list[tuple[str, tuple[str, ...]]] = []
         for left_shape, left_concretes in _render_sql_renderings(node.left, module_values, env):
             for right_shape, right_concretes in _render_sql_renderings(node.right, module_values, env):
-                combined.append(
-                    (left_shape + right_shape, tuple(a + b for a in left_concretes for b in right_concretes))
-                )
+                combined.append((left_shape + right_shape, tuple(a + b for a in left_concretes for b in right_concretes)))
         return combined
     if isinstance(node, ast.Name):
         if node.id in env:
@@ -429,28 +410,18 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
 
         if pair in _DROPPED_0147_PAIRS:
             if table_name in Base.metadata.tables:
-                violations.append(
-                    f"{table_name}.{column_name}: recorded as dropped by "
-                    f"{_DROPPED_0147_PAIRS[pair]} but the table is back in Base.metadata"
-                )
+                violations.append(f"{table_name}.{column_name}: recorded as dropped by {_DROPPED_0147_PAIRS[pair]} but the table is back in Base.metadata")
             continue
 
         if pair in _NO_ORM_MODEL_0147_PAIRS:
             if table_name in Base.metadata.tables:
-                violations.append(
-                    f"{table_name}.{column_name}: recorded in _NO_ORM_MODEL_0147_PAIRS by "
-                    f"{_NO_ORM_MODEL_0147_PAIRS[pair]} but the table is mapped again in Base.metadata"
-                )
+                violations.append(f"{table_name}.{column_name}: recorded in _NO_ORM_MODEL_0147_PAIRS by {_NO_ORM_MODEL_0147_PAIRS[pair]} but the table is mapped again in Base.metadata")
             continue
 
         resolved_table, resolved_column = _resolved_pair(pair)
         table = Base.metadata.tables.get(resolved_table)
         if table is None:
-            violations.append(
-                f"{table_name}.{column_name}: table {resolved_table!r} is absent from "
-                "Base.metadata and the pair is not justified in _DROPPED_0147_PAIRS — a "
-                "renamed or dropped 0147 table must be named explicitly, never skipped"
-            )
+            violations.append(f"{table_name}.{column_name}: table {resolved_table!r} is absent from Base.metadata and the pair is not justified in _DROPPED_0147_PAIRS — a renamed or dropped 0147 table must be named explicitly, never skipped")
             continue
 
         column = table.columns.get(resolved_column)
@@ -460,17 +431,9 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
 
         dialect_impl = column.type.dialect_impl(dialect)
         if not isinstance(dialect_impl, JSONB):
-            violations.append(
-                f"{resolved_table}.{resolved_column}: declared {type(column.type).__name__}, "
-                f"renders as {type(dialect_impl).__name__} on postgresql — the physical "
-                "column is JSONB after 0147"
-            )
+            violations.append(f"{resolved_table}.{resolved_column}: declared {type(column.type).__name__}, renders as {type(dialect_impl).__name__} on postgresql — the physical column is JSONB after 0147")
 
-    assert not violations, (
-        "0147-converted columns whose ORM declaration disagrees with the physical jsonb "
-        "column (a SQL predicate against these binds as ::JSON and raises "
-        "'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "0147-converted columns whose ORM declaration disagrees with the physical jsonb column (a SQL predicate against these binds as ::JSON and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
 
 
 def test_0147_pair_resolution_is_complete_and_justified() -> None:
@@ -479,24 +442,13 @@ def test_0147_pair_resolution_is_complete_and_justified() -> None:
     justified = set(_RENAMED_0147_PAIRS) | set(_DROPPED_0147_PAIRS) | set(_NO_ORM_MODEL_0147_PAIRS)
 
     stale = sorted(justified - pairs)
-    assert not stale, (
-        "_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS name pairs 0147 "
-        f"does not convert (a stale exception would hide whatever it still claims): {stale}"
-    )
+    assert not stale, f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS name pairs 0147 does not convert (a stale exception would hide whatever it still claims): {stale}"
 
-    unmapped_absent = sorted(
-        pair for pair in pairs if pair not in justified and _resolved_pair(pair)[0] not in Base.metadata.tables
-    )
-    assert not unmapped_absent, (
-        "0147 pairs whose table is absent from Base.metadata and are not justified in "
-        f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS: {unmapped_absent}"
-    )
+    unmapped_absent = sorted(pair for pair in pairs if pair not in justified and _resolved_pair(pair)[0] not in Base.metadata.tables)
+    assert not unmapped_absent, f"0147 pairs whose table is absent from Base.metadata and are not justified in _RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS: {unmapped_absent}"
 
     for renamed_from, destination in _RENAMED_0147_PAIRS.items():
-        assert destination[0] in Base.metadata.tables, (
-            f"_RENAMED_0147_PAIRS maps {renamed_from} to {destination}, but {destination[0]!r} "
-            "is not mapped in Base.metadata"
-        )
+        assert destination[0] in Base.metadata.tables, f"_RENAMED_0147_PAIRS maps {renamed_from} to {destination}, but {destination[0]!r} is not mapped in Base.metadata"
 
 
 def test_dropped_0147_pairs_are_actually_dropped() -> None:
@@ -514,20 +466,10 @@ def test_dropped_0147_pairs_are_actually_dropped() -> None:
         if _migration_drops_table(migration_name, table_name):
             continue
         if _migration_renames_table(migration_name, table_name):
-            failures.append(
-                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
-                f"{migration_name}, but that migration RENAMES {table_name!r} rather than dropping "
-                "it — a rename belongs in _RENAMED_0147_PAIRS so the destination column is checked"
-            )
+            failures.append(f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration {migration_name}, but that migration RENAMES {table_name!r} rather than dropping it — a rename belongs in _RENAMED_0147_PAIRS so the destination column is checked")
         else:
-            failures.append(
-                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
-                f"{migration_name}, but that migration contains no DROP TABLE for {table_name!r} — "
-                "either the map entry or its migration reference is wrong"
-            )
-    assert not failures, "_DROPPED_0147_PAIRS entries whose named migration does not drop the table:\n  " + "\n  ".join(
-        failures
-    )
+            failures.append(f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration {migration_name}, but that migration contains no DROP TABLE for {table_name!r} — either the map entry or its migration reference is wrong")
+    assert not failures, "_DROPPED_0147_PAIRS entries whose named migration does not drop the table:\n  " + "\n  ".join(failures)
 
 
 def _jsonb_construction_lines(source: str, filename: str = "<unknown>") -> list[int]:
@@ -572,15 +514,9 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
             offenders[path.relative_to(_BACKEND).as_posix()] = lines
 
     alias_key = _JSONB_ALIAS_PATH.relative_to(_BACKEND).as_posix()
-    assert alias_key in offenders, (
-        f"{alias_key} must construct the shared JSONB variant (JSONB_COL) — removing it "
-        "would leave every 0147 column undeclared"
-    )
+    assert alias_key in offenders, f"{alias_key} must construct the shared JSONB variant (JSONB_COL) — removing it would leave every 0147 column undeclared"
     extra = {path: lines for path, lines in offenders.items() if path != alias_key}
-    assert not extra, (
-        "A JSONB() call outside the shared alias (farna.db.models.base.JSONB_COL). "
-        f"Import JSONB_COL instead of constructing JSONB locally: {extra}"
-    )
+    assert not extra, f"A JSONB() call outside the shared alias (farna.db.models.base.JSONB_COL). Import JSONB_COL instead of constructing JSONB locally: {extra}"
 
 
 # ---------------------------------------------------------------------------
@@ -700,14 +636,8 @@ _UNPARSED_JSONB_DDL: dict[tuple[str, str], str] = {
     # pairs are enumerated declaratively — 0129's ``_JSON_COLUMNS`` and 0147's
     # ``_JSON_TO_JSONB`` — and parsed from THERE, which is why the extractor's
     # pair set already contains them.
-    ("0129_runs_json_to_jsonb", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
-        "type is the runtime `cast` argument (jsonb on upgrade / json on downgrade); the "
-        "pairs are declared in `_JSON_COLUMNS` and parsed from there"
-    ),
-    ("0147_json_to_jsonb_standardize", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
-        "same `_add_temp_column` shape as 0129 — type is the runtime `cast`; the pairs are "
-        "declared in `_JSON_TO_JSONB` and parsed from there"
-    ),
+    ("0129_runs_json_to_jsonb", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): ("type is the runtime `cast` argument (jsonb on upgrade / json on downgrade); the pairs are declared in `_JSON_COLUMNS` and parsed from there"),
+    ("0147_json_to_jsonb_standardize", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): ("same `_add_temp_column` shape as 0129 — type is the runtime `cast`; the pairs are declared in `_JSON_TO_JSONB` and parsed from there"),
 }
 
 
@@ -801,11 +731,7 @@ def _module_string_sequence_constants(tree: ast.Module) -> dict[str, tuple[str |
         for element in value.elts:
             if isinstance(element, ast.Constant) and isinstance(element.value, str):
                 elements.append(element.value)
-            elif (
-                isinstance(element, ast.Tuple)
-                and element.elts
-                and all(isinstance(inner, ast.Constant) and isinstance(inner.value, str) for inner in element.elts)
-            ):
+            elif isinstance(element, ast.Tuple) and element.elts and all(isinstance(inner, ast.Constant) and isinstance(inner.value, str) for inner in element.elts):
                 elements.append(tuple(inner.value for inner in element.elts))
             else:
                 elements = []
@@ -831,9 +757,7 @@ def _is_jsonb_type_expression(node: ast.expr, jsonb_names: frozenset[str]) -> bo
     if isinstance(func, (ast.Name, ast.Attribute)):
         name = func.id if isinstance(func, ast.Name) else func.attr
         if name == "with_variant":
-            return any(_is_jsonb_type_expression(arg, jsonb_names) for arg in node.args) or any(
-                _is_jsonb_type_expression(keyword.value, jsonb_names) for keyword in node.keywords
-            )
+            return any(_is_jsonb_type_expression(arg, jsonb_names) for arg in node.args) or any(_is_jsonb_type_expression(keyword.value, jsonb_names) for keyword in node.keywords)
     return False
 
 
@@ -843,12 +767,7 @@ def _jsonb_bound_names(tree: ast.Module) -> frozenset[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and _is_jsonb_type_expression(node.value, frozenset()):
             names.update(target.id for target in node.targets if isinstance(target, ast.Name))
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and node.value is not None
-            and isinstance(node.target, ast.Name)
-            and _is_jsonb_type_expression(node.value, frozenset())
-        ):
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name) and _is_jsonb_type_expression(node.value, frozenset()):
             names.add(node.target.id)
     return frozenset(names)
 
@@ -927,11 +846,7 @@ def _executed_sql_jsonb_declarations(source: str) -> list[tuple[str, set[tuple[s
 
 def _unexplained_executed_jsonb_declarations(stem: str, source: str) -> list[str]:
     """Declarations in *source* that parse to no pair and are not justified."""
-    return [
-        f"{stem}: {shape}"
-        for shape, pairs in _executed_sql_jsonb_declarations(source)
-        if not pairs and (stem, shape) not in _UNPARSED_JSONB_DDL
-    ]
+    return [f"{stem}: {shape}" for shape, pairs in _executed_sql_jsonb_declarations(source) if not pairs and (stem, shape) not in _UNPARSED_JSONB_DDL]
 
 
 def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
@@ -953,12 +868,7 @@ def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
             if isinstance(column, ast.Call) and column.args:
                 column_name = _string_constant(column.args[0], constants)
                 column_type = column.args[1] if len(column.args) > 1 else None
-                if (
-                    table
-                    and column_name
-                    and column_type is not None
-                    and _is_jsonb_type_expression(column_type, jsonb_names)
-                ):
+                if table and column_name and column_type is not None and _is_jsonb_type_expression(column_type, jsonb_names):
                     pairs.add((table, column_name))
         elif name == "create_table" and node.args:
             table = _string_constant(node.args[0], constants)
@@ -973,12 +883,7 @@ def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
             table = _string_constant(node.args[0], constants)
             column_name = _string_constant(node.args[1], constants)
             column_type = next((keyword.value for keyword in node.keywords if keyword.arg == "type_"), None)
-            if (
-                table
-                and column_name
-                and column_type is not None
-                and _is_jsonb_type_expression(column_type, jsonb_names)
-            ):
+            if table and column_name and column_type is not None and _is_jsonb_type_expression(column_type, jsonb_names):
                 pairs.add((table, column_name))
 
     # Only strings actually handed to an executor — NEVER every string constant.
@@ -1049,16 +954,9 @@ def test_every_migration_declared_jsonb_column_is_jsonb_on_postgres() -> None:
         if column is None:
             continue
         if not isinstance(column.type.dialect_impl(dialect), JSONB):
-            violations.append(
-                f"{table_name}.{column_name}: declared {type(column.type).__name__} on the ORM, but "
-                f"migration(s) {', '.join(sorted(migrations))} declare it jsonb — a SQL predicate "
-                "against this column binds as ::JSON and raises 'operator does not exist: jsonb = json'"
-            )
+            violations.append(f"{table_name}.{column_name}: declared {type(column.type).__name__} on the ORM, but migration(s) {', '.join(sorted(migrations))} declare it jsonb — a SQL predicate against this column binds as ::JSON and raises 'operator does not exist: jsonb = json'")
 
-    assert not violations, (
-        "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON "
-        "on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
 
 
 def test_raw_sql_create_table_parses_jsonb_column_on_one_line() -> None:
@@ -1176,9 +1074,7 @@ def test_interpolated_loop_ddl_is_resolved_not_excused() -> None:
     for migration, (table, columns) in expected.items():
         for column in columns:
             assert migration in declared[(table, column)]
-        assert not any(stem == migration for stem, _shape in _UNPARSED_JSONB_DDL), (
-            f"{migration}'s interpolated DDL must be PARSED, not excused in _UNPARSED_JSONB_DDL"
-        )
+        assert not any(stem == migration for stem, _shape in _UNPARSED_JSONB_DDL), f"{migration}'s interpolated DDL must be PARSED, not excused in _UNPARSED_JSONB_DDL"
 
 
 def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
@@ -1203,10 +1099,7 @@ def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
         if path.name.startswith("__"):
             continue
         unexplained.extend(_unexplained_executed_jsonb_declarations(path.stem, path.read_text(encoding="utf-8")))
-    assert not unexplained, (
-        "executed-SQL jsonb declaration(s) that neither parse to a (table, column) pair nor are "
-        "justified in _UNPARSED_JSONB_DDL — make them parseable or record the reason:\n  " + "\n  ".join(unexplained)
-    )
+    assert not unexplained, "executed-SQL jsonb declaration(s) that neither parse to a (table, column) pair nor are justified in _UNPARSED_JSONB_DDL — make them parseable or record the reason:\n  " + "\n  ".join(unexplained)
 
 
 def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
@@ -1224,10 +1117,7 @@ def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
             if not pairs:
                 detected.add((path.stem, shape))
     stale = sorted(set(_UNPARSED_JSONB_DDL) - detected)
-    assert not stale, (
-        "_UNPARSED_JSONB_DDL justifies declarations that no longer need it (a stale exception "
-        f"would hide whatever it still claims): {stale}"
-    )
+    assert not stale, f"_UNPARSED_JSONB_DDL justifies declarations that no longer need it (a stale exception would hide whatever it still claims): {stale}"
 
 
 def test_unparsed_interpolated_jsonb_declaration_is_never_silently_skipped() -> None:
@@ -1319,23 +1209,12 @@ def test_schema_enforcement_json_is_generic_json_on_both_sides() -> None:
     creating the reverse ORM-JSONB-over-DB-json mismatch.
     """
     orm_column = Base.metadata.tables[_SCHEMA_ENFORCEMENT_TABLE].columns[_SCHEMA_ENFORCEMENT_COLUMN]
-    assert type(orm_column.type) is JSON, (
-        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} must stay generic JSON "
-        f"(0251 created it as sa.JSON()); found {type(orm_column.type).__name__}"
-    )
-    assert not isinstance(orm_column.type.dialect_impl(_POSTGRES_DIALECT), JSONB), (
-        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} renders as JSONB on postgres — "
-        "0251's comment is wrong and the column is genuinely json on both sides"
-    )
+    assert type(orm_column.type) is JSON, f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} must stay generic JSON (0251 created it as sa.JSON()); found {type(orm_column.type).__name__}"
+    assert not isinstance(orm_column.type.dialect_impl(_POSTGRES_DIALECT), JSONB), f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} renders as JSONB on postgres — 0251's comment is wrong and the column is genuinely json on both sides"
     declared_migration_type = _add_column_type_name(
         _SCHEMA_ENFORCEMENT_MIGRATION.read_text(encoding="utf-8"),
         _SCHEMA_ENFORCEMENT_TABLE,
         _SCHEMA_ENFORCEMENT_COLUMN,
     )
-    assert declared_migration_type == "JSON", (
-        "0251 must declare schema_enforcement_json with generic sa.JSON() (its comment's "
-        f"'JSONB on Postgres' claim is false); found {declared_migration_type!r}"
-    )
-    assert (_SCHEMA_ENFORCEMENT_TABLE, _SCHEMA_ENFORCEMENT_COLUMN) not in _migration_declared_jsonb_pairs(), (
-        "no migration may declare schema_enforcement_json as jsonb — it is generic JSON on both sides"
-    )
+    assert declared_migration_type == "JSON", f"0251 must declare schema_enforcement_json with generic sa.JSON() (its comment's 'JSONB on Postgres' claim is false); found {declared_migration_type!r}"
+    assert (_SCHEMA_ENFORCEMENT_TABLE, _SCHEMA_ENFORCEMENT_COLUMN) not in _migration_declared_jsonb_pairs(), "no migration may declare schema_enforcement_json as jsonb — it is generic JSON on both sides"

@@ -979,10 +979,7 @@ class TestListHousekeepingAuthz(AuthContext):
         with caplog.at_level(logging.WARNING, logger="farna.api.mcp_server"):
             result = await list_housekeeping()
         assert result["error"] == "insufficient_scope"
-        assert any(
-            "list_housekeeping" in rec.getMessage() and "system_admin_required" in rec.getMessage()
-            for rec in caplog.records
-        )
+        assert any("list_housekeeping" in rec.getMessage() and "system_admin_required" in rec.getMessage() for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1057,9 +1054,7 @@ class TestPerformHousekeepingErrors(_SystemAdminContext):
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "invalid_org_fk"}])
 
         assert result["deleted_count"] == 0
-        assert result["errors"] == [
-            {"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}
-        ]
+        assert result["errors"] == [{"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}]
         # Detection-only category must never reach the destructive delete path.
         mock_delete_group.assert_not_awaited()
 
@@ -1094,9 +1089,7 @@ class TestPerformHousekeepingSuccess(_SystemAdminContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_sesh = _make_housekeeping_session()
-        mock_sesh.execute = AsyncMock(
-            side_effect=IntegrityError("DELETE 1", {}, Exception("foreign key constraint violation"))
-        )
+        mock_sesh.execute = AsyncMock(side_effect=IntegrityError("DELETE 1", {}, Exception("foreign key constraint violation")))
         mock_session.return_value = make_session_context(mock_sesh)
 
         result = await perform_housekeeping(items=[{"id": "abc123", "entity_type": "secret"}])

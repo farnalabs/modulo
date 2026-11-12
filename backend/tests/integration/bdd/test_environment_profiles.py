@@ -73,9 +73,7 @@ async def user_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
             account_id = uuid.uuid4()
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, "
-                    "auth_provider, active) "
-                    "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
                 ),
                 {"id": str(account_id), "email": "admin-a@test.local", "name": "Admin A"},
             )
@@ -88,8 +86,7 @@ async def user_a(db_engine: AsyncEngine, org_a: uuid.UUID) -> uuid.UUID:
         if membership.first() is None:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
                 ),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_a)},
             )

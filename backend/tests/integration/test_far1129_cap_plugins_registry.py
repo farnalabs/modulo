@@ -90,12 +90,7 @@ def _write_plugin(site: pathlib.Path, name: str, entry_points: str, module_src: 
     # though the METADATA Name uses the display (dash) form.
     dist_info = site / f"{name.replace('-', '_')}-1.0.0.dist-info"
     dist_info.mkdir(parents=True, exist_ok=True)
-    (dist_info / "METADATA").write_text(
-        "Metadata-Version: 2.1\n"
-        f"Name: {name}\n"
-        "Version: 1.0.0\n"
-        "Summary: A demo plugin used by FAR-1129 integration tests\n"
-    )
+    (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\nSummary: A demo plugin used by FAR-1129 integration tests\n")
     (dist_info / "entry_points.txt").write_text(entry_points)
     (dist_info / "top_level.txt").write_text(name.replace("-", "_") + "\n")
 

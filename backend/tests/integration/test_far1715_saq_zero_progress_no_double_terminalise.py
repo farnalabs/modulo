@@ -68,8 +68,7 @@ async def _seed_env(db_engine: AsyncEngine, label: str) -> _Env:
         )
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {
                 "id": str(account_id),

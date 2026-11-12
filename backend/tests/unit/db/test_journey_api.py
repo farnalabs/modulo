@@ -352,12 +352,8 @@ class TestListMapJourneys:
         await _seed_org(session)
         await _seed_map(session)
         await _seed_stage(session)
-        recent = await _seed_journey(
-            session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 9, 1, tzinfo=UTC)
-        )
-        await _seed_journey(
-            session, kind="github_issue", ref="c/d#7", map_id=_MAP, updated_at=datetime(2026, 8, 1, tzinfo=UTC)
-        )
+        recent = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 9, 1, tzinfo=UTC))
+        await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP, updated_at=datetime(2026, 8, 1, tzinfo=UTC))
 
         items, _ = await list_map_journeys(session, map_id=_MAP, updated_since=datetime(2026, 8, 25, tzinfo=UTC))
 
@@ -367,9 +363,7 @@ class TestListMapJourneys:
         await _seed_org(session)
         await _seed_map(session)
         await _seed_stage(session)
-        boundary = await _seed_journey(
-            session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 8, 25, tzinfo=UTC)
-        )
+        boundary = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP, updated_at=datetime(2026, 8, 25, tzinfo=UTC))
 
         items, _ = await list_map_journeys(session, map_id=_MAP, updated_since=datetime(2026, 8, 25, tzinfo=UTC))
 
@@ -689,11 +683,7 @@ class TestJourneyRunHistory:
         await _seed_stage(session)
         journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
 
-        sql = str(
-            _journey_runs_postgres_query(journey, limit=20, viewer_account_id=_ACCOUNT).compile(
-                dialect=pg_dialect.dialect()
-            )
-        )
+        sql = str(_journey_runs_postgres_query(journey, limit=20, viewer_account_id=_ACCOUNT).compile(dialect=pg_dialect.dialect()))
 
         assert "@>" in sql
         assert "team_memberships" in sql
@@ -837,10 +827,7 @@ class TestViewerAccountTeamScope:
         await _seed_journey(session, kind="github_issue", ref="a/b#5")
         await _seed_team_run(session, pipeline_id=_OTHER_PIPELINE)
 
-        assert (
-            await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5", viewer_account_id=_ACCOUNT)
-            is None
-        )
+        assert await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5", viewer_account_id=_ACCOUNT) is None
         assert await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5") is not None
 
 
@@ -1077,9 +1064,7 @@ class TestRoutes:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        journey = _make_journey_mock(
-            map_id=None, stage_id=None, stage_name=None, position=None, latest_status=None, latest_provenance=None
-        )
+        journey = _make_journey_mock(map_id=None, stage_id=None, stage_name=None, position=None, latest_status=None, latest_provenance=None)
         with (
             patch(
                 "farna.api.routes.lifecycle_maps.get_lifecycle_map",
@@ -1370,9 +1355,7 @@ class TestSelfReportConfirmAdvance:
         # job, but advance on a NON-existing row would upsert (mint). Prove the
         # endpoint never reaches it by confirming first: here we only advance
         # confirmed entries, so nothing is written.
-        confirmed, unmatched = await confirm_reported_refs(
-            session, _ORG, [{"kind": "github_issue", "ref": "ghost", "source": "agent"}]
-        )
+        confirmed, unmatched = await confirm_reported_refs(session, _ORG, [{"kind": "github_issue", "ref": "ghost", "source": "agent"}])
         assert confirmed == []
         assert unmatched == 1
 

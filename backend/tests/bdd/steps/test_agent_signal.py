@@ -117,9 +117,7 @@ def _given_source_pipeline(name: str, request: Any) -> None:
     ctx["source_pipeline_id"] = uuid.uuid4()
 
 
-@given(
-    parsers.parse('pipeline "{name}" has an agent_signal trigger watching source pipeline "{source}" node "{node_id}"')
-)
+@given(parsers.parse('pipeline "{name}" has an agent_signal trigger watching source pipeline "{source}" node "{node_id}"'))
 def _given_trigger_watching(name: str, source: str, node_id: str, request: Any) -> None:
     ctx = _ctx(request)
     spid = ctx["source_pipeline_id"]
@@ -165,11 +163,7 @@ def _given_one_active_run(name: str, request: Any) -> None:
     ctx["active_runs_count"] = 1
 
 
-@given(
-    parsers.parse(
-        'pipeline "{name}" has an inactive agent_signal trigger watching source pipeline "{source}" node "{node_id}"'
-    )
-)
+@given(parsers.parse('pipeline "{name}" has an inactive agent_signal trigger watching source pipeline "{source}" node "{node_id}"'))
 def _given_inactive_trigger(name: str, source: str, node_id: str, request: Any) -> None:
     ctx = _ctx(request)
     spid = ctx["source_pipeline_id"]
@@ -244,9 +238,7 @@ def _when_node_completes(node_id: str, source: str, mock_session: MagicMock, req
 
 
 @when(parsers.parse('node "{node_id}" completes in pipeline "{source}" with output {output}'))
-def _when_node_completes_with_output(
-    node_id: str, source: str, output: str, mock_session: MagicMock, request: Any
-) -> None:
+def _when_node_completes_with_output(node_id: str, source: str, output: str, mock_session: MagicMock, request: Any) -> None:
     ctx = _ctx(request)
     ctx["completed_node_id"] = node_id
     ctx["node_output"] = output if isinstance(output, dict) else {"result": output}
@@ -328,9 +320,7 @@ def _then_trigger_event_recorded(result: str, request: Any) -> None:
     session = request.getfixturevalue("mock_session")
     assert session.add.call_count >= 1
     added_events = [c.args[0] for c in session.add.call_args_list if hasattr(c.args[0], "validation_result")]
-    assert any(e.validation_result == result for e in added_events), (
-        f"No TriggerEvent with validation_result='{result}' found"
-    )
+    assert any(e.validation_result == result for e in added_events), f"No TriggerEvent with validation_result='{result}' found"
 
 
 @then("the result is empty")

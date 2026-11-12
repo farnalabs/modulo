@@ -475,9 +475,7 @@ def test_scan_node_runner_ignores_non_constant_default(tmp_path):
 def test_scan_pipeline_config_files_flags_bad_yaml(monkeypatch, tmp_path):
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir()
-    (pipeline_dir / "bad.yaml").write_text(
-        "node_type: sandbox_agent\nagent_prompt: ''\ntemplate_id: base\ntimeout_seconds: 600\n"
-    )
+    (pipeline_dir / "bad.yaml").write_text("node_type: sandbox_agent\nagent_prompt: ''\ntemplate_id: base\ntimeout_seconds: 600\n")
     monkeypatch.chdir(tmp_path)
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_pipeline_config_files()
@@ -491,9 +489,7 @@ def test_scan_pipeline_config_files_flags_bad_yaml(monkeypatch, tmp_path):
 def test_scan_pipeline_config_files_flags_bad_yml(monkeypatch, tmp_path):
     pipeline_dir = tmp_path / "pipelines"
     pipeline_dir.mkdir()
-    (pipeline_dir / "bad.yml").write_text(
-        "node_type: sandbox_agent\nagent_prompt: 'do it'\ntemplate_id: opencode\ntimeout_seconds: 600\n"
-    )
+    (pipeline_dir / "bad.yml").write_text("node_type: sandbox_agent\nagent_prompt: 'do it'\ntemplate_id: opencode\ntimeout_seconds: 600\n")
     monkeypatch.chdir(tmp_path)
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_pipeline_config_files()

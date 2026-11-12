@@ -57,9 +57,7 @@ async def test_query_monitors_with_filters(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_query_events(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/events").mock(
-        return_value=httpx.Response(200, json={"events": [{"id": "e1", "title": "Deploy", "text": "v2 deployed"}]})
-    )
+    respx.get(f"{_BASE}/api/v1/events").mock(return_value=httpx.Response(200, json={"events": [{"id": "e1", "title": "Deploy", "text": "v2 deployed"}]}))
     result = await connector.query(ConnectorQuery(resource="events"))
     assert len(result.records) == 1
     assert result.records[0]["title"] == "Deploy"
@@ -220,9 +218,7 @@ async def test_query_logs_non_string_after(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_query_logs_missing_meta(connector: DatadogConnector) -> None:
-    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "log1"}]})
-    )
+    respx.post(f"{_BASE}/api/v2/logs/events/search").mock(return_value=httpx.Response(200, json={"data": [{"id": "log1"}]}))
     result = await connector.query(ConnectorQuery(resource="logs"))
     assert len(result.records) == 1
     assert result.next_cursor is None
@@ -318,9 +314,7 @@ async def test_write_event_missing_title(connector: DatadogConnector) -> None:
 
 @respx.mock
 async def test_write_monitor(connector: DatadogConnector) -> None:
-    respx.post(f"{_BASE}/api/v1/monitor").mock(
-        return_value=httpx.Response(200, json={"id": 42, "name": "Test Monitor", "type": "metric alert"})
-    )
+    respx.post(f"{_BASE}/api/v1/monitor").mock(return_value=httpx.Response(200, json={"id": 42, "name": "Test Monitor", "type": "metric alert"}))
     result = await connector.write(
         ConnectorPayload(
             resource="monitor",

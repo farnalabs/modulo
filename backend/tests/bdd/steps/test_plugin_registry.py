@@ -242,9 +242,7 @@ def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> Non
             mock_ep = MagicMock()
             mock_ep.name = "slack"
             mock_ep.dist = None  # No distribution → manifest rejected
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
-            )
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
             discovered = registry.discover_plugins()
     else:
         with patch("farna.core.plugin_registry.importlib.metadata.entry_points") as mock_eps:
@@ -259,9 +257,7 @@ def _discover_plugins(request: pytest.FixtureRequest, patches: list[Any]) -> Non
             }.get(key, default)
             mock_ep.dist = mock_dist
             mock_ep.load.return_value = lambda cfg, creds: None
-            mock_eps.side_effect = lambda group=None: (
-                [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
-            )
+            mock_eps.side_effect = lambda group=None: [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
             discovered = registry.discover_plugins()
 
     request.node._discovered = discovered
@@ -283,9 +279,7 @@ def _registry_processes_entry_point(request: pytest.FixtureRequest) -> None:
         mock_ep = MagicMock()
         mock_ep.name = "slack"
         mock_ep.dist = None  # No distribution → manifest rejected
-        mock_eps.side_effect = lambda group=None: (
-            [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
-        )
+        mock_eps.side_effect = lambda group=None: [mock_ep] if group in ("farna.connectors", "farna.model_backends") else []
         registry.discover_plugins()
 
     request.node._registry_state = registry

@@ -55,12 +55,7 @@ async def _insert_run(
             {"sid": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs "
-                "(id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, "
-                "trigger_type, input_hash, run_number) "
-                "VALUES (:rid, :oid, :pid, :sid, :thread, 'manual', :hash, :number)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, trigger_type, input_hash, run_number) VALUES (:rid, :oid, :pid, :sid, :thread, 'manual', :hash, :number)"),
             {
                 "rid": str(run_id),
                 "oid": str(org_id),
@@ -123,11 +118,7 @@ async def test_eval_run_crud_excludes_guardrail_and_error_rows(
             (error_id, "regex", "error"),
         ):
             await conn.execute(
-                text(
-                    "INSERT INTO evals "
-                    "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
-                    "VALUES (:eid, :oid, :pid, :name, :eval_type, '{}'::jsonb, :aid)"
-                ),
+                text("INSERT INTO evals (id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) VALUES (:eid, :oid, :pid, :name, :eval_type, '{}'::jsonb, :aid)"),
                 {
                     "eid": str(eval_id),
                     "oid": str(test_org),
@@ -143,11 +134,7 @@ async def test_eval_run_crud_excludes_guardrail_and_error_rows(
             (error_id, "error", False),
         ):
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results "
-                    "(id, organisation_id, run_id, eval_id, passed, outcome) "
-                    "VALUES (:rid, :oid, :run, :eid, :passed, :outcome)"
-                ),
+                text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:rid, :oid, :run, :eid, :passed, :outcome)"),
                 {
                     "rid": str(uuid.uuid4()),
                     "oid": str(test_org),

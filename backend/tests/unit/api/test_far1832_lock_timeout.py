@@ -317,21 +317,11 @@ def test_every_patch_writer_route_classifies_55p03() -> None:
     """
     discovered = _route_sources_reaching_a_patch_helper()
 
-    assert discovered, (
-        "writer discovery found NO route module reaching a patch helper — the guard's "
-        "discovery tokens are stale, which is not the same as the sweep being complete"
-    )
+    assert discovered, "writer discovery found NO route module reaching a patch helper — the guard's discovery tokens are stale, which is not the same as the sweep being complete"
     missing_known = _KNOWN_WRITER_MODULES - set(discovered)
-    assert not missing_known, (
-        f"discovery no longer sees known patch-helper writers {sorted(missing_known)} — "
-        "fix the discovery tokens, do not weaken the guard"
-    )
+    assert not missing_known, f"discovery no longer sees known patch-helper writers {sorted(missing_known)} — fix the discovery tokens, do not weaken the guard"
 
-    unclassified = sorted(
-        name
-        for name, source in discovered.items()
-        if _CLASSIFIER_NAME not in source and _DECORATOR_MARKER not in source
-    )
+    unclassified = sorted(name for name, source in discovered.items() if _CLASSIFIER_NAME not in source and _DECORATOR_MARKER not in source)
     assert not unclassified, (
         "FAR-1832: these route modules reach a bounded-lock org-settings/OTel patch but classify "
         f"55P03 through neither {_CLASSIFIER_NAME} nor {_DECORATOR_MARKER}: {unclassified}. "

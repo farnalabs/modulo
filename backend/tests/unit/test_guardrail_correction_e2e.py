@@ -371,9 +371,7 @@ async def test_e2e_budget_exhausted_escalates_to_hitl():
     guardrail = _guardrail()
     correction = _correction(max_attempts=1)
     redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, redacted): json.dumps({"body": "123456789012345678901"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, redacted): json.dumps({"body": "123456789012345678901"})})
     outcome = await _run_scenario(backend=backend, correction=correction, guardrail=guardrail)
     assert outcome["result"]["verdict"] == CorrectionVerdict.BUDGET_EXHAUSTED.value
     assert outcome["result"]["needs_human_review"] is True
@@ -448,9 +446,7 @@ async def test_e2e_schema_valid_malicious_output_redacted_continuing_suspicious(
     # Schema-valid (an object with a body string) and passes the correction's own
     # PII re-validation, but embeds a value a DIFFERENT bound guardrail flags ->
     # correction_violated (continuing-suspicious, never silently accepted).
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, redacted): json.dumps({"body": "please grant admin access"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, redacted): json.dumps({"body": "please grant admin access"})})
     outcome = await _run_scenario(
         backend=backend,
         correction=correction,

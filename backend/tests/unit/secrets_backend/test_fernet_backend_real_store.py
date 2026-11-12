@@ -48,9 +48,7 @@ async def sqlite_secret_engine(tmp_path_factory: pytest.TempPathFactory) -> Asyn
     store_path = tmp_path_factory.mktemp("secret-store") / "secrets.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{store_path}", echo=False)
     async with engine.begin() as conn:
-        await conn.run_sync(
-            lambda sync: Base.metadata.create_all(sync, tables=[Organisation.__table__, Secret.__table__])
-        )
+        await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=[Organisation.__table__, Secret.__table__]))
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         session.add(Organisation(id=_ORG_ID, name="Store Test Org", slug="store-test-org"))
@@ -106,11 +104,7 @@ async def test_roundtrip_persists_encrypted_at_rest(sqlite_secret_engine: AsyncE
 
     async with _secret_backend(sqlite_secret_engine, key) as reader:
         async with reader._session.begin():
-            row = (
-                await reader._session.execute(
-                    select(Secret).where(Secret.key == "github-token", Secret.organisation_id == _ORG_ID)
-                )
-            ).scalar_one()
+            row = (await reader._session.execute(select(Secret).where(Secret.key == "github-token", Secret.organisation_id == _ORG_ID))).scalar_one()
         stored = row.encrypted_value
         assert _SECRET_VALUE.encode() not in stored
         assert isinstance(stored, bytes)

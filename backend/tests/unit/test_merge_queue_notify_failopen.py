@@ -103,15 +103,9 @@ def test_notification_step_is_present(step_name: str, run_blocks: dict[str, str]
 @pytest.mark.parametrize("step_name", NOTIFICATION_STEPS)
 def test_step_tracks_whether_every_pr_got_a_durable_comment(step_name: str, run_blocks: dict[str, str]) -> None:
     run = run_blocks[step_name]
-    assert FAILED_COMMENT_TOKEN in run, (
-        f"'{step_name}' does not count durable-comment failures "
-        f"({FAILED_COMMENT_TOKEN} missing), so it cannot tell a silent PR from a "
-        "signalled one"
-    )
+    assert FAILED_COMMENT_TOKEN in run, f"'{step_name}' does not count durable-comment failures ({FAILED_COMMENT_TOKEN} missing), so it cannot tell a silent PR from a signalled one"
     signal_token_present = any(token in run for token in SIGNAL_TOKENS)
-    assert signal_token_present, (
-        f"'{step_name}' does not record which PRs got a durable comment (none of {SIGNAL_TOKENS} present)"
-    )
+    assert signal_token_present, f"'{step_name}' does not record which PRs got a durable comment (none of {SIGNAL_TOKENS} present)"
 
 
 @pytest.mark.parametrize("step_name", NOTIFICATION_STEPS)
@@ -130,12 +124,7 @@ def test_exit_1_is_gated_on_the_durable_comment_failure(step_name: str, run_bloc
         gate = _nearest_preceding_if(lines, index)
         assert gate is not None, f"'{step_name}': the `exit 1` on line {index + 1} is not inside any `if`"
         gated = FAILED_COMMENT_TOKEN in gate or "NO_SIGNAL_PRS" in gate
-        assert gated, (
-            f"'{step_name}': the `exit 1` on line {index + 1} is not gated on the "
-            f"durable-comment failure condition - its enclosing conditional is "
-            f"{gate.strip()!r}. A dispatch failure with every PR durably commented "
-            "must not discard the pass."
-        )
+        assert gated, f"'{step_name}': the `exit 1` on line {index + 1} is not gated on the durable-comment failure condition - its enclosing conditional is {gate.strip()!r}. A dispatch failure with every PR durably commented must not discard the pass."
 
 
 @pytest.mark.parametrize("step_name", NOTIFICATION_STEPS)
@@ -145,16 +134,10 @@ def test_durable_comments_let_the_pass_continue(step_name: str, run_blocks: dict
     assert done_indices, f"'{step_name}' has no durable-comment loop"
     after_loop = [line for line in lines[done_indices[-1] + 1 :] if line.strip() and not line.lstrip().startswith("#")]
     assert after_loop, f"'{step_name}' does nothing after its durable-comment loop"
-    assert after_loop[0].strip() != "exit 1", (
-        f"'{step_name}': the durable-comment loop is followed immediately by "
-        "`exit 1`, so an undelivered notification discards the pass even when "
-        "every affected PR has a durable signal (the 2026-10-21 defect)."
-    )
+    assert after_loop[0].strip() != "exit 1", f"'{step_name}': the durable-comment loop is followed immediately by `exit 1`, so an undelivered notification discards the pass even when every affected PR has a durable signal (the 2026-10-21 defect)."
     warnings = [line for line in lines if "::warning::" in line]
     assert warnings, f"'{step_name}' has no ::warning:: fail-open annotation"
-    assert "durable" in " ".join(warnings).lower(), (
-        f"'{step_name}': the fail-open warning does not name the durable signal"
-    )
+    assert "durable" in " ".join(warnings).lower(), f"'{step_name}': the fail-open warning does not name the durable signal"
     exits_zero = [line for line in after_loop if line.strip() == "exit 0"]
     assert exits_zero, f"'{step_name}': the fail-open path does not exit 0"
 
@@ -247,29 +230,19 @@ def _enclosing_conditionals(lines: list[str], index: int) -> list[str]:
 def test_merge_step_records_a_head_sha_for_each_conflicted_pr() -> None:
     """The dedupe keys on the head that conflicted, recorded at conflict time."""
     merge_run = _run_block(MERGE_STEP)
-    assert HEADS_FILE in merge_run, (
-        "the merge step does not write the conflicted head SHAs, so the notify step cannot dedupe"
-    )
+    assert HEADS_FILE in merge_run, "the merge step does not write the conflicted head SHAs, so the notify step cannot dedupe"
     assert f": > {HEADS_FILE}" in merge_run, "the heads file is never initialised, so a stale file could be read"
-    assert 'git rev-parse --verify --quiet "refs/heads/pr-$NUM"' in merge_run, (
-        "the conflicted head is not taken from the ref this pass just fetched and tried to merge"
-    )
-    assert 'printf \'%s %s\\n\' "$NUM" "$CONFLICT_HEAD"' in merge_run, (
-        "the heads file is not written as '<num> <sha>' pairs"
-    )
+    assert 'git rev-parse --verify --quiet "refs/heads/pr-$NUM"' in merge_run, "the conflicted head is not taken from the ref this pass just fetched and tried to merge"
+    assert 'printf \'%s %s\\n\' "$NUM" "$CONFLICT_HEAD"' in merge_run, "the heads file is not written as '<num> <sha>' pairs"
     # The PR-number list itself must keep its shape: three other consumers read it.
-    assert 'echo "$conflict_prs" > /tmp/conflict_prs.txt' in merge_run, (
-        "the conflict list format changed - the Alembic-heads rebuild and both payloads read it"
-    )
+    assert 'echo "$conflict_prs" > /tmp/conflict_prs.txt' in merge_run, "the conflict list format changed - the Alembic-heads rebuild and both payloads read it"
 
 
 def test_dedupe_marker_is_written_on_both_dispatch_outcomes() -> None:
     """A record must exist wherever a notification attempt was made."""
     run = _run_block(CONFLICT_STEP)
     marker_writes = run.count("head=${PR_HEAD} at=${DISPATCH_AT}")
-    assert marker_writes == 2, (
-        f"expected the marker on both the delivered and the undelivered comment, found {marker_writes} write(s)"
-    )
+    assert marker_writes == 2, f"expected the marker on both the delivered and the undelivered comment, found {marker_writes} write(s)"
     assert DEDUPE_MARKER in run
     assert "DISPATCH_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ" in run, "the marker timestamp is not an ISO-8601 UTC stamp"
 
@@ -280,17 +253,11 @@ def test_dedupe_suppresses_only_an_exact_head_inside_the_cooldown() -> None:
     lines = body.splitlines()
 
     suppress = [index for index, line in enumerate(lines) if line.strip() == "return 0"]
-    assert len(suppress) == 1, (
-        f"the dedupe has {len(suppress)} suppression paths; exactly one (the cooldown) is intended"
-    )
+    assert len(suppress) == 1, f"the dedupe has {len(suppress)} suppression paths; exactly one (the cooldown) is intended"
     enclosing = _enclosing_conditionals(lines, suppress[0])
-    assert any("COOLDOWN_SECONDS" in condition for condition in enclosing), (
-        f"the only dedupe skip is not gated on the cooldown - its enclosing conditionals are {enclosing!r}"
-    )
+    assert any("COOLDOWN_SECONDS" in condition for condition in enclosing), f"the only dedupe skip is not gated on the cooldown - its enclosing conditionals are {enclosing!r}"
 
-    changed_gate = [
-        index for index, line in enumerate(lines) if line.strip() == 'if [ "$marker_head" != "$head" ]; then'
-    ]
+    changed_gate = [index for index, line in enumerate(lines) if line.strip() == 'if [ "$marker_head" != "$head" ]; then']
     assert changed_gate, "there is no head-changed branch: a new commit would be deduped away"
     following = [line.strip() for line in lines[changed_gate[0] + 1 : changed_gate[0] + 4]]
     assert "return 1" in following, "the head-changed branch does not dispatch"
@@ -315,15 +282,10 @@ def test_dedupe_fails_open_on_every_lookup_error() -> None:
     lines = body.splitlines()
 
     warnings = [index for index, line in enumerate(lines) if "::warning::" in line]
-    assert len(warnings) >= 4, (
-        f"only {len(warnings)} fail-open warning(s) in the dedupe: the lookup, JSON, "
-        "marker and clock errors are all expected"
-    )
+    assert len(warnings) >= 4, f"only {len(warnings)} fail-open warning(s) in the dedupe: the lookup, JSON, marker and clock errors are all expected"
     for index in warnings:
         following = [line.strip() for line in lines[index + 1 : index + 4]]
-        assert "return 1" in following, (
-            f"a dedupe error warns but does not dispatch (fail open) at line {index + 1}: {lines[index].strip()!r}"
-        )
+        assert "return 1" in following, f"a dedupe error warns but does not dispatch (fail open) at line {index + 1}: {lines[index].strip()!r}"
 
     # The caller's default must be dispatch, and the suppression must be the
     # explicit exception.
@@ -337,22 +299,15 @@ def test_dedupe_never_posts_a_false_never_notified_comment() -> None:
 
     # The failure arm covers only the PRs this pass actually tried to notify.
     failure_arm = run.rsplit('if [ "$DISPATCH_OK" != "true" ]; then', 1)[-1]
-    assert "for NUM in $TARGETS; do" in failure_arm, (
-        "the undelivered-notification comment loop does not iterate the dispatch set, so a deduped PR "
-        "would receive a 'the fixer was never notified' comment that is now false"
-    )
+    assert "for NUM in $TARGETS; do" in failure_arm, "the undelivered-notification comment loop does not iterate the dispatch set, so a deduped PR would receive a 'the fixer was never notified' comment that is now false"
     assert "for NUM in $CONFLICTS; do" not in failure_arm
     assert '--arg conflictPrs "$TARGETS"' in run, "the payload does not name the dispatch set"
 
     # The skip path posts nothing at all: no comment between the notice and exit.
     lines = run.splitlines()
-    notice = [
-        index for index, line in enumerate(lines) if "no Branch Fixer dispatch and no new PR comment this pass" in line
-    ]
+    notice = [index for index, line in enumerate(lines) if "no Branch Fixer dispatch and no new PR comment this pass" in line]
     assert notice, "the all-deduped pass has no notice explaining why nothing was dispatched"
-    skip_exit = [
-        index for index, line in enumerate(lines[notice[0] + 1 :], start=notice[0] + 1) if line.strip() == "exit 0"
-    ]
+    skip_exit = [index for index, line in enumerate(lines[notice[0] + 1 :], start=notice[0] + 1) if line.strip() == "exit 0"]
     assert skip_exit, "the all-deduped pass does not exit 0 before dispatching"
     skipped_region = "\n".join(lines[notice[0] : skip_exit[0]])
     assert "gh pr comment" not in skipped_region, "a deduped pass still posts a comment on the PR"
@@ -372,13 +327,7 @@ def test_dedupe_is_confined_to_the_notification_step(run_blocks: dict[str, str])
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     # Exclude the steps this module owns: the conflict step's own comments NAME
     # the merge command, and the other notification steps are covered above.
-    merge_path_steps = [
-        step
-        for step in workflow["jobs"]["queue"]["steps"]
-        if isinstance(step, dict)
-        and step.get("name") not in NOTIFICATION_STEPS
-        and ("gh pr merge" in (step.get("run") or "") or "alembic" in (step.get("run") or ""))
-    ]
+    merge_path_steps = [step for step in workflow["jobs"]["queue"]["steps"] if isinstance(step, dict) and step.get("name") not in NOTIFICATION_STEPS and ("gh pr merge" in (step.get("run") or "") or "alembic" in (step.get("run") or ""))]
     assert merge_path_steps, "no merge/validation steps found - this scan would pass vacuously"
     for step in merge_path_steps:
         run = step.get("run") or ""

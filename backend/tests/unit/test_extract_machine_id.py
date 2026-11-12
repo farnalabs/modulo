@@ -22,12 +22,7 @@ from extract_machine_id import extract_machine_id  # noqa: E402
 V0_4_87_LAUNCH = " Machine ID: 3dXg9aB2cF1eH7k\n"
 
 # Realistic multi-line launch output with leading provisioning chatter.
-V0_4_87_LAUNCH_MULTILINE = (
-    "=> Provisioning a new machine\n"
-    "=> Creating a new machine\n"
-    " Machine ID: 8kLm2NpQ4rSt6UvW\n"
-    "Attempting to start instance\n"
-)
+V0_4_87_LAUNCH_MULTILINE = "=> Provisioning a new machine\n=> Creating a new machine\n Machine ID: 8kLm2NpQ4rSt6UvW\nAttempting to start instance\n"
 
 
 def test_exact_v0_4_87_line() -> None:

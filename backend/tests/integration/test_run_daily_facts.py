@@ -55,15 +55,13 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -103,17 +101,9 @@ async def _seed_team(
     """Raw INSERT INTO teams — optional soft-delete (FAR-1653 tests)."""
     team_id = uuid.uuid4()
     if soft_deleted:
-        sql = (
-            "INSERT INTO teams (id, organisation_id, name, account_id, "
-            "notification_endpoints, settings, deleted_at) "
-            "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, now())"
-        )
+        sql = "INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings, deleted_at) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, now())"
     else:
-        sql = (
-            "INSERT INTO teams (id, organisation_id, name, account_id, "
-            "notification_endpoints, settings, deleted_at) "
-            "VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, NULL)"
-        )
+        sql = "INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings, deleted_at) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, NULL)"
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(sql),
@@ -199,10 +189,7 @@ async def _insert_cost_component(session: AsyncSession, org_id: uuid.UUID) -> No
     # repeat the predicate to match it.
     await session.execute(
         text(
-            "INSERT INTO cost_components (id, organisation_id, name, display_name, kind, rate_usd, "
-            "formula, enabled, sort_order) "
-            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0) "
-            "ON CONFLICT (organisation_id, name) WHERE deleted_at IS NULL DO NOTHING",
+            "INSERT INTO cost_components (id, organisation_id, name, display_name, kind, rate_usd, formula, enabled, sort_order) VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0) ON CONFLICT (organisation_id, name) WHERE deleted_at IS NULL DO NOTHING",
         ),
         {
             "id": str(uuid.uuid4()),
@@ -267,9 +254,7 @@ async def bypass_engine(migrated_db_url: str, db_engine: AsyncEngine) -> AsyncEn
         await conn.execute(text(f'DROP ROLE IF EXISTS "{_BYPASS_ROLE}"'))
         await conn.execute(text(f'CREATE ROLE "{_BYPASS_ROLE}" NOSUPERUSER BYPASSRLS NOLOGIN'))
         await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{_BYPASS_ROLE}"'))
-        await conn.execute(
-            text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{_BYPASS_ROLE}"')
-        )
+        await conn.execute(text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{_BYPASS_ROLE}"'))
         await conn.execute(text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{_BYPASS_ROLE}"'))
         await conn.commit()
 
@@ -321,9 +306,7 @@ class TestLiveWriter:
 
         for _ in range(2):
             async with db_session.begin():
-                await db_session.execute(
-                    text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)}
-                )
+                await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
                 run = await db_session.get(Run, run_id)
                 await finalize_cost(
                     db_session,
@@ -388,9 +371,7 @@ class TestLiveWriter:
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             row = (
                 await db_session.execute(
-                    text(
-                        "SELECT status, total_cost_usd, total_tokens, run_date FROM run_daily_facts WHERE run_id = :rid"
-                    ),
+                    text("SELECT status, total_cost_usd, total_tokens, run_date FROM run_daily_facts WHERE run_id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).first()
@@ -456,15 +437,10 @@ class TestLiveWriter:
 
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
-            run_status = (
-                await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})
-            ).scalar_one()
+            run_status = (await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})).scalar_one()
             ledger_total = (
                 await db_session.execute(
-                    text(
-                        "SELECT total_spend_usd FROM org_daily_run_counts "
-                        "WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-13'"
-                    ),
+                    text("SELECT total_spend_usd FROM org_daily_run_counts WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-13'"),
                     {"oid": str(org)},
                 )
             ).scalar_one_or_none()
@@ -516,10 +492,7 @@ class TestLiveWriter:
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             row = (
                 await db_session.execute(
-                    text(
-                        "SELECT status, total_cost_usd, total_tokens, trigger_type, run_date "
-                        "FROM run_daily_facts WHERE run_id = :rid"
-                    ),
+                    text("SELECT status, total_cost_usd, total_tokens, trigger_type, run_date FROM run_daily_facts WHERE run_id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).first()
@@ -568,15 +541,10 @@ class TestLiveWriter:
 
         async with db_session.begin():
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
-            run_status = (
-                await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})
-            ).scalar_one()
+            run_status = (await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})).scalar_one()
             ledger_total = (
                 await db_session.execute(
-                    text(
-                        "SELECT total_spend_usd FROM org_daily_run_counts "
-                        "WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-03'"
-                    ),
+                    text("SELECT total_spend_usd FROM org_daily_run_counts WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-03'"),
                     {"oid": str(org)},
                 )
             ).scalar_one_or_none()
@@ -949,10 +917,7 @@ class TestLiveWriterEnrichment:
                     "id": str(snapshot_id),
                     "pid": str(pipeline_id),
                     "oid": str(org_id),
-                    "gjson": (
-                        '{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, '
-                        '{"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'
-                    ),
+                    "gjson": ('{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, {"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'),
                 },
             )
         return snapshot_id
@@ -1042,13 +1007,7 @@ class TestLiveWriterEnrichment:
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             row = (
                 await db_session.execute(
-                    text(
-                        "SELECT error_code, claim_count, queue_wait_ms, final_idle_ms, "
-                        "cancellation_requested, dispatcher, node_count, sandbox_agent_node_count, "
-                        "max_node_timeout_seconds, parent_run_id, snapshot_id, run_number, "
-                        "output_bytes, rate_limited "
-                        "FROM run_daily_facts WHERE run_id = :rid"
-                    ),
+                    text("SELECT error_code, claim_count, queue_wait_ms, final_idle_ms, cancellation_requested, dispatcher, node_count, sandbox_agent_node_count, max_node_timeout_seconds, parent_run_id, snapshot_id, run_number, output_bytes, rate_limited FROM run_daily_facts WHERE run_id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).first()
@@ -1086,12 +1045,7 @@ class TestLiveWriterEnrichment:
         run_id = uuid.uuid4()
         async with db_session.begin():
             await db_session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', :hash, :thread, 5, "
-                    ":started, :completed)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', :hash, :thread, 5, :started, :completed)"),
                 {
                     "id": str(run_id),
                     "oid": str(org),
@@ -1113,10 +1067,7 @@ class TestLiveWriterEnrichment:
             await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
             row = (
                 await db_session.execute(
-                    text(
-                        "SELECT node_count, sandbox_agent_node_count, max_node_timeout_seconds "
-                        "FROM run_daily_facts WHERE run_id = :rid"
-                    ),
+                    text("SELECT node_count, sandbox_agent_node_count, max_node_timeout_seconds FROM run_daily_facts WHERE run_id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).first()
@@ -1139,12 +1090,7 @@ class TestLiveWriterEnrichment:
         run_id = uuid.uuid4()
         async with db_session.begin():
             await db_session.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) "
-                    "VALUES (:id, :oid, :pid, :sid, 'ongoing', 'complete', :hash, :thread, 7, "
-                    ":started, :completed)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) VALUES (:id, :oid, :pid, :sid, 'ongoing', 'complete', :hash, :thread, 7, :started, :completed)"),
                 {
                     "id": str(run_id),
                     "oid": str(org),
@@ -1184,12 +1130,7 @@ class TestTerminalStatusesInvariant:
         import re
 
         async with db_engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-                    "WHERE conrelid = 'public.runs'::regclass AND conname = 'ck_runs_status'"
-                )
-            )
+            result = await conn.execute(text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.runs'::regclass AND conname = 'ck_runs_status'"))
             definition = result.scalar_one()
         check_values = set(re.findall(r"'([^']+)'", definition))
         for status in TERMINAL_STATUSES:
@@ -1263,9 +1204,7 @@ class TestSoftDeletedTeamNamePreservation:
             ).first()
         assert row is not None, "backfill must insert the fact row"
         assert uuid.UUID(str(row[0])) == team_id, "the fact must carry the run's team_id"
-        assert row[1] == "Far1653 Backfill Deleted Team", (
-            f"a soft-deleted team's NAME must be preserved on the backfill path, got {row[1]!r}"
-        )
+        assert row[1] == "Far1653 Backfill Deleted Team", f"a soft-deleted team's NAME must be preserved on the backfill path, got {row[1]!r}"
 
     async def test_record_run_facts_resolves_soft_deleted_team_and_pipeline_name(
         self,
@@ -1319,9 +1258,5 @@ class TestSoftDeletedTeamNamePreservation:
                 )
             ).first()
         assert row is not None, "record_run_facts must write the fact row"
-        assert row[0] == "Far1653 Live Deleted Team", (
-            f"a soft-deleted team's NAME must resolve on the live fact writer, got {row[0]!r}"
-        )
-        assert row[1] == "Far1653-Live-Deleted-Pipeline", (
-            f"a soft-deleted pipeline's NAME must resolve on the live fact writer, got {row[1]!r}"
-        )
+        assert row[0] == "Far1653 Live Deleted Team", f"a soft-deleted team's NAME must resolve on the live fact writer, got {row[0]!r}"
+        assert row[1] == "Far1653-Live-Deleted-Pipeline", f"a soft-deleted pipeline's NAME must resolve on the live fact writer, got {row[1]!r}"

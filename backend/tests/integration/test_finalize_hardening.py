@@ -66,9 +66,7 @@ async def _seed_org(db_engine: AsyncEngine, name: str) -> uuid.UUID:
         # FAR-1833: the ceiling/cumulative now live on the cost-state row.
         await conn.execute(
             text(
-                "INSERT INTO organisation_cost_state "
-                "(org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) "
-                "VALUES (:id, NULL, :ceiling, 0)",
+                "INSERT INTO organisation_cost_state (org_id, max_run_cost_cents, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:id, NULL, :ceiling, 0)",
             ),
             {"id": str(org_id), "ceiling": _SPEND_CEILING_CENTS},
         )
@@ -80,16 +78,13 @@ async def _seed_account(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": email, "name": email.split("@", maxsplit=1)[0]},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -101,10 +96,7 @@ async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pipeline_id),
@@ -278,9 +270,7 @@ async def test_reduced_escape_bounds_lock_timeout_before_status_write(
         await _reduced_escape(db_session, ctx)
 
     assert "lock_timeout" in observed, "the reduced escape must reach its status write"
-    assert observed["lock_timeout"] != "0", (
-        "the reduced escape must SET LOCAL lock_timeout before its row-locking status write"
-    )
+    assert observed["lock_timeout"] != "0", "the reduced escape must SET LOCAL lock_timeout before its row-locking status write"
 
 
 # ---------------------------------------------------------------------------

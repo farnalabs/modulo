@@ -226,9 +226,7 @@ class TestStructured503Backstop:
     ERROR level) so a recurrence of the 2026-09-04 webhook 503 incident on a
     non-webhook route is diagnosable from the persisted reason trail."""
 
-    async def test_sqlalchemy_error_emits_structured_service_unavailable(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_sqlalchemy_error_emits_structured_service_unavailable(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             caplog.at_level(logging.ERROR),
             pytest.raises(HTTPException) as excinfo,
@@ -407,9 +405,7 @@ class TestInvalidRequestErrorMapping:
         assert detail != "Database temporarily unavailable.", detail
         assert "outside an active transaction" in detail, detail
 
-    async def test_invalid_request_error_does_not_emit_the_structured_503_record(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_invalid_request_error_does_not_emit_the_structured_503_record(self, caplog: pytest.LogCaptureFixture) -> None:
         """The ``db_transient`` reason trail must stay clean of programming errors."""
         with (
             caplog.at_level(logging.ERROR),
@@ -421,9 +417,7 @@ class TestInvalidRequestErrorMapping:
         records = [r for r in caplog.records if r.name == "farna.api.db_error_reporting"]
         assert not records, f"InvalidRequestError must not write a service_unavailable record: {records}"
 
-    async def test_invalid_request_error_logs_as_a_session_contract_error(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_invalid_request_error_logs_as_a_session_contract_error(self, caplog: pytest.LogCaptureFixture) -> None:
         """It IS still logged (loudly) — just under the programming-error key."""
         with (
             caplog.at_level(logging.ERROR, logger="farna.api.db_error_handling"),
@@ -463,9 +457,7 @@ class TestPendingRollbackErrorMapping:
             await endpoint()
         assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert excinfo.value.detail == "Database temporarily unavailable."
-        assert (
-            excinfo.value.detail != "Internal server error: a database session was used outside an active transaction."
-        )
+        assert excinfo.value.detail != "Internal server error: a database session was used outside an active transaction."
 
     async def test_pending_rollback_emits_the_structured_503_record(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
@@ -852,12 +844,7 @@ class TestReemitPrimedStream:
         assert chunks == ["1\n", "2\n"]
 
     async def test_header_precedes_and_trailer_follows_the_items(self) -> None:
-        chunks = [
-            chunk
-            async for chunk in reemit_primed_stream(
-                _stream_items(2, 3), 1, lambda n: f"{n}\n", header="H\n", trailer="T\n"
-            )
-        ]
+        chunks = [chunk async for chunk in reemit_primed_stream(_stream_items(2, 3), 1, lambda n: f"{n}\n", header="H\n", trailer="T\n")]
         assert chunks == ["H\n", "1\n", "2\n", "3\n", "T\n"]
 
     async def test_trailer_is_omitted_when_the_stream_raises_after_the_first_item(self) -> None:

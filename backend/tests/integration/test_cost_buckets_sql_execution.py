@@ -64,8 +64,7 @@ _RUN_FIXTURE: list[dict[str, object]] = [
     {  # (b) 6dp string amounts, two components
         "team": "A",
         "total": Decimal("1.750000"),
-        "breakdown": '[{"component": "model", "amount_usd": "1.500000"}, '
-        '{"component": "storage", "amount_usd": "0.250000"}]',
+        "breakdown": '[{"component": "model", "amount_usd": "1.500000"}, {"component": "storage", "amount_usd": "0.250000"}]',
         "started": _STARTED_IN,
     },
     {  # same (team, component) as the first run — aggregates ACROSS runs
@@ -96,8 +95,7 @@ _RUN_FIXTURE: list[dict[str, object]] = [
         # total proves exclusion is by the marker, not by the amount)
         "team": "A",
         "total": Decimal("99999999.999999"),
-        "breakdown": '[{"total_clamped": true, "amount_usd": "0.000000"}, '
-        '{"component": "model", "amount_usd": "999.000000"}]',
+        "breakdown": '[{"total_clamped": true, "amount_usd": "0.000000"}, {"component": "model", "amount_usd": "999.000000"}]',
         "started": _STARTED_IN,
     },
     {  # (d) legacy — SQL-NULL breakdown contributes its total
@@ -117,10 +115,7 @@ _RUN_FIXTURE: list[dict[str, object]] = [
         # get NO bucket row at all (the HAVING drop)
         "team": "B",
         "total": Decimal("1.000000"),
-        "breakdown": '["garbage", {"component": "", "amount_usd": "1.000000"}, '
-        '{"component": 9, "amount_usd": "1.000000"}, '
-        '{"component": "junk", "amount_usd": "not-a-number"}, '
-        '{"component": "junk", "amount_usd": true}]',
+        "breakdown": '["garbage", {"component": "", "amount_usd": "1.000000"}, {"component": 9, "amount_usd": "1.000000"}, {"component": "junk", "amount_usd": "not-a-number"}, {"component": "junk", "amount_usd": true}]',
         "started": _STARTED_IN,
     },
     {  # (f) null amount — KEPT as a 0.000000 row (jsonb_typeof 'null')
@@ -179,10 +174,7 @@ _RUN_FIXTURE: list[dict[str, object]] = [
         # (typeof-gated at the DB level, mirroring the unit literal).
         "team": "B",
         "total": Decimal("5.000000"),
-        "breakdown": '[{"component": "model_stringfalse", "source": "self_reported", '
-        '"billable": "false", "amount_usd": "3.000000"}, '
-        '{"component": "model_nullbillable", "source": "self_reported", '
-        '"billable": null, "amount_usd": "2.000000"}]',
+        "breakdown": '[{"component": "model_stringfalse", "source": "self_reported", "billable": "false", "amount_usd": "3.000000"}, {"component": "model_nullbillable", "source": "self_reported", "billable": null, "amount_usd": "2.000000"}]',
         "started": _STARTED_IN,
     },
 ]
@@ -205,10 +197,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         {"id": str(org_id), "name": "Cost Bucket Org", "slug": f"cost-bucket-{org_id.hex[:8]}"},
     )
     await db_session.execute(
-        text(
-            "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-            "VALUES (:id, :email, :name, 'hash', 'local', true)"
-        ),
+        text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
         {
             "id": str(account_id),
             "email": f"cost-bucket-{account_id.hex[:8]}@integration.test",
@@ -232,11 +221,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         run_id = uuid.uuid4()
         await db_session.execute(
             text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "langgraph_thread_id, run_number, input_hash, owner_team_id, total_cost_usd, "
-                "cost_breakdown, started_at) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :num, :hash, :tid, :total, "
-                ":breakdown, :started)"
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, owner_team_id, total_cost_usd, cost_breakdown, started_at) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :num, :hash, :tid, :total, :breakdown, :started)"
             ),
             {
                 "id": str(run_id),
@@ -256,9 +241,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
 
     # --- the raw statement literals execute directly ------------------------
     since = _report_since(datetime.now(UTC).date(), "month")
-    component_rows = (
-        await db_session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})
-    ).all()
+    component_rows = (await db_session.execute(text(_SQL_COST_COMPONENT_BUCKETS), {"org_id": org_id, "since": since})).all()
 
     # exactly 11 GROUP rows: T1 {model, model_plain, model_explicit, storage},
     # T2 {model_stringfalse, model_nullbillable, tokens, egress, zero, credit},
@@ -267,10 +250,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     # FAR-1780 declared-only component (``model_declared``, billable false)
     # must NOT materialise either (4.0 excluded).
     assert len(component_rows) == 11
-    raw_buckets = {
-        (str(row.team_id) if row.team_id is not None else "__org__", row.component): row.amount_usd
-        for row in component_rows
-    }
+    raw_buckets = {(str(row.team_id) if row.team_id is not None else "__org__", row.component): row.amount_usd for row in component_rows}
     assert raw_buckets == {
         (str(team_a.id), "model"): Decimal("2.000000"),
         (str(team_a.id), "model_plain"): Decimal("1.000000"),
@@ -285,9 +265,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         ("__org__", "storage"): Decimal("0.750000"),
     }
 
-    legacy_total = (
-        await db_session.execute(text(_SQL_COST_LEGACY_TOTAL), {"org_id": org_id, "since": since})
-    ).scalar_one()
+    legacy_total = (await db_session.execute(text(_SQL_COST_LEGACY_TOTAL), {"org_id": org_id, "since": since})).scalar_one()
     # run 7's 2.0 + run 15's 3.0 — NOT the out-of-window 50, the non-array 5,
     # the marker's 99999999.999999, or the NULL-started_at 7.
     assert legacy_total == Decimal("5.000000")
@@ -337,10 +315,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         {"id": str(export_org_id), "name": "Cost Export Org", "slug": f"cost-export-{export_org_id.hex[:8]}"},
     )
     await db_session.execute(
-        text(
-            "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-            "VALUES (:id, :email, :name, 'hash', 'local', true)"
-        ),
+        text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
         {
             "id": str(export_account_id),
             "email": f"cost-export-{export_account_id.hex[:8]}@integration.test",
@@ -381,10 +356,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         (
             pipeline_one,
             Decimal("1.000000"),
-            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
-            '"amount_usd": "1.000000"}, '
-            '{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
-            '"amount_usd": "2.000000"}]',
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", "amount_usd": "1.000000"}, {"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", "amount_usd": "2.000000"}]',
             _STARTED_IN,
         ),
         (
@@ -415,10 +387,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
         (
             pipeline_one,
             Decimal("1.250000"),
-            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", '
-            '"billable": true, "amount_usd": "1.250000"}, '
-            '{"component": "m2_declared", "display_name": "M2", "source": "self_reported", '
-            '"billable": false, "amount_usd": "7.000000"}]',
+            '[{"component": "gpt4", "display_name": "GPT-4", "source": "self_reported", "billable": true, "amount_usd": "1.250000"}, {"component": "m2_declared", "display_name": "M2", "source": "self_reported", "billable": false, "amount_usd": "7.000000"}]',
             _STARTED_IN,
         ),
         # gpt4 with source='calculated' — EXCLUDED by the source filter
@@ -433,13 +402,7 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     await db_session.execute(text("SET session_replication_role = replica"))
     for export_run_number, (pid, total, breakdown, started) in enumerate(export_runs, start=1):
         await db_session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                "langgraph_thread_id, run_number, input_hash, total_cost_usd, cost_breakdown, "
-                "started_at) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :num, :hash, :total, "
-                ":breakdown, :started)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd, cost_breakdown, started_at) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, :num, :hash, :total, :breakdown, :started)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(export_org_id),
@@ -458,12 +421,8 @@ async def test_cost_bucket_sql_statements_execute_and_match_expected_buckets(db_
     export_since = _report_since(datetime.now(UTC).date(), "month")
 
     # --- _SQL_EXPORT_PIPELINE directly --------------------------------------
-    pipeline_rows = (
-        await db_session.execute(text(_SQL_EXPORT_PIPELINE), {"org_id": export_org_id, "since": export_since})
-    ).all()
-    pipeline_export = {
-        (str(row.pipeline_id), _safe_float(row.total_spend_usd), _safe_int(row.total_runs)) for row in pipeline_rows
-    }
+    pipeline_rows = (await db_session.execute(text(_SQL_EXPORT_PIPELINE), {"org_id": export_org_id, "since": export_since})).all()
+    pipeline_export = {(str(row.pipeline_id), _safe_float(row.total_spend_usd), _safe_int(row.total_runs)) for row in pipeline_rows}
     # `_SQL_EXPORT_PIPELINE` sums EVERY in-window run for the org — it ignores the
     # `cost_breakdown`; the per-component/model split is the job of
     # `_SQL_EXPORT_MODEL`, so the self_reported/calculated runs below DO count

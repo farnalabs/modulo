@@ -151,9 +151,7 @@ class TestOperatorWins:
 
     @pytest.mark.parametrize("raw", ["", "   "])
     @pytest.mark.asyncio
-    async def test_blank_env_var_is_off_not_a_licence_fallthrough(
-        self, monkeypatch: pytest.MonkeyPatch, raw: str
-    ) -> None:
+    async def test_blank_env_var_is_off_not_a_licence_fallthrough(self, monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
         """A set-but-empty env var is an explicit OFF, never "unset".
 
         Regression: blank-then-strip dropped the env source entirely, so a

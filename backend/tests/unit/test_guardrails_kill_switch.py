@@ -96,11 +96,7 @@ async def test_set_kill_switch_enable_audits_and_alerts(session: AsyncSession, m
         assert org.guardrails_kill_switch_at is not None
 
         # Audit event written.
-        audit = (
-            (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrails_kill_switch")))
-            .scalars()
-            .all()
-        )
+        audit = (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrails_kill_switch"))).scalars().all()
         assert len(audit) == 1
         assert audit[0].payload_json["enabled"] is True
 

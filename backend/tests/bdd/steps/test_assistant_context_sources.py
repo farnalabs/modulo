@@ -153,11 +153,7 @@ def build_system_prompt(request, ctx) -> None:
         tool_lines.append("- get_skill(name) — Load a skill by name")
 
     if tool_lines:
-        parts.append(
-            "## Available Knowledge Tools\n\nYou can retrieve additional knowledge by calling these tools:\n"
-            + "\n".join(tool_lines)
-            + "\n"
-        )
+        parts.append("## Available Knowledge Tools\n\nYou can retrieve additional knowledge by calling these tools:\n" + "\n".join(tool_lines) + "\n")
 
     # Organisation Skills (always_on or null)
     always_on_org = [s for s in ctx.get("org_skills", []) if s.source_mode is None or s.source_mode == "always_on"]
@@ -210,19 +206,12 @@ def call_get_integration_status(request, ctx) -> None:
 
 @when(parsers.parse('the user calls get_org_config with section "{section}"'))
 def call_get_org_config(section: str, request, ctx) -> None:
-    ctx["org_config_result"] = (
-        '| Key | Value |\n|-----|-------|\n| assistant_config:org-1 | {"system_prompt": "You are helpful."} |\n'
-    )
+    ctx["org_config_result"] = '| Key | Value |\n|-----|-------|\n| assistant_config:org-1 | {"system_prompt": "You are helpful."} |\n'
 
 
 @when("the user calls get_available_features")
 def call_get_available_features(request, ctx) -> None:
-    ctx["features_result"] = (
-        "| Feature | Required Tier | Available |\n"
-        "|---------|---------------|-----------|\n"
-        "| assistant_chat | core | yes |\n"
-        "| custom_skills | team | no |\n"
-    )
+    ctx["features_result"] = "| Feature | Required Tier | Available |\n|---------|---------------|-----------|\n| assistant_chat | core | yes |\n| custom_skills | team | no |\n"
 
 
 # ── Then steps ──────────────────────────────────────────────────────────

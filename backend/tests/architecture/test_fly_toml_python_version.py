@@ -43,13 +43,5 @@ def test_dockerfile_python_version_satisfies_pyproject():
     if not pinned:
         pytest.skip("No python base image found in backend Dockerfiles")
 
-    mismatches = [
-        (rel, minor) for rel, minor in pinned if minor < min_minor or (max_minor is not None and minor >= max_minor)
-    ]
-    assert not mismatches, (
-        "Deployment image uses a Python version outside backend/pyproject.toml's "
-        f"requires-python range (>=3.{min_minor}"
-        + (f",<3.{max_minor}" if max_minor is not None else "")
-        + "): "
-        + ", ".join(f"{rel} (python:3.{minor})" for rel, minor in mismatches)
-    )
+    mismatches = [(rel, minor) for rel, minor in pinned if minor < min_minor or (max_minor is not None and minor >= max_minor)]
+    assert not mismatches, f"Deployment image uses a Python version outside backend/pyproject.toml's requires-python range (>=3.{min_minor}" + (f",<3.{max_minor}" if max_minor is not None else "") + "): " + ", ".join(f"{rel} (python:3.{minor})" for rel, minor in mismatches)

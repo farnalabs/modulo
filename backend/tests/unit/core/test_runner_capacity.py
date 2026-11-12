@@ -478,9 +478,7 @@ async def test_gate_flag_on_statement_class_set_and_ordering(monkeypatch: pytest
     )
     _ = resolve_runner_capacity_decision
 
-    slot = await acquire_runner_dispatch_slot(
-        factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b"
-    )
+    slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b")
     assert slot.status == "acquired"
     assert slot.attempt_key == f"run:{_RUN}:node:n1:7"
     assert slot.marker_set is True
@@ -544,9 +542,7 @@ async def test_gate_denies_at_capacity_with_marker_rolled_back(monkeypatch: pyte
     monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
     with pytest.raises(RunnerCapacityDeniedError, match="at capacity"):
-        await acquire_runner_dispatch_slot(
-            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-        )
+        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
 
     # The denied transaction never reached the marker UPDATE (rolled back).
     assert not any("UPDATE runs SET sandbox_dispatch_state" in s for s in executed)
@@ -562,9 +558,7 @@ async def test_gate_skips_cap_for_non_host_resource_provider(monkeypatch: pytest
 
     monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
-    slot = await acquire_runner_dispatch_slot(
-        factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_E2B
-    )
+    slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_E2B)
     assert slot.status == "acquired"
     assert slot.marker_set is True
 
@@ -572,9 +566,7 @@ async def test_gate_skips_cap_for_non_host_resource_provider(monkeypatch: pytest
 async def test_gate_fenced_when_claim_superseded(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=False)
     factory = _fake_session({"claim_count": None})  # own-row SELECT answers no row
-    slot = await acquire_runner_dispatch_slot(
-        factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-    )
+    slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
     assert slot.status == "fenced"
     assert slot.attempt_key is None
     assert slot.marker_set is False
@@ -666,9 +658,7 @@ async def test_gate_lock_timeout_degrades_to_retryable_denial(monkeypatch: pytes
     factory = MagicMock(return_value=session_cm)
 
     with caplog_at_level_warning() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
-        await acquire_runner_dispatch_slot(
-            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-        )
+        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
     assert any("runner.capacity.lock_degraded" in m for m in caplog_ctx.messages)
 
 
@@ -705,9 +695,7 @@ async def test_gate_deadlock_is_distinct_alarm(monkeypatch: pytest.MonkeyPatch) 
     factory = MagicMock(return_value=session_cm)
 
     with caplog_at_level_error() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
-        await acquire_runner_dispatch_slot(
-            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-        )
+        await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
     assert any("runner.capacity.deadlock_degraded" in m for m in caplog_ctx.messages)
 
 
@@ -767,9 +755,7 @@ def caplog_at_level_error() -> Any:
 
 async def test_gate_missing_claim_context_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_gate(monkeypatch, flag_on=True)
-    slot = await acquire_runner_dispatch_slot(
-        MagicMock(), org_id=_ORG, run_id=_RUN, claim_token=None, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-    )
+    slot = await acquire_runner_dispatch_slot(MagicMock(), org_id=_ORG, run_id=_RUN, claim_token=None, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
     assert slot.status == "fail_open"
 
 
@@ -844,15 +830,11 @@ async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyP
         RUNNER_PROVIDER_LOCAL,
         RUNNER_PROVIDER_KUBERNETES,
     ):
-        slot = await acquire_runner_dispatch_slot(
-            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=provider_val
-        )
+        slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=provider_val)
         assert slot.status == "acquired"
         assert captured_markers, f"no marker captured for provider={provider_val}"
         parsed = json.loads(captured_markers[-1])
-        assert parsed["provider"] == provider_val, (
-            f"marker provider mismatch: expected {provider_val}, got {parsed.get('provider')}"
-        )
+        assert parsed["provider"] == provider_val, f"marker provider mismatch: expected {provider_val}, got {parsed.get('provider')}"
         assert "written_at" in parsed, f"written_at missing for provider={provider_val}"
 
 
@@ -1068,9 +1050,7 @@ def test_sweep_c_terminal_anomaly_codes_exempt() -> None:
     from farna.core.rollback_thresholds import SCRIPT_ANOMALY_ERROR_CODES
 
     for code in sorted(SCRIPT_ANOMALY_ERROR_CODES):
-        action = classify_sweep_action(
-            **_sweep_kwargs(status="failed", error_code=code, stale_reference=_NOW - timedelta(days=30))
-        )
+        action = classify_sweep_action(**_sweep_kwargs(status="failed", error_code=code, stale_reference=_NOW - timedelta(days=30)))
         assert action == "keep_anomaly", code
 
 
@@ -1097,12 +1077,7 @@ def test_sweep_d_terminal_crash_leaked_fence_clears_past_staleness() -> None:
     fence = json.dumps({"state": MARKER_STATE_SCRIPT_EXECUTING, "attempt_key": "k"})
     assert classify_sweep_action(**_sweep_kwargs(status="complete", marker_json=fence)) == "clear_terminal"
     # A just-terminalised run (marker fresh) keeps it — mid-teardown.
-    assert (
-        classify_sweep_action(
-            **_sweep_kwargs(status="complete", marker_json=fence, stale_reference=_NOW - timedelta(hours=2))
-        )
-        == "keep_live"
-    )
+    assert classify_sweep_action(**_sweep_kwargs(status="complete", marker_json=fence, stale_reference=_NOW - timedelta(hours=2))) == "keep_live"
 
 
 def test_sweep_d_terminal_crash_leaked_fence_without_age_reference_keeps() -> None:
@@ -1827,9 +1802,7 @@ async def test_sweep_org_failure_raises_typed_error(monkeypatch: pytest.MonkeyPa
         await reconcile_runner_dispatch_markers(_factory)  # type: ignore[arg-type]
 
 
-async def test_sweep_acquires_marker_lock_on_dedicated_connection(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_sweep_acquires_marker_lock_on_dedicated_connection(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-766 (prove-the-fix): the marker sweep acquires the SESSION-scoped
     dedup advisory lock on a DEDICATED ``engine.connect()`` connection using
     ``pg_try_advisory_lock`` (never the blocking ``pg_advisory_lock``), and
@@ -1855,9 +1828,7 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     monkeypatch.setattr(rc, "_run_recoverable", AsyncMock(return_value=False))
 
     lock_engine = _FakeLockEngine(try_lock_returns=True)
-    stale_marker = json.dumps(
-        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
-    )
+    stale_marker = json.dumps({"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()})
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
 
     parent_factory = _FakeSweepFactory([stale_awaiting])
@@ -1873,16 +1844,12 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     assert lock_engine.last_conn is not None
     assert lock_engine.last_conn.unlocked
     assert lock_engine.close_calls == 1, "the dedicated connection must be closed after the sweep"
-    assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), (
-        "the advisory lock must be acquired — the lock_failed fail-open path must not fire"
-    )
+    assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), "the advisory lock must be acquired — the lock_failed fail-open path must not fire"
     assert result["cleared"] == 1, "with the lock held, the sweep proceeds to clear the stale marker"
     assert stale_awaiting.id in parent_factory.cleared
 
 
-async def test_sweep_proceeds_when_advisory_lock_not_acquired(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_sweep_proceeds_when_advisory_lock_not_acquired(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """A dedup lock that can never be acquired (``pg_try_advisory_lock`` returns
     False every poll) must FAIL OPEN: the sweep PROCEEDS to clear stale markers
     rather than skipping the whole tick. A skipped sweep would let stale markers
@@ -1905,9 +1872,7 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
     # Simulate the dedup lock NOT being acquired — exercise the fail-open proceed path.
     monkeypatch.setattr(rc, "_acquire_sweep_dedup_lock", AsyncMock(return_value=(False, None)))
 
-    stale_marker = json.dumps(
-        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
-    )
+    stale_marker = json.dumps({"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()})
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
 
     factory = _FakeSweepFactory([stale_awaiting])
@@ -1920,9 +1885,7 @@ async def test_sweep_proceeds_when_advisory_lock_not_acquired(
 
     assert result["cleared"] == 1, "fail-open must proceed and clear the stale marker"
     assert stale_awaiting.id in factory.cleared, "a fail-open sweep must clear the stale marker"
-    assert any("runner.capacity.marker_sweep_proceeding_without_lock" in r.message for r in caplog.records), (
-        "the fail-open path must log marker_sweep_proceeding_without_lock"
-    )
+    assert any("runner.capacity.marker_sweep_proceeding_without_lock" in r.message for r in caplog.records), "the fail-open path must log marker_sweep_proceeding_without_lock"
 
 
 async def test_sweep_serialises_contending_sweeps_via_polling(
@@ -1973,9 +1936,7 @@ async def test_sweep_serialises_contending_sweeps_via_polling(
             return self.last_conn
 
     lock_engine = _ContendedLockEngine()
-    stale_marker = json.dumps(
-        {"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()}
-    )
+    stale_marker = json.dumps({"state": MARKER_STATE_CLEARED_AT_HITL, "written_at": (_NOW - timedelta(hours=30)).isoformat()})
     stale_awaiting = _Row(status="awaiting_human", sandbox_dispatch_state=stale_marker)
     factory = _FakeSweepFactory([stale_awaiting])
     factory.kw["bind"] = lock_engine  # type: ignore[attr-defined]
@@ -2298,9 +2259,7 @@ async def test_saq_cron_persists_partial_counts_and_reraises(monkeypatch: pytest
     assert payload["scanned"] == 3
     assert payload["cleared"] == 1
     assert payload["orgs_failed"] == 1
-    assert payload["error"] == (
-        "sweep_failed (RunnerMarkerSweepError: scanned=3, cleared=1, transitioned=0, org_failures=1)"
-    )
+    assert payload["error"] == ("sweep_failed (RunnerMarkerSweepError: scanned=3, cleared=1, transitioned=0, org_failures=1)")
 
 
 # ---------------------------------------------------------------------------
@@ -2427,9 +2386,7 @@ async def test_resume_gate_converges_onto_reserved_namespace(monkeypatch: pytest
     _ = count_active_runner_dispatches_for_decision
 
     with pytest.raises(SandboxCapacityExceededError):
-        await executor._enforce_resume_sandbox_capacity(
-            session, org_id=_ORG, run_id=uuid.uuid4(), snapshot_id=uuid.uuid4()
-        )
+        await executor._enforce_resume_sandbox_capacity(session, org_id=_ORG, run_id=uuid.uuid4(), snapshot_id=uuid.uuid4())
 
     advisory = [(t, p) for t, p in executed if "pg_advisory_xact_lock" in t]
     assert advisory, "the flag-on resume gate must take the per-org advisory lock"
@@ -2485,9 +2442,7 @@ async def test_resume_gate_lock_timeout_maps_to_retryable_capacity_error(
     monkeypatch.setattr("farna.core.runner_capacity.read_runner_cap_contract", _fake_contract)
 
     with pytest.raises(SandboxCapacityExceededError) as exc_info:
-        await executor._enforce_resume_sandbox_capacity(
-            session, org_id=_ORG, run_id=uuid.uuid4(), snapshot_id=uuid.uuid4()
-        )
+        await executor._enforce_resume_sandbox_capacity(session, org_id=_ORG, run_id=uuid.uuid4(), snapshot_id=uuid.uuid4())
     # The mapped error carries the 55P03 DBAPI chain (sqlstate_of extraction).
     dbapi_cause = exc_info.value.__cause__
     assert dbapi_cause is not None
@@ -2598,12 +2553,8 @@ async def test_sweep_org_lock_timeout_fail_open(
     # The org pass was counted as failed.
     assert excinfo.value.org_failures == 1
     # The distinctive lock-timeout event was logged (not the generic org_failed).
-    assert any("marker_sweep_org_lock_timeout" in r.message for r in caplog.records), (
-        "lock_timeout must emit marker_sweep_org_lock_timeout, not generic org_failed"
-    )
-    assert not any("marker_sweep_org_failed" in r.message for r in caplog.records), (
-        "lock_timeout must NOT emit the generic marker_sweep_org_failed"
-    )
+    assert any("marker_sweep_org_lock_timeout" in r.message for r in caplog.records), "lock_timeout must emit marker_sweep_org_lock_timeout, not generic org_failed"
+    assert not any("marker_sweep_org_failed" in r.message for r in caplog.records), "lock_timeout must NOT emit the generic marker_sweep_org_failed"
 
 
 async def test_sweep_lock_timeout_only_affected_org(
@@ -2864,9 +2815,7 @@ class TestHotRunsRowLockBoundFAR1601:
 
         monkeypatch.setattr("farna.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
 
-        slot = await acquire_runner_dispatch_slot(
-            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b"
-        )
+        slot = await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b")
         assert slot.status == "acquired"
 
         texts = [text_stmt for text_stmt, _params in statements]
@@ -2874,9 +2823,7 @@ class TestHotRunsRowLockBoundFAR1601:
         rowlock_at = [i for i, s in enumerate(texts) if "FOR UPDATE" in s]
         assert bound_at, f"flag-off issued NO transaction-local lock bound; statements={texts}"
         assert rowlock_at, f"the own-row FOR UPDATE never ran; statements={texts}"
-        assert bound_at[0] < rowlock_at[0], (
-            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, FOR UPDATE at {rowlock_at[0]})"
-        )
+        assert bound_at[0] < rowlock_at[0], f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, FOR UPDATE at {rowlock_at[0]})"
         # SET LOCAL semantics: set_config(..., is_local => true) — transaction-
         # scoped, reverts on COMMIT/ROLLBACK, never leaks onto the pool.
         assert ", true)" in texts[bound_at[0]]
@@ -2917,9 +2864,7 @@ class TestHotRunsRowLockBoundFAR1601:
         factory = MagicMock(return_value=session_cm)
 
         with caplog_at_level_warning() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
-            await acquire_runner_dispatch_slot(
-                factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
-            )
+            await acquire_runner_dispatch_slot(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER)
         assert any("runner.capacity.lock_degraded" in m for m in caplog_ctx.messages)
 
     async def test_hitl_tombstone_bounds_its_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2953,9 +2898,7 @@ class TestHotRunsRowLockBoundFAR1601:
         update_at = [i for i, s in enumerate(texts) if "UPDATE runs SET sandbox_dispatch_state" in s]
         assert bound_at, f"no transaction-local lock bound issued; statements={texts}"
         assert update_at, f"the tombstone UPDATE never ran; statements={texts}"
-        assert bound_at[0] < update_at[0], (
-            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
-        )
+        assert bound_at[0] < update_at[0], f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
         assert ", true)" in texts[bound_at[0]]
         bound_params = executed[bound_at[0]][1]
         assert bound_params == {"val": "4321ms"}

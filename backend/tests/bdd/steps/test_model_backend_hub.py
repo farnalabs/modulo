@@ -167,9 +167,7 @@ def hub_initialises(name: str, hub_ctx):
 
 @then(parsers.parse('the resolved backend is "{name}"'))
 def resolved_backend(name: str, hub_ctx):
-    assert hub_ctx["resolved"] is hub_ctx["backend_objs"][name], (
-        f"expected backend {name!r}, got {hub_ctx['resolved']!r}"
-    )
+    assert hub_ctx["resolved"] is hub_ctx["backend_objs"][name], f"expected backend {name!r}, got {hub_ctx['resolved']!r}"
 
 
 @then("an unavailable error is raised")
@@ -186,19 +184,12 @@ def not_found_error(hub_ctx):
 def audit_event_recorded(primary: str, fallback: str, hub_ctx):
     primary_id = str(hub_ctx["backend_ids"][primary])
     fallback_id = str(hub_ctx["backend_ids"][fallback])
-    assert any(
-        e.get("event_type") == "model_failover"
-        and e.get("primary_id") == primary_id
-        and e.get("fallback_id") == fallback_id
-        for e in hub_ctx["audit_events"]
-    ), f"no model_failover event {primary_id} -> {fallback_id} in {hub_ctx['audit_events']}"
+    assert any(e.get("event_type") == "model_failover" and e.get("primary_id") == primary_id and e.get("fallback_id") == fallback_id for e in hub_ctx["audit_events"]), f"no model_failover event {primary_id} -> {fallback_id} in {hub_ctx['audit_events']}"
 
 
 @then(parsers.parse('the secret backend was read exactly once for "{name}"'))
 def secret_read_once(name: str, hub_ctx):
-    assert hub_ctx["secret_reads"].get(name, 0) == 1, (
-        f"expected exactly one secret read for {name!r}, got {hub_ctx['secret_reads'].get(name, 0)}"
-    )
+    assert hub_ctx["secret_reads"].get(name, 0) == 1, f"expected exactly one secret read for {name!r}, got {hub_ctx['secret_reads'].get(name, 0)}"
 
 
 @then(parsers.parse('backend "{name}" is registered in the hub'))

@@ -180,11 +180,7 @@ def _enrich_env(*, run: MagicMock | Exception, instances: list, hub: MagicMock):
     """
     lister = AsyncMock(return_value=SimpleNamespace(items=instances))
     hub_cls = MagicMock(return_value=hub)
-    run_patcher = (
-        patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=run)
-        if isinstance(run, Exception)
-        else patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run)
-    )
+    run_patcher = patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, side_effect=run) if isinstance(run, Exception) else patch("farna.api.routes.runs.get_run", new_callable=AsyncMock, return_value=run)
     with (
         run_patcher,
         patch("farna.core.work_item_enrichment.list_connector_instances", new=lister),

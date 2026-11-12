@@ -254,9 +254,7 @@ class TestSupportedInferenceTypes:
             SUPPORTED_INFERENCE_TYPES,
         )
 
-        assert (
-            frozenset(connector_type.value for connector_type in _CONNECTOR_TYPE_CATEGORY) == SUPPORTED_INFERENCE_TYPES
-        )
+        assert frozenset(connector_type.value for connector_type in _CONNECTOR_TYPE_CATEGORY) == SUPPORTED_INFERENCE_TYPES
 
     def test_non_sampled_connector_types_are_not_admitted(self) -> None:
         from farna.connectors.base import ConnectorType

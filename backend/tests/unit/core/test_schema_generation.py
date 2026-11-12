@@ -144,9 +144,7 @@ class TestSchemaGenerationService:
 
     async def test_generate_rejects_non_fenced_surrounding_text(self) -> None:
         expected = {"type": "object", "properties": {"id": {"type": "string"}}}
-        backend = _FakeBackend(
-            response=(f"Here is your schema:\n{json.dumps(expected)}\n\nLet me know if you need changes.")
-        )
+        backend = _FakeBackend(response=(f"Here is your schema:\n{json.dumps(expected)}\n\nLet me know if you need changes."))
         service = SchemaGenerationService(backend)
         with pytest.raises(SchemaGenerationError, match="Failed to parse"):
             await service.generate("A schema")

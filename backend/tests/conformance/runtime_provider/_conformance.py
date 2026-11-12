@@ -173,10 +173,7 @@ async def assert_workspace_created_and_running(provider: RuntimeProvider) -> Non
     ref = await _create_workspace(provider)
     try:
         status = await provider.get_workspace_status(ref)
-        assert status == "running", (
-            f"create_workspace returned {ref!r} but get_workspace_status reports {status!r} "
-            "(expected 'running' - the provider must wait for the pod before returning)"
-        )
+        assert status == "running", f"create_workspace returned {ref!r} but get_workspace_status reports {status!r} (expected 'running' - the provider must wait for the pod before returning)"
     finally:
         await destroy_workspace_quietly(provider, ref)
 
@@ -186,9 +183,7 @@ async def assert_exec_exit_zero(provider: RuntimeProvider) -> None:
     ref = await _create_workspace(provider)
     try:
         result = await provider.exec_command(ref, ["sh", "-c", "echo conformance-zero-ok"], cmd_timeout=_EXEC_TIMEOUT_S)
-        assert result.exit_code == 0, (
-            f"exit-0 command returned exit_code={result.exit_code} (stderr={result.stderr!r}) - expected 0"
-        )
+        assert result.exit_code == 0, f"exit-0 command returned exit_code={result.exit_code} (stderr={result.stderr!r}) - expected 0"
         assert "conformance-zero-ok" in result.stdout, f"stdout lost the echoed marker: {result.stdout!r}"
     finally:
         await destroy_workspace_quietly(provider, ref)
@@ -204,11 +199,7 @@ async def assert_exec_nonzero_exit_code_mapped(provider: RuntimeProvider) -> Non
     ref = await _create_workspace(provider)
     try:
         result = await provider.exec_command(ref, ["sh", "-c", "exit 7"], cmd_timeout=_EXEC_TIMEOUT_S)
-        assert result.exit_code == 7, (
-            f"a command that exits 7 must report exit_code=7 (fabricated success or an "
-            f"opaque -1 both break the contract); got {result.exit_code} "
-            f"(stderr={result.stderr!r})"
-        )
+        assert result.exit_code == 7, f"a command that exits 7 must report exit_code=7 (fabricated success or an opaque -1 both break the contract); got {result.exit_code} (stderr={result.stderr!r})"
     finally:
         await destroy_workspace_quietly(provider, ref)
 
@@ -239,14 +230,10 @@ async def assert_stream_ordered_with_clean_exit(provider: RuntimeProvider) -> No
         stderr_text = "".join(stderr_parts)
         assert "cf-out-1" in stdout_text, f"stdout marker 1 missing: {stdout_text!r}"
         assert "cf-out-2" in stdout_text, f"stdout marker 2 missing: {stdout_text!r}"
-        assert stdout_text.index("cf-out-1") < stdout_text.index("cf-out-2"), (
-            f"stdout chunks arrived out of order: {stdout_text!r}"
-        )
+        assert stdout_text.index("cf-out-1") < stdout_text.index("cf-out-2"), f"stdout chunks arrived out of order: {stdout_text!r}"
         assert "cf-err-1" in stderr_text, f"stderr marker 1 missing: {stderr_text!r}"
         assert "cf-err-2" in stderr_text, f"stderr marker 2 missing: {stderr_text!r}"
-        assert stderr_text.index("cf-err-1") < stderr_text.index("cf-err-2"), (
-            f"stderr chunks arrived out of order: {stderr_text!r}"
-        )
+        assert stderr_text.index("cf-err-1") < stderr_text.index("cf-err-2"), f"stderr chunks arrived out of order: {stderr_text!r}"
         assert process.error is None, f"a healthy stream must end without an error: {process.error}"
         assert process.exit_code == 0, f"a healthy stream must end with exit_code=0, got {process.exit_code!r}"
     finally:
@@ -281,11 +268,7 @@ async def assert_stream_kill_before_collect_detected(provider: RuntimeProvider) 
         # the suite would then "pass" kill detection while never observing a
         # live stream at all (observed exactly that during local validation).
         seen_before_kill = "".join(marker_seen)
-        assert "cf-kill-live" in seen_before_kill, (
-            "the stream never delivered the live marker before the kill, so "
-            "kill-before-collect cannot be tested on it (broken exec path?): "
-            f"received {seen_before_kill!r}"
-        )
+        assert "cf-kill-live" in seen_before_kill, f"the stream never delivered the live marker before the kill, so kill-before-collect cannot be tested on it (broken exec path?): received {seen_before_kill!r}"
 
         await process.kill()
         # Drain so the chunk generator finalises and ``done`` fires.
@@ -293,13 +276,8 @@ async def assert_stream_kill_before_collect_detected(provider: RuntimeProvider) 
             pass
         await asyncio.wait_for(process.done.wait(), timeout=_STREAM_DONE_WAIT_S)
 
-        assert process.exit_code is None, (
-            f"kill-before-collect fabricated exit_code={process.exit_code!r} - a stream killed "
-            "before its exit status arrived must never report a completed (successful) process"
-        )
-        assert process.error is not None, (
-            "kill-before-collect must surface a stream error (detected), not a silent healthy-looking end"
-        )
+        assert process.exit_code is None, f"kill-before-collect fabricated exit_code={process.exit_code!r} - a stream killed before its exit status arrived must never report a completed (successful) process"
+        assert process.error is not None, "kill-before-collect must surface a stream error (detected), not a silent healthy-looking end"
     finally:
         await destroy_workspace_quietly(provider, ref)
 
@@ -321,18 +299,11 @@ async def assert_log_tail_after_process_end(provider: RuntimeProvider) -> None:
             ["sh", "-c", f"( echo {_LOG_TAIL_MARKER} ) > {_WORKSPACE_LOG_PATH} 2>&1"],
             cmd_timeout=_EXEC_TIMEOUT_S,
         )
-        assert result.exit_code == 0, (
-            f"probing command failed (exit_code={result.exit_code}) - the log-tail read below would not prove anything"
-        )
+        assert result.exit_code == 0, f"probing command failed (exit_code={result.exit_code}) - the log-tail read below would not prove anything"
         tail = await provider.read_log_tail(ref, max_bytes=_LOG_TAIL_MAX_BYTES)
         assert isinstance(tail, bytes), f"read_log_tail must return raw bytes, got {type(tail).__name__}"
-        assert len(tail) <= _LOG_TAIL_MAX_BYTES, (
-            f"read_log_tail ignored max_bytes={_LOG_TAIL_MAX_BYTES}: returned {len(tail)} bytes"
-        )
-        assert _LOG_TAIL_MARKER.encode("utf-8") in tail, (
-            "read_log_tail returned no workspace content after the process ended: "
-            f"expected {_LOG_TAIL_MARKER!r} in the tail, got {tail!r}"
-        )
+        assert len(tail) <= _LOG_TAIL_MAX_BYTES, f"read_log_tail ignored max_bytes={_LOG_TAIL_MAX_BYTES}: returned {len(tail)} bytes"
+        assert _LOG_TAIL_MARKER.encode("utf-8") in tail, f"read_log_tail returned no workspace content after the process ended: expected {_LOG_TAIL_MARKER!r} in the tail, got {tail!r}"
     finally:
         await destroy_workspace_quietly(provider, ref)
 
@@ -349,14 +320,10 @@ async def assert_destroy_by_ref_idempotent(provider: RuntimeProvider) -> None:
     assert first is True, f"first destroy of {ref!r} must confirm removal, got {first!r}"
 
     status = await await_workspace_status(provider, ref, "terminated")
-    assert status == "terminated", (
-        f"status must read 'terminated' once the pod is gone, got {status!r} (polled {_STATUS_POLL_BOUND_S:.0f}s)"
-    )
+    assert status == "terminated", f"status must read 'terminated' once the pod is gone, got {status!r} (polled {_STATUS_POLL_BOUND_S:.0f}s)"
 
     second = await provider.destroy_workspace_by_ref(ref)
-    assert second is True, (
-        f"second destroy of the already-gone ref {ref!r} must be an idempotent no-op success, got {second!r}"
-    )
+    assert second is True, f"second destroy of the already-gone ref {ref!r} must be an idempotent no-op success, got {second!r}"
 
     # A realistic-looking ref this run never created: the idempotent
     # no-op-success clause must cover it (the pod is already gone), never an

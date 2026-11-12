@@ -976,9 +976,7 @@ async def test_create_workspace_applies_hardening_security_options(
     config = mock_docker_client.containers.create.call_args[1]["config"]
     security_opt = config["HostConfig"]["SecurityOpt"]
     if required_entry.endswith("="):
-        assert any(entry.startswith(required_entry) for entry in security_opt), (
-            f"Expected a {description} entry in SecurityOpt, got: {security_opt}"
-        )
+        assert any(entry.startswith(required_entry) for entry in security_opt), f"Expected a {description} entry in SecurityOpt, got: {security_opt}"
     else:
         assert required_entry in security_opt, f"Expected {description} in SecurityOpt, got: {security_opt}"
 

@@ -55,11 +55,7 @@ async def prefs_tenant(
             {"oid": str(test_org), "aid": str(test_user)},
         )
         await conn.execute(
-            text(
-                "UPDATE accounts "
-                "SET preferences = coalesce(preferences, '{}'::jsonb) - 'notification_dashboard_level' "
-                "WHERE id = :aid"
-            ),
+            text("UPDATE accounts SET preferences = coalesce(preferences, '{}'::jsonb) - 'notification_dashboard_level' WHERE id = :aid"),
             {"aid": str(test_user)},
         )
     return {"org_id": test_org, "user_id": test_user}
@@ -170,9 +166,7 @@ async def test_delta_put_round_trips_through_get(
     assert reloaded["notification_opt_outs"][category_a] is True
     assert reloaded["notification_opt_outs"][category_b] is True
     # A single-key delta must not clear the other categories.
-    untouched = {
-        key: value for key, value in reloaded["notification_opt_outs"].items() if key not in (category_a, category_b)
-    }
+    untouched = {key: value for key, value in reloaded["notification_opt_outs"].items() if key not in (category_a, category_b)}
     assert all(value is False for value in untouched.values())
 
 
@@ -195,10 +189,7 @@ async def test_repeated_put_is_an_idempotent_upsert(
     async with db_engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT count(*) FROM notification_preferences "
-                    "WHERE organisation_id = :oid AND account_id = :aid AND category = :cat"
-                ),
+                text("SELECT count(*) FROM notification_preferences WHERE organisation_id = :oid AND account_id = :aid AND category = :cat"),
                 {
                     "oid": str(prefs_tenant["org_id"]),
                     "aid": str(prefs_tenant["user_id"]),

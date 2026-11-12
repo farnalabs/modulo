@@ -57,9 +57,7 @@ def _mocked_executor() -> PipelineExecutor:
     executor._build_eval_defs_by_node = MagicMock(return_value={})
     # The terminalization path is mocked so we can ASSERT what flows into it
     # without needing a database.
-    executor._run_post_stream_and_teardown = AsyncMock(
-        return_value=("failed", "sandbox.tier_refused", "local tier refused")
-    )
+    executor._run_post_stream_and_teardown = AsyncMock(return_value=("failed", "sandbox.tier_refused", "local tier refused"))
     final_run = MagicMock()
     executor._finalize_run_after_stream = AsyncMock(return_value=final_run)
     # The objection of the test: the retry policy must NEVER be consulted for a

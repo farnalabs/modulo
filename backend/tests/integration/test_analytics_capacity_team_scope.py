@@ -132,11 +132,7 @@ async def _seed_pending_run(
     run_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "input_hash, langgraph_thread_id, run_number, owner_team_id, created_at) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :hash, :thread, :num, :tid, :created)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number, owner_team_id, created_at) VALUES (:id, :oid, :pid, :sid, 'manual', 'pending', :hash, :thread, :num, :tid, :created)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -157,35 +153,25 @@ async def _cleanup(db_engine: AsyncEngine, pipeline_ids: list[uuid.UUID]) -> Non
     async with db_engine.begin() as conn:
         for pipeline_id in pipeline_ids:
             await conn.execute(text("DELETE FROM runs WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
-            await conn.execute(
-                text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)}
-            )
+            await conn.execute(text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
             await conn.execute(text("DELETE FROM pipelines WHERE id = :pid"), {"pid": str(pipeline_id)})
 
 
-async def _seed_foreign_and_caller(
-    db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID
-) -> tuple[uuid.UUID, uuid.UUID, list[uuid.UUID]]:
+async def _seed_foreign_and_caller(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID, list[uuid.UUID]]:
     """Caller team + foreign team; a SOFT-DELETED foreign pipeline and a live
     caller pipeline, each carrying a surviving pending run. Returns
     ``(caller_team, foreign_pipeline_id, cleanup_ids)`` and the caller pipeline
     id is ``cleanup_ids[1]``."""
     caller_team = await _seed_team(db_engine, org_id, account_id, "caller")
     foreign_team = await _seed_team(db_engine, org_id, account_id, "foreign")
-    foreign_pipeline_id, foreign_snapshot_id = await _seed_pipeline(
-        db_engine, org_id, account_id, foreign_team, soft_deleted=True
-    )
-    caller_pipeline_id, caller_snapshot_id = await _seed_pipeline(
-        db_engine, org_id, account_id, caller_team, soft_deleted=False
-    )
+    foreign_pipeline_id, foreign_snapshot_id = await _seed_pipeline(db_engine, org_id, account_id, foreign_team, soft_deleted=True)
+    caller_pipeline_id, caller_snapshot_id = await _seed_pipeline(db_engine, org_id, account_id, caller_team, soft_deleted=False)
     await _seed_pending_run(db_engine, org_id, foreign_pipeline_id, foreign_snapshot_id, foreign_team)
     await _seed_pending_run(db_engine, org_id, caller_pipeline_id, caller_snapshot_id, caller_team)
     return caller_team, foreign_pipeline_id, [foreign_pipeline_id, caller_pipeline_id]
 
 
-async def test_team_scope_excludes_soft_deleted_foreign_pipeline(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_team_scope_excludes_soft_deleted_foreign_pipeline(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """The scoped row query must not return the deleted foreign pipeline's run,
     while still returning the caller's own live pipeline run (non-vacuous)."""
     caller_team, foreign_pipeline_id, cleanup_ids = await _seed_foreign_and_caller(db_engine, test_org, test_user)
@@ -212,9 +198,7 @@ async def test_team_scope_excludes_soft_deleted_foreign_pipeline(
         await _cleanup(db_engine, cleanup_ids)
 
 
-async def test_team_scope_empty_team_fails_closed_on_soft_deleted_foreign_pipeline(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_team_scope_empty_team_fails_closed_on_soft_deleted_foreign_pipeline(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """An empty caller team is FAIL-CLOSED: only org-level pipelines are visible,
     so neither the deleted foreign pipeline nor the caller's own pipeline's run
     may be returned."""
@@ -242,9 +226,7 @@ async def test_team_scope_empty_team_fails_closed_on_soft_deleted_foreign_pipeli
         await _cleanup(db_engine, cleanup_ids)
 
 
-async def test_run_capacity_query_report_never_names_a_foreign_pipeline(
-    db_engine: AsyncEngine, db_url: str, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_run_capacity_query_report_never_names_a_foreign_pipeline(db_engine: AsyncEngine, db_url: str, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """Service-layer coverage for ``run_capacity_query`` / ``_team_scope`` / the
     ``visible_pipeline_ids`` derivation: the assembled report's
     ``pending.by_pipeline`` and every ``series[].by_pipeline`` must not name the

@@ -296,9 +296,7 @@ class TestRollback:
         with (
             patch(
                 "farna.api.routes.agents.rollback_prompt_version",
-                side_effect=GitContentRefError(
-                    "prompt_template 'git+https://github.com/example/repo.git@main#p.md' is not pinned to a commit SHA"
-                ),
+                side_effect=GitContentRefError("prompt_template 'git+https://github.com/example/repo.git@main#p.md' is not pinned to a commit SHA"),
             ),
             patch("farna.api.routes.agents.set_rls_org"),
         ):

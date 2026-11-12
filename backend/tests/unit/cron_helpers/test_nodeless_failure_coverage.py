@@ -149,9 +149,7 @@ class TestPreservedBehaviour:
         assert ch._should_redispatch_nodeless(_row(4)) is True
         assert ch._should_redispatch_nodeless(_row(5)) is False
 
-    def test_carve_out_budget_is_derived_from_the_shared_matcher(
-        self, monkeypatch: pytest.MonkeyPatch, budget_default: None
-    ) -> None:
+    def test_carve_out_budget_is_derived_from_the_shared_matcher(self, monkeypatch: pytest.MonkeyPatch, budget_default: None) -> None:
         """The carve-out asks the SHARED ``_retry_after_policy`` matcher for
         the failure budget instead of re-validating ``max_retries`` by hand
         (F3): a matcher that answers with a DIFFERENT budget moves the
@@ -161,9 +159,7 @@ class TestPreservedBehaviour:
 
         real = executor_module._retry_after_policy
 
-        def _fake(
-            policy: Any, final_status: str, error_code: str | None, error_detail: str | None = None
-        ) -> int | None:
+        def _fake(policy: Any, final_status: str, error_code: str | None, error_detail: str | None = None) -> int | None:
             if final_status == "failed":
                 # The carve-out's derivation call — answer with 1, not the
                 # policy's max_retries, so the decision proves which source won.

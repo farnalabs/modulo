@@ -92,9 +92,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     plan = MagicMock()
     plan.feature_enabled.return_value = True
     plan.list_enabled_features.return_value = []
@@ -619,9 +617,7 @@ def test_reset_circuit_breaker_works_without_team_license(client: tuple[TestClie
 def test_reset_circuit_breaker_requires_org_admin(client: tuple[TestClient, AsyncMock], role: str) -> None:
     """The reset stays behind the org-admin ``cost.manage`` permission on every plan."""
     http, _session = client
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username=f"{role}@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role)
     reset = AsyncMock(return_value=1)
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_PREFIX}reset_pipeline_circuit_breaker", new=reset))

@@ -363,9 +363,7 @@ def test_policy_from_pipeline_default_absent_on_matches_explicit_four_event_list
     four-event run-level list at the node level — same attempt ceiling, same
     node event set, same backoff."""
     absent = rc._policy_from_pipeline_default({"max_retries": 2, "backoff": 1.5})
-    explicit = rc._policy_from_pipeline_default(
-        {"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 2, "backoff": 1.5}
-    )
+    explicit = rc._policy_from_pipeline_default({"on": ["stall", "timeout", "failure", "eval_failed"], "max_retries": 2, "backoff": 1.5})
     assert absent == explicit
 
 
@@ -424,14 +422,10 @@ def test_resolve_backoff_schedule_absent_variants() -> None:
 
 
 def test_resolve_backoff_schedule_valid_fixed_and_growth() -> None:
-    present, delay, mult, reason = rc.resolve_backoff_schedule(
-        {"backoff_schedule": {"delay_seconds": 30, "multiplier": 1.0}}
-    )
+    present, delay, mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 30, "multiplier": 1.0}})
     assert (present, delay, mult, reason) == (True, 30.0, 1.0, None)
 
-    present, delay, mult, reason = rc.resolve_backoff_schedule(
-        {"backoff_schedule": {"delay_seconds": 10, "multiplier": 3}}
-    )
+    present, delay, mult, reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 10, "multiplier": 3}})
     assert (present, delay, mult, reason) == (True, 10.0, 3.0, None)
 
 
@@ -443,9 +437,7 @@ def test_resolve_backoff_schedule_multiplier_defaults_to_2() -> None:
 def test_resolve_backoff_schedule_canonicalizes_types() -> None:
     """Integral floats -> int-valued floats; ints -> floats — the resolved
     values are type-stable so a re-resolve is deterministic."""
-    _present, delay, mult, _reason = rc.resolve_backoff_schedule(
-        {"backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}}
-    )
+    _present, delay, mult, _reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}})
     assert delay == 300.0
     assert isinstance(mult, float)
     assert mult == 2.0
@@ -601,9 +593,7 @@ def test_resolve_backoff_schedule_default_schedule_value_matches_executor_defaul
     for attempt in (1, 2, 3, 4, 5):
         _present, delay, mult, _reason = rc.resolve_backoff_schedule({"backoff_schedule": {"delay_seconds": 0}})
         assert (delay, mult) == (45.0, 2.0)
-        assert retry_policy_module.retry_backoff_seconds(attempt, base=delay, multiplier=mult) == min(
-            45.0 * 2.0 ** (attempt - 1), 300.0
-        )
+        assert retry_policy_module.retry_backoff_seconds(attempt, base=delay, multiplier=mult) == min(45.0 * 2.0 ** (attempt - 1), 300.0)
 
 
 # ---------------------------------------------------------------------------
@@ -656,15 +646,11 @@ def test_write_sites_produce_identical_canonical_stored_output() -> None:
         {"delay_seconds": 1, "multiplier": 10},
     ):
         api_out = _validate_retry_policy({"on": ["failure"], "max_retries": 2, "backoff_schedule": dict(schedule)})
-        import_out, fault = _sanitize_retry_policy(
-            {"on": ["failure"], "max_retries": 2, "backoff_schedule": dict(schedule)}
-        )
+        import_out, fault = _sanitize_retry_policy({"on": ["failure"], "max_retries": 2, "backoff_schedule": dict(schedule)})
         assert fault is None, schedule
         assert api_out is not None, schedule
         assert import_out is not None, schedule
         assert api_out["backoff_schedule"] == import_out["backoff_schedule"], schedule
     # Spot-check the canonical spellings survive both sites identically.
-    api_out = _validate_retry_policy(
-        {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}}
-    )
+    api_out = _validate_retry_policy({"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0, "multiplier": 2}})
     assert api_out["backoff_schedule"] == {"delay_seconds": 300, "multiplier": 2.0}

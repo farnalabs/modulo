@@ -217,9 +217,7 @@ def test_validate_capability_scopes_rejects_blank_entry_on_a_connector_node():
 
 def test_agent_granted_connector_types_handles_both_shapes():
     # dict form
-    assert agent_granted_connector_types(
-        [{"connector_type": "github", "capabilities": ["issue_read"]}, {"connector_type": "slack"}]
-    ) == {"github", "slack"}
+    assert agent_granted_connector_types([{"connector_type": "github", "capabilities": ["issue_read"]}, {"connector_type": "slack"}]) == {"github", "slack"}
     # legacy string-list form
     assert agent_granted_connector_types(["github", "linear"]) == {"github", "linear"}
     # empty / None

@@ -35,9 +35,7 @@ def _failure_records(caplog: object, key: str) -> list[object]:
     ],
     ids=["fire_once_allowed", "missed_fire_cooldown_ok"],
 )
-async def test_redis_failure_fails_open_and_logs(
-    caplog: pytest.LogCaptureFixture, call: Callable[..., Awaitable[bool]], expected_log: str
-) -> None:
+async def test_redis_failure_fails_open_and_logs(caplog: pytest.LogCaptureFixture, call: Callable[..., Awaitable[bool]], expected_log: str) -> None:
     client = _redis_mock("set")
     with caplog.at_level(logging.WARNING, logger="farna.core.error_tracking"):
         result = await call(client)

@@ -426,19 +426,12 @@ def _has_audited_annotation(fn: ast.FunctionDef | ast.AsyncFunctionDef, mi: _Mod
     """True when the handler's decorators or parameter defaults call ``audited(...)``."""
     exprs: list[ast.expr] = [*fn.decorator_list, *fn.args.defaults]
     exprs.extend(d for d in fn.args.kw_defaults if d is not None)
-    return any(
-        isinstance(node, ast.Call) and _trailing_name(node.func) in _AUDITED_CALL_NAMES
-        for expr in exprs
-        for node in ast.walk(expr)
-    )
+    return any(isinstance(node, ast.Call) and _trailing_name(node.func) in _AUDITED_CALL_NAMES for expr in exprs for node in ast.walk(expr))
 
 
 def _is_route_handler(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True when a decorator registers the function as a FastAPI route."""
-    return any(
-        isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr in _ROUTE_METHODS
-        for dec in fn.decorator_list
-    )
+    return any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr in _ROUTE_METHODS for dec in fn.decorator_list)
 
 
 # ---------------------------------------------------------------------------
@@ -897,8 +890,7 @@ def test_no_route_double_audits_the_same_event_type():
     assert not violations, (
         f"{len(violations)} handler(s) append the SAME event type twice per action - the route's "
         "audited(...) dependency and its own inline append_audit_event(...). Give the coarse event "
-        "the secondary api_access_<verb> namespace and leave the rich inline event alone:\n  "
-        + "\n  ".join(sorted(violations))
+        "the secondary api_access_<verb> namespace and leave the rich inline event alone:\n  " + "\n  ".join(sorted(violations))
     )
 
 

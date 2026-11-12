@@ -61,14 +61,8 @@ def _licence(*, days_from_now: int) -> str:
         "expires_at": (datetime.now(UTC) + timedelta(days=days_from_now)).isoformat(),
         "org_id": str(_ORG_ID),
     }
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
-    sig_b64 = (
-        base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, _TEST_KP["private_key"]))).decode().rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sign_primitive(payload, _TEST_KP["private_key"]))).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
 
@@ -141,9 +135,7 @@ def admin_client() -> Generator[TestClient, None, None]:
     [-(LICENCE_GRACE_DAYS + 1), -(LICENCE_GRACE_DAYS * 100)],
     ids=["past-grace", "long-lapsed"],
 )
-def test_admin_can_reach_the_licence_endpoint_when_licence_is_lapsed(
-    admin_client: TestClient, days_from_now: int
-) -> None:
+def test_admin_can_reach_the_licence_endpoint_when_licence_is_lapsed(admin_client: TestClient, days_from_now: int) -> None:
     """The recovery endpoint answers 200 (Community), never a licence 402.
 
     This is the invariant: if the licence screen ever starts licence-gating

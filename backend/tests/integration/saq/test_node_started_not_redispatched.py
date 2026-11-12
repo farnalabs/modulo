@@ -57,11 +57,7 @@ async def _seed_node_phase_run(
         async with eng.connect() as conn, conn.begin():
             await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS enqueue_failed_at timestamptz"))
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                    "run_context_defaults, visibility, max_concurrent_runs) "
-                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, run_context_defaults, visibility, max_concurrent_runs) VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"),
                 {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
             )
             await conn.execute(
@@ -118,20 +114,14 @@ async def _run_row_state(db_engine: Any, run_id: uuid.UUID) -> tuple[str, str | 
     eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
     try:
         async with eng.connect() as conn:
-            row = (
-                await conn.execute(
-                    text("SELECT status, claim_token, error_code FROM runs WHERE id=:rid"), {"rid": str(run_id)}
-                )
-            ).first()
+            row = (await conn.execute(text("SELECT status, claim_token, error_code FROM runs WHERE id=:rid"), {"rid": str(run_id)})).first()
     finally:
         await eng.dispose()
     assert row is not None
     return row[0], row[1], row[2]
 
 
-async def test_node_started_stale_run_is_not_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_node_started_stale_run_is_not_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """A first-node-STARTED run with a stale heartbeat and no SAQ job is NOT
     re-dispatched: no job appears and the claim token is untouched (nothing
     claimed or re-enqueued it).
@@ -153,9 +143,7 @@ async def test_node_started_stale_run_is_not_redispatched(
     assert claim_token == "token-a"
 
 
-async def test_control_null_phase_stale_run_is_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_control_null_phase_stale_run_is_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """The control: the IDENTICAL row with no durable phase (no node-start
     evidence) IS re-dispatched by the tick — the exclusion discriminates on
     the phase alone."""
@@ -168,9 +156,7 @@ async def test_control_null_phase_stale_run_is_redispatched(
     assert status == "running"
 
 
-async def test_pending_node_started_reset_run_is_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pending_node_started_reset_run_is_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """FAR-1649 qa iteration 3 (no-strand regression): a node-STARTED run
     RESET to pending (the fenced pending-reset keeps
     ``dispatcher``/``dispatched_at``/the phase) and whose SAQ job is GONE is
@@ -200,9 +186,7 @@ async def test_pending_node_started_reset_run_is_redispatched(
     assert claim_token == "token-a"
 
 
-async def test_control_pending_null_phase_run_is_redispatched(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_control_pending_null_phase_run_is_redispatched(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """The control: the IDENTICAL pending row with no durable phase IS
     re-dispatched (as ``execute_run``) by the reenqueue-window leg — pending
     recovery does not discriminate on the phase (iteration 3); the phase

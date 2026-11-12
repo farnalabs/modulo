@@ -59,18 +59,14 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     yield TestClient(app)
     app.dependency_overrides.clear()
     _mock_session = None
 
 
 def _set_principal(role: str) -> None:
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=role)
 
 
 def test_web_vitals_viewer_allowed(client: TestClient) -> None:
@@ -108,9 +104,7 @@ def test_web_vitals_unauthenticated_returns_4xx(client: TestClient) -> None:
             json={"events": [{"metric_name": "LCP", "metric_value": 1200.0}]},
         )
     finally:
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     assert resp.status_code in (401, 403)
 
 
@@ -155,9 +149,7 @@ def test_web_vitals_summary_unauthenticated_returns_4xx(client: TestClient) -> N
     try:
         resp = client.get("/api/v1/metrics/web-vitals/summary?days=7")
     finally:
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     assert resp.status_code in (401, 403)
 
 
@@ -180,7 +172,5 @@ def test_web_vitals_timeseries_unauthenticated_returns_4xx(client: TestClient) -
     try:
         resp = client.get("/api/v1/metrics/web-vitals/timeseries?metric_name=LCP&days=7")
     finally:
-        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     assert resp.status_code in (401, 403)

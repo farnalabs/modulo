@@ -37,9 +37,7 @@ def ctx() -> dict[str, Any]:
     return {"response": None, "contrib_id": None}
 
 
-def _mk_contribution(
-    *, status: str, visibility: str, name: str = "My Test Fixture", slug: str = "my-test-fixture"
-) -> Any:
+def _mk_contribution(*, status: str, visibility: str, name: str = "My Test Fixture", slug: str = "my-test-fixture") -> Any:
     """Build the service-returned primitive for the create/submit/publish/version routes.
 
     The routes read ``id`` / ``name`` / ``slug`` / ``contribution_status`` /
@@ -297,9 +295,7 @@ def _list_contribution_versions(
 @then(parsers.parse('the response has contribution_status "{expected}"'))
 def _response_has_contribution_status(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
-    assert data.get("contribution_status") == expected, (
-        f"Expected contribution_status '{expected}', got {data.get('contribution_status')!r}"
-    )
+    assert data.get("contribution_status") == expected, f"Expected contribution_status '{expected}', got {data.get('contribution_status')!r}"
 
 
 @then(parsers.parse('the response has visibility "{expected}"'))
@@ -311,9 +307,7 @@ def _response_has_visibility(ctx: dict[str, Any], expected: str) -> None:
 @then(parsers.parse('the new version has contribution_status "{expected}"'))
 def _new_version_has_contribution_status(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
-    assert data.get("contribution_status") == expected, (
-        f"Expected new-version contribution_status '{expected}', got {data.get('contribution_status')!r}"
-    )
+    assert data.get("contribution_status") == expected, f"Expected new-version contribution_status '{expected}', got {data.get('contribution_status')!r}"
 
 
 @then("the response contains a list of contributions")

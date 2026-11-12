@@ -168,9 +168,7 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -214,9 +212,7 @@ def test_list_triggers_assert_error_matrix(client: tuple[TestClient, AsyncMock])
 
 def test_viewer_trigger_list_query_contains_account_team_scope(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     captured: list[Any] = []
 
     async def execute(statement: Any) -> Any:
@@ -316,9 +312,7 @@ def test_update_cron_config_timezone_without_expression_returns_422(client: tupl
 def test_update_cron_config_wrong_type_returns_400(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     ctxs = list(_happy_patches())
-    ctxs.append(
-        patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger(trigger_type="webhook")))
-    )
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger(trigger_type="webhook"))))
     for c in ctxs:
         c.__enter__()
     try:
@@ -409,9 +403,7 @@ def test_preview_cron_schedule_returns_times(client: tuple[TestClient, AsyncMock
 
 def test_viewer_cron_preview_query_includes_membership_scope(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
     ctxs = list(_happy_patches())
     for c in ctxs:
@@ -563,9 +555,7 @@ def test_update_polling_config_cross_team_connector_returns_409(client: tuple[Te
     connector_id = uuid.uuid4()
     ctxs = list(_happy_patches())
     ctxs.append(
-        patch(
-            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
-        ),
+        patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])),
     )
     ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
 
@@ -587,9 +577,7 @@ def test_create_trigger_cross_team_connector_returns_409(client: tuple[TestClien
     connector_id = uuid.uuid4()
     ctxs = list(_happy_patches())
     ctxs.append(
-        patch(
-            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
-        ),
+        patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])),
     )
 
     resp = _with_patches(
@@ -615,9 +603,7 @@ def test_update_trigger_cross_team_connector_returns_409(client: tuple[TestClien
     connector_id = uuid.uuid4()
     ctxs = list(_happy_patches())
     ctxs.append(
-        patch(
-            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
-        ),
+        patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])),
     )
     ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
 
@@ -1527,9 +1513,7 @@ def test_list_trigger_events_unknown_returns_404(client: tuple[TestClient, Async
 
 def test_viewer_trigger_event_query_contains_account_team_scope(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     trigger = _make_trigger()
     event = _event_row(0)
     trigger_result = _trigger_result([trigger])

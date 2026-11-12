@@ -229,41 +229,20 @@ def _collect_facts(scope: ast.AST) -> _Facts:
                     facts.typed.setdefault(name, {})[attr] = _value_kind(node.value)
                     if attr == "execute" and isinstance(node.value, ast.Call) and _call_has_result_keyword(node.value):
                         facts.execute_stubbed.add(name)
-                    if (
-                        attr == "execute"
-                        and isinstance(node.value, ast.Call)
-                        and _call_name(node.value.func) != _ASYNC_MOCK
-                    ):
+                    if attr == "execute" and isinstance(node.value, ast.Call) and _call_name(node.value.func) != _ASYNC_MOCK:
                         # ``make_empty_execute_result()`` / ``MagicMock()`` — a
                         # real synchronous result, not an auto-created child.
                         facts.execute_stubbed.add(name)
-                if (
-                    isinstance(target, ast.Attribute)
-                    and isinstance(target.value, ast.Attribute)
-                    and target.value.attr == "execute"
-                    and isinstance(target.value.value, ast.Name)
-                    and target.attr in {"return_value", "side_effect"}
-                ):
+                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Attribute) and target.value.attr == "execute" and isinstance(target.value.value, ast.Name) and target.attr in {"return_value", "side_effect"}:
                     facts.execute_stubbed.add(target.value.value.id)
                 if isinstance(target, ast.Name) and isinstance(node.value, ast.Await):
                     awaited = node.value.value
-                    if (
-                        isinstance(awaited, ast.Call)
-                        and isinstance(awaited.func, ast.Attribute)
-                        and awaited.func.attr == "execute"
-                        and isinstance(awaited.func.value, ast.Name)
-                    ):
+                    if isinstance(awaited, ast.Call) and isinstance(awaited.func, ast.Attribute) and awaited.func.attr == "execute" and isinstance(awaited.func.value, ast.Name):
                         execute_vars.setdefault(awaited.func.value.id, set()).add(target.id)
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             facts.used.setdefault(node.value.id, set()).add(node.attr)
             # Chained read: ``(await session.execute(...)).scalar_one_or_none()``
-            if (
-                isinstance(node.value, ast.Await)
-                and isinstance(node.value.value, ast.Call)
-                and isinstance(node.value.value.func, ast.Attribute)
-                and node.value.value.func.attr == "execute"
-                and isinstance(node.value.value.func.value, ast.Name)
-            ):
+            if isinstance(node.value, ast.Await) and isinstance(node.value.value, ast.Call) and isinstance(node.value.value.func, ast.Attribute) and node.value.value.func.attr == "execute" and isinstance(node.value.value.func.value, ast.Name):
                 facts.execute_result_reads.setdefault(node.value.value.func.value.id, set()).add(node.attr)
         elif isinstance(node, ast.Return) and isinstance(node.value, ast.Name):
             facts.returns.add(node.value.id)
@@ -296,11 +275,7 @@ def _scopes(tree: ast.Module) -> Iterator[ast.AST]:
 def _session_bindings(scope: ast.AST) -> Iterator[tuple[str, int]]:
     """``(name, lineno)`` for each ``name = AsyncMock(...)`` in this scope."""
     for node in _direct_nodes(scope):
-        if not (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call)
-            and _call_name(node.value.func) == _ASYNC_MOCK
-        ):
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and _call_name(node.value.func) == _ASYNC_MOCK):
             continue
         for target in node.targets:
             if isinstance(target, ast.Name) and _SESSION_NAME.search(target.id):
@@ -317,11 +292,7 @@ def _helper_alias_usage(tree: ast.Module, helper_returns: dict[str, set[str]]) -
     for scope in _scopes(tree):
         facts = _collect_facts(scope)
         for node in _direct_nodes(scope):
-            if not (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Call)
-                and (_call_name(node.value.func) or "") in helper_returns
-            ):
+            if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and (_call_name(node.value.func) or "") in helper_returns):
                 continue
             helper = _call_name(node.value.func)
             assert helper is not None  # narrowed by the membership test above
@@ -375,9 +346,7 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
                 # Rule 1: a double built by a helper is driven by arbitrary
                 # production code the test cannot see, so it must express the
                 # whole synchronous contract (i.e. go through the helper).
-                problems.append(
-                    "shared helper double is not built through configure_mock_session/configure_rls_preamble"
-                )
+                problems.append("shared helper double is not built through configure_mock_session/configure_rls_preamble")
             untyped_sync = sorted((used & _SYNC_MEMBERS) - set(typed) - configured_members)
             if untyped_sync:
                 problems.append(f"sync member(s) not typed as MagicMock: {', '.join(untyped_sync)}")
@@ -399,20 +368,14 @@ def _violations_in_source(source: str, filename: str) -> list[str]:
 def _all_violations() -> list[str]:
     violations: list[str] = []
     for path in sorted(_API_TESTS.rglob("*.py")):
-        violations.extend(
-            _violations_in_source(path.read_text(encoding="utf-8"), str(path.relative_to(_API_TESTS.parent.parent)))
-        )
+        violations.extend(_violations_in_source(path.read_text(encoding="utf-8"), str(path.relative_to(_API_TESTS.parent.parent))))
     return violations
 
 
 def test_no_bare_asyncmock_session_doubles() -> None:
     """Every driven session double expresses the synchronous session contract."""
     violations = _all_violations()
-    assert not violations, (
-        "Session test doubles leaking un-awaited coroutines — build the double with "
-        "tests/unit/api/mock_session.configure_mock_session (or type the synchronous "
-        "session contract explicitly):\n" + "\n".join(violations)
-    )
+    assert not violations, "Session test doubles leaking un-awaited coroutines — build the double with tests/unit/api/mock_session.configure_mock_session (or type the synchronous session contract explicitly):\n" + "\n".join(violations)
 
 
 def test_detector_flags_the_defect_and_accepts_the_fix() -> None:

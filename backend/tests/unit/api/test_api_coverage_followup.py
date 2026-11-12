@@ -64,9 +64,7 @@ def route_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_current_tenant_user] = lambda: principal
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="coverage", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="coverage", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     plan = MagicMock()
     plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: plan
@@ -199,17 +197,11 @@ class TestScimCoverage:
             await scim_route._apply_replace_group_op(
                 session,
                 group,
-                scim_route.ScimPatchOperation(
-                    op="replace", value={"displayName": "Renamed", "members": {"value": str(_USER_ID)}}
-                ),
+                scim_route.ScimPatchOperation(op="replace", value={"displayName": "Renamed", "members": {"value": str(_USER_ID)}}),
                 _ORG_ID,
             )
-            await scim_route._apply_add_group_op(
-                session, group, scim_route.ScimPatchOperation(op="add", value={"value": str(_USER_ID)}), _ORG_ID
-            )
-            await scim_route._apply_remove_group_op(
-                session, group, scim_route.ScimPatchOperation(op="remove", path=f'members[value eq "{_USER_ID}"]')
-            )
+            await scim_route._apply_add_group_op(session, group, scim_route.ScimPatchOperation(op="add", value={"value": str(_USER_ID)}), _ORG_ID)
+            await scim_route._apply_remove_group_op(session, group, scim_route.ScimPatchOperation(op="remove", path=f'members[value eq "{_USER_ID}"]'))
         assert group.id == _USER_ID
 
 

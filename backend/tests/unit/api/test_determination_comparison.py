@@ -283,11 +283,7 @@ class TestReadOnlyGuarantee:
         assert data["target"]["activation_status"] == "not_activated"
 
     def test_route_handler_takes_no_database_session(self) -> None:
-        route = next(
-            route
-            for route in determination_router.routes
-            if isinstance(route, APIRoute) and route.path == _COMPARE_PATH
-        )
+        route = next(route for route in determination_router.routes if isinstance(route, APIRoute) and route.path == _COMPARE_PATH)
 
         assert "POST" in (route.methods or set())
         assert "session" not in inspect.signature(route.dependant.call).parameters

@@ -38,8 +38,4 @@ def test_every_integration_test_file_has_integration_marker():
     for path in sorted(INTEGRATION_DIR.rglob("test_*.py")):
         if _pytestmark_missing_integration(path):
             unmarked.append(str(path.relative_to(INTEGRATION_DIR.parent)))
-    assert not unmarked, (
-        f"Found {len(unmarked)} integration test file(s) whose `pytestmark` lacks `pytest.mark.integration` — "
-        "the deploy pre-gate (`pytest tests/integration/ -m integration -n 2`) silently deselects "
-        "their tests:\n" + "\n".join(f"  {p}" for p in unmarked)
-    )
+    assert not unmarked, f"Found {len(unmarked)} integration test file(s) whose `pytestmark` lacks `pytest.mark.integration` — the deploy pre-gate (`pytest tests/integration/ -m integration -n 2`) silently deselects their tests:\n" + "\n".join(f"  {p}" for p in unmarked)

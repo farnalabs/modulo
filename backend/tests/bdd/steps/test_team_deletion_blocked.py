@@ -86,10 +86,7 @@ def delete_team(team_name: str, request, ctx, client=None) -> None:
     # Count only resources actually owned by THIS team, per DB table. Buckets
     # the scenario never seeded simply do not own anything (the entity-aware
     # dispatcher answers their count reads with the zero default).
-    table_counts = {
-        table: sum(1 for data in ctx.get(bucket, {}).values() if str(data.get("owner_team_id")) == str(team_id))
-        for bucket, table in _BUCKET_TABLES.items()
-    }
+    table_counts = {table: sum(1 for data in ctx.get(bucket, {}).values() if str(data.get("owner_team_id")) == str(team_id)) for bucket, table in _BUCKET_TABLES.items()}
     team_row = MagicMock() if team is not None else None
     _configure_delete_session(mock_session, table_counts=table_counts, team_row=team_row)
 
@@ -106,9 +103,7 @@ def reassign_all(team_name: str, ctx) -> None:
     team = ctx["teams"].get(team_name, {})
     team_id = team.get("id")
     for key in _BUCKET_TABLES:
-        ctx[key] = {
-            name: data for name, data in ctx.get(key, {}).items() if str(data.get("owner_team_id")) != str(team_id)
-        }
+        ctx[key] = {name: data for name, data in ctx.get(key, {}).items() if str(data.get("owner_team_id")) != str(team_id)}
 
 
 @then("the error indicates the team still has resources")

@@ -69,9 +69,7 @@ async def _set_run_json_column_type(db_engine: AsyncEngine, col_type: str) -> No
                 try:
                     async with conn.begin():
                         await conn.execute(text("SET LOCAL lock_timeout = '2s'"))
-                        await conn.execute(
-                            text(f"ALTER TABLE runs ALTER COLUMN {column} TYPE {col_type} USING {column}::{col_type}")
-                        )
+                        await conn.execute(text(f"ALTER TABLE runs ALTER COLUMN {column} TYPE {col_type} USING {column}::{col_type}"))
                     break
                 except Exception:
                     if _attempt == 29:
@@ -118,9 +116,7 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
         await _set_run_json_column_type(db_engine, "json")
 
         async with db_session.begin():
-            await db_session.execute(
-                text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)}
-            )
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
             result = await update_run_status(
                 db_session,
                 run_id,
@@ -156,21 +152,14 @@ async def test_fenced_update_run_status_succeeds_on_plain_json_columns(
             assert _as_json(row[1]) == cost_breakdown
             store_rows = (
                 await conn.execute(
-                    text(
-                        "SELECT node_id, attempt_key, outputs_json, node_telemetry_json "
-                        "FROM run_node_outputs WHERE run_id = :rid"
-                    ),
+                    text("SELECT node_id, attempt_key, outputs_json, node_telemetry_json FROM run_node_outputs WHERE run_id = :rid"),
                     {"rid": str(run_id)},
                 )
             ).all()
         # Each side lands on its own __final__ rows (a node carrying only the
         # other side reads SQL NULL here) — filter per side.
-        final_outputs = {
-            r[0]: r[2] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[2] is not None
-        }
-        final_telemetry = {
-            r[0]: r[3] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[3] is not None
-        }
+        final_outputs = {r[0]: r[2] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[2] is not None}
+        final_telemetry = {r[0]: r[3] for r in store_rows if r[1] == "__final__" and r[0] != "__run_meta__" and r[3] is not None}
         assert final_outputs == outputs_json, "the blobs land on the per-node store (B1 primary write)"
         assert final_telemetry == node_telemetry_json
     finally:

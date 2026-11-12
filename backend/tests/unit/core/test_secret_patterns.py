@@ -220,9 +220,7 @@ class TestReDoSBoundedMasking:
         # A private-key block whose body exceeds the ReDoS cap must still be
         # masked in full — its close delimiter falls outside any 5000-char
         # window, so the direct span masking must kick in.
-        block = (
-            "-----BEGIN RSA PRIVATE KEY-----\n" + ("MIIBOgIBAAJBAKj34GkxFhD" * 300) + "\n-----END RSA PRIVATE KEY-----"
-        )
+        block = "-----BEGIN RSA PRIVATE KEY-----\n" + ("MIIBOgIBAAJBAKj34GkxFhD" * 300) + "\n-----END RSA PRIVATE KEY-----"
         assert len(block) > SECRET_VALUE_REDACT_CHAR_CAP
         text = ("a" * 100) + block + ("b" * 100)
         masked = mask_secret_values_in_text(text)

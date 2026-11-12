@@ -102,8 +102,7 @@ async def _seed_env(db_engine: AsyncEngine) -> _Env:
         )
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": f"far1862-{account_id.hex[:8]}@test.local", "name": "FAR-1862 User"},
         )
@@ -270,9 +269,7 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
     # its SAQ job is live — a job that may still be sitting in an unbounded
     # queue and execute later. The age backstop must therefore NOT terminalise
     # it (asserted below).
-    saq_queued_id = next(
-        run_id for run_id, combo in seeded.items() if combo == (dispatched_old, "saq", None, None, stale)
-    )
+    saq_queued_id = next(run_id for run_id, combo in seeded.items() if combo == (dispatched_old, "saq", None, None, stale))
     assert saq_queued_id in reclaimed, "the scan must still select the normal queued saq shape"
 
     # A ``dispatcher IS NULL`` row carrying ``enqueue_failed_at`` is owned by
@@ -341,26 +338,15 @@ async def test_every_pending_shape_is_reclaimed_or_backstopped(
     # collect) or (FAR-1883) deliberately left queued by the capacity-queue
     # design. Those two classes are the deliberate exceptions to "reclaimed-or-
     # terminalised".
-    uncovered = [
-        seeded[run_id]
-        for run_id in seeded
-        if run_id not in reclaimed
-        and run_id not in backstopped
-        and run_id not in marker_owned
-        and run_id not in capacity_queued_owned
-    ]
+    uncovered = [seeded[run_id] for run_id in seeded if run_id not in reclaimed and run_id not in backstopped and run_id not in marker_owned and run_id not in capacity_queued_owned]
     assert not uncovered, f"pending shapes left with no reclaim leg and no age backstop: {uncovered}"
 
     # The SAFETY half: the stranded-pending backstop is the EXACT complement of
     # the foreign-dispatcher reclaim leg. It must not terminalise the normal
     # queued ``dispatcher='saq'`` shape nor any marker-owned shape — either
     # would silently lose still-executable work.
-    assert saq_queued_id not in set(stranded), (
-        "the stranded-pending backstop must NOT terminalise the normal queued saq shape"
-    )
-    assert not (set(stranded) & marker_owned), (
-        "the stranded-pending backstop must NOT terminalise enqueue-failed (marker-owned) runs"
-    )
+    assert saq_queued_id not in set(stranded), "the stranded-pending backstop must NOT terminalise the normal queued saq shape"
+    assert not (set(stranded) & marker_owned), "the stranded-pending backstop must NOT terminalise enqueue-failed (marker-owned) runs"
 
 
 async def test_backstop_leaves_executable_and_marker_runs_alone(
@@ -443,9 +429,7 @@ async def test_backstop_leaves_executable_and_marker_runs_alone(
     assert aged_foreign in stranded_set, "the backstop must still terminalise the aged foreign-dispatcher run"
     assert fresh_saq not in stranded_set, "the backstop must not terminalise a freshly-dispatched queued run"
     assert aged_saq not in stranded_set, "the backstop must not terminalise an aged but still-queued saq run"
-    assert aged_marker not in stranded_set, (
-        "the backstop must not terminalise an enqueue-failed (Redis-unverifiable) run"
-    )
+    assert aged_marker not in stranded_set, "the backstop must not terminalise an enqueue-failed (Redis-unverifiable) run"
 
     remaining = await _pending_run_ids(db_engine, far1862_env.org_id)
     assert fresh_saq in remaining

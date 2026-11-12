@@ -114,12 +114,7 @@ class TestShippedPackContent:
     def test_every_row_states_a_control_and_a_customer_location(self) -> None:
         pack = load_mapping_pack()
 
-        missing = [
-            (row.id, field)
-            for row in pack.rows
-            for field in _REQUIRED_ROW_TEXT_FIELDS
-            if not str(getattr(row, field)).strip()
-        ]
+        missing = [(row.id, field) for row in pack.rows for field in _REQUIRED_ROW_TEXT_FIELDS if not str(getattr(row, field)).strip()]
         assert not missing, missing
 
     def test_row_ids_are_unique_across_the_pack(self) -> None:
@@ -132,19 +127,13 @@ class TestShippedPackContent:
     def test_every_indexed_artifact_type_is_mapped_to_a_clause(self) -> None:
         pack = load_mapping_pack()
 
-        unmapped = [
-            artifact_type for artifact_type in INDEXED_ARTIFACT_TYPES if not pack.rows_for_artifact(artifact_type)
-        ]
+        unmapped = [artifact_type for artifact_type in INDEXED_ARTIFACT_TYPES if not pack.rows_for_artifact(artifact_type)]
         assert not unmapped, unmapped
 
     def test_each_framework_names_something_modulo_does_not_satisfy(self) -> None:
         pack = load_mapping_pack()
 
-        offenders = [
-            framework_id
-            for framework_id, framework in pack.frameworks.items()
-            if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)
-        ]
+        offenders = [framework_id for framework_id, framework in pack.frameworks.items() if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)]
         assert not offenders, offenders
 
     def test_soc2_keeps_the_required_clause_set(self) -> None:
@@ -221,31 +210,19 @@ class TestShippedPackContent:
         assert not offenders, offenders
 
         # And the pack as a whole must never read as universally satisfied.
-        unqualified = [
-            framework_id
-            for framework_id, framework in pack.frameworks.items()
-            if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)
-        ]
+        unqualified = [framework_id for framework_id, framework in pack.frameworks.items() if not any(row.coverage in NON_SELF_COVERAGE_VALUES for row in framework.rows)]
         assert not unqualified, unqualified
 
     def test_satisfied_rows_never_rest_on_customer_material(self) -> None:
         pack = load_mapping_pack()
 
-        offenders = [
-            row.id
-            for row in pack.rows
-            if row.coverage == COVERAGE_SATISFIED and row.provenance == PROVENANCE_CUSTOMER_SUPPLIED
-        ]
+        offenders = [row.id for row in pack.rows if row.coverage == COVERAGE_SATISFIED and row.provenance == PROVENANCE_CUSTOMER_SUPPLIED]
         assert not offenders, offenders
 
     def test_customer_responsibility_rows_are_customer_supplied(self) -> None:
         pack = load_mapping_pack()
 
-        offenders = [
-            row.id
-            for row in pack.rows
-            if row.coverage == COVERAGE_CUSTOMER_RESPONSIBILITY and row.provenance != PROVENANCE_CUSTOMER_SUPPLIED
-        ]
+        offenders = [row.id for row in pack.rows if row.coverage == COVERAGE_CUSTOMER_RESPONSIBILITY and row.provenance != PROVENANCE_CUSTOMER_SUPPLIED]
         assert not offenders, offenders
 
 
@@ -265,17 +242,7 @@ class TestContentHash:
     def test_hash_changes_when_an_assertion_changes(self) -> None:
         pack = load_mapping_pack()
         target = pack.rows[0].id
-        changed_frameworks = {
-            framework_id: framework.model_copy(
-                update={
-                    "rows": tuple(
-                        row.model_copy(update={"modulo_control": "a different claim"}) if row.id == target else row
-                        for row in framework.rows
-                    )
-                }
-            )
-            for framework_id, framework in pack.frameworks.items()
-        }
+        changed_frameworks = {framework_id: framework.model_copy(update={"rows": tuple(row.model_copy(update={"modulo_control": "a different claim"}) if row.id == target else row for row in framework.rows)}) for framework_id, framework in pack.frameworks.items()}
         changed = MappingPack.model_validate({**pack.model_dump(), "frameworks": changed_frameworks})
 
         assert changed.content_hash() != pack.content_hash()
@@ -289,17 +256,7 @@ class TestContentHash:
         """
         pack = load_mapping_pack()
         target = pack.rows[0].id
-        changed_frameworks = {
-            framework_id: framework.model_copy(
-                update={
-                    "rows": tuple(
-                        row.model_copy(update={"notes": "a reviewer-facing note"}) if row.id == target else row
-                        for row in framework.rows
-                    )
-                }
-            )
-            for framework_id, framework in pack.frameworks.items()
-        }
+        changed_frameworks = {framework_id: framework.model_copy(update={"rows": tuple(row.model_copy(update={"notes": "a reviewer-facing note"}) if row.id == target else row for row in framework.rows)}) for framework_id, framework in pack.frameworks.items()}
         changed = MappingPack.model_validate({**pack.model_dump(), "frameworks": changed_frameworks})
 
         # Precondition: the edit actually landed on the target row's notes.

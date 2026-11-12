@@ -864,9 +864,7 @@ async def test_revoke_run_api_key_sweep_org_self_selection_works_with_autobegin_
     """
     org_id = uuid.uuid4()
     run_id = uuid.uuid4()
-    session = _SweepSession(
-        [_sweep_orgs_result([org_id]), _sweep_keys_result([(uuid.uuid4(), run_id)]), _sweep_revoke_result(1)]
-    )
+    session = _SweepSession([_sweep_orgs_result([org_id]), _sweep_keys_result([(uuid.uuid4(), run_id)]), _sweep_revoke_result(1)])
     session_factory = MagicMock(return_value=session)
 
     result = await revoke_run_api_key_sweep(session_factory)

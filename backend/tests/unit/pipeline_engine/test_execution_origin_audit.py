@@ -132,9 +132,7 @@ class TestRunStartedExecutionOrigin:
         payload = await _run_started_payload(_run(execution_origin="dispatched"))
         assert payload["pipeline_id"] == str(_PIPELINE_ID)
         # manual runs attribute the source to the user request (labels.py).
-        assert payload["summary"] == (
-            f'Pipeline "PR Reviewer Agent" ({str(_PIPELINE_ID)[:8]}) run triggered by user request'
-        )
+        assert payload["summary"] == (f'Pipeline "PR Reviewer Agent" ({str(_PIPELINE_ID)[:8]}) run triggered by user request')
         assert payload["actor"] is not None
 
 

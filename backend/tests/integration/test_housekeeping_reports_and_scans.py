@@ -135,9 +135,7 @@ class TestEmptyLifecycleMapScanOnPostgres:
         candidates = await _scan_empty_lifecycle_maps(db_session, org_id)
 
         surfaced_names = sorted(c.name for c in candidates)
-        assert surfaced_names == ["hk-empty-map", "hk-ui-emptied-map"], (
-            f"expected both empty-shaped maps, got {surfaced_names}"
-        )
+        assert surfaced_names == ["hk-empty-map", "hk-ui-emptied-map"], f"expected both empty-shaped maps, got {surfaced_names}"
         surfaced_ids = {c.id for c in candidates}
         assert str(empty_id) in surfaced_ids
         assert str(ui_emptied_id) in surfaced_ids
@@ -230,13 +228,7 @@ async def _seed_cleanup_batch(db_engine: AsyncEngine, *, slug_prefix: str) -> _C
             )
         )
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                "snapshot_id, trigger_type, status, input_hash, "
-                "langgraph_thread_id, run_number) "
-                "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                ":hash, :tid, :rn)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)"),
             {
                 "rid": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -289,9 +281,7 @@ class TestPerformCleanupDeletedCountOnPostgres:
             assert error["error"] == "Foreign key constraint violation", error
 
             async with db_engine.connect() as conn:
-                secret_rows = (
-                    await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})
-                ).all()
+                secret_rows = (await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})).all()
                 snapshot_rows = (
                     await conn.execute(
                         text("SELECT id FROM pipeline_snapshots WHERE id = :sid"),
@@ -348,9 +338,7 @@ class TestMcpPerformHousekeepingDeletedCountOnPostgres:
             assert error["error"] == "Foreign key constraint violation", error
 
             async with db_engine.connect() as conn:
-                secret_rows = (
-                    await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})
-                ).all()
+                secret_rows = (await conn.execute(text("SELECT id FROM secrets WHERE id = :sid"), {"sid": str(batch.secret_id)})).all()
                 snapshot_rows = (
                     await conn.execute(
                         text("SELECT id FROM pipeline_snapshots WHERE id = :sid"),

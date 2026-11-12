@@ -115,9 +115,7 @@ async def _drive_finalize(
         patch("farna.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=final_run)),
     ):
-        returned = await executor._finalize_run_after_stream(
-            **_finalize_args(run_id, _ORG_ID, pipeline_id, final_status=final_status, error_code=error_code)
-        )
+        returned = await executor._finalize_run_after_stream(**_finalize_args(run_id, _ORG_ID, pipeline_id, final_status=final_status, error_code=error_code))
     assert returned is final_run
     return final_run
 

@@ -1078,9 +1078,7 @@ async def test_chain_end_returns_early_without_envelope():
     executor = PipelineExecutor(MagicMock())
     state = _StreamState()
     ctx = SimpleNamespace(node_ids={"node-a"}, guard=None, completed_node_outputs=None, run_trace_id=None)
-    await executor._handle_chain_end_event(
-        state=state, ctx=ctx, lg_event={"name": "node-a", "data": {"output": {"status": "completed"}}}
-    )
+    await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event={"name": "node-a", "data": {"output": {"status": "completed"}}})
     assert state.stall_reason is None
     assert state.session_lost_reason is None
 
@@ -1143,10 +1141,7 @@ def test_agent_failure_reads_split_envelope_telemetry():
     assert _node_output_agent_failure(failed) == "agent crashed"
     # A self-declared failure with no error/summary still elevates with the
     # fallback reason (the telemetry-channel twin of the legacy fallback).
-    assert (
-        _node_output_agent_failure(_split_sandbox_envelope(status="failed", agent_status="failed", summary=""))
-        == "agent self-reported failure"
-    )
+    assert _node_output_agent_failure(_split_sandbox_envelope(status="failed", agent_status="failed", summary="")) == "agent self-reported failure"
     # Non-failed telemetry yields None (no false A1 elevation).
     assert _node_output_agent_failure(_split_sandbox_envelope(agent_status="success")) is None
     # Legacy fallback still works.
@@ -1159,12 +1154,7 @@ def test_session_lost_reads_split_envelope_telemetry():
     assert _node_output_sandbox_session_lost(lost) == "session dead"
     # A dead-session marker with no error/summary still returns the fixed
     # placeholder (the telemetry-channel twin of the legacy fallback).
-    assert (
-        _node_output_sandbox_session_lost(
-            _split_sandbox_envelope(status="failed", sandbox_session_lost=True, summary="")
-        )
-        == "No output from agent - session interrupted"
-    )
+    assert _node_output_sandbox_session_lost(_split_sandbox_envelope(status="failed", sandbox_session_lost=True, summary="")) == "No output from agent - session interrupted"
     assert _node_output_sandbox_session_lost(_split_sandbox_envelope()) is None
 
 
@@ -1363,12 +1353,7 @@ def test_stream_terminal_reason_session_lost_reason_text_classifies():
     """FAR-1800: when the session-lost REASON itself carries the provider
     signature, the terminal code is the classified one (not the hardcoded
     ``sandbox.no_output_json``)."""
-    state = _StreamState(
-        session_lost_reason=(
-            '{"type":"error","error":{"name":"APIError","data":'
-            '{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'
-        )
-    )
+    state = _StreamState(session_lost_reason=('{"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'))
     result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
     assert result[0] == "failed"
     assert result[1] == "model.insufficient_funds"
@@ -1381,10 +1366,7 @@ def test_stream_terminal_reason_session_lost_retained_text_classifies():
     ``model.insufficient_funds`` while the detail stays the placeholder."""
     state = _StreamState(
         session_lost_reason="No output from agent - session interrupted",
-        session_lost_retained_text=(
-            '{"type":"error","error":{"name":"APIError","data":'
-            '{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'
-        ),
+        session_lost_retained_text=('{"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'),
     )
     result = _stream_terminal_reason(state, MagicMock(), uuid.uuid4())
     assert result[0] == "failed"
@@ -1606,17 +1588,13 @@ def test_retry_after_policy_failure_excludes_stall():
 
 def test_retry_after_policy_failure_excludes_hang():
     """Hang death (node_cancelled + 'likely hung') excluded from failure retry."""
-    result = _retry_after_policy(
-        {"max_retries": 2, "on": ["failure"]}, "failed", "node_cancelled", error_detail="sandbox likely hung after 120s"
-    )
+    result = _retry_after_policy({"max_retries": 2, "on": ["failure"]}, "failed", "node_cancelled", error_detail="sandbox likely hung after 120s")
     assert result is None
 
 
 def test_retry_after_policy_failure_includes_transient_cancel():
     """node_cancelled WITHOUT hang marker is retryable via failure."""
-    result = _retry_after_policy(
-        {"max_retries": 2, "on": ["failure"]}, "failed", "node_cancelled", error_detail="timeout"
-    )
+    result = _retry_after_policy({"max_retries": 2, "on": ["failure"]}, "failed", "node_cancelled", error_detail="timeout")
     assert result == 2
 
 
@@ -1696,10 +1674,7 @@ def test_failure_event_matches_false_for_non_retryable_provider_refusals(code: s
 
 
 def test_failure_event_matches_false_for_hang():
-    assert (
-        _failure_event_matches({"failure"}, "failed", "node_cancelled", "node.cancelled", "sandbox likely hung")
-        is False
-    )
+    assert _failure_event_matches({"failure"}, "failed", "node_cancelled", "node.cancelled", "sandbox likely hung") is False
 
 
 # ---------------------------------------------------------------------------
@@ -2370,9 +2345,7 @@ async def test_stream_graph_runaway_error():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "failed"
     assert code == "runaway"
 
@@ -2393,9 +2366,7 @@ async def test_stream_graph_timeout_error():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "failed"
     assert code == "node_timeout"
 
@@ -2416,9 +2387,7 @@ async def test_stream_graph_superseded_node_error():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "failed"
     assert code == "executor_superseded"
 
@@ -2441,9 +2410,7 @@ async def test_stream_graph_output_rejected_error():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "failed"
     assert code == "output_rejected"
 
@@ -2466,9 +2433,7 @@ async def test_stream_graph_router_no_match_error():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "router_no_match"
     assert code == "router.no_match"
 
@@ -2512,9 +2477,7 @@ async def test_stream_graph_run_cancelled_terminalizes():
     executor._otel_bridge = MagicMock()
     executor._otel_bridge.start_run_root.return_value = None
 
-    status, code, _detail, _ = await executor._stream_graph(
-        compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4()
-    )
+    status, code, _detail, _ = await executor._stream_graph(compiled, None, {"configurable": {"thread_id": "t"}}, {"n1"}, broker, uuid.uuid4())
     assert status == "cancelled"
     assert code is None
 
@@ -2563,9 +2526,7 @@ def test_connector_failure_helpers_cover_unmarked_artifact_validation_branches()
         ]
     }
 
-    assert _node_output_connector_failure(output, "connector", expected_node_id="node-conn") == (
-        "Connector reported failure"
-    )
+    assert _node_output_connector_failure(output, "connector", expected_node_id="node-conn") == ("Connector reported failure")
     assert _node_output_connector_failure(output, "connector", expected_node_id="missing") is None
     assert (
         _node_output_connector_failure(
@@ -2587,16 +2548,8 @@ def test_connector_failure_helpers_cover_error_code_fallbacks():
     """Connector error-code lookup handles malformed and artifact-only envelopes."""
     assert _node_output_connector_error_code("not a dict") == "connector.failed"
     assert _node_output_connector_error_code({"error_code": "connector.failed"}) == "connector.failed"
-    assert (
-        _node_output_connector_error_code({"artifacts": [{"status": "completed", "error_code": "ignored"}]})
-        == "connector.failed"
-    )
-    assert (
-        _node_output_connector_error_code(
-            {"artifacts": [{"status": "failed", "error_code": "connector.side_effect_unknown"}]}
-        )
-        == "connector.side_effect_unknown"
-    )
+    assert _node_output_connector_error_code({"artifacts": [{"status": "completed", "error_code": "ignored"}]}) == "connector.failed"
+    assert _node_output_connector_error_code({"artifacts": [{"status": "failed", "error_code": "connector.side_effect_unknown"}]}) == "connector.side_effect_unknown"
     assert _node_output_connector_error_code({"artifacts": "not a list"}) == "connector.failed"
     assert (
         _node_output_connector_error_code(

@@ -89,10 +89,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"{label}-{account_id.hex[:12]}@example.com",
@@ -100,10 +97,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -337,9 +331,7 @@ async def _seed_member_behind_a_conversion(
     from farna.db.crud.team_membership import add_team_member
 
     member = await _seed_operator_account(db_engine, test_org, label)
-    scenario = await _seed_conv_scenario(
-        db_engine, test_org, test_user, pipeline_scoped_to_team=pipeline_scoped_to_team
-    )
+    scenario = await _seed_conv_scenario(db_engine, test_org, test_user, pipeline_scoped_to_team=pipeline_scoped_to_team)
 
     # The member joins Team A - enough to clear
     # ``require_team_membership_or_admin`` on a Team-A pipeline AND to see
@@ -382,9 +374,7 @@ async def test_convert_member_binds_a_team_private_connector_to_an_org_pipeline_
     pipeline + agent + backend + node this path needs, and re-implementing
     them here would drift.
     """
-    member, scenario = await _seed_member_behind_a_conversion(
-        db_engine, test_org, test_user, "conv-gate-member", pipeline_scoped_to_team=False
-    )
+    member, scenario = await _seed_member_behind_a_conversion(db_engine, test_org, test_user, "conv-gate-member", pipeline_scoped_to_team=False)
     team_connector = await _seed_connector(db_engine, test_org, test_user, scenario.team_a)
     try:
         resp = await integration_client.post(
@@ -426,9 +416,7 @@ async def test_convert_member_binds_an_org_visibility_connector_and_is_accepted(
             json=_conv_body(scenario, connector_id=org_connector),
             headers=_conv_auth_headers(test_org, member, role="operator"),
         )
-        assert resp.status_code != 409, (
-            f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
-        )
+        assert resp.status_code != 409, f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
         assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         # Removes the teams, their memberships (including the one added above)

@@ -40,11 +40,7 @@ def _registry_names_for(role: str | None) -> list[str]:
     if role is None:
         return []
     level = org_role_level(role)
-    return [
-        name
-        for name, min_role in sorted(PERMISSIONS.items())
-        if org_role_level(min_role) <= level and name not in _SYSTEM_ONLY_PERMISSIONS
-    ]
+    return [name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= level and name not in _SYSTEM_ONLY_PERMISSIONS]
 
 
 def _system_only_keys_from_the_live_app() -> set[str]:
@@ -164,9 +160,7 @@ def test_system_admin_gets_the_admin_floor_without_a_membership(app: FastAPI) ->
     about.
     """
     principal = _principal(org_role=None, is_system_admin=True, organisation_id=None)
-    expected = [
-        name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= org_role_level("admin")
-    ]
+    expected = [name for name, min_role in sorted(PERMISSIONS.items()) if org_role_level(min_role) <= org_role_level("admin")]
 
     with _client_with_principal(app, principal) as client:
         resp = client.get("/api/v1/auth/permissions")

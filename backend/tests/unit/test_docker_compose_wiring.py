@@ -53,9 +53,5 @@ def test_app_services_declare_postgres_password():
     for service in _APP_SERVICES:
         assert service in services, f"missing service {service} in compose file"
         env = services[service].get("environment", {})
-        assert "POSTGRES_PASSWORD" in env, (
-            f"{service} must declare POSTGRES_PASSWORD so entrypoint.sh uses the same password as the db service"
-        )
-        assert env["POSTGRES_PASSWORD"] == db_password, (
-            f"{service} POSTGRES_PASSWORD ({env['POSTGRES_PASSWORD']}) must match the db service value ({db_password})"
-        )
+        assert "POSTGRES_PASSWORD" in env, f"{service} must declare POSTGRES_PASSWORD so entrypoint.sh uses the same password as the db service"
+        assert env["POSTGRES_PASSWORD"] == db_password, f"{service} POSTGRES_PASSWORD ({env['POSTGRES_PASSWORD']}) must match the db service value ({db_password})"

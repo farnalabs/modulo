@@ -47,12 +47,7 @@ class TestParseSuspensionMarker:
             ("<!-- FAST_LANE_SUSPENSION: Major -->", "major"),
             # Marker embedded in a longer comment (last line)
             (
-                (
-                    "The review found issues in the pipeline engine.\n"
-                    "File: backend/src/farna/core/pipeline_engine/graph.py\n"
-                    "Severity: critical\n"
-                    "<!-- FAST_LANE_SUSPENSION: critical -->"
-                ),
+                ("The review found issues in the pipeline engine.\nFile: backend/src/farna/core/pipeline_engine/graph.py\nSeverity: critical\n<!-- FAST_LANE_SUSPENSION: critical -->"),
                 "critical",
             ),
             # Extra whitespace inside the comment delimiters
@@ -114,15 +109,7 @@ class TestParseSuspensionMarker:
 
     def test_marker_inside_fenced_code_block_is_ignored(self) -> None:
         """A marker quoted inside a fenced code block must NOT trigger."""
-        body = (
-            "The reviewer posts a marker like this:\n"
-            "\n"
-            "```\n"
-            "<!-- FAST_LANE_SUSPENSION: critical -->\n"
-            "```\n"
-            "\n"
-            "But this comment itself is clean."
-        )
+        body = "The reviewer posts a marker like this:\n\n```\n<!-- FAST_LANE_SUSPENSION: critical -->\n```\n\nBut this comment itself is clean."
         assert parse_suspension_marker(body) is None
 
     def test_marker_inside_tilde_fenced_block_is_ignored(self) -> None:
@@ -132,16 +119,7 @@ class TestParseSuspensionMarker:
 
     def test_real_marker_outside_fence_is_detected(self) -> None:
         """A real marker outside a code block is still detected."""
-        body = (
-            "Here is the format:\n"
-            "\n"
-            "```\n"
-            "<!-- FAST_LANE_SUSPENSION: critical -->\n"
-            "```\n"
-            "\n"
-            "And here is the actual marker:\n"
-            "<!-- FAST_LANE_SUSPENSION: major -->"
-        )
+        body = "Here is the format:\n\n```\n<!-- FAST_LANE_SUSPENSION: critical -->\n```\n\nAnd here is the actual marker:\n<!-- FAST_LANE_SUSPENSION: major -->"
         assert parse_suspension_marker(body) == "major"
 
     def test_empty_body(self) -> None:

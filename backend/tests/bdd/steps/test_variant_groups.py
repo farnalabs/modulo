@@ -347,9 +347,7 @@ def check_run_count(count: int, ctx: dict[str, Any]) -> None:
 def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any]) -> None:
     actual = sum(1 for r in ctx["run_results"] if r["variant_name"] == variant)
     tolerance = max(1, expected * 0.2)
-    assert abs(actual - expected) <= tolerance, (
-        f"Expected ~{expected} runs for {variant!r}, got {actual} (tolerance {tolerance})"
-    )
+    assert abs(actual - expected) <= tolerance, f"Expected ~{expected} runs for {variant!r}, got {actual} (tolerance {tolerance})"
 
 
 @then("each batch run merges its variant's run_context_overrides into the input payload")
@@ -409,16 +407,12 @@ def coverage_gap_absent(variant: str, ctx: dict[str, Any]) -> None:
 @then(parsers.parse('the selected variant is "{expected}"'))
 def check_selected_variant(expected: str, ctx: dict[str, Any]) -> None:
     assert ctx["selected_variant"] is not None, "No variant was selected"
-    assert ctx["selected_variant"]["name"] == expected, (
-        f"Expected variant {expected!r}, got {ctx['selected_variant']['name']!r}"
-    )
+    assert ctx["selected_variant"]["name"] == expected, f"Expected variant {expected!r}, got {ctx['selected_variant']['name']!r}"
 
 
 @then("the batch is rejected with a quota_exceeded error")
 def check_quota_exceeded(ctx: dict[str, Any]) -> None:
-    assert ctx.get("run_results") is None or not ctx.get("run_results", []), (
-        "Expected no run results when quota is exceeded"
-    )
+    assert ctx.get("run_results") is None or not ctx.get("run_results", []), "Expected no run results when quota is exceeded"
 
 
 # ===================================================================

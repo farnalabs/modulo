@@ -317,15 +317,9 @@ async def test_loop_metrics_over_postgres(db_session: AsyncSession) -> None:
 
     # A reservation's run_id is a real FK to runs (same organisation), so the
     # reservation runs are created first and the facts reference them.
-    consumed_run = _add_run(
-        db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"]
-    )
-    unobserved_run = _add_run(
-        db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"]
-    )
-    released_run = _add_run(
-        db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"]
-    )
+    consumed_run = _add_run(db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"])
+    unobserved_run = _add_run(db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"])
+    released_run = _add_run(db_session, org_id=org_id, pipeline_id=seeded["pipeline_id"], snapshot_id=seeded["snapshot_id"])
     _add_fact(
         db_session,
         org_id=org_id,
