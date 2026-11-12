@@ -222,13 +222,7 @@ def _make_session() -> AsyncMock:
 
 def _fake_boundary(reachable: bool, image_ok: bool = True) -> Any:
     boundary = MagicMock()
-    if reachable:
-        outcome = EngineProbeOutcome(
-            reachable=True,
-            engine_info={"cpu_count": 8, "mem_total_mb": 16384},
-        )
-    else:
-        outcome = EngineProbeOutcome(reachable=False, error="connection refused")
+    outcome = EngineProbeOutcome(reachable=True, engine_info={"cpu_count": 8, "mem_total_mb": 16384}) if reachable else EngineProbeOutcome(reachable=False, error="connection refused")
     boundary.probe_engine = AsyncMock(return_value=outcome)
     boundary.image_present = AsyncMock(return_value=image_ok)
     boundary.close = AsyncMock()

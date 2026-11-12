@@ -233,10 +233,7 @@ def _apply_one_trigger(
     """
     pipeline_id = pipeline_ids.get(entity.pipeline)
     if pipeline_id is None:
-        if entity.pipeline in declared_pipelines:
-            msg = f"pipeline {entity.pipeline!r} apply failed upstream - see the pipeline's failed entry"
-        else:
-            msg = f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an earlier document) or apply the pipeline first"
+        msg = f"pipeline {entity.pipeline!r} apply failed upstream - see the pipeline's failed entry" if entity.pipeline in declared_pipelines else f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an earlier document) or apply the pipeline first"
         raise KeyError(msg)
     resolved_config = resolved_configs.get(entry_name)
     if resolved_config is None:
