@@ -3,7 +3,7 @@ Postgres.
 
 Drives ``update_run_status`` (ORM branch + fenced branch) and the core
 catch/orchestrate contract (:func:`guard_dual_write`) through a NOBYPASSRLS
-role (the production ``modulo_app`` scenario), so the RLS-scoped store write,
+role (the production ``farna_control_app`` scenario), so the RLS-scoped store write,
 the fail-closed abort, the transient retry, and the separate-session
 terminalization are exercised against the real migration-0192 table.
 
@@ -68,12 +68,7 @@ async def dual_write_tenant(db_engine: AsyncEngine, test_user: uuid.UUID) -> _Te
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(tenant.pipeline_id),
                 "oid": str(tenant.org_id),
@@ -124,11 +119,7 @@ async def _insert_run(
     tok_value: Any = claim_token or f"tok-seed-{run_id}"
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, :hash, :thread, :tok)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, :hash, :thread, :tok)"),
             {
                 "id": str(run_id),
                 "oid": str(tenant.org_id),
@@ -169,10 +160,7 @@ async def _fetch_new_table_rows(db_engine: AsyncEngine, run_id: uuid.UUID) -> li
     """Read run_node_outputs rows over a superuser connection (RLS bypassed)."""
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT node_id, attempt_key, outputs_json, node_telemetry_json, raw_output_markers "
-                "FROM run_node_outputs WHERE run_id = :rid ORDER BY node_id, attempt_key"
-            ),
+            text("SELECT node_id, attempt_key, outputs_json, node_telemetry_json, raw_output_markers FROM run_node_outputs WHERE run_id = :rid ORDER BY node_id, attempt_key"),
             {"rid": str(run_id)},
         )
         return [(r[0], r[1], r[2], r[3], r[4]) for r in result.all()]
@@ -181,10 +169,7 @@ async def _fetch_new_table_rows(db_engine: AsyncEngine, run_id: uuid.UUID) -> li
 async def _fetch_error_events(db_engine: AsyncEngine, org_id: uuid.UUID, pattern: str) -> list[tuple[str, str]]:
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT source, message FROM error_events "
-                "WHERE organisation_id = :oid AND message LIKE :pattern ORDER BY created_at"
-            ),
+            text("SELECT source, message FROM error_events WHERE organisation_id = :oid AND message LIKE :pattern ORDER BY created_at"),
             {"oid": str(org_id), "pattern": pattern},
         )
         return [(r[0], r[1]) for r in result.all()]

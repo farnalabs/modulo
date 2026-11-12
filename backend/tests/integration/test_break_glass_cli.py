@@ -1,12 +1,12 @@
 """Integration tests for the break-glass CLI deliverable (B).
 
 Runs the CLI core operations (activate / deactivate / force-last-admin /
-smoke / status) against a REAL modulo_breakglass LOGIN engine on testcontainers
+smoke / status) against a REAL farna_control_breakglass LOGIN engine on testcontainers
 Postgres. Exercises the caller-bound ``deactivate_break_glass`` SECURITY
-DEFINER operator branch (session_user='modulo_breakglass' only), the accounts
+DEFINER operator branch (session_user='farna_control_breakglass' only), the accounts
 UPDATE allow-list boundary (the CLI INSERTs accounts and writes the three
 break-glass columns), and the audit writes via the Python
-``append_audit_event`` on the modulo_breakglass session (plan §5, iteration-16
+``append_audit_event`` on the farna_control_breakglass session (plan §5, iteration-16
 CRITICAL — the chained audit_chain_heads write needs the SELECT+INSERT/UPDATE
 grants).
 
@@ -47,16 +47,11 @@ async def _create_admin(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, "
-                "active, is_break_glass) VALUES (:id, :email, :name, 'hash', 'local', true, false)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active, is_break_glass) VALUES (:id, :email, :name, 'hash', 'local', true, false)"),
             {"id": str(acc_id), "email": f"admin-{acc_id.hex[:12]}@example.com", "name": "Admin"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"),
             {"id": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -155,9 +150,7 @@ async def test_force_last_admin_removes_last_non_bg_admin(db_engine: AsyncEngine
     org_id = await _create_org(db_engine)
     admin_id = await _create_admin(db_engine, org_id)
 
-    result = await bg.force_last_admin(
-        bg_session, org_id=org_id, actor="operator", reason="TKT-3", now=datetime.now(UTC)
-    )
+    result = await bg.force_last_admin(bg_session, org_id=org_id, actor="operator", reason="TKT-3", now=datetime.now(UTC))
     assert result["removed_account_id"] == str(admin_id)
 
     async with bg_session.begin():
@@ -197,5 +190,5 @@ async def test_smoke_probe(bg_session: AsyncSession) -> None:
     async with bg_session.begin():
         result = await bg.smoke(bg_session)
     assert result["connectivity"] == "ok"
-    assert result["session_user"] == "modulo_breakglass"
+    assert result["session_user"] == "farna_control_breakglass"
     assert result["deactivate_function"] is not None

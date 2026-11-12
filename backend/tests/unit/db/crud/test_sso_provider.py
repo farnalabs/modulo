@@ -156,9 +156,7 @@ class TestReadPaths:
 
 class TestCreateProvider:
     async def test_duplicate_name_raises_value_error(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_make_provider()))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_make_provider())))
         from farna.db.crud.sso_provider import create_provider
 
         with pytest.raises(ValueError, match="already exists"):
@@ -231,15 +229,13 @@ class TestCreateProvider:
             )
         assert result.provider_id == "custom-id"
 
-    def _system_scan_patches(self, modulo_system_database_url: str) -> object:
+    def _system_scan_patches(self, farna_control_system_database_url: str) -> object:
         return patch(
             "farna.db.crud.sso_provider.get_settings",
-            MagicMock(return_value=MagicMock(modulo_system_database_url=modulo_system_database_url)),
+            MagicMock(return_value=MagicMock(farna_control_system_database_url=farna_control_system_database_url)),
         )
 
-    async def test_system_session_scan_when_url_configured(
-        self, mock_session: AsyncMock, system_session: AsyncMock
-    ) -> None:
+    async def test_system_session_scan_when_url_configured(self, mock_session: AsyncMock, system_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         scalars_all = MagicMock(all=MagicMock(return_value=[]))
         system_session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=scalars_all)))
@@ -257,9 +253,7 @@ class TestCreateProvider:
         system_session.begin.assert_called_once()
         system_session.execute.assert_awaited_once()
 
-    async def test_system_session_falls_back_when_url_unset(
-        self, mock_session: AsyncMock, system_session: AsyncMock
-    ) -> None:
+    async def test_system_session_falls_back_when_url_unset(self, mock_session: AsyncMock, system_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with self._system_scan_patches(""), _patch_audit():
             from farna.db.crud.sso_provider import create_provider
@@ -274,9 +268,7 @@ class TestCreateProvider:
             )
         system_session.execute.assert_not_awaited()
 
-    async def test_system_fallback_when_settings_raise(
-        self, mock_session: AsyncMock, system_session: AsyncMock
-    ) -> None:
+    async def test_system_fallback_when_settings_raise(self, mock_session: AsyncMock, system_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
         with (
             patch(
@@ -318,10 +310,7 @@ class TestUpdateProvider:
         with patch("farna.db.crud.sso_provider.get_provider", AsyncMock(return_value=None)):
             from farna.db.crud.sso_provider import update_provider
 
-            assert (
-                await update_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID, fernet_key=_FERNET_KEY, name="x")
-                is None
-            )
+            assert await update_provider(mock_session, _PROVIDER_ID, org_id=_ORG_ID, fernet_key=_FERNET_KEY, name="x") is None
 
     async def test_client_secret_encrypted_and_removed_from_updates(self, mock_session: AsyncMock) -> None:
         provider = _make_provider()

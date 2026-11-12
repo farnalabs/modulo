@@ -79,6 +79,11 @@ __all__ = [
     "get_api_key_role_cap_count",  # test-support diagnostic getter for API-key role-cap security counter
     # runs.py wrapper kept for test_prompt_reveal (reveal_node_prompt uses _build_messages)
     "_build_messages_from_template_and_state",
+    # Migration ceremony helpers are imported dynamically by retired migration
+    # modules and retained for compatibility with the baseline ledger.
+    "is_postgres",
+    "role_exists",
+    "assert_owner_is_migrate",
     # FAR-900: RenderResult.skip_reason is read by callers/tests but vulture
     # cannot resolve dataclass attribute reads.
     "skip_reason",

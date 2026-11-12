@@ -2,7 +2,7 @@
 """FAR-19 gate: prove the pg_dump backup + Alembic upgrade/downgrade path.
 
 This script is the automated evidence behind ``docs/operations/backup.md``.
-It runs the real ``modulo backup`` / ``modulo restore`` CLI against a real
+It runs the real ``farna-control backup`` / ``farna-control restore`` CLI against a real
 Postgres and proves the whole self-hosted disaster-recovery loop:
 
   1. reset two scratch databases on the target server (refusing a server that
@@ -15,11 +15,11 @@ Postgres and proves the whole self-hosted disaster-recovery loop:
      seed one row in each of ``checkpoints`` / ``checkpoint_blobs`` /
      ``checkpoint_writes`` (an empty table would make the JSON export and
      restore path vacuous)
-  6. ``modulo backup`` -> pg_dump + checkpoint JSON exports + manifest, then
+  6. ``farna-control backup`` -> pg_dump + checkpoint JSON exports + manifest, then
      assert ALL six artefacts exist and ``database.sql`` is non-empty
-  7. ``modulo restore`` that backup into the second, empty database
+  7. ``farna-control restore`` that backup into the second, empty database
   8. assert the seeded rows AND the three seeded checkpoint rows survived the
-     restore, then re-assert the runtime role posture for ``modulo_app``
+     restore, then re-assert the runtime role posture for ``farna_control_app``
      (NOBYPASSRLS + the expected grants) — the restore's own posture step
      swallows its failures, so the gate must check the end state itself, and
      the posture is deliberately broken before the restore so that check
@@ -42,11 +42,11 @@ worktree-unique-port principle the local e2e harness applies::
 
     NAME=modulo-dr-gate-$(date +%Y%m%d-%H%M%S)
     docker run -d --rm --name "$NAME" \\
-        -e POSTGRES_USER=modulo_test -e POSTGRES_PASSWORD=modulo_test \\
-        -e POSTGRES_DB=modulo_test -p 0:5432 postgres:16-alpine
+        -e POSTGRES_USER=farna_control_test -e POSTGRES_PASSWORD=farna_control_test \\
+        -e POSTGRES_DB=farna_control_test -p 0:5432 postgres:16-alpine
     PORT=$(docker port "$NAME" 5432/tcp | tail -1 | sed 's/.*://')
 
-    export DATABASE_URL=postgresql+asyncpg://modulo_test:modulo_test@localhost:$PORT/modulo_test
+    export DATABASE_URL=postgresql+asyncpg://farna_control_test:farna_control_test@localhost:$PORT/farna_control_test
     uv run --project backend python scripts/verify_backup_restore.py
 
 Run it from the REPOSITORY ROOT — the script lives at ``scripts/`` and imports
@@ -56,7 +56,7 @@ merely inconvenient.
 Cluster-scoped roles
 --------------------
 This gate resets the runtime roles the migration chain requires
-(``modulo_app``, ``modulo_migrate``, ``modulo_breakglass``) with
+(``farna_control_app``, ``farna_control_migrate``, ``farna_control_breakglass``) with
 ``DROP ROLE`` / ``CREATE ROLE``. Roles are CLUSTER-scoped, not database-scoped:
 pointed at a shared server this rotates the role passwords of every deployment
 living on it. The gate therefore refuses to proceed unless the database URL's
@@ -65,8 +65,8 @@ suffix (``_test``, ``_src``, ``_restored``, ...), or ``--allow-role-reset`` is
 passed. Only ever point it at a dedicated throwaway server.
 
 ``--database-url`` overrides ``$DATABASE_URL``. ``pg_dump`` and ``psql``
-(major version >= the server's) must be on ``PATH``: ``modulo backup`` and
-``modulo restore`` shell out to them.
+(major version >= the server's) must be on ``PATH``: ``farna-control backup`` and
+``farna-control restore`` shell out to them.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ BACKEND_DIR = REPO_ROOT / "backend"
 _SEED_PIPELINE_NAME = "Backup Gate Pipeline"
 _CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 
-# Every artefact ``modulo backup`` must produce. All six are asserted after the
+# Every artefact ``farna-control backup`` must produce. All six are asserted after the
 # backup so a silently-missing export fails the gate instead of leaving an
 # untested restore step behind.
 _BACKUP_ARTEFACTS = (
@@ -109,7 +109,7 @@ _BACKUP_ARTEFACTS = (
 )
 
 # The runtime app role whose posture the restore must leave correct.
-_APP_ROLE = "modulo_app"
+_APP_ROLE = "farna_control_app"
 # Password for the scratch app role (matches _ROLE_DDL below). Only ever set on
 # a throwaway server the role guard has approved; not a real secret.
 _APP_ROLE_PASSWORD = "apppass"
@@ -120,17 +120,17 @@ _APP_ROLE_PASSWORD = "apppass"
 # everything else).
 _SCRATCH_DB_SUFFIXES = ("_test", "_tests", "_src", "_restored", "_backup_src", "_scratch", "_gate")
 
-# Migrations 0036/0037/0066/0067 SET ROLE modulo_migrate and re-own tables to
-# it, and the reconciliation chain grants EXECUTE to modulo_app /
-# modulo_breakglass, so all three must exist before `alembic upgrade heads`.
+# Migrations 0036/0037/0066/0067 SET ROLE farna_control_migrate and re-own tables to
+# it, and the reconciliation chain grants EXECUTE to farna_control_app /
+# farna_control_breakglass, so all three must exist before `alembic upgrade heads`.
 # Mirrors backend/tests/integration/conftest.py.
 _ROLE_DDL = (
-    'DROP ROLE IF EXISTS "modulo_migrate"',
-    'DROP ROLE IF EXISTS "modulo_breakglass"',
-    'DROP ROLE IF EXISTS "modulo_app"',
-    "CREATE ROLE modulo_migrate NOSUPERUSER NOLOGIN BYPASSRLS",
-    "CREATE ROLE modulo_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'",
-    "CREATE ROLE modulo_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'",
+    'DROP ROLE IF EXISTS "farna_control_migrate"',
+    'DROP ROLE IF EXISTS "farna_control_breakglass"',
+    'DROP ROLE IF EXISTS "farna_control_app"',
+    "CREATE ROLE farna_control_migrate NOSUPERUSER NOLOGIN BYPASSRLS",
+    "CREATE ROLE farna_control_breakglass LOGIN BYPASSRLS PASSWORD 'bgpass'",
+    "CREATE ROLE farna_control_app NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD 'apppass'",
 )
 
 
@@ -168,7 +168,7 @@ def _db_name(url: str) -> str:
 
 
 def _base_db_name(url: str) -> str:
-    return _db_name(url) or "modulo_test"
+    return _db_name(url) or "farna_control_test"
 
 
 # -- Role-reset guard -------------------------------------------------------
@@ -195,8 +195,8 @@ def _is_scratch_host(host: str) -> bool:
 def _assert_role_reset_allowed(database_url: str, allow_role_reset: bool) -> None:
     """Refuse a cluster-wide role reset against a server that may be shared.
 
-    The gate runs ``DROP ROLE`` / ``CREATE ROLE`` for ``modulo_app``,
-    ``modulo_migrate`` and ``modulo_breakglass`` with fixed passwords. Roles are
+    The gate runs ``DROP ROLE`` / ``CREATE ROLE`` for ``farna_control_app``,
+    ``farna_control_migrate`` and ``farna_control_breakglass`` with fixed passwords. Roles are
     CLUSTER-scoped: on a shared server that rotates the credentials of every
     deployment living there. The reset is only allowed when the target is
     provably scratch (loopback/private host AND a scratch database-name suffix)
@@ -635,7 +635,7 @@ def _url_with_user(url: str, user: str, password: str) -> str:
 
 
 def _break_app_role_posture(database_url: str) -> None:
-    """Give ``modulo_app`` BYPASSRLS *before* the restore.
+    """Give ``farna_control_app`` BYPASSRLS *before* the restore.
 
     Roles are CLUSTER-scoped and are not in the dump, so a restore cannot
     repair them. Breaking the posture first is what stops the post-restore
@@ -653,10 +653,10 @@ def _break_app_role_posture(database_url: str) -> None:
 def _apply_runtime_role_posture(database_url: str) -> None:
     """Re-run the promoted bootstrap path with the REAL runtime app role.
 
-    ``modulo restore`` derives its app role from ``--db-url``. In this gate
+    ``farna-control restore`` derives its app role from ``--db-url``. In this gate
     that user is the scratch superuser psql needs to replay the dump, so the
-    restore's posture step configures the superuser rather than ``modulo_app``.
-    Running the same promoted path once with ``modulo_app`` as the app URL is
+    restore's posture step configures the superuser rather than ``farna_control_app``.
+    Running the same promoted path once with ``farna_control_app`` as the app URL is
     what makes the grant assertions below meaningful — and it fails loudly if
     ``bootstrap_roles`` itself stops applying the posture.
     """
@@ -670,11 +670,11 @@ def _apply_runtime_role_posture(database_url: str) -> None:
 
 
 def _assert_restore_posture(database_url: str) -> None:
-    """Observe ``modulo_app``'s role posture and grants directly after restore.
+    """Observe ``farna_control_app``'s role posture and grants directly after restore.
 
-    ``modulo restore``'s own posture step (``_ensure_restore_posture``) catches
+    ``farna-control restore``'s own posture step (``_ensure_restore_posture``) catches
     every exception, logs a warning and returns — a restore that left
-    ``modulo_app`` able to bypass RLS, or without the grants the app needs,
+    ``farna_control_app`` able to bypass RLS, or without the grants the app needs,
     still exits 0. The gate therefore checks the end state itself: a
     ``--clean --no-owner --no-acl`` dump strips every table ACL, so the grants
     below are re-created by the posture path and are the real signal.
@@ -684,7 +684,7 @@ def _assert_restore_posture(database_url: str) -> None:
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = %s", (_APP_ROLE,))
         role = cur.fetchone()
-        cur.execute("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'modulo_system'")
+        cur.execute("SELECT rolbypassrls FROM pg_roles WHERE rolname = 'farna_control_system'")
         system_role = cur.fetchone()
         cur.execute("SELECT has_schema_privilege(%s, 'public', 'USAGE')", (_APP_ROLE,))
         schema_usage = cur.fetchone()[0]
@@ -719,7 +719,7 @@ def _assert_restore_posture(database_url: str) -> None:
         cur.execute(
             "SELECT b.rolname FROM pg_auth_members m "
             "JOIN pg_roles a ON a.oid = m.member JOIN pg_roles b ON b.oid = m.roleid "
-            "WHERE a.rolname = %s AND b.rolname IN ('modulo_migrate', 'modulo_breakglass')",
+            "WHERE a.rolname = %s AND b.rolname IN ('farna_control_migrate', 'farna_control_breakglass')",
             (_APP_ROLE,),
         )
         memberships = sorted(row[0] for row in cur.fetchall())
@@ -731,7 +731,7 @@ def _assert_restore_posture(database_url: str) -> None:
     if role[1]:
         _fail(f"after restore: {_APP_ROLE} has BYPASSRLS - tenant isolation relies on RLS policies")
     if system_role is None or not system_role[0]:
-        _fail("after restore: modulo_system is missing or lacks BYPASSRLS - system crons would see zero rows")
+        _fail("after restore: farna_control_system is missing or lacks BYPASSRLS - system crons would see zero rows")
     if not schema_usage:
         _fail(f"after restore: {_APP_ROLE} has no USAGE on schema public")
     if not all(table_privileges):
@@ -765,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify_backup_restore.py",
         description=(
-            "Prove the modulo backup/restore CLI and the Alembic upgrade/downgrade path against a real Postgres."
+            "Prove the farna-control backup/restore CLI and the Alembic upgrade/downgrade path against a real Postgres."
         ),
     )
     parser.add_argument(
@@ -834,14 +834,14 @@ def main(argv: list[str] | None = None) -> int:
     _seed_checkpoint_rows(source_url, expected)
     _assert_checkpoint_rows(source_url, expected, "after seeding")
 
-    print(f"[6/10] Running 'modulo backup' on '{source_name}'")
+    print(f"[6/10] Running 'farna-control backup' on '{source_name}'")
     _ensure_settings_env()
     backup_dir = Path(tempfile.mkdtemp(prefix="modulo-dr-gate-"))
     _invoke_cli(["backup", "--db-url", source_url, "--output-dir", str(backup_dir)])
     _assert_backup_artefacts(backup_dir)
 
-    print(f"[7/10] Running 'modulo restore' into empty database '{restored_name}'")
-    # Roles are cluster-scoped and absent from the dump, so break modulo_app's
+    print(f"[7/10] Running 'farna-control restore' into empty database '{restored_name}'")
+    # Roles are cluster-scoped and absent from the dump, so break farna_control_app's
     # posture here: step 8's assertion must prove the posture path repairs it.
     _break_app_role_posture(database_url)
     # The target is a scratch database created empty moments ago, so the
@@ -861,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
     print("[8/10] Asserting data integrity after restore")
     _assert_integrity(restored_url, expected, "after restore")
     _assert_checkpoint_rows(restored_url, expected, "after restore")
-    # `modulo restore` derives its app role from --db-url, which here is the
+    # `farna-control restore` derives its app role from --db-url, which here is the
     # scratch superuser, so re-run the promoted first-boot posture path with
     # the REAL runtime role before checking it.
     _apply_runtime_role_posture(restored_url)

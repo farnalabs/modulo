@@ -1,18 +1,18 @@
 Modulo has been installed!
 
 Release: {{ .Release.Name }}
-Namespace: {{ include "modulo.namespace" . }}
+Namespace: {{ include "farna-control.namespace" . }}
 
 === Services ===
 
 Backend API:
-  kubectl get svc {{ include "modulo.fullname" . }}-backend -n {{ include "modulo.namespace" . }}
+  kubectl get svc {{ include "farna-control.fullname" . }}-backend -n {{ include "farna-control.namespace" . }}
 
 SAQ System Worker:
-  kubectl get svc {{ include "modulo.fullname" . }}-saq-system -n {{ include "modulo.namespace" . }}
+  kubectl get svc {{ include "farna-control.fullname" . }}-saq-system -n {{ include "farna-control.namespace" . }}
 
 Frontend:
-  kubectl get svc {{ include "modulo.fullname" . }}-frontend -n {{ include "modulo.namespace" . }}
+  kubectl get svc {{ include "farna-control.fullname" . }}-frontend -n {{ include "farna-control.namespace" . }}
 
 === Access ===
 
@@ -25,10 +25,10 @@ Ingress is enabled. Access Modulo at:
 Port-forward to access Modulo locally:
 
   # Frontend (port 80)
-  kubectl port-forward svc/{{ include "modulo.fullname" . }}-frontend 8080:{{ .Values.frontend.service.port }} -n {{ include "modulo.namespace" . }}
+  kubectl port-forward svc/{{ include "farna-control.fullname" . }}-frontend 8080:{{ .Values.frontend.service.port }} -n {{ include "farna-control.namespace" . }}
 
   # Backend API (port 8000)
-  kubectl port-forward svc/{{ include "modulo.fullname" . }}-backend 8000:{{ .Values.backend.service.port }} -n {{ include "modulo.namespace" . }}
+  kubectl port-forward svc/{{ include "farna-control.fullname" . }}-backend 8000:{{ .Values.backend.service.port }} -n {{ include "farna-control.namespace" . }}
 
 Then open: http://localhost:8080
 {{- end }}

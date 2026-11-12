@@ -398,7 +398,7 @@ class Notifier:
 
         The read runs under the org's RLS context (FAR-523):
         ``notification_endpoints`` carries the ``rls_org_isolation`` policy and
-        ``modulo_app`` is NOBYPASSRLS, so a query without
+        ``farna_control_app`` is NOBYPASSRLS, so a query without
         ``app.organisation_id`` set silently matches ZERO rows — the webhook
         dispatch would deliver to nobody. The team scope is applied explicitly
         in the WHERE clause (team rows first, org-wide fallback), matching the

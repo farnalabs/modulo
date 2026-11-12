@@ -2,10 +2,10 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "modulo.fullname" . }}-ingress
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-ingress
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -34,7 +34,7 @@ spec:
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ include "modulo.fullname" $ }}-frontend
+                name: {{ include "farna-control.fullname" $ }}-frontend
                 port:
                   number: {{ $.Values.frontend.service.port }}
           {{- end }}

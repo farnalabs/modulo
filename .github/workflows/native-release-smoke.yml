@@ -279,11 +279,11 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup
+          farna-control backup --data-dir "${DATA_DIR}" --output-dir smoke-backup
           modulo stop
           rm -rf "${DATA_DIR}"
           modulo start --detach
-          modulo restore smoke-backup --data-dir "${DATA_DIR}" --yes
+          farna-control restore smoke-backup --data-dir "${DATA_DIR}" --yes
           modulo doctor --json | tee doctor-restore.json > /dev/null
           echo "backup/wipe/restore round-trip OK"
 
@@ -350,10 +350,10 @@ jobs:
           fi
           echo "upgrade refusal OK"
           # SUCCESS: boot the stack (the dump needs the bundled Postgres reachable),
-          # take the verified dump via modulo backup, then upgrade --skip-backup
+          # take the verified dump via farna-control backup, then upgrade --skip-backup
           # (the loud, one-flag installer ack per scripts/install.sh and FAR-675).
           modulo start --detach
-          modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
+          farna-control backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
           modulo upgrade "${TAG}" --from-file "${TARBALL}" --skip-backup
           curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           modulo stop
@@ -624,11 +624,11 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup
+          farna-control backup --data-dir "${DATA_DIR}" --output-dir smoke-backup
           modulo stop
           rm -rf "${DATA_DIR}"
           modulo start --detach
-          modulo restore smoke-backup --data-dir "${DATA_DIR}" --yes
+          farna-control restore smoke-backup --data-dir "${DATA_DIR}" --yes
           modulo doctor --json | tee doctor-restore.json > /dev/null
           echo "backup/wipe/restore round-trip OK"
 
@@ -698,10 +698,10 @@ jobs:
           fi
           echo "upgrade refusal OK"
           # SUCCESS: boot the stack (the dump needs the bundled Postgres reachable),
-          # take the verified dump via modulo backup, then upgrade --skip-backup
+          # take the verified dump via farna-control backup, then upgrade --skip-backup
           # (the loud, one-flag installer ack per scripts/install.sh and FAR-675).
           modulo start --detach
-          modulo backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
+          farna-control backup --data-dir "${DATA_DIR}" --output-dir smoke-backup2
           modulo upgrade "${TAG}" --from-file "${TARBALL}" --skip-backup
           curl -fsS --retry 30 --retry-connrefused "${BASE}/healthz" > /dev/null  #NOSONAR install target is the local launcher on 127.0.0.1 (http-only by design); nothing leaves the runner
           modulo stop
@@ -746,7 +746,7 @@ jobs:
           bash scripts/install.sh --from-file "${n1_dir}/${n1_tarball}"  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 manifest signature + sha256 + internal SHA256SUMS + SLSA attestation) before this step
           modulo start --detach
           modulo users add n1-seed@modulo.run --admin --password "${ADMIN_PASSWORD}"
-          modulo backup --data-dir "${DATA_DIR}" --output-dir canary-backup
+          farna-control backup --data-dir "${DATA_DIR}" --output-dir canary-backup
           modulo doctor --json | tee canary-doctor.json > /dev/null
           modulo stop || true
           bash scripts/install.sh --from-file "${TARBALL}" --skip-backup  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step

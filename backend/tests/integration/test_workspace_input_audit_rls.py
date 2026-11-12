@@ -10,7 +10,7 @@ transaction — without it the INSERT is rejected with ``42501`` and the
 best-effort write is swallowed, so the audit row silently never lands.
 
 These tests drive the real persistence functions against a NOBYPASSRLS
-role (``modulo_app`` production scenario) and assert the rows actually
+role (``farna_control_app`` production scenario) and assert the rows actually
 land when RLS is set, and do NOT land when it is not.  The unit tests run
 on SQLite, which has no RLS, so they cannot catch a missing
 ``set_rls_org`` call — only a real Postgres path can.  This is exactly
@@ -69,11 +69,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :rn, :ih, :tid)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :rn, :ih, :tid)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),

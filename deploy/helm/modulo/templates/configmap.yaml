@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "modulo.fullname" . }}-config
-  namespace: {{ include "modulo.namespace" . }}
+  name: {{ include "farna-control.fullname" . }}-config
+  namespace: {{ include "farna-control.namespace" . }}
   labels:
-    {{- include "modulo.labels" . | nindent 4 }}
+    {{- include "farna-control.labels" . | nindent 4 }}
 data:
   MODULO_DB: "{{ .Values.backend.env.MODULO_DB | default "postgres" }}"
   MODULO_LOG_LEVEL: "{{ .Values.backend.env.MODULO_LOG_LEVEL | default "info" }}"

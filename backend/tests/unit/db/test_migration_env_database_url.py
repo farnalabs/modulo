@@ -1,7 +1,7 @@
 """Unit tests for env.py's migration-target resolution (FAR-2183 F5).
 
 Before the fix, ``alembic.ini`` hardcoded
-``postgresql+asyncpg://modulo:modulo@localhost:5434/modulo`` and env.py read
+``postgresql+asyncpg://modulo:modulo@localhost:5434/farna_control`` and env.py read
 ONLY ``os.environ``. ``alembic upgrade heads`` therefore ignored
 ``backend/.env`` and silently migrated the hardcoded database - correct only by
 coincidence on a default local host, and a silent wrong-database migration for
@@ -35,9 +35,9 @@ from farna.db.migrations import env as migration_env
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 
-_DATABASE_URL = "postgresql+asyncpg://modulo_app:app-secret@db.internal:5434/modulo"
-_ADMIN_URL = "postgresql+asyncpg://modulo:owner-secret@db.internal:5434/modulo"
-_ENV_FILE_URL = "postgresql+asyncpg://modulo_app:env-secret@env-file-host:5555/env_file_db"
+_DATABASE_URL = "postgresql+asyncpg://farna_control_app:app-secret@db.internal:5434/farna_control"
+_ADMIN_URL = "postgresql+asyncpg://modulo:owner-secret@db.internal:5434/farna_control"
+_ENV_FILE_URL = "postgresql+asyncpg://farna_control_app:env-secret@env-file-host:5555/env_file_db"
 
 
 def _config() -> Config:

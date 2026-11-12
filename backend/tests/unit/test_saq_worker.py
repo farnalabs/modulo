@@ -2396,7 +2396,7 @@ class TestMakeSystemSessionFactory:
 
 class TestGetSystemAsyncEngine:
     def test_creates_engine_from_system_url(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2413,7 +2413,7 @@ class TestGetSystemAsyncEngine:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_translates_sslmode_require_for_the_system_engine(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2425,7 +2425,7 @@ class TestGetSystemAsyncEngine:
             args, kwargs = create_engine.call_args
             # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
             # leaving it in the URL raises TypeError at first connect (FAR-1440).
-            assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/modulo"
+            assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/farna_control"
             assert kwargs["connect_args"] == {"ssl": "require", "statement_cache_size": 0}
         finally:
             sw._SYSTEM_ASYNC_ENGINE = None
@@ -2433,7 +2433,7 @@ class TestGetSystemAsyncEngine:
     def test_honours_sslmode_require(self) -> None:
         """FAR-1441: sslmode=require must reach asyncpg as ssl='require' (TLS
         required, fail-closed), not be silently downgraded to ssl=False."""
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=require")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2451,7 +2451,7 @@ class TestGetSystemAsyncEngine:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_honours_sslmode_verify_full(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=verify-full")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=verify-full")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2467,7 +2467,7 @@ class TestGetSystemAsyncEngine:
 
     def test_rejects_downgrading_sslmode(self) -> None:
         """FAR-1441: prefer/allow silently downgrade to plaintext — refused."""
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo?sslmode=prefer")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2486,7 +2486,7 @@ class TestGetSystemAsyncEngine:
     def test_non_postgres_url_gets_no_ssl_kwargs(self) -> None:
         """The ssl/statement_cache_size connect args are asyncpg-only: a
         non-Postgres system URL must not receive them (FAR-1441)."""
-        mock_settings = _settings(modulo_system_database_url="mysql+aiomysql://sys:pass@db:3306/modulo")
+        mock_settings = _settings(farna_control_system_database_url="mysql+aiopostgresql://user:pass@host:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2502,7 +2502,7 @@ class TestGetSystemAsyncEngine:
             sw._SYSTEM_ASYNC_ENGINE = None
 
     def test_fails_closed_when_url_empty(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="")
+        mock_settings = _settings(farna_control_system_database_url="")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         errors: list[tuple[object, object]] = []
         try:
@@ -2524,7 +2524,7 @@ class TestGetSystemAsyncEngine:
 
     def test_caches_engine_singleton(self) -> None:
         system_engine = MagicMock()
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(farna_control_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (

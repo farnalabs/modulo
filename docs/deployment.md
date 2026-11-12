@@ -43,7 +43,7 @@ uv sync
 Set environment variables in `.env`:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
+DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/farna_control
 SECRET_KEY=<random-64-char-string>
 FERNET_KEY=<random-44-char-base64>
 ```
@@ -427,13 +427,13 @@ app refuses to start without them:
 | `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(uv run --with cryptography --no-project python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")` (URL-safe base64 of exactly 32 bytes) |
 
 The SAQ **system** worker needs one more variable: `MODULO_SYSTEM_DATABASE_URL`.
-Its system-engine crons (the jobs that run on the `modulo_system` role,
+Its system-engine crons (the jobs that run on the `farna_control_system` role,
 including `dispatcher_reconcile`) refuse to run without it, and
 `dispatcher_reconcile` gates `/healthz/ready`, so leaving it unset gives an API
 that answers while readiness never becomes ready. The stale-run sweep and
 `fire_due_triggers` are not in this set: they scope per-org on the regular
 engine and run without it. In standalone mode point it at the same SQLite file;
-in every other mode use the dedicated `modulo_system` role (see
+in every other mode use the dedicated `farna_control_system` role (see
 [Docker Compose](#docker-compose-single-server-multi-user)).
 
 The command below sets the required variables inline, so it is runnable as
@@ -628,17 +628,17 @@ already initialized on the old `changeme` default keeps that value until you
 rotate it.
 
 The compose also constructs one URL the system worker needs:
-`MODULO_SYSTEM_DATABASE_URL` (`modulo_system` + `MODULO_DB_PASSWORD` @ the
+`MODULO_SYSTEM_DATABASE_URL` (`farna_control_system` + `MODULO_DB_PASSWORD` @ the
 bundled Postgres). `dispatcher_reconcile` and the other cross-org system
 crons fail closed without it, and `dispatcher_reconcile` gates
 `/healthz/ready` - so leaving it out gives an API that answers while
 readiness never becomes ready.
 
-**Upgrading a database that already ran:** the `modulo_system` role is
+**Upgrading a database that already ran:** the `farna_control_system` role is
 created on the *first* boot, when the URL above did not exist yet, so it
 carries a random password - and a warm boot (migrations already at head)
 does not re-run the role bootstrap to correct it. The symptom is
-`password authentication failed for user "modulo_system"` in the
+`password authentication failed for user "farna_control_system"` in the
 `saq-system` worker log and `dispatcher_reconcile` reporting `failed` in
 readiness. Reconcile the role once after upgrading:
 

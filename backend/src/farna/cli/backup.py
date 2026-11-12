@@ -1051,7 +1051,7 @@ def _check_archived_state_consistency(backup_dir: Path, manifest: dict[str, Any]
 class RestorePostureError(click.ClickException):
     """The restored cluster's role/grant posture could not be established.
 
-    A posture failure can leave ``modulo_app`` able to bypass RLS (or missing
+    A posture failure can leave ``farna_control_app`` able to bypass RLS (or missing
     the grants it needs), which is a tenant-isolation breach — so the restore
     FAILS instead of reporting success. The data itself is already restored:
     fix the reported check, then re-run the posture step with
@@ -1099,7 +1099,7 @@ def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:
     ``DATABASE_URL``; ``--db-url`` / ``DATABASE_ADMIN_URL`` is the ADMIN
     connection the restore writes through and is legitimately a different,
     privileged role. Deriving the app URL from the target would configure the
-    ADMIN role as ``modulo_app`` and leave the real application role with
+    ADMIN role as ``farna_control_app`` and leave the real application role with
     whatever posture the restored cluster carried — so the source is always
     configuration (``--app-db-url``, else ``DATABASE_URL`` from settings) and
     never the target URL.
@@ -1115,8 +1115,8 @@ def _ensure_restore_posture(admin_url: str, app_url: str) -> None:
 
     Reuses the promoted path (``modulo.db.bootstrap_role.bootstrap_roles`` —
     ADR 031 Decision 2) so a restored database ends up with exactly the
-    role/grant posture first boot would produce: modulo_app NOBYPASSRLS,
-    modulo_system/modulo_breakglass BYPASSRLS, grants re-applied, and the
+    role/grant posture first boot would produce: farna_control_app NOBYPASSRLS,
+    farna_control_system/farna_control_breakglass BYPASSRLS, grants re-applied, and the
     accounts allow-list + role-posture assertions re-run (fatal inside that
     path).
 

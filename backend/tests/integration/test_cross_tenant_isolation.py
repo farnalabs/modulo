@@ -1319,7 +1319,7 @@ class TestTriggerEventRetentionRls:
     ) -> None:
         """The SAQ ``trigger_events_cleanup`` system cron purges BOTH orgs'
         expired events through a BYPASSRLS-equivalent factory. The plain
-        ``modulo_app`` factory (NOBYPASSRLS, no ``app.organisation_id``) would
+        ``farna_control_app`` factory (NOBYPASSRLS, no ``app.organisation_id``) would
         silently match zero rows and delete nothing."""
         import farna.core.saq_worker as sw
 
@@ -1327,7 +1327,7 @@ class TestTriggerEventRetentionRls:
         old_b = await _seed_trigger_event(db_engine, org_b, trigger_b, received_at=datetime.now(UTC) - timedelta(days=100))
 
         # The testcontainers superuser bypasses RLS entirely — the same
-        # effective semantics as the production modulo_system (BYPASSRLS)
+        # effective semantics as the production farna_control_system (BYPASSRLS)
         # role the system session factory connects with. autobegin=False
         # mirrors the real system factory (the cron opens per-batch
         # transactions itself).

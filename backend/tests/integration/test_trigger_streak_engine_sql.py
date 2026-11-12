@@ -17,7 +17,7 @@ behaviour:
   predicate could never be implied by the engine's ``->> 'value'`` filters).
 
 The deactivation helper runs under a NON-SUPERUSER role so Postgres RLS actually
-filters (mirrors production ``modulo_app``); the seeds go through the superuser
+filters (mirrors production ``farna_control_app``); the seeds go through the superuser
 engine so they are visible to every role.
 """
 
@@ -55,15 +55,13 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -121,9 +119,7 @@ async def _seed_ongoing_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, trigger_type, "
-                "active, max_concurrent_runs, daily_spend_limit, config_json, streak_epoch) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'ongoing', true, 2, 100.0, :cfg, :epoch)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, trigger_type, active, max_concurrent_runs, daily_spend_limit, config_json, streak_epoch) VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'ongoing', true, 2, 100.0, :cfg, :epoch)",
             ),
             {
                 "id": str(trigger_id),
@@ -229,9 +225,7 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
     """Five consecutive no-delivery terminal runs after the epoch -> the guarded
     UPDATE deactivates EXACTLY ONCE with streak=5; a second sweep tick is a no-op
     (idempotent concurrent ticks)."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     epoch = _now() - timedelta(days=2)
     for i in range(5):
         await _insert_run(
@@ -246,18 +240,14 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
             reason="infra_error",
         )
 
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now())
     assert deactivated is not None
     assert deactivated["id"] == trigger_id
     assert int(deactivated["streak"]) == 5
 
     # The deactivation is durable: the trigger is now inactive.
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT active FROM triggers WHERE id = :tid"), {"tid": str(trigger_id)})
-        ).scalar_one()
+        row = (await conn.execute(text("SELECT active FROM triggers WHERE id = :tid"), {"tid": str(trigger_id)})).scalar_one()
     assert row is False
 
     # FAR-192: the deactivation lifecycle writes a TriggerEvent row with
@@ -269,11 +259,7 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
     async with db_engine.connect() as conn:
         event_rows = (
             await conn.execute(
-                text(
-                    "SELECT validation_result, error_detail FROM trigger_events "
-                    "WHERE organisation_id = :oid AND trigger_id = :tid "
-                    "AND validation_result = 'auto_deactivated'"
-                ),
+                text("SELECT validation_result, error_detail FROM trigger_events WHERE organisation_id = :oid AND trigger_id = :tid AND validation_result = 'auto_deactivated'"),
                 {"oid": str(org), "tid": str(trigger_id)},
             )
         ).all()
@@ -282,9 +268,7 @@ async def test_streak_walk_deactivates_once_with_correct_streak(
     assert "auto-deactivated" in (event_rows[0][1] or ""), f"unexpected error_detail: {event_rows[0][1]!r}"
 
     # A second tick is a no-op (AND active guard).
-    second = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now()
-    )
+    second = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now())
     assert second is None
 
 
@@ -299,9 +283,7 @@ async def test_delivered_run_breaks_streak(
 ) -> None:
     """A delivered run between no-deliveries breaks the walk: only the trailing
     no-delivery runs after the last delivery count."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     epoch = _now() - timedelta(days=2)
     for i in range(3):
         await _insert_run(
@@ -338,15 +320,11 @@ async def test_delivered_run_breaks_streak(
         )
 
     # Only the 2 trailing no-deliveries count -> below threshold 5 -> no deactivation.
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=5, window_cutoff=_now())
     assert deactivated is None
 
     # With threshold 2 the trailing streak deactivates with streak=2.
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=2, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=2, window_cutoff=_now())
     assert deactivated is not None
     assert int(deactivated["streak"]) == 2
 
@@ -363,9 +341,7 @@ async def test_excluded_mid_walk_breaks(
     """An excluded run (operator/HITL-cancelled, budget_exceeded) between
     no-deliveries stops the walk fail-closed — the streak never spans across
     it."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     epoch = _now() - timedelta(days=2)
     for i in range(3):
         await _insert_run(
@@ -402,9 +378,7 @@ async def test_excluded_mid_walk_breaks(
         )
 
     # Only the 3 trailing no-deliveries count (the excluded run breaks the walk).
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now())
     assert deactivated is not None
     assert int(deactivated["streak"]) == 3
 
@@ -420,9 +394,7 @@ async def test_equal_completed_at_ordering(
 ) -> None:
     """Equal completed_at runs get a deterministic total order (id tie-break): a
     delivered run at the same instant as no-deliveries stops the walk."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     same_instant = _now() - timedelta(hours=1)
     # A no-delivery and a delivered run at the SAME completed_at. The delivered
     # one has a LARGER id (created later) -> it is the newest at that instant ->
@@ -455,9 +427,7 @@ async def test_equal_completed_at_ordering(
         run_id=dl,
     )
 
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=1, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=1, window_cutoff=_now())
     assert deactivated is None, "a delivered run at the same instant stops the walk"
 
 
@@ -473,9 +443,7 @@ async def test_boundary_greatest_excludes_pre_epoch_history(
     """Runs predating streak_epoch never count (post-deploy grace) and a
     delivered run AFTER the epoch extends the boundary (GREATEST)."""
     epoch = _now() - timedelta(days=2)
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=epoch
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=epoch)
     # Runs BEFORE the epoch (pre-existing history) — must never count.
     for i in range(5):
         await _insert_run(
@@ -513,9 +481,7 @@ async def test_boundary_greatest_excludes_pre_epoch_history(
             classification_value="no_delivery",
         )
 
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=2, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=2, window_cutoff=_now())
     assert deactivated is not None
     assert int(deactivated["streak"]) == 2, "only the post-delivery no-deliveries count"
 
@@ -531,9 +497,7 @@ async def test_unclassified_run_breaks_fail_closed(
 ) -> None:
     """A terminal run with an 'unclassified' classification record stops the
     walk fail-closed — deactivation can never ride on uncertain evidence."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     epoch = _now() - timedelta(days=2)
     for i in range(3):
         await _insert_run(
@@ -558,9 +522,7 @@ async def test_unclassified_run_breaks_fail_closed(
         reason="classifier_error",
     )
 
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now())
     assert deactivated is None, "the unclassified run stops the walk"
 
 
@@ -576,9 +538,7 @@ async def _insert_audit_deactivation(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO audit_events (id, organisation_id, event_type, resource_type, "
-                "resource_id, payload_json, created_at) "
-                "VALUES (:id, :oid, :etype, :rtype, :rid, :payload, :created)",
+                "INSERT INTO audit_events (id, organisation_id, event_type, resource_type, resource_id, payload_json, created_at) VALUES (:id, :oid, :etype, :rtype, :rid, :payload, :created)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -622,14 +582,10 @@ async def test_get_trigger_streak_status_is_tenant_isolated(
     snapshot_b = await _seed_snapshot(db_engine, org_b, pipeline_b)
 
     # Org A's inactive ongoing trigger with a real streak_epoch.
-    trigger_a = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1)
-    )
+    trigger_a = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1))
     # Org B: a no-delivery run + an auto-deactivated audit record — the data the
     # org-A read must NOT see.
-    trigger_b = await _seed_ongoing_trigger(
-        db_engine, org_id=org_b, pipeline_id=pipeline_b, account_id=user_b, streak_epoch=_now() - timedelta(days=1)
-    )
+    trigger_b = await _seed_ongoing_trigger(db_engine, org_id=org_b, pipeline_id=pipeline_b, account_id=user_b, streak_epoch=_now() - timedelta(days=1))
     await _insert_run(
         db_engine,
         org_id=org_b,
@@ -645,9 +601,7 @@ async def test_get_trigger_streak_status_is_tenant_isolated(
     # Read org A's trigger through the RLS-scoped app engine.
     async with app_factory() as session, session.begin():
         await ch._set_rls_org(session, org)
-        trigger_row = (
-            await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))
-        ).scalar_one()
+        trigger_row = (await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))).scalar_one()
         status = await ts.get_trigger_streak_status(session, trigger_row)
 
     assert status["streak"] == 0, "org B's no-delivery run must not count toward org A's trigger"
@@ -680,9 +634,7 @@ async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
 
     # Org A's own ongoing trigger with a real past streak_epoch, and its OWN
     # no-delivery run inside the boundary (now - 2h vs epoch now - 1 day).
-    trigger_a = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1)
-    )
+    trigger_a = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=1))
     own_completed = _now() - timedelta(hours=2)
     run_id = await _insert_run(
         db_engine,
@@ -698,9 +650,7 @@ async def test_get_trigger_streak_status_surfaces_own_no_delivery_run(
 
     async with app_factory() as session, session.begin():
         await ch._set_rls_org(session, org)
-        trigger_row = (
-            await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))
-        ).scalar_one()
+        trigger_row = (await session.execute(select(Trigger).where(Trigger.id == trigger_a, Trigger.organisation_id == org))).scalar_one()
         status = await ts.get_trigger_streak_status(session, trigger_row)
 
     assert status["streak"] == 1, "org A's own no-delivery run must count toward the streak"
@@ -756,17 +706,11 @@ async def test_all_no_work_history_has_zero_streak_and_never_deactivates(
 ) -> None:
     """FAR-2276 — a healthy idle poller (only no_work runs) has streak 0 and is
     never auto-deactivated, however many idle runs accumulate."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
-    await _seed_reasoned_runs(
-        db_engine, org=org, pipeline=pipeline, snapshot=snapshot, trigger_id=trigger_id, reasons=["no_work"] * 8
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
+    await _seed_reasoned_runs(db_engine, org=org, pipeline=pipeline, snapshot=snapshot, trigger_id=trigger_id, reasons=["no_work"] * 8)
 
     assert await _read_count(app_factory, org, trigger_id) == 0
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=1, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=1, window_cutoff=_now())
     assert deactivated is None
 
 
@@ -781,9 +725,7 @@ async def test_no_work_between_real_failures_is_neutral(
 ) -> None:
     """FAR-2276 — no_work runs interleaved with real failures neither count nor
     reset the streak: 3 source_error runs with 2 idle runs between them -> 3."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     await _seed_reasoned_runs(
         db_engine,
         org=org,
@@ -794,9 +736,7 @@ async def test_no_work_between_real_failures_is_neutral(
     )
 
     assert await _read_count(app_factory, org, trigger_id) == 3
-    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(
-        app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now()
-    )
+    deactivated = await ts._deactivate_trigger_on_no_delivery_streak(app_factory, org_id=org, trigger_id=trigger_id, threshold=3, window_cutoff=_now())
     assert deactivated is not None
     assert int(deactivated["streak"]) == 3
 
@@ -812,9 +752,7 @@ async def test_other_no_delivery_reasons_still_count(
 ) -> None:
     """FAR-2276 — a different no_delivery reason (needs_human, parse_error,
     source_error) counts exactly as before; only no_work is skipped."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     await _seed_reasoned_runs(
         db_engine,
         org=org,
@@ -840,9 +778,7 @@ async def test_newest_reason_skips_no_work(
     a trailing idle run never masks the real failure reason."""
     from farna.core import cron_helpers as ch
 
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     await _seed_reasoned_runs(
         db_engine,
         org=org,
@@ -870,9 +806,7 @@ async def test_streak_sql_uses_the_reshaped_index(
     ``ix_runs_streak_engine`` index. The old partial predicate
     (``run_classification IS NOT NULL``) could never be implied by the engine's
     ``->> 'value'`` filters (FAR-190 qa FIX 6b)."""
-    trigger_id = await _seed_ongoing_trigger(
-        db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2)
-    )
+    trigger_id = await _seed_ongoing_trigger(db_engine, org_id=org, pipeline_id=pipeline, account_id=user, streak_epoch=_now() - timedelta(days=2))
     for i in range(5):
         await _insert_run(
             db_engine,
@@ -900,12 +834,7 @@ async def test_streak_sql_uses_the_reshaped_index(
     # the span of the EXPLAIN so ix_runs_streak_engine is deterministically the
     # only index that can serve the query. RESET runs in ``finally`` so a failed
     # EXPLAIN never leaves the connection with seqscan disabled.
-    explain_sql = (
-        "EXPLAIN SELECT id FROM runs WHERE trigger_id = :tid "
-        "AND status IN (__STATUSES__) AND completed_at IS NOT NULL "
-        "AND completed_at >= :cutoff "
-        "ORDER BY completed_at DESC"
-    ).replace("__STATUSES__", status_list)
+    explain_sql = ("EXPLAIN SELECT id FROM runs WHERE trigger_id = :tid AND status IN (__STATUSES__) AND completed_at IS NOT NULL AND completed_at >= :cutoff ORDER BY completed_at DESC").replace("__STATUSES__", status_list)
     async with db_engine.connect() as conn:
         await conn.execute(text("SET enable_seqscan = off"))
         try:
@@ -931,6 +860,4 @@ async def test_streak_sql_uses_the_reshaped_index(
             await conn.execute(text("RESET enable_seqscan"))
     joined = "\n".join(rows)
     assert "Seq Scan" not in joined, f"streak query must be index-backed, not a Seq Scan:\n{joined}"
-    assert "ix_runs_streak_engine" in joined, (
-        f"streak query must use the purpose-built ix_runs_streak_engine index:\n{joined}"
-    )
+    assert "ix_runs_streak_engine" in joined, f"streak query must use the purpose-built ix_runs_streak_engine index:\n{joined}"

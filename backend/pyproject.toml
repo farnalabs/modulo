@@ -125,9 +125,9 @@ Source = "https://github.com/farnalabs/modulo"
 BugTracker = "https://github.com/farnalabs/modulo/issues"
 
 [project.scripts]
-modulo = "farna.cli.main:cli"
-modulo-migrate = "farna.cli.migrate:cli"
-modulo-break-glass = "farna.cli.break_glass:cli"
+farna-control = "farna.cli.main:cli"
+# Removed: farna-control migrate (subcommand)
+# Removed: farna-control break-glass (subcommand)
 
 [project.optional-dependencies]
 dev = [

@@ -1,18 +1,18 @@
-"""modulo-break-glass: break-glass admin recovery CLI (deliverable B).
+"""farna-control break-glass: break-glass admin recovery CLI (deliverable B).
 
 Usage::
 
-  modulo-break-glass activate <org-id|org-slug> --reason TEXT [--ttl-minutes N] [--dry-run] [--yes]
-  modulo-break-glass deactivate <org-id|org-slug> --reason TEXT [--force] [--account-id UUID]
-  modulo-break-glass status [org-id|org-slug] [--all] [--json]
-  modulo-break-glass force-last-admin <org-id|org-slug> --reason TEXT
-  modulo-break-glass smoke
+  farna-control break-glass activate <org-id|org-slug> --reason TEXT [--ttl-minutes N] [--dry-run] [--yes]
+  farna-control break-glass deactivate <org-id|org-slug> --reason TEXT [--force] [--account-id UUID]
+  farna-control break-glass status [org-id|org-slug] [--all] [--json]
+  farna-control break-glass force-last-admin <org-id|org-slug> --reason TEXT
+  farna-control break-glass smoke
 
-Connects as ``modulo_breakglass`` via ``MODULO_BREAK_GLASS_DATABASE_URL`` — a
+Connects as ``farna_control_breakglass`` via ``FARNA_CONTROL_BREAK_GLASS_DATABASE_URL`` — a
 dedicated LAZY engine (importing this module connects to nothing). The
 caller-bound SECURITY DEFINER ``deactivate_break_glass`` (0036) is the sole
 write path for deactivation / force-last-admin. Operator authentication is a
-hmac.compare_digest check of ``--secret`` / ``MODULO_BREAK_GLASS_OPERATOR_SECRET``
+hmac.compare_digest check of ``--secret`` / ``FARNA_CONTROL_BREAK_GLASS_OPERATOR_SECRET``
 against the configured primary/standby secrets, with the actor derived from
 which secret matched.
 
@@ -65,7 +65,7 @@ EXIT_DEACTIVATE_ATOMICITY_FAILURE = 8
 EXIT_CREDENTIAL_PRINT_FAILURE = 9
 
 # The CLI calls the SECURITY DEFINER with a sentinel caller id; authorization is
-# carried entirely by the session_user operator branch (modulo_breakglass only).
+# carried entirely by the session_user operator branch (farna_control_breakglass only).
 _CALLER_SENTINEL = uuid.UUID(int=0)
 
 _OPERATOR_PRIMARY_ACTOR = "operator"
@@ -125,7 +125,7 @@ _bg_factory_url: str | None = None
 def get_break_glass_engine(settings: Settings) -> AsyncEngine:
     """Return the process-global break-glass engine, creating it if necessary.
 
-    Keyed on ``MODULO_BREAK_GLASS_DATABASE_URL`` (not the app ``database_url``)
+    Keyed on ``FARNA_CONTROL_BREAK_GLASS_DATABASE_URL`` (not the app ``database_url``)
     and LAZY — importing this module never connects to anything. Mirrors
     ``api.dependencies.get_or_create_engine``'s module-level cache.
     """
@@ -178,14 +178,14 @@ def authenticate_operator(secret: str | None, settings: Settings) -> str:
     """Return the actor derived from the matching secret, else exit-5 error."""
     provided = (secret or "").strip()
     if not provided:
-        raise PreconditionError("operator secret required — pass --secret or set MODULO_BREAK_GLASS_OPERATOR_SECRET")
+        raise PreconditionError("operator secret required — pass --secret or set FARNA_CONTROL_BREAK_GLASS_OPERATOR_SECRET")
     primary = settings.modulo_break_glass_secret
     standby = settings.modulo_break_glass_standby_secret
     if primary and hmac.compare_digest(provided, primary):
         return _OPERATOR_PRIMARY_ACTOR
     if standby and hmac.compare_digest(provided, standby):
         return _OPERATOR_STANDBY_ACTOR
-    raise PreconditionError("operator secret does not match MODULO_BREAK_GLASS_SECRET or MODULO_BREAK_GLASS_STANDBY_SECRET")
+    raise PreconditionError("operator secret does not match FARNA_CONTROL_BREAK_GLASS_SECRET or FARNA_CONTROL_BREAK_GLASS_STANDBY_SECRET")
 
 
 # ── Shared async helpers ─────────────────────────────────────────────────────
@@ -540,8 +540,8 @@ async def smoke(session: AsyncSession) -> dict[str, Any]:
         if one != 1:
             raise SmokeFailureError("connectivity probe SELECT 1 did not return 1")
         role: str = (await session.execute(text("SELECT session_user"))).scalar_one()
-        if role != "modulo_breakglass":
-            raise SmokeFailureError(f"session_user is {role!r}, expected 'modulo_breakglass'")
+        if role != "farna_control_breakglass":
+            raise SmokeFailureError(f"session_user is {role!r}, expected 'farna_control_breakglass'")
         function: str | None = (await session.execute(text("SELECT to_regprocedure('public.deactivate_break_glass(uuid, uuid, boolean)')"))).scalar_one()
         if not function:
             raise SmokeFailureError("deactivate_break_glass SECURITY DEFINER not found")
@@ -620,13 +620,13 @@ def _render_status(rows: list[dict[str, Any]], *, as_json: bool) -> None:
 @click.group()
 @click.option(
     "--secret",
-    envvar="FARNA_CONTROL_MODULO_BREAK_GLASS_OPERATOR_SECRET",
+    envvar="FARNA_CONTROL_BREAK_GLASS_OPERATOR_SECRET",
     default=None,
-    help="Operator secret (or MODULO_BREAK_GLASS_OPERATOR_SECRET)",
+    help="Operator secret (or FARNA_CONTROL_BREAK_GLASS_OPERATOR_SECRET)",
 )
 @click.pass_context
 def cli(ctx: click.Context, secret: str | None) -> None:
-    """Break-glass admin recovery — emergency org access via modulo_breakglass."""
+    """Break-glass admin recovery — emergency org access via farna_control_breakglass."""
     ctx.ensure_object(dict)
     settings = _settings_from_ctx(ctx)
     if "actor" not in ctx.obj:
@@ -644,7 +644,7 @@ def cli(ctx: click.Context, secret: str | None) -> None:
     "--ttl-minutes",
     type=int,
     default=None,
-    help="TTL in minutes (default = MODULO_BREAK_GLASS_TTL_MINUTES)",
+    help="TTL in minutes (default = FARNA_CONTROL_BREAK_GLASS_TTL_MINUTES)",
 )
 @click.option("--dry-run", is_flag=True, default=False, help="Print what would happen without executing")
 @click.option("--yes", is_flag=True, default=False, help="Non-interactive: skip confirmation, print to stdout")
