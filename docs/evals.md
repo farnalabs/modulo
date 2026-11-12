@@ -145,7 +145,7 @@ logic (those are Phase 3).
   and audit. A case references its dataset with `ON DELETE RESTRICT`, so a
   referenced dataset can never be hard-removed.
 
-Key guarantees (enforced by `backend/tests/unit/db/test_eval_dataset.py`):
+Key guarantees (enforced by baseline migrations `0350_baseline_schema.py` / `0351_baseline_rls.py` and verified by `tests/integration/test_rls_isolation.py`):
 
 * **Storage is data-only.** `input_payload` is stored verbatim and returned
   verbatim – even when it contains prompt-injection strings it is never altered

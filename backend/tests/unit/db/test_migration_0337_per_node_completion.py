@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-_BASELINE = Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0001_baseline_schema.py"
+_BASELINE = Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0350_baseline_schema.py"
 
 
 def test_run_node_outputs_final_schema_is_in_the_baseline() -> None:
