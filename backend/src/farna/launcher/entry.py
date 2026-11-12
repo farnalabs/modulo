@@ -643,7 +643,7 @@ def _add_saq_children(supervisor: Any, settings: Any, composed: dict[str, str]) 
 
     def _child_env(base: dict[str, str]) -> dict[str, str]:
         env = dict(base)
-        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "FARNA_CONTROL_SYSTEM_DATABASE_URL"):
+        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "FARNA_CONTROL_SYSTEM_DATABASE_URL", "SECRET_KEY", "FERNET_KEY"):
             if composed.get(key):
                 env[key] = composed[key]
         return env

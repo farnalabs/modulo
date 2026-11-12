@@ -916,6 +916,50 @@ if [[ -f "${DATA_DIR}/state.json" ]]; then
   fi
 fi
 
+ensure_runtime_keys() {
+  # Persist the application keys before the first launcher start. Values from
+  # the operator environment or an existing config.env win; generated values
+  # are never printed and are written only to the owner-readable config file.
+  local config_path="$1" temp_path secret_key fernet_key existing
+  mkdir -p -- "${DATA_DIR}"
+  chmod 700 -- "${DATA_DIR}"
+  config_path="${DATA_DIR}/config.env"
+  if [[ -L "${config_path}" ]]; then
+    die "refusing to write native runtime configuration: ${config_path} is a symlink"
+  fi
+
+  existing=""
+  if [[ -f "${config_path}" ]]; then
+    existing="$(cat -- "${config_path}")"
+  fi
+  secret_key="${SECRET_KEY:-}"
+  fernet_key="${FERNET_KEY:-}"
+  if [[ -z "${secret_key}" ]]; then
+    secret_key="$(printf '%s\n' "${existing}" | sed -n 's/^SECRET_KEY=//p' | head -n 1)"
+  fi
+  if [[ -z "${fernet_key}" ]]; then
+    fernet_key="$(printf '%s\n' "${existing}" | sed -n 's/^FERNET_KEY=//p' | head -n 1)"
+  fi
+  command -v openssl >/dev/null 2>&1 || {
+    [[ -n "${secret_key}" && -n "${fernet_key}" ]] || die "openssl is required to generate missing native runtime keys (install it, e.g. 'apt install openssl')"
+  }
+  [[ -n "${secret_key}" ]] || secret_key="$(openssl rand -hex 32)" || die "could not generate SECRET_KEY with openssl"
+  [[ -n "${fernet_key}" ]] || fernet_key="$(openssl rand -base64 32 | tr -d '\n')" || die "could not generate FERNET_KEY with openssl"
+  [[ -n "${secret_key}" && -n "${fernet_key}" ]] || die "openssl generated an empty native runtime key"
+
+  temp_path="${config_path}.tmp.$$"
+  umask 077
+  {
+    if [[ -n "${existing}" ]]; then
+      printf '%s\n' "${existing}" | sed '/^SECRET_KEY=/d; /^FERNET_KEY=/d'
+    fi
+    printf 'SECRET_KEY=%s\n' "${secret_key}"
+    printf 'FERNET_KEY=%s\n' "${fernet_key}"
+  } > "${temp_path}" || die "could not write native runtime configuration"
+  chmod 600 -- "${temp_path}" || die "could not secure native runtime configuration"
+  mv -f -- "${temp_path}" "${config_path}" || die "could not install native runtime configuration"
+}
+
 # --- lay out the versioned install + `current` symlink ----------------------
 
 stage "layout (installing the bundle)"
@@ -943,6 +987,10 @@ else
   mv -Tf "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
 fi
 info "current -> $(readlink "${INSTALL_ROOT}/current")"
+
+# Persist the shared application runtime keys before any launcher child starts.
+stage "security (persisting native runtime configuration)"
+ensure_runtime_keys
 
 # --- neutralise a previous /usr/local/bin/modulo ----------------------------
 #

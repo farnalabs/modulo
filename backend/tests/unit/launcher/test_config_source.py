@@ -92,10 +92,27 @@ def test_no_settings_module_loaded_after_import_by_subprocess() -> None:
 def test_compose_config_derives_all_bundled_endpoints() -> None:
     composed = compose_config(_state(), _secrets())
     assert composed["DATABASE_URL"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
+    assert composed["SECRET_KEY"]
+    assert composed["FERNET_KEY"]
     assert composed["DATABASE_ADMIN_URL"] == composed["DATABASE_URL"]
     assert composed["REDIS_URL"] == "redis://:redis-pw@127.0.0.1:16379/0"
     system_url = composed["FARNA_CONTROL_SYSTEM_DATABASE_URL"]
     assert system_url.startswith("postgresql+asyncpg://farna_control_system:pg-pw@127.0.0.1:15432/modulo")
+
+
+def test_pinned_config_preserves_existing_operator_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    path = data_dir / CONFIG_ENV_FILENAME
+    path.write_text("SECRET_KEY=operator-secret\nFERNET_KEY=operator-fernet\n", encoding="utf-8")
+
+    write_pinned_env_file(data_dir, _state(), _secrets())
+
+    rendered = path.read_text(encoding="utf-8")
+    assert "SECRET_KEY=operator-secret\n" in rendered
+    assert "FERNET_KEY=operator-fernet\n" in rendered
 
 
 def test_compose_config_is_password_free_on_state_alone() -> None:
@@ -164,7 +181,7 @@ def test_source_system_database_url_environment_wins_over_composed(monkeypatch: 
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
-def test_source_derives_system_url_from_the_operators_database_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_source_derives_system_url_from_the_operators_database_url(clean_launcher_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The app/system URL pair is atomic: an operator DATABASE_URL must never
     end up paired with a system URL still pointing at the bundled Postgres."""
     data_dir = tmp_path / "data"
@@ -173,14 +190,14 @@ def test_source_derives_system_url_from_the_operators_database_url(monkeypatch: 
     import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:op-pass@db.example.com:5432/modulo")
     monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     assert "database_url" not in resolved
     system = resolved.get("modulo_system_database_url", "")
     expected_prefixes = (
-        "postgresql://farna_control_system:pass@host:5432/modulo",
-        "postgresql+asyncpg://farna_control_system:pass@host:5432/modulo",
+        "postgresql://farna_control_system:op-pass@db.example.com:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:op-pass@db.example.com:5432/modulo",
     )
     assert system.startswith(expected_prefixes)
     assert "127.0.0.1" not in system
