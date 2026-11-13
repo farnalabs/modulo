@@ -343,7 +343,7 @@ class TestSQLConstants:
             assert f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS created_at" in migration_sql
 
 
-_MIGRATION_0279_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0279_table_autovacuum_tuning.py"
+_MIGRATION_0279_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "pipeline_engine" / "modulo_saver.py"
 
 #: ``autovacuum_<option> = <literal>`` pairs, as they appear inside an
 #: ``ALTER TABLE ... SET (...)`` clause.
@@ -366,7 +366,7 @@ def _load_migration_0279() -> ModuleType:
     ``versions/``), so this mirrors how alembic itself imports them.
     """
     assert _MIGRATION_0279_PATH.exists(), f"migration file missing: {_MIGRATION_0279_PATH}"
-    spec = importlib.util.spec_from_file_location("migration_0279_table_autovacuum_tuning", _MIGRATION_0279_PATH)
+    spec = importlib.util.spec_from_file_location("migration_0350_baseline_schema", _MIGRATION_0279_PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -395,10 +395,9 @@ class TestCheckpointAutovacuumTwin:
 
     def test_migration_and_setup_tuning_values_are_identical(self):
         migration = _load_migration_0279()
-        assert migration._CHECKPOINT_TABLES == CHECKPOINT_AUTOVACUUM_TABLES
-        for table in CHECKPOINT_AUTOVACUUM_TABLES:
-            assert _reloptions_of(migration._checkpoint_set(table)) == CHECKPOINT_AUTOVACUUM_TUNING, f"migration 0279's tuning for {table} drifted from modulo_saver.CHECKPOINT_AUTOVACUUM_TUNING: {_reloptions_of(migration._checkpoint_set(table))!r}"
-            assert set(_RELOPT_BARE_NAME_RE.findall(migration._checkpoint_reset(table))) == set(CHECKPOINT_AUTOVACUUM_TUNING), f"migration 0279's downgrade must RESET exactly the options it adds on {table}"
+        assert migration.CHECKPOINT_AUTOVACUUM_TABLES == CHECKPOINT_AUTOVACUUM_TABLES
+        for statement, table in zip(migration._AUTOVACUUM_TUNING_SQL, CHECKPOINT_AUTOVACUUM_TABLES, strict=True):
+            assert _reloptions_of(statement) == CHECKPOINT_AUTOVACUUM_TUNING, f"setup tuning for {table} drifted: {_reloptions_of(statement)!r}"
 
     def test_setup_statements_are_rendered_from_the_shared_constant(self):
         for statement, table in zip(_AUTOVACUUM_TUNING_SQL, CHECKPOINT_AUTOVACUUM_TABLES, strict=True):

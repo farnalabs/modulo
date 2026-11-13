@@ -176,6 +176,8 @@ class DockerRuntimeProvider(RuntimeProvider):
         workspace_network: str = _DEFAULT_WORKSPACE_NETWORK,
     ) -> None:
         self._docker_host = docker_host or os.environ.get("FARNA_CONTROL_MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+        if docker_host is None and self._docker_host and self._docker_host.startswith("npipe:"):
+            self._docker_host = None
         _validate_docker_endpoint_tls(self._docker_host)
         self._default_image = default_image
         self._create_timeout = create_timeout

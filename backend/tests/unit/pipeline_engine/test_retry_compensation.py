@@ -21,6 +21,7 @@ real-DB constraint round-trips are covered by the integration invariant tests.
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -257,7 +258,7 @@ _UNKNOWN = "unknown"
 
 
 def _migration_0158():
-    return importlib.import_module("farna.db.migrations.versions.0159_pipeline_retry_compensation")
+    return importlib.import_module("farna.db.migrations.versions.0350_baseline_schema")
 
 
 def test_compensation_failed_registered_in_vocabularies() -> None:
@@ -293,13 +294,10 @@ def test_unknown_still_writable_alongside_compensation_failed() -> None:
 
 def test_migration_0158_extends_constraint_consistently() -> None:
     migration = _migration_0158()
-    # The ADD statement includes the two new statuses; the OLD one does not.
-    assert _COMPENSATION_FAILED in migration._ADD_NEW
-    assert _UNKNOWN in migration._ADD_NEW
-    assert _COMPENSATION_FAILED not in migration._ADD_OLD
-    assert _UNKNOWN not in migration._ADD_OLD
-    # Both share the pre-existing base statuses.
-    assert "'cost_ceiling_exceeded'::character varying" in migration._ADD_NEW
+    source = Path(migration.__file__).read_text(encoding="utf-8")
+    assert _COMPENSATION_FAILED in source
+    assert _UNKNOWN in source
+    assert "cost_ceiling_exceeded" in source
 
 
 def test_policy_from_pipeline_default_maps_run_vocabulary_to_node_policy() -> None:

@@ -85,6 +85,8 @@ def is_local_endpoint(endpoint: str | None) -> bool:
     if not endpoint:
         return True
     parsed = urlparse(endpoint if "://" in endpoint else f"unix://{endpoint}")
+    if parsed.scheme == "npipe":
+        return True
     scheme = parsed.scheme.lower()
     if scheme in ("unix", ""):
         return True
@@ -144,5 +146,5 @@ def validate_docker_endpoint_tls(endpoint: str | None) -> None:
         "or use a local unix socket / the compose-internal proxy instead. "
         "See docs/security/bundled-runner-operator-guide.md §8 for details. "
         "To bypass this check for a private bridge endpoint, set "
-        "MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1 (see §8 for caveats)."
+        "FARNA_CONTROL_MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT=1 (see §8 for caveats)."
     )
