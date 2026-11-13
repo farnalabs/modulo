@@ -107,9 +107,7 @@ def test_transient_failure_is_bounded_by_max_attempts(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("invalid_attempts", ["0", "-1", "not-a-number"])
-def test_non_positive_or_non_numeric_max_attempts_is_rejected_without_running_uv(
-    tmp_path: Path, invalid_attempts: str
-) -> None:
+def test_non_positive_or_non_numeric_max_attempts_is_rejected_without_running_uv(tmp_path: Path, invalid_attempts: str) -> None:
     result, calls = _run(tmp_path, fail_times=0, max_attempts=invalid_attempts)
     assert result.returncode != 0
     assert calls == 0

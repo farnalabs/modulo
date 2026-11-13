@@ -171,9 +171,7 @@ def score_fixture(fixture_dir: Path) -> tuple[bool, list[str]]:
     all_mismatches = []
     all_mismatches.extend(compare_nodes(actual["nodes"], expected["nodes"]))
     all_mismatches.extend(compare_edges(actual["edges"], expected["edges"]))
-    all_mismatches.extend(
-        compare_automation_suggestions(actual["automation_suggestions"], expected["automation_suggestions"])
-    )
+    all_mismatches.extend(compare_automation_suggestions(actual["automation_suggestions"], expected["automation_suggestions"]))
     all_mismatches.extend(compare_findings(findings, expected))
 
     passed = len(all_mismatches) == 0

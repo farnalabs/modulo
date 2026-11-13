@@ -74,17 +74,11 @@ def when_health_check(n8n_connector):
     global _last_health_result, _last_error
     with respx.mock:
         if _given_unreachable:
-            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-                side_effect=httpx.ConnectError("connection refused")
-            )
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
         elif _given_invalid:
-            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-                return_value=httpx.Response(401, text="Unauthorized")
-            )
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
         else:
-            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-                return_value=httpx.Response(200, json={"data": []})
-            )
+            respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": []}))
         try:
             _last_health_result = _run(n8n_connector.health_check())
         except Exception as exc:
@@ -130,9 +124,7 @@ def when_query_with_id(n8n_connector, resource, item_id):
     path_map = {"workflow": "workflows", "execution": "executions", "credential": "credentials"}
     api_resource = path_map.get(resource, resource)
     with respx.mock:
-        respx.get(f"{BASE_URL}/api/v1/{api_resource}/{item_id}").mock(
-            return_value=httpx.Response(200, json={"data": {"id": item_id, "name": f"{resource} {item_id}"}})
-        )
+        respx.get(f"{BASE_URL}/api/v1/{api_resource}/{item_id}").mock(return_value=httpx.Response(200, json={"data": {"id": item_id, "name": f"{resource} {item_id}"}}))
         try:
             _last_query_result = _run(n8n_connector.query(ConnectorQuery(resource=resource, filters={"id": item_id})))
         except Exception as exc:
@@ -153,9 +145,7 @@ def when_write_resource(n8n_connector, resource, name):
     global _last_write_result, _last_error
     with respx.mock:
         if resource == "workflow" and name:
-            respx.post(f"{BASE_URL}/api/v1/workflows").mock(
-                return_value=httpx.Response(201, json={"data": {"id": "W1", "name": name, "active": False}})
-            )
+            respx.post(f"{BASE_URL}/api/v1/workflows").mock(return_value=httpx.Response(201, json={"data": {"id": "W1", "name": name, "active": False}}))
         elif resource in {"credential", "invalid_resource"}:
             pass
         try:
@@ -174,13 +164,9 @@ def when_write_credential(n8n_connector, resource, name, cred_type):
     global _last_write_result, _last_error
     with respx.mock:
         if name and cred_type:
-            respx.post(f"{BASE_URL}/api/v1/credentials").mock(
-                return_value=httpx.Response(201, json={"data": {"id": "C1", "name": name, "type": cred_type}})
-            )
+            respx.post(f"{BASE_URL}/api/v1/credentials").mock(return_value=httpx.Response(201, json={"data": {"id": "C1", "name": name, "type": cred_type}}))
         try:
-            _last_write_result = _run(
-                n8n_connector.write(ConnectorPayload(resource=resource, data={"name": name, "type": cred_type}))
-            )
+            _last_write_result = _run(n8n_connector.write(ConnectorPayload(resource=resource, data={"name": name, "type": cred_type})))
         except Exception as exc:
             _last_error = exc
 
@@ -220,9 +206,7 @@ def when_write_update(n8n_connector, resource, item_id, name):
     global _last_write_result, _last_error
     with respx.mock:
         if resource == "workflow_update" and item_id:
-            respx.put(f"{BASE_URL}/api/v1/workflows/{item_id}").mock(
-                return_value=httpx.Response(200, json={"data": {"id": item_id, "name": name}})
-            )
+            respx.put(f"{BASE_URL}/api/v1/workflows/{item_id}").mock(return_value=httpx.Response(200, json={"data": {"id": item_id, "name": name}}))
         try:
             data = {"id": item_id, "name": name} if item_id else {}
             _last_write_result = _run(n8n_connector.write(ConnectorPayload(resource=resource, data=data)))

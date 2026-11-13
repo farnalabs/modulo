@@ -65,7 +65,4 @@ def test_login_payload_uses_email_not_username():
             continue
         _collect_violations(content, LOGIN_PAYLOAD, rel, violations)
         _collect_violations(content, LOGIN_PAYLOAD_PASSWORD_FIRST, rel, violations)
-    assert not violations, (
-        f"Found {len(violations)} login payloads using 'username' field.\n"
-        "FastAPI login endpoint expects 'email' — change to 'email'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} login payloads using 'username' field.\nFastAPI login endpoint expects 'email' — change to 'email'.\n" + "\n".join(violations)

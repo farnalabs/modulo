@@ -52,19 +52,12 @@ def test_every_deleted_at_model_inherits_soft_delete_mixin() -> None:
             continue
 
         # Check if the class (or any of its mapped columns) has deleted_at
-        has_deleted_at = any(
-            col.key == "deleted_at" for col in mapper.column_attrs if hasattr(col, "columns")
-        ) or hasattr(cls, "deleted_at")
+        has_deleted_at = any(col.key == "deleted_at" for col in mapper.column_attrs if hasattr(col, "columns")) or hasattr(cls, "deleted_at")
 
         if has_deleted_at and not issubclass(cls, SoftDeleteMixin):
-            violations.append(
-                f"{cls.__module__}.{cls.__qualname__} declares deleted_at but does not inherit SoftDeleteMixin"
-            )
+            violations.append(f"{cls.__module__}.{cls.__qualname__} declares deleted_at but does not inherit SoftDeleteMixin")
 
-    assert not violations, (
-        "The following models declare deleted_at without SoftDeleteMixin — "
-        "the global soft-delete filter will NOT cover them:\n" + "\n".join(f"  - {v}" for v in violations)
-    )
+    assert not violations, "The following models declare deleted_at without SoftDeleteMixin — the global soft-delete filter will NOT cover them:\n" + "\n".join(f"  - {v}" for v in violations)
 
 
 def test_gate_enumerates_known_orgscoped_models() -> None:
@@ -87,13 +80,8 @@ def test_gate_enumerates_known_orgscoped_models() -> None:
         enumerated_classes.add(cls)
 
     # Both are concrete OrgScoped subclasses with deleted_at — must appear
-    assert Eval in enumerated_classes, (
-        "Eval is a concrete OrgScoped model with deleted_at but was "
-        "not enumerated — the gate may have re-introduced a vacuous getattr skip"
-    )
-    assert ErrorNotificationRule in enumerated_classes, (
-        "ErrorNotificationRule is a concrete OrgScoped model with deleted_at but was not enumerated"
-    )
+    assert Eval in enumerated_classes, "Eval is a concrete OrgScoped model with deleted_at but was not enumerated — the gate may have re-introduced a vacuous getattr skip"
+    assert ErrorNotificationRule in enumerated_classes, "ErrorNotificationRule is a concrete OrgScoped model with deleted_at but was not enumerated"
 
 
 def test_soft_delete_mixin_provides_deleted_at() -> None:

@@ -224,9 +224,7 @@ async def test_gitea_query_repos(gitea_connector: GiteaConnector) -> None:
 
 
 async def test_gitea_query_file(gitea_connector: GiteaConnector) -> None:
-    result = await gitea_connector.query(
-        ConnectorQuery(resource="file", filters={"repo": f"{ADMIN}/modulo-tier1b", "path": "README.md"})
-    )
+    result = await gitea_connector.query(ConnectorQuery(resource="file", filters={"repo": f"{ADMIN}/modulo-tier1b", "path": "README.md"}))
     records = [record for record in result.records if isinstance(record, dict)]
     decoded = next((rec.get("content") for rec in records if rec.get("type") == "file"), None)
     assert decoded, f"expected real Gitea file read of seeded README: got {records!r}"
@@ -234,13 +232,9 @@ async def test_gitea_query_file(gitea_connector: GiteaConnector) -> None:
 
 async def test_gitea_write_issue_then_query(gitea_connector: GiteaConnector) -> None:
     issue_title = f"tier1b-issue-{_now_suffix()}"
-    write_result = await gitea_connector.write(
-        ConnectorPayload(resource="issue", data={"repo": f"{ADMIN}/modulo-tier1b", "title": issue_title})
-    )
+    write_result = await gitea_connector.write(ConnectorPayload(resource="issue", data={"repo": f"{ADMIN}/modulo-tier1b", "title": issue_title}))
     assert isinstance(write_result, dict), f"expected dict from gitea write, got {type(write_result).__name__}"
-    result = await gitea_connector.query(
-        ConnectorQuery(resource="issues", filters={"repo": f"{ADMIN}/modulo-tier1b", "state": "open"})
-    )
+    result = await gitea_connector.query(ConnectorQuery(resource="issues", filters={"repo": f"{ADMIN}/modulo-tier1b", "state": "open"}))
     titles = {record.get("title") for record in result.records}
     assert issue_title in titles, f"gitea write-then-read roundtrip failed; real issues: {titles!r}"
 
@@ -291,9 +285,7 @@ def n8n_service() -> Iterator[ContainerHandle]:
                 timeout_seconds=300,
                 message="n8n REST surface to answer with JSON again after owner-setup restart",
             )
-            login = client.post(
-                "/rest/login", json={"emailOrLdapLoginId": "modulo-admin@example.com", "password": owner_password}
-            )
+            login = client.post("/rest/login", json={"emailOrLdapLoginId": "modulo-admin@example.com", "password": owner_password})
             try:
                 login.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -337,9 +329,7 @@ async def test_n8n_health(n8n_service: ContainerHandle, n8n_connector: N8NConnec
 
 async def test_n8n_workflow_write_then_query(n8n_connector: N8NConnector) -> None:
     workflow_name = f"modulo-tier1b-{_now_suffix()}"
-    write_result = await n8n_connector.write(
-        ConnectorPayload(resource="workflow", data={"name": workflow_name, "nodes": [], "connections": {}})
-    )
+    write_result = await n8n_connector.write(ConnectorPayload(resource="workflow", data={"name": workflow_name, "nodes": [], "connections": {}}))
     assert isinstance(write_result, dict), f"expected dict from n8n write, got {type(write_result).__name__}"
     result = await n8n_connector.query(ConnectorQuery(resource="workflows"))
     names = {record.get("name") for record in result.records}
@@ -365,13 +355,7 @@ def jenkins_service() -> Iterator[ContainerHandle]:
     # mint needed while the first-run wizard is still pending (the token
     # endpoint 403s until setup completes).
     handle.creds["jenkins_api_token"] = initial_password
-    freestyle_xml = (
-        "<project><actions/><description>modulo tier1b</description>"
-        "<keepDependencies>false</keepDependencies>"
-        "<properties/>"
-        "<builders><hudson.tasks.Shell><command>echo modulo-tier1b-ok</command></hudson.tasks.Shell></builders>"
-        "</project>"
-    )
+    freestyle_xml = "<project><actions/><description>modulo tier1b</description><keepDependencies>false</keepDependencies><properties/><builders><hudson.tasks.Shell><command>echo modulo-tier1b-ok</command></hudson.tasks.Shell></builders></project>"
     try:
         with httpx.Client(base_url=handle.base_url, auth=("admin", initial_password), timeout=60.0) as client:
             # CSRF: every Jenkins POST needs the crumb, tied to the SAME
@@ -461,15 +445,11 @@ def sonarqube_service() -> Iterator[ContainerHandle]:
             try:
                 token_resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise AssertionError(
-                    f"SonarQube token generation failed: {exc} body={token_resp.text[:400]!r}"
-                ) from exc
+                raise AssertionError(f"SonarQube token generation failed: {exc} body={token_resp.text[:400]!r}") from exc
             admin_token = token_resp.json()["token"]
         project_key = f"modulo-tier1b-{_now_suffix()}"
         with httpx.Client(base_url=handle.base_url, auth=(admin_token, ""), timeout=60.0) as client:
-            project_resp = client.post(
-                "/api/projects/create", params={"project": project_key, "name": "Modulo Tier 1b"}
-            )
+            project_resp = client.post("/api/projects/create", params={"project": project_key, "name": "Modulo Tier 1b"})
             try:
                 project_resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -486,9 +466,7 @@ def sonarqube_connector(sonarqube_service: ContainerHandle) -> SonarQubeConnecto
     return SonarQubeConnector(token=sonarqube_service.creds["sonar_token"], base_url=sonarqube_service.base_url)
 
 
-async def test_sonarqube_health_and_query(
-    sonarqube_service: ContainerHandle, sonarqube_connector: SonarQubeConnector
-) -> None:
+async def test_sonarqube_health_and_query(sonarqube_service: ContainerHandle, sonarqube_connector: SonarQubeConnector) -> None:
     health: HealthResult | None = None
     # Health settles late (embedded Elasticsearch warms after /api/system/status
     # reports UP), so poll until it leaves RED within a bounded window.
@@ -571,12 +549,8 @@ async def test_grafana_health_and_dashboards(grafana_connector: GrafanaConnector
 
 async def test_grafana_write_annotation_then_query(grafana_connector: GrafanaConnector) -> None:
     annotation_text = f"modulo-tier1b-{_now_suffix()}"
-    write_result = await grafana_connector.write(
-        ConnectorPayload(resource="annotation", data={"text": annotation_text, "tags": ["tier1b"]})
-    )
-    assert isinstance(write_result, dict), (
-        f"expected dict from grafana annotation write, got {type(write_result).__name__}"
-    )
+    write_result = await grafana_connector.write(ConnectorPayload(resource="annotation", data={"text": annotation_text, "tags": ["tier1b"]}))
+    assert isinstance(write_result, dict), f"expected dict from grafana annotation write, got {type(write_result).__name__}"
     result = await grafana_connector.query(ConnectorQuery(resource="annotations"))
     texts = {record.get("text") if isinstance(record, dict) else None for record in result.records}
     assert annotation_text in texts, f"grafana annotation roundtrip failed; real annotations: {texts!r}"
@@ -605,12 +579,7 @@ def teamcity_service() -> Iterator[ContainerHandle]:
     """
     seed_dir = os.environ.get(_TEAMCITY_SEED_DIR_ENV, "").strip()
     if not seed_dir:
-        pytest.skip(
-            "Tier 1b TeamCity connector roundtrip is a recorded skip (FAR-934): "
-            "jetbrains/teamcity-server 2024.07.2 blocks headless on its first-start "
-            "confirmation screen. Set TEAMCITY_SEED_DIR to a pre-confirmed TeamCity "
-            "data directory to run this roundtrip against a real server."
-        )
+        pytest.skip("Tier 1b TeamCity connector roundtrip is a recorded skip (FAR-934): jetbrains/teamcity-server 2024.07.2 blocks headless on its first-start confirmation screen. Set TEAMCITY_SEED_DIR to a pre-confirmed TeamCity data directory to run this roundtrip against a real server.")
     handle = start_tier1b_container(
         ContainerSpec(
             image="jetbrains/teamcity-server:2024.07.2",
@@ -670,9 +639,7 @@ def teamcity_connector(teamcity_service: ContainerHandle) -> TeamCityConnector:
 async def test_teamcity_health_and_agents(teamcity_connector: TeamCityConnector) -> None:
     health = await teamcity_connector.health_check()
     assert health.ok, f"TeamCity health against real container failed: {health.detail}"
-    result = await teamcity_connector.query(
-        ConnectorQuery(resource="buildTypes", filters={"project_id": "ModuloTier1b"})
-    )
+    result = await teamcity_connector.query(ConnectorQuery(resource="buildTypes", filters={"project_id": "ModuloTier1b"}))
     assert result.total >= 0, "TeamCity real buildTypes query should decode"
 
 
@@ -685,9 +652,7 @@ async def test_teamcity_write_build_type(teamcity_connector: TeamCityConnector) 
         )
     )
     assert isinstance(write_result, dict), f"expected dict from teamcity write, got {type(write_result).__name__}"
-    result = await teamcity_connector.query(
-        ConnectorQuery(resource="buildTypes", filters={"project_id": "ModuloTier1b"})
-    )
+    result = await teamcity_connector.query(ConnectorQuery(resource="buildTypes", filters={"project_id": "ModuloTier1b"}))
     ids = {record.get("id") for record in result.records}
     assert build_type_id in ids, f"TeamCity buildType roundtrip failed; real build types: {ids!r}"
 
@@ -738,11 +703,5 @@ def test_codeclimate_connector_has_no_self_hostable_target(
 
     pinned_base = getattr(cc_mod, "_API_BASE", "")
     if pinned_base:
-        pytest.skip(
-            f"Code Climate connector pins {pinned_base} (SaaS-only) with no overridable "
-            "base URL; no container-hosted service can receive real query()/write() calls. "
-            "Recorded skip (FAR-934); a production base_url param would cover this connector."
-        )
-    raise AssertionError(
-        "CodeClimateConnector no longer pins a base URL — implement the container-hosted connector-level roundtrip now."
-    )
+        pytest.skip(f"Code Climate connector pins {pinned_base} (SaaS-only) with no overridable base URL; no container-hosted service can receive real query()/write() calls. Recorded skip (FAR-934); a production base_url param would cover this connector.")
+    raise AssertionError("CodeClimateConnector no longer pins a base URL — implement the container-hosted connector-level roundtrip now.")

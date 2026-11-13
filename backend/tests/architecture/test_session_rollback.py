@@ -42,10 +42,7 @@ def test_no_bare_session_rollback():
             if node in inside_except:
                 continue
             violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  {ast.unparse(node.value)[:80]}")
-    assert not violations, (
-        f"Found {len(violations)} session.rollback() calls outside exception handlers.\n"
-        "Use savepoint = await session.begin_nested() instead.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} session.rollback() calls outside exception handlers.\nUse savepoint = await session.begin_nested() instead.\n" + "\n".join(violations)
 
 
 def _nodes_within_except_handlers(tree: ast.AST) -> set[ast.AST]:

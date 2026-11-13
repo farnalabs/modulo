@@ -72,9 +72,7 @@ def _hitl_node_graph(
 
 @pytest.mark.parametrize("graph_builder", [_gated_edge_graph, _hitl_node_graph])
 async def test_valid_subject_path_accepted(graph_builder):
-    result = await GraphValidator().validate_definition(
-        graph_builder(subject_path=_VALID_SUBJECT_PATH), _session_returning()
-    )
+    result = await GraphValidator().validate_definition(graph_builder(subject_path=_VALID_SUBJECT_PATH), _session_returning())
     assert not any(i.code.startswith("HITL_SUBJECT_PATH") for i in result.issues)
 
 
@@ -110,9 +108,7 @@ async def test_max_length_subject_path_accepted():
 
 @pytest.mark.parametrize("graph_builder", [_gated_edge_graph, _hitl_node_graph])
 async def test_invalid_jmespath_rejected(graph_builder):
-    result = await GraphValidator().validate_definition(
-        graph_builder(subject_path="this is {not valid jmes[[["), _session_returning()
-    )
+    result = await GraphValidator().validate_definition(graph_builder(subject_path="this is {not valid jmes[[["), _session_returning())
     issues = [i for i in result.issues if i.code == "HITL_SUBJECT_PATH_INVALID_JMESPATH"]
     assert len(issues) == 1
     assert "invalid JMESPath" in issues[0].message

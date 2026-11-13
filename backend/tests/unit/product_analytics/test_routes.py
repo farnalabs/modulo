@@ -273,11 +273,7 @@ class TestStagingPurgeOnOptOut:
     def _staging_deletes(session: AsyncMock) -> list:
         from sqlalchemy.sql.dml import Delete
 
-        return [
-            call.args[0]
-            for call in session.execute.await_args_list
-            if call.args and isinstance(call.args[0], Delete) and call.args[0].table.name == "metrics_staging"
-        ]
+        return [call.args[0] for call in session.execute.await_args_list if call.args and isinstance(call.args[0], Delete) and call.args[0].table.name == "metrics_staging"]
 
     def test_put_level_off_purges_staged_events(self, env) -> None:
         session, _org = env

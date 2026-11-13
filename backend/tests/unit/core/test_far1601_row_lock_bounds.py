@@ -163,9 +163,7 @@ def _assert_bound_precedes_update(conn: _PgRecordingConn, update_marker: str) ->
     update_at = _update_statements(conn, update_marker)
     assert bound_at, f"no transaction-local lock_timeout bound issued; statements={conn.statements}"
     assert update_at, f"the writer's UPDATE never ran; statements={conn.statements}"
-    assert bound_at[0] < update_at[0], (
-        f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
-    )
+    assert bound_at[0] < update_at[0], f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
     # SET LOCAL semantics: set_config(..., is_local => true) — the bound is
     # transaction-scoped and reverts on COMMIT/ROLLBACK.
     assert ", true)" in conn.statements[bound_at[0]]
@@ -202,9 +200,7 @@ def _settings_with_bound(**extra: Any) -> MagicMock:
 class TestWritersBoundTheirRowLockWait:
     async def test_claim_run_async_bounds_before_the_claim_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        monkeypatch.setattr(
-            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
-        )
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20))
         with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()):
             token = await claim_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is not None
@@ -212,9 +208,7 @@ class TestWritersBoundTheirRowLockWait:
 
     async def test_claim_resume_run_async_bounds_before_the_claim_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        monkeypatch.setattr(
-            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
-        )
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20))
         token = await claim_resume_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is not None
         _assert_bound_precedes_update(conn, "UPDATE runs SET status='running'")
@@ -253,13 +247,9 @@ class TestWritersBoundTheirRowLockWait:
         conn = _PgRecordingConn()
         monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
         await _record_node_deadline_watchdog_firing(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
-        _assert_bound_precedes_update(
-            conn, "node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1"
-        )
+        _assert_bound_precedes_update(conn, "node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1")
 
-    async def test_stale_run_recovery_sweep_bounds_before_its_first_update(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_stale_run_recovery_sweep_bounds_before_its_first_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         org_id = uuid.uuid4()
         conn = _PgRecordingConn(org_rows=[(org_id,)])
         monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
@@ -282,9 +272,7 @@ class TestLockTimeoutHandling:
         """The claim 55P03s → returns None (the existing not-claimable outcome),
         leaving the run claimable for dispatcher_reconcile; WARNING, never silent."""
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='running'")
-        monkeypatch.setattr(
-            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
-        )
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20))
         with (
             patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()),
             caplog.at_level("WARNING", logger=_LOGGER),
@@ -301,9 +289,7 @@ class TestLockTimeoutHandling:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='running'")
-        monkeypatch.setattr(
-            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
-        )
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20))
         with caplog.at_level("WARNING", logger=_LOGGER):
             token = await claim_resume_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is None
@@ -426,9 +412,7 @@ class TestLockTimeoutHandling:
                 error_detail="boom",
             )
 
-    async def test_fail_run_terminal_retry_wrapper_retries_a_lock_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fail_run_terminal_retry_wrapper_retries_a_lock_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """55P03's driver class (``LockNotAvailableError``) is in the transient
         vocabulary, so the heartbeat-loss path's bounded retry rides out a
         momentary contention."""

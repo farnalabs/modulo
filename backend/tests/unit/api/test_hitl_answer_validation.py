@@ -27,9 +27,7 @@ _REVIEW_ID = "hitl_review_src_tgt"
 _SESSION = AsyncMock()
 
 
-async def _validate(
-    answer: dict[str, Any] | None, config: dict[str, Any] | None, *, require_answer: bool = False
-) -> dict[str, Any] | None:
+async def _validate(answer: dict[str, Any] | None, config: dict[str, Any] | None, *, require_answer: bool = False) -> dict[str, Any] | None:
     """Run ``validate_hitl_answer`` with ``resolve_hitl_review_config`` stubbed."""
     with patch(
         "farna.api.hitl_answer_validation.resolve_hitl_review_config",
@@ -152,9 +150,7 @@ async def test_mcp_adapter_returns_error_tuple_on_invalid_answer():
         "farna.api.hitl_answer_validation.resolve_hitl_review_config",
         new=AsyncMock(return_value=config),
     ):
-        error, validated = await _validate_mcp_choice_answer(
-            AsyncMock(), _RUN_ID, _REVIEW_ID, _ORG_ID, {"kind": "choice", "option_id": "maybe"}
-        )
+        error, validated = await _validate_mcp_choice_answer(AsyncMock(), _RUN_ID, _REVIEW_ID, _ORG_ID, {"kind": "choice", "option_id": "maybe"})
     assert error is not None
     assert error["error"] == "invalid_answer"
     assert validated is None

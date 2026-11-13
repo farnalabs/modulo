@@ -412,9 +412,7 @@ async def test_validate_graph_save_receives_the_converted_nodes_connector_bindin
         await _save(session)
 
     kwargs = validate.await_args.kwargs
-    assert kwargs["connector_bindings"] == [{"node_id": str(_NODE_ID), "connector_instance_id": str(_CONNECTOR_ID)}], (
-        kwargs
-    )
+    assert kwargs["connector_bindings"] == [{"node_id": str(_NODE_ID), "connector_instance_id": str(_CONNECTOR_ID)}], kwargs
 
 
 async def test_validate_graph_save_failure_propagates_out_of_the_save() -> None:

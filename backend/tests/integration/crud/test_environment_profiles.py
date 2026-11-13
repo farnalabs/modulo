@@ -20,8 +20,7 @@ async def _seed_account(db_engine: AsyncEngine, email: str) -> uuid.UUID:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": email, "name": email.split("@", maxsplit=1)[0]},
         )
@@ -171,10 +170,7 @@ async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) ->
         )
         await conn.execute(
             text(
-                "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, provider_type, image_ref, capabilities_json, "
-                "secret_refs_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
+                "INSERT INTO environment_profiles (id, organisation_id, name, provider_type, image_ref, capabilities_json, secret_refs_json, config_json, account_id) VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -186,10 +182,7 @@ async def test_rls_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine) ->
         )
         await conn.execute(
             text(
-                "INSERT INTO environment_profiles "
-                "(id, organisation_id, name, provider_type, image_ref, capabilities_json, "
-                "secret_refs_json, config_json, account_id) "
-                "VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
+                "INSERT INTO environment_profiles (id, organisation_id, name, provider_type, image_ref, capabilities_json, secret_refs_json, config_json, account_id) VALUES (:id, :org_id, :name, 'local_docker', :image, '[]'::json, '[]'::json, '{}'::json, :account_id)",
             ),
             {
                 "id": str(uuid.uuid4()),

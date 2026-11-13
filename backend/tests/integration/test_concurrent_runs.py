@@ -62,11 +62,7 @@ class TestConcurrentRunCreation:
                 await set_rls_org(session, test_org)
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -112,11 +108,7 @@ class TestConcurrentRunCreation:
                 await set_rls_org(session, test_org)
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -157,11 +149,7 @@ class TestConcurrentStatusTransitions:
                 run_id = uuid.uuid4()
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -213,11 +201,7 @@ class TestConcurrentStatusTransitions:
                 run_id = uuid.uuid4()
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -283,10 +267,7 @@ class TestConcurrentActiveRunCounting:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, "
-                    "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
                 ),
                 {
                     "id": str(pipeline_id),
@@ -314,11 +295,7 @@ class TestConcurrentActiveRunCounting:
                 run_id = uuid.uuid4()
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', "
-                        ":hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'manual', 'pending', :hash, :tid, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -356,9 +333,7 @@ class TestConcurrentActiveRunCounting:
             await set_rls_org(session, test_org)
             result = await session.execute(
                 text(
-                    "SELECT count(*) FROM runs WHERE pipeline_id = :pid "
-                    "AND status IN ('pending', 'running', 'awaiting_human', "
-                    "'claimed', 'waiting_for_lock')",
+                    "SELECT count(*) FROM runs WHERE pipeline_id = :pid AND status IN ('pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock')",
                 ),
                 {"pid": str(pipeline_id)},
             )
@@ -389,10 +364,7 @@ class TestMaxConcurrentRunsEnforcement:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, "
-                    "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
                 ),
                 {
                     "id": str(pipeline_id),
@@ -414,9 +386,7 @@ class TestMaxConcurrentRunsEnforcement:
             )
             await session.execute(
                 text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, :mcr, '{}'::json, :uid)",
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, :mcr, '{}'::json, :uid)",
                 ),
                 {
                     "id": str(trigger_id),
@@ -446,11 +416,7 @@ class TestMaxConcurrentRunsEnforcement:
                 tid_str = f"{test_org}:{tag}-{i}-{uuid.uuid4().hex[:6]}"
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, trigger_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', "
-                        ":hash, :tid, :tid2, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, trigger_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', :hash, :tid, :tid2, :rn)",
                     ),
                     {
                         "rid": str(run_id),

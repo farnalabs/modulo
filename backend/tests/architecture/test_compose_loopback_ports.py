@@ -102,11 +102,7 @@ def test_default_compose_ports_are_loopback_only(compose_path: Path) -> None:
     compose = _load_compose(compose_path)
     violations = _port_violations(compose.get("services", {}), skip_services=set())
 
-    assert not violations, (
-        f"Non-loopback port bindings found in {compose_path.relative_to(_REPO_ROOT)}:\n"
-        + "\n".join(violations)
-        + "\n\nSee docs/security/bundled-runner-trust-boundary.md — FAR-1035."
-    )
+    assert not violations, f"Non-loopback port bindings found in {compose_path.relative_to(_REPO_ROOT)}:\n" + "\n".join(violations) + "\n\nSee docs/security/bundled-runner-trust-boundary.md — FAR-1035."
 
 
 @pytest.mark.parametrize(
@@ -127,7 +123,4 @@ def test_service_scoped_compose_ports_are_loopback_only(compose_path: Path, exce
     compose = _load_compose(compose_path)
     violations = _port_violations(compose.get("services", {}), skip_services=exceptions)
 
-    assert not violations, (
-        f"Non-loopback port bindings found in {compose_path.relative_to(_REPO_ROOT)} "
-        f"(services exempt by design: {sorted(exceptions)}):\n" + "\n".join(violations)
-    )
+    assert not violations, f"Non-loopback port bindings found in {compose_path.relative_to(_REPO_ROOT)} (services exempt by design: {sorted(exceptions)}):\n" + "\n".join(violations)

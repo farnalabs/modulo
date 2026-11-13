@@ -97,9 +97,7 @@ class TestSentryErrorForwarder:
         ],
         ids=["without-userinfo", "with-userinfo"],
     )
-    async def test_api_fallback_authorization_header_follows_dsn_userinfo(
-        self, dsn: str, expected_authorization: str | None
-    ) -> None:
+    async def test_api_fallback_authorization_header_follows_dsn_userinfo(self, dsn: str, expected_authorization: str | None) -> None:
         fwd = SentryErrorForwarder()
 
         with _patch_pinned("sentry") as mock_client:

@@ -101,9 +101,7 @@ async def _cleanup(engine: AsyncEngine, pipeline_id: uuid.UUID) -> None:
         await conn.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
 
 
-async def _create_snapshot_and_run(
-    engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID, account_id: uuid.UUID
-) -> tuple[PipelineSnapshot, Run]:
+async def _create_snapshot_and_run(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID, account_id: uuid.UUID) -> tuple[PipelineSnapshot, Run]:
     """One creator: its OWN session + transaction, matching a run-start route.
 
     The snapshot AND the run are created in the SAME transaction (as
@@ -169,12 +167,7 @@ async def test_twelve_concurrent_creators_produce_distinct_runs_and_versions(
     """
     pipeline_id = await _insert_pipeline(concurrent_engine, test_org, test_user)
     try:
-        pairs = await asyncio.gather(
-            *(
-                _create_snapshot_and_run(concurrent_engine, test_org, pipeline_id, test_user)
-                for _ in range(_CONCURRENT_CREATORS)
-            )
-        )
+        pairs = await asyncio.gather(*(_create_snapshot_and_run(concurrent_engine, test_org, pipeline_id, test_user) for _ in range(_CONCURRENT_CREATORS)))
         snapshots = [snapshot for snapshot, _ in pairs]
         runs = [run for _, run in pairs]
 
@@ -220,12 +213,7 @@ async def test_sequential_creators_continue_the_version_sequence(
     """
     pipeline_id = await _insert_pipeline(concurrent_engine, test_org, test_user)
     try:
-        burst = await asyncio.gather(
-            *(
-                _create_snapshot_and_run(concurrent_engine, test_org, pipeline_id, test_user)
-                for _ in range(_CONCURRENT_CREATORS)
-            )
-        )
+        burst = await asyncio.gather(*(_create_snapshot_and_run(concurrent_engine, test_org, pipeline_id, test_user) for _ in range(_CONCURRENT_CREATORS)))
         assert max(snapshot.snapshot_version for snapshot, _ in burst) == _CONCURRENT_CREATORS
 
         after_snapshot, after_run = await _create_snapshot_and_run(concurrent_engine, test_org, pipeline_id, test_user)

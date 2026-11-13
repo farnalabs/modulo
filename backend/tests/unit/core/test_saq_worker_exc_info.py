@@ -25,9 +25,7 @@ async def test_execute_run_job_kwargs_stamp_failure() -> None:
         patch.object(sw, "_log") as log,
     ):
         await sw.execute_run({"job": job}, run_id=run_id, org_id=org_id)
-    log.warning.assert_called_once_with(
-        "SAQ execute_run: job kwargs stamp failed for run %s", uuid.UUID(run_id), exc_info=True
-    )
+    log.warning.assert_called_once_with("SAQ execute_run: job kwargs stamp failed for run %s", uuid.UUID(run_id), exc_info=True)
 
 
 async def test_persist_sweep_stats_redis_failure() -> None:

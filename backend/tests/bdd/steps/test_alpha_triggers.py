@@ -44,7 +44,7 @@ class _ProvisionedSystemSettings:
     connects.
     """
 
-    farna_control_system_database_url = "postgresql+asyncpg://localhost/modulo-system-bdd-test"
+    modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-bdd-test"
     # FAR-1524: get_or_create_system_engine passes this to create_async_engine
     # as pool_recycle; the stub must expose it just like the real Settings.
     db_pool_recycle_seconds = 1500

@@ -67,26 +67,15 @@ async def _seed(db_engine: AsyncEngine) -> dict[str, Any]:
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json, triggers_paused) "
-                "VALUES (:id, :name, :slug, "
-                '        \'{"cost_controls": {"circuit_breaker_enabled": true}}\'::json, '
-                "        '{}'::json, false)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json, triggers_paused) VALUES (:id, :name, :slug,         '{\"cost_controls\": {\"circuit_breaker_enabled\": true}}'::json,         '{}'::json, false)"),
             {"id": str(org_id), "name": "FAR-1833 P1 org", "slug": f"far1833-p1-{org_id.hex[:8]}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisation_cost_state (org_id, spend_ceiling_cents, org_cumulative_spend_cents) "
-                "VALUES (:id, :ceiling, :cumulative)"
-            ),
+            text("INSERT INTO organisation_cost_state (org_id, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:id, :ceiling, :cumulative)"),
             {"id": str(org_id), "ceiling": _SPEND_CEILING_CENTS, "cumulative": _CUMULATIVE_CENTS},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_id), "email": f"far1833-p1-{account_id.hex[:8]}@example.com", "name": "FAR-1833 P1"},
         )
     return {"org_id": org_id, "account_id": account_id}
@@ -204,7 +193,4 @@ async def test_update_cost_controls_takes_advisory_before_org_row_write(db_engin
 
     # The ordering assertion: pre-fix this is True (the endpoint holds the org
     # row before taking the advisory) and the cycle deadlocks.
-    assert org_row_locked_by_endpoint is False, (
-        "the endpoint mutated the organisations row BEFORE taking the cost advisory "
-        "— the lock order is inverted (advisory must precede any org-row mutation)"
-    )
+    assert org_row_locked_by_endpoint is False, "the endpoint mutated the organisations row BEFORE taking the cost advisory — the lock order is inverted (advisory must precede any org-row mutation)"

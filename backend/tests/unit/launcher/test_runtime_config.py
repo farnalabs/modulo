@@ -24,7 +24,7 @@ _ENTRYPOINT = _REPO_ROOT / "deploy" / "fly" / "entrypoint.sh"
 _CREDENTIAL_ENV: dict[str, str] = {
     "DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
     "DATABASE_ADMIN_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
-    "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
+    "FARNA_CONTROL_SYSTEM_DATABASE_URL": "postgresql+asyncpg://modulo:hunter2@127.0.0.1:15432/farna_control",
     "REDIS_URL": "redis://:redis-pass@127.0.0.1:16379/0",
     "SECRET_KEY": "a" * 64,
     "FERNET_KEY": "b" * 44,
@@ -46,7 +46,7 @@ def test_monitor_config_is_parsed_into_the_allowlisted_key() -> None:
 def test_invalid_monitor_config_is_reported_and_dropped(capsys: pytest.CaptureFixture[str]) -> None:
     payload = build_runtime_config_payload({"FARNA_CONTROL_MODULO_MONITOR_CONFIG": "not-json"})
     assert not payload
-    assert "Ignoring invalid MODULO_MONITOR_CONFIG" in capsys.readouterr().out
+    assert "Ignoring invalid FARNA_CONTROL_MODULO_MONITOR_CONFIG" in capsys.readouterr().out
 
 
 def test_auto_login_pair_requires_both_values() -> None:

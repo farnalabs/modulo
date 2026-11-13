@@ -307,9 +307,7 @@ def test_update_policy_lock_timeout_is_409(client: tuple[TestClient, AsyncMock])
     assert "another change is in progress" in resp.json()["detail"]
 
 
-def test_update_policy_lock_timeout_arm_pre_empts_backstop(
-    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
-) -> None:
+def test_update_policy_lock_timeout_arm_pre_empts_backstop(client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1905: the PUT arm's own 55P03 -> 409 verdict wins over the backstop.
 
     The ORIGINAL FAR-1905 acceptance criterion — "the 55P03 -> 409 classification
@@ -494,9 +492,7 @@ def _issue(client: TestClient, method: str, url: str, body: dict[str, int] | Non
     [(_SQL, 503, _MSG_503), (_PROG, 501, _MSG_501)],
     ids=["sqlalchemy-503", "programming-501"],
 )
-def test_backstop_maps_escaping_db_error_to_standard_status(
-    method: str, url: str, body: dict[str, int] | None, exc: Exception, expected: int, detail: str
-) -> None:
+def test_backstop_maps_escaping_db_error_to_standard_status(method: str, url: str, body: dict[str, int] | None, exc: Exception, expected: int, detail: str) -> None:
     """FAR-1905 prove-the-fix: an unexpected DB error escaping the handler body.
 
     ``_resolve_org_id`` runs before each handler's ``try``, so a DB error raised

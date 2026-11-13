@@ -102,9 +102,7 @@ def _guardrail_row() -> MagicMock:
     return row
 
 
-def _session_execute_results(
-    session: AsyncMock, *, run, rows, node_started: bool = False, has_checkpoint: bool = True
-) -> None:
+def _session_execute_results(session: AsyncMock, *, run, rows, node_started: bool = False, has_checkpoint: bool = True) -> None:
     """Wire session.execute to return the run/row sequence used by the override.
 
     A node-started run (FAR-1711 M1) adds ONE checkpoint-existence probe

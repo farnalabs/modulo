@@ -162,18 +162,14 @@ def test_approval_without_hash_is_reset_to_unapproved() -> None:
 
 def test_matching_approved_hash_is_approved() -> None:
     approved = "a" * 64
-    outcome = decide_observation(
-        observed_hash=approved, approved_hash=approved, current_status=APPROVAL_STATUS_APPROVED
-    )
+    outcome = decide_observation(observed_hash=approved, approved_hash=approved, current_status=APPROVAL_STATUS_APPROVED)
 
     assert outcome.approval_status == APPROVAL_STATUS_APPROVED
     assert outcome.drifted is False
 
 
 def test_changed_hash_is_drift() -> None:
-    outcome = decide_observation(
-        observed_hash="b" * 64, approved_hash="a" * 64, current_status=APPROVAL_STATUS_APPROVED
-    )
+    outcome = decide_observation(observed_hash="b" * 64, approved_hash="a" * 64, current_status=APPROVAL_STATUS_APPROVED)
 
     assert outcome.approval_status == APPROVAL_STATUS_APPROVED_STALE
     assert outcome.drifted is True
@@ -181,9 +177,7 @@ def test_changed_hash_is_drift() -> None:
 
 def test_return_to_approved_hash_clears_stale() -> None:
     approved = "a" * 64
-    outcome = decide_observation(
-        observed_hash=approved, approved_hash=approved, current_status=APPROVAL_STATUS_APPROVED_STALE
-    )
+    outcome = decide_observation(observed_hash=approved, approved_hash=approved, current_status=APPROVAL_STATUS_APPROVED_STALE)
 
     assert outcome.approval_status == APPROVAL_STATUS_APPROVED
     assert outcome.drifted is False
@@ -215,9 +209,7 @@ async def test_observation_of_changed_tools_marks_stale_and_alerts(session: Asyn
     hash_a = compute_tools_hash(tools_a)
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
 
-    result = await apply_tool_observation(
-        session, server=server, org_id=_ORG, tools=_tools("read", "write", "delete"), actor_user_id=None
-    )
+    result = await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "write", "delete"), actor_user_id=None)
 
     assert result.approval_status == APPROVAL_STATUS_APPROVED_STALE
     assert result.drifted is True
@@ -232,12 +224,8 @@ async def test_second_observation_while_stale_does_not_re_alert(session: AsyncSe
     hash_a = compute_tools_hash(tools_a)
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
 
-    await apply_tool_observation(
-        session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-    )
-    second = await apply_tool_observation(
-        session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-    )
+    await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
+    second = await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
 
     assert second.drifted is True
     assert second.newly_drifted is False
@@ -250,9 +238,7 @@ async def test_return_to_approved_tools_clears_stale(session: AsyncSession) -> N
     hash_a = compute_tools_hash(tools_a)
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_APPROVED, tools=tools_a)
 
-    await apply_tool_observation(
-        session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-    )
+    await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
     reverted = await apply_tool_observation(session, server=server, org_id=_ORG, tools=tools_a, actor_user_id=None)
 
     assert reverted.approval_status == APPROVAL_STATUS_APPROVED
@@ -264,9 +250,7 @@ async def test_blocked_server_observation_does_not_alert(session: AsyncSession) 
     hash_a = compute_tools_hash(tools_a)
     server = await _seed_server(session, approved_hash=hash_a, status=APPROVAL_STATUS_BLOCKED, tools=tools_a)
 
-    result = await apply_tool_observation(
-        session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-    )
+    result = await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
 
     assert result.approval_status == APPROVAL_STATUS_BLOCKED
     assert result.drifted is False
@@ -295,9 +279,7 @@ async def test_drift_audit_failure_is_swallowed(session: AsyncSession) -> None:
         "farna.core.mcp.tool_pinning.append_audit_event",
         AsyncMock(side_effect=SQLAlchemyError("audit down")),
     ):
-        result = await apply_tool_observation(
-            session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-        )
+        result = await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
 
     assert result.approval_status == APPROVAL_STATUS_APPROVED_STALE
     assert result.newly_drifted is True
@@ -314,9 +296,7 @@ async def test_drift_notification_failure_is_swallowed(session: AsyncSession) ->
         "farna.core.mcp.tool_pinning.create_notification",
         AsyncMock(side_effect=SQLAlchemyError("notify down")),
     ):
-        result = await apply_tool_observation(
-            session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None
-        )
+        result = await apply_tool_observation(session, server=server, org_id=_ORG, tools=_tools("read", "delete"), actor_user_id=None)
 
     assert result.approval_status == APPROVAL_STATUS_APPROVED_STALE
     assert result.newly_drifted is True

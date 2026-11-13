@@ -737,9 +737,7 @@ async def test_redispatch_branch_persists_a_non_terminal_marker() -> None:
         patch.object(ch, "persist_terminal_triage_marker", terminal_writer),
         patch.object(ch, "persist_redispatch_triage_marker", redispatch_writer),
     ):
-        await pe._fail_overdue_node(
-            MagicMock(), str(_RUN), str(_ORG), deadlines, exec_task, done, stall, retry_hook=hook
-        )
+        await pe._fail_overdue_node(MagicMock(), str(_RUN), str(_ORG), deadlines, exec_task, done, stall, retry_hook=hook)
     await _stop(exec_task)
 
     terminal_writer.assert_not_awaited()
@@ -795,9 +793,7 @@ async def test_redispatch_marker_coexists_with_the_terminal_marker_and_projects(
     assert markers[redispatch_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH
     assert markers[redispatch_key]["attempt_key"] == redispatch_key
 
-    entries = {
-        entry["attempt_key"]: entry for entry in runs_module._deadline_triage_from_markers(markers, run_attempt_count=2)
-    }
+    entries = {entry["attempt_key"]: entry for entry in runs_module._deadline_triage_from_markers(markers, run_attempt_count=2)}
     assert set(entries) == {terminal_key, redispatch_key}
     assert entries[redispatch_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE_REDISPATCH
     assert entries[terminal_key]["no_output_reason"] == ch._TERMINAL_TRIAGE_REASON_NODE_DEADLINE
@@ -843,12 +839,7 @@ async def test_node_deadline_triage_swallows_a_write_failure(caplog: pytest.LogC
 
     writer.assert_awaited_once()
     assert result is None
-    records = [
-        record
-        for record in caplog.records
-        if record.name == "farna.core.pipeline_execution"
-        and "pipeline_execution.node_deadline_triage_failed" in record.getMessage()
-    ]
+    records = [record for record in caplog.records if record.name == "farna.core.pipeline_execution" and "pipeline_execution.node_deadline_triage_failed" in record.getMessage()]
     assert len(records) == 1
     record = records[0]
     assert record.levelno == logging.WARNING

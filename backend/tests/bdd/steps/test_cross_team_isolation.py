@@ -177,9 +177,7 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
     cpdata = ctx.get("connectors", {}).get(connector_name)
     ppdata = ctx.get("pipelines", {}).get(pipeline_name)
     if cpdata is None or ppdata is None:
-        raise AssertionError(
-            "binding step requires the connector and pipeline to be declared; the real graph PUT route cannot be driven"
-        )
+        raise AssertionError("binding step requires the connector and pipeline to be declared; the real graph PUT route cannot be driven")
     connector_id = uuid.UUID(cpdata["id"])
     with (
         session_client("admin") as client,

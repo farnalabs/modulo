@@ -65,9 +65,7 @@ async def test_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -141,9 +139,7 @@ class TestWebhookDeduplication:
                 await set_rls_org(session, test_org)
                 result = await session.execute(
                     text(
-                        "SELECT validation_result FROM trigger_events "
-                        "WHERE trigger_id = :tid AND validation_result = 'deduplicated' "
-                        "AND raw_payload_hash = :hash LIMIT 1",
+                        "SELECT validation_result FROM trigger_events WHERE trigger_id = :tid AND validation_result = 'deduplicated' AND raw_payload_hash = :hash LIMIT 1",
                     ),
                     {"tid": str(trigger_id), "hash": payload_hash},
                 )
@@ -157,9 +153,7 @@ class TestWebhookDeduplication:
             await set_rls_org(session, test_org)
             result = await session.execute(
                 text(
-                    "SELECT count(*) FROM trigger_events "
-                    "WHERE trigger_id = :tid AND raw_payload_hash = :hash "
-                    "AND validation_result = 'accepted'",
+                    "SELECT count(*) FROM trigger_events WHERE trigger_id = :tid AND raw_payload_hash = :hash AND validation_result = 'accepted'",
                 ),
                 {"tid": str(trigger_id), "hash": payload_hash},
             )
@@ -313,11 +307,7 @@ class TestWebhookFloodProtection:
                 tid_str = f"{test_org}:{tag}-{i}-{uuid.uuid4().hex[:6]}"
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, trigger_type, status, input_hash, "
-                        "langgraph_thread_id, trigger_id, run_number) "
-                        "VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', "
-                        ":hash, :tid, :tid2, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, trigger_id, run_number) VALUES (:rid, :oid, :pid, :sid, 'webhook', 'running', :hash, :tid, :tid2, :rn)",
                     ),
                     {
                         "rid": str(run_id),
@@ -482,10 +472,7 @@ class TestWebhookFullPipeline:
             await set_rls_org(session, test_org)
             await session.execute(
                 text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, "
-                    "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                    "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
                 ),
                 {"id": str(pipeline_id), "oid": str(test_org), "name": "Full Pipeline Test", "uid": str(test_user)},
             )
@@ -502,9 +489,7 @@ class TestWebhookFullPipeline:
             )
             await session.execute(
                 text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
                 ),
                 {
                     "id": str(trigger_id),
@@ -546,8 +531,7 @@ class TestWebhookFullPipeline:
             payload_hash = canonical_payload_hash({"action": "opened", "issue": {"number": 42}})
             result = await session.execute(
                 text(
-                    "SELECT payload_hash, expires_at FROM webhook_dedup_hashes "
-                    "WHERE trigger_id = :tid AND payload_hash = :hash",
+                    "SELECT payload_hash, expires_at FROM webhook_dedup_hashes WHERE trigger_id = :tid AND payload_hash = :hash",
                 ),
                 {"tid": str(trigger_id), "hash": payload_hash},
             )
@@ -579,9 +563,7 @@ async def ci_failure_mapped_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 20, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -670,9 +652,7 @@ class TestGithubSignatureVerifiedDelivery:
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 100, (:config)::json, :uid)",
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 100, (:config)::json, :uid)",
                 ),
                 {
                     "id": str(trigger_id),

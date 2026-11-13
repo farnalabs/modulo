@@ -98,22 +98,13 @@ def create_cron_trigger_simple(pipeline: str, expression: str, client, request, 
     create_cron_trigger_full(pipeline, expression, "UTC", "{}", client, request, mock_session)
 
 
-@when(
-    parsers.parse(
-        'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" '
-        'timezone "{timezone}" and input_template {template}'
-    )
-)
+@when(parsers.parse('I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" timezone "{timezone}" and input_template {template}'))
 def create_cron_trigger_full(pipeline: str, expression: str, timezone: str, template, client, request, mock_session):
     input_template = json.loads(template) if isinstance(template, str) else template
     _do_create_cron_trigger(client, request, expression, timezone, input_template, mock_session)
 
 
-@when(
-    parsers.parse(
-        'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" timezone "{timezone}"'
-    )
-)
+@when(parsers.parse('I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" timezone "{timezone}"'))
 def create_cron_trigger_timezone(pipeline: str, expression: str, timezone: str, client, request, mock_session):
     _do_create_cron_trigger(client, request, expression, timezone, {}, mock_session)
 

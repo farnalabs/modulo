@@ -437,11 +437,6 @@ class TestSelfLockoutEndpoint:
         assert resp.status_code == 200
         assert resp.json()["is_active"] is True
 
-        update_statements = [
-            call.args[0] for call in mock_session.execute.call_args_list if isinstance(call.args[0], Update)
-        ]
+        update_statements = [call.args[0] for call in mock_session.execute.call_args_list if isinstance(call.args[0], Update)]
         assert update_statements, "expected an UPDATE against org_memberships"
-        assert any(
-            "deactivated_at" in str(stmt) and stmt.compile().params.get("deactivated_at") is None
-            for stmt in update_statements
-        ), "reactivation must clear the membership deactivated_at tombstone"
+        assert any("deactivated_at" in str(stmt) and stmt.compile().params.get("deactivated_at") is None for stmt in update_statements), "reactivation must clear the membership deactivated_at tombstone"

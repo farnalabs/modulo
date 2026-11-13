@@ -569,7 +569,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     app_user = _parse_role(app_url)
     app_pass = _parse_password(app_url)
 
-    bg_url = os.environ.get("FARNA_CONTROL_MODULO_BREAK_GLASS_DATABASE_URL", "")
+    bg_url = os.environ.get("FARNA_CONTROL_BREAK_GLASS_DATABASE_URL", "")
     bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
     # None = URL unconfigured (or passwordless): an existing role KEEPS its
     # password; a missing role gets a random placeholder below. Reconciling a
@@ -577,7 +577,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     # drift FAR-1519 fixes — only a configured URL may set a password.
     bg_pass = _parse_password(bg_url) or None
 
-    sys_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
+    sys_url = os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL", "")
     sys_user = _parse_role(sys_url) or _SYSTEM_ROLE
     sys_pass = _parse_password(sys_url) or None
 

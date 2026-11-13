@@ -142,9 +142,7 @@ def test_the_guard_covers_the_judge_entry_points_and_subpackages() -> None:
 
 
 def test_no_blocking_call_or_sync_sdk_is_used_on_the_judge_path() -> None:
-    sources = list(iter_source_text(_TYPED_JUDGE_DIR)) + [
-        (path, path.read_text(encoding="utf-8")) for path in _JUDGE_MODULES
-    ]
+    sources = list(iter_source_text(_TYPED_JUDGE_DIR)) + [(path, path.read_text(encoding="utf-8")) for path in _JUDGE_MODULES]
     offenders = [finding for path, source in sources for finding in _file_violations(path, source)]
 
     assert not offenders, "blocking/sync SDK pattern(s): " + ", ".join(offenders)

@@ -1336,10 +1336,7 @@ async def _saml_config_from_db(
     # Per-provider entity_id default (FAR-1001): when the DB provider
     # has no entity_id set, default to {public_url}/saml/{provider_id}
     # for per-provider routes, or the legacy env setting for singleton.
-    if provider_id is not None:
-        default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
-    else:
-        default_entity = settings.modulo_saml_entity_id or "modulo"
+    default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}" if provider_id is not None else settings.modulo_saml_entity_id or "modulo"
     entity_id = db_saml.entity_id or default_entity
     sp_key = settings.modulo_saml_sp_private_key or None
     sp_cert = settings.modulo_saml_sp_x509_cert or None

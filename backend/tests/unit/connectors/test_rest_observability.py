@@ -223,12 +223,8 @@ class TestRecordHelpers:
         meter, histograms, counters = _storage_meter()
         with patch.object(rest_metrics, "_get_meter", return_value=meter):
             rest_metrics.record_request_duration(1.25, host="api.example.com", method="GET", outcome="success")
-        histograms["modulo_rest_request_duration_seconds"].record.assert_called_once_with(
-            1.25, attributes={"host": "api.example.com", "method": "GET", "outcome": "success"}
-        )
-        counters["modulo_rest_outcome_total"].add.assert_called_once_with(
-            1, attributes={"cause_code": "success", "host": "api.example.com"}
-        )
+        histograms["modulo_rest_request_duration_seconds"].record.assert_called_once_with(1.25, attributes={"host": "api.example.com", "method": "GET", "outcome": "success"})
+        counters["modulo_rest_outcome_total"].add.assert_called_once_with(1, attributes={"cause_code": "success", "host": "api.example.com"})
 
     def test_record_retry_emits_reason(self) -> None:
         meter, _h, counters = _storage_meter()
@@ -240,9 +236,7 @@ class TestRecordHelpers:
         meter, _h, counters = _storage_meter()
         with patch.object(rest_metrics, "_get_meter", return_value=meter):
             rest_metrics.record_ssrf_blocked("169.254.169.254")
-        counters["modulo_rest_ssrf_blocked_total"].add.assert_called_once_with(
-            1, attributes={"host": "169.254.169.254"}
-        )
+        counters["modulo_rest_ssrf_blocked_total"].add.assert_called_once_with(1, attributes={"host": "169.254.169.254"})
 
     def test_record_redaction_event_emits_no_attributes(self) -> None:
         meter, _h, counters = _storage_meter()
@@ -441,43 +435,31 @@ class TestConnectorMetricWiring:
 
 class TestRestRollback:
     def test_below_min_samples_never_triggers(self) -> None:
-        assert (
-            evaluate_rest_rollback(url="https://a.example", total_requests=10, error_requests=10, unknown_requests=0)
-            is None
-        )
+        assert evaluate_rest_rollback(url="https://a.example", total_requests=10, error_requests=10, unknown_requests=0) is None
 
     def test_zero_requests_never_triggers(self) -> None:
         signal = evaluate_rest_rollback(url="https://a.example", total_requests=0, error_requests=0, unknown_requests=0)
         assert signal is None
 
     def test_error_rate_crossed_triggers_signal(self) -> None:
-        signal = evaluate_rest_rollback(
-            url="https://a.example", total_requests=100, error_requests=20, unknown_requests=0
-        )
+        signal = evaluate_rest_rollback(url="https://a.example", total_requests=100, error_requests=20, unknown_requests=0)
         assert isinstance(signal, RestRollbackSignal)
         assert signal.error_rate == pytest.approx(0.2)
         assert signal.action == "operator_review"
         assert signal.url == "https://a.example"
 
     def test_unknown_rate_crossed_triggers_signal(self) -> None:
-        signal = evaluate_rest_rollback(
-            url="https://a.example", total_requests=100, error_requests=0, unknown_requests=10
-        )
+        signal = evaluate_rest_rollback(url="https://a.example", total_requests=100, error_requests=0, unknown_requests=10)
         assert isinstance(signal, RestRollbackSignal)
         assert signal.unknown_rate == pytest.approx(0.1)
 
     def test_healthy_rates_do_not_trigger(self) -> None:
-        assert (
-            evaluate_rest_rollback(url="https://a.example", total_requests=100, error_requests=1, unknown_requests=1)
-            is None
-        )
+        assert evaluate_rest_rollback(url="https://a.example", total_requests=100, error_requests=1, unknown_requests=1) is None
 
     def test_error_and_unknown_buckets_are_disjoint(self) -> None:
         """A request counted as UNKNOWN must be judged against the unknown
         threshold independently, not double-counted as an error."""
-        signal = evaluate_rest_rollback(
-            url="https://a.example", total_requests=100, error_requests=6, unknown_requests=3
-        )
+        signal = evaluate_rest_rollback(url="https://a.example", total_requests=100, error_requests=6, unknown_requests=3)
         assert isinstance(signal, RestRollbackSignal)
         assert signal.error_rate == pytest.approx(0.06)
         assert signal.unknown_rate == pytest.approx(0.03)
@@ -775,9 +757,7 @@ def test_rest_connector_uses_shared_redis_budget_per_destination() -> None:
     )
 
     with pytest.raises(RESTFanOutFailureError, match="rate-limit wait exceeded") as exc:
-        asyncio.run(
-            c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]}))
-        )
+        asyncio.run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]})))
     assert "rate-limit wait exceeded" in exc.value.failed_error
     # Budget keyed per <tenant, host+path>.
     assert any("org-1" in k and "https://api.example.com/users" in k for k in store)
@@ -843,9 +823,7 @@ def test_rest_connector_local_bucket_when_no_redis() -> None:
     )
 
     with pytest.raises(RESTFanOutFailureError, match="rate-limit wait exceeded"):
-        asyncio.run(
-            c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]}))
-        )
+        asyncio.run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]})))
     # Local store carried the destination bucket.
     assert len(c._rate_buckets) == 1
 
@@ -866,8 +844,6 @@ def test_rest_connector_redis_failure_fails_closed() -> None:
     )
 
     with pytest.raises(RESTFanOutFailureError, match="rate-limit budget unavailable"):
-        asyncio.run(
-            c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]}))
-        )
+        asyncio.run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(3)]})))
     # With Redis configured, the connector must NOT fall back to a per-process bucket.
     assert not c._rate_buckets

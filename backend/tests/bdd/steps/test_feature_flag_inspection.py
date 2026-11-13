@@ -200,11 +200,7 @@ def signed_license_stored(ctx: dict[str, Any]) -> None:
         "org_id": "bdd-org",
     }
     sig_hex = sign_primitive(payload, keypair["private_key"])
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     raw_key = f"{payload_b64}.{sig_b64}"
     data = LicenseData(

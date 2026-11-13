@@ -33,9 +33,7 @@ def _org(
     org.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     org.triggers_paused = triggers_paused
     org.triggers_paused_at = None
-    org.settings_json = (
-        {"cost_controls": {"circuit_breaker_enabled": circuit_breaker_enabled}} if circuit_breaker_enabled else {}
-    )
+    org.settings_json = {"cost_controls": {"circuit_breaker_enabled": circuit_breaker_enabled}} if circuit_breaker_enabled else {}
     return org
 
 
@@ -54,9 +52,7 @@ async def test_toggle_off_is_strict_noop() -> None:
     org = _org(circuit_breaker_enabled=False)
     session = AsyncMock()
 
-    engaged = await maybe_auto_pause_org_triggers(
-        session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500
-    )
+    engaged = await maybe_auto_pause_org_triggers(session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500)
 
     assert engaged is False
     assert org.triggers_paused is False
@@ -100,9 +96,7 @@ async def test_already_paused_is_noop_and_never_unpauses() -> None:
         patch.object(org_auto_pause, "append_audit_event", new=AsyncMock()) as audit,
         patch.object(org_auto_pause, "_notify_admins", new=AsyncMock()) as notify,
     ):
-        engaged = await maybe_auto_pause_org_triggers(
-            session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500
-        )
+        engaged = await maybe_auto_pause_org_triggers(session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500)
 
     assert engaged is False
     audit.assert_not_awaited()
@@ -118,9 +112,7 @@ async def test_audit_failure_is_fail_open() -> None:
         patch.object(org_auto_pause, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("boom"))) as audit,
         patch.object(org_auto_pause, "_notify_admins", new=AsyncMock()) as notify,
     ):
-        engaged = await maybe_auto_pause_org_triggers(
-            session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500
-        )
+        engaged = await maybe_auto_pause_org_triggers(session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500)
 
     assert engaged is False
     audit.assert_awaited_once()
@@ -189,18 +181,14 @@ async def test_notify_admins_swallows_dispatch_failure() -> None:
     org = _org(circuit_breaker_enabled=True)
     session = AsyncMock()
 
-    notifier_patch, engine_patch, settings_patch, notifier = _patched_notifier(
-        AsyncMock(side_effect=RuntimeError("boom"))
-    )
+    notifier_patch, engine_patch, settings_patch, notifier = _patched_notifier(AsyncMock(side_effect=RuntimeError("boom")))
     with (
         patch.object(org_auto_pause, "append_audit_event", new=AsyncMock()),
         notifier_patch,
         engine_patch,
         settings_patch,
     ):
-        engaged = await maybe_auto_pause_org_triggers(
-            session, org=org, reason=AUTO_PAUSE_REASON_SPEND_CEILING, spend_cents=1500, limit_cents=1000
-        )
+        engaged = await maybe_auto_pause_org_triggers(session, org=org, reason=AUTO_PAUSE_REASON_SPEND_CEILING, spend_cents=1500, limit_cents=1000)
 
     assert engaged is True
     notifier.dispatch_event.assert_awaited_once()
@@ -219,6 +207,4 @@ async def test_notify_admins_cancellation_propagates() -> None:
         settings_patch,
         pytest.raises(asyncio.CancelledError),
     ):
-        await maybe_auto_pause_org_triggers(
-            session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500
-        )
+        await maybe_auto_pause_org_triggers(session, org=org, reason=AUTO_PAUSE_REASON_DAILY_LIMIT, spend_cents=1000, limit_cents=500)

@@ -94,21 +94,15 @@ class TestFireDueTriggersOngoingScan:
         adv_ongoing.assert_awaited_once()
 
         # The enqueued ongoing job targets the SAQ wrapper with the snapshot.
-        ongoing_calls = [
-            c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"
-        ]
+        ongoing_calls = [c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"]
         assert len(ongoing_calls) == 1
         assert "latest_snapshot_id" in ongoing_calls[0].kwargs
 
         # The ongoing select is the LAST trigger-family read in the tick.
         trigger_selects = [(i, s) for i, (s, _p) in enumerate(session.executed) if "from triggers" in str(s).lower()]
         assert trigger_selects
-        ongoing_index = next(
-            i for i, s in trigger_selects if "ongoing" in str(s.compile(compile_kwargs={"literal_binds": True}))
-        )
-        report_index = next(
-            i for i, (s, _p) in enumerate(session.executed) if "from scheduled_reports" in str(s).lower()
-        )
+        ongoing_index = next(i for i, s in trigger_selects if "ongoing" in str(s.compile(compile_kwargs={"literal_binds": True})))
+        report_index = next(i for i, (s, _p) in enumerate(session.executed) if "from scheduled_reports" in str(s).lower())
         assert report_index < ongoing_index, "ongoing scan must run after the report read"
 
     @pytest.mark.asyncio
@@ -142,12 +136,7 @@ class TestFireDueTriggersOngoingScan:
             summary = await ch.fire_due_triggers()
 
         ongoing_select = next(
-            (
-                s
-                for s, _p in session.executed
-                if "from triggers" in str(s).lower()
-                and "ongoing" in str(s.compile(compile_kwargs={"literal_binds": True}))
-            ),
+            (s for s, _p in session.executed if "from triggers" in str(s).lower() and "ongoing" in str(s.compile(compile_kwargs={"literal_binds": True}))),
             None,
         )
         assert ongoing_select is not None
@@ -221,7 +210,5 @@ class TestFireDueTriggersOngoingScan:
         assert summary["ongoing_skipped_paused"] == 1
         assert summary["ongoing_enqueued"] == 0
         adv_ongoing.assert_awaited_once()
-        ongoing_calls = [
-            c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"
-        ]
+        ongoing_calls = [c for c in enqueue.await_args_list if c.args[1] == "farna.core.saq_worker.fire_ongoing_trigger"]
         assert ongoing_calls == []

@@ -92,9 +92,7 @@ def _ctx(request: Any) -> dict[str, Any]:
     return cast("dict[str, Any]", request.node._ctx)
 
 
-def _make_trigger(
-    *, secret: str, max_concurrent_runs: int = 5, payload_mapping: dict[str, str] | None = None
-) -> MagicMock:
+def _make_trigger(*, secret: str, max_concurrent_runs: int = 5, payload_mapping: dict[str, str] | None = None) -> MagicMock:
     config: dict[str, Any] = {"signing_secret": secret}
     if payload_mapping is not None:
         config["payload_mapping"] = payload_mapping
@@ -225,11 +223,7 @@ def _recorded_results(ctx: dict[str, Any]) -> list[str]:
     session = ctx["session"]
     if session is None:
         return []
-    return [
-        add_call.args[0].validation_result
-        for add_call in session.add.call_args_list
-        if add_call.args and getattr(add_call.args[0], "validation_result", None) is not None
-    ]
+    return [add_call.args[0].validation_result for add_call in session.add.call_args_list if add_call.args and getattr(add_call.args[0], "validation_result", None) is not None]
 
 
 # ---------------------------------------------------------------------------

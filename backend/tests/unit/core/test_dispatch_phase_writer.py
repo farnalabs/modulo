@@ -121,9 +121,7 @@ class _FakeConn:
             row = eng.row
             now = eng.db_now()
             # Stand-in for the SQL predicate: token fence + monotonic guard.
-            ok = row["claim_token"] == p["tok"] and (
-                row["dispatch_phase_entered_at"] is None or row["dispatch_phase_entered_at"] <= now
-            )
+            ok = row["claim_token"] == p["tok"] and (row["dispatch_phase_entered_at"] is None or row["dispatch_phase_entered_at"] <= now)
             if ok:
                 row["dispatch_phase"] = p["phase"]
                 row["dispatch_phase_entered_at"] = now
@@ -262,9 +260,7 @@ class TestFailSoft:
             writer.record(PHASE_LOADING_SETUP)
         assert "dispatch_phase.record scheduling failed" in caplog.text
 
-    def test_record_unexpected_error_is_swallowed(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_record_unexpected_error_is_swallowed(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A non-RuntimeError scheduling fault is fail-soft too (generic arm)."""
         eng = _FakeEngine(_fwd_row())
         writer = _writer(eng)
@@ -383,10 +379,7 @@ class TestTrackerWiring:
         # Pin the scope: the claim floor ('claimed') is never re-written here.
         # FAR-1422: first_node_dispatched is durable — a run that STARTED a node
         # must persist that fact, not look like it never dispatched anything.
-        assert (
-            frozenset({PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING, PHASE_FIRST_NODE_DISPATCHED})
-            == DURABLE_PHASES
-        )
+        assert frozenset({PHASE_LOADING_SETUP, PHASE_SETUP_COMPLETE, PHASE_STREAMING, PHASE_FIRST_NODE_DISPATCHED}) == DURABLE_PHASES
 
     @pytest.mark.asyncio
     async def test_tracker_records_each_durable_phase(self) -> None:
@@ -666,9 +659,7 @@ class TestDropCounter:
         assert eng.row["dispatch_phase_write_drops"] == 0
 
     @pytest.mark.asyncio
-    async def test_bump_timeout_is_swallowed(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_bump_timeout_is_swallowed(self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
         """The bump carries its own tighter bound, and failing it never raises."""
         assert DROP_COUNTER_WRITE_TIMEOUT_SECONDS < PHASE_WRITE_TIMEOUT_SECONDS
 

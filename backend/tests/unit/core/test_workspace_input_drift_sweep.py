@@ -257,9 +257,7 @@ class TestSweepWorkspaceInputDriftFlags:
         assert result == {"scanned": 0, "corrected": 0}
 
     @pytest.mark.anyio
-    async def test_read_failure_is_swallowed(
-        self, factory: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_read_failure_is_swallowed(self, factory: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture) -> None:
         run_id = uuid.uuid4()
         async with factory() as session:
             session.add(_make_run(run_id=run_id, status="complete", drift_detected=None))

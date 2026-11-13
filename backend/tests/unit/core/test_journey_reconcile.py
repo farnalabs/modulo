@@ -332,9 +332,7 @@ class TestAdvanceOnlyDriftRefs:
 
 class TestNonAdvancingRuns:
     @pytest.mark.parametrize("status", ["cancelled", "stalled"])
-    async def test_stale_journey_is_not_perpetual_drift_for_mint_only_runs(
-        self, session: AsyncSession, status: str
-    ) -> None:
+    async def test_stale_journey_is_not_perpetual_drift_for_mint_only_runs(self, session: AsyncSession, status: str) -> None:
         older = uuid.uuid4()
         await _seed_journey(session, "github_pr", "123", updated_at=_T1, latest_terminal_run_id=older)
         await _seed_run(
@@ -373,9 +371,7 @@ class TestNonAdvancingRuns:
 
 
 class TestFailOpen:
-    async def test_per_run_failure_does_not_abort_sweep(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_per_run_failure_does_not_abort_sweep(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         await _seed_run(
             session,
             refs=[{"kind": "github_pr", "ref": "1", "source": "derived"}],
@@ -435,9 +431,7 @@ class TestReconcileEdgeCases:
         # journey current — so the sweep must NOT re-advance, or run_count
         # would be double-counted.
         current_run = uuid.uuid4()
-        await _seed_journey(
-            session, "github_pr", "456", updated_at=_T3, run_count=1, latest_terminal_run_id=current_run
-        )
+        await _seed_journey(session, "github_pr", "456", updated_at=_T3, run_count=1, latest_terminal_run_id=current_run)
         await _seed_run(
             session,
             refs=[{"kind": "github_pr", "ref": "#456", "source": "derived"}],
@@ -819,37 +813,25 @@ class TestReconcileMetrics:
         monkeypatch.setattr("opentelemetry.metrics.get_meter_provider", _boom)
         assert reconcile_mod._get_meter() is None
 
-    def test_record_functions_initialise_and_attribute(
-        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    def test_record_functions_initialise_and_attribute(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod.record_journey_advance(2)
         assert fake_meter.counter("modulo_journey_advance_total").calls == [{"value": 2, "attributes": None}]
 
         reconcile_mod.record_journey_parse_failure("live", 1)
-        assert fake_meter.counter("modulo_journey_parse_failure_total").calls == [
-            {"value": 1, "attributes": {"writer": "live"}}
-        ]
+        assert fake_meter.counter("modulo_journey_parse_failure_total").calls == [{"value": 1, "attributes": {"writer": "live"}}]
 
         reconcile_mod.record_journey_finalise_attempt("live", 3)
-        assert fake_meter.counter("modulo_journey_finalise_attempt_total").calls == [
-            {"value": 3, "attributes": {"writer": "live"}}
-        ]
+        assert fake_meter.counter("modulo_journey_finalise_attempt_total").calls == [{"value": 3, "attributes": {"writer": "live"}}]
 
         reconcile_mod.record_self_report_refs_capped(4)
-        assert fake_meter.counter("modulo_journey_self_report_refs_capped_total").calls == [
-            {"value": 4, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_journey_self_report_refs_capped_total").calls == [{"value": 4, "attributes": None}]
 
         reconcile_mod.record_unmatched_self_report_refs(1)
-        assert fake_meter.counter("modulo_journey_unmatched_self_report_refs_total").calls == [
-            {"value": 1, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_journey_unmatched_self_report_refs_total").calls == [{"value": 1, "attributes": None}]
 
         reconcile_mod.record_journey_reconcile_drift(2, kind="stale")
-        assert fake_meter.counter("modulo_journey_reconcile_drift_total").calls == [
-            {"value": 2, "attributes": {"kind": "stale"}}
-        ]
+        assert fake_meter.counter("modulo_journey_reconcile_drift_total").calls == [{"value": 2, "attributes": {"kind": "stale"}}]
 
         reconcile_mod.record_refs_cap_dropped(3)
         assert fake_meter.counter("modulo_work_item_refs_cap_dropped_total").calls == [{"value": 3, "attributes": None}]
@@ -857,33 +839,21 @@ class TestReconcileMetrics:
     def test_agent_mint_counters_attribute(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod.record_refs_agent_minted(5)
-        assert fake_meter.counter("modulo_work_item_refs_agent_minted_total").calls == [
-            {"value": 5, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_agent_minted_total").calls == [{"value": 5, "attributes": None}]
         reconcile_mod.record_refs_agent_mint_suppressed_by_flag(2)
-        assert fake_meter.counter("modulo_work_item_refs_agent_mint_suppressed_by_flag_total").calls == [
-            {"value": 2, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_agent_mint_suppressed_by_flag_total").calls == [{"value": 2, "attributes": None}]
 
     def test_agent_mint_events_are_counted(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         """db-layer agent-mint emissions land on the counters (layering mirror)."""
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod._refs_event_sink("agent_minted", {"count": 3})
-        assert fake_meter.counter("modulo_work_item_refs_agent_minted_total").calls == [
-            {"value": 3, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_agent_minted_total").calls == [{"value": 3, "attributes": None}]
         reconcile_mod._refs_event_sink("agent_mint_suppressed_by_flag", {})
-        assert fake_meter.counter("modulo_work_item_refs_agent_mint_suppressed_by_flag_total").calls == [
-            {"value": 1, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_agent_mint_suppressed_by_flag_total").calls == [{"value": 1, "attributes": None}]
         reconcile_mod._refs_event_sink("agent_mint_budget_exceeded", {"count": 4})
-        assert fake_meter.counter("modulo_work_item_refs_agent_mint_budget_exceeded_total").calls == [
-            {"value": 4, "attributes": None}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_agent_mint_budget_exceeded_total").calls == [{"value": 4, "attributes": None}]
 
-    def test_ensure_early_return_when_handles_initialised(
-        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    def test_ensure_early_return_when_handles_initialised(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         reconcile_mod._ensure()
         reconcile_mod._ensure()
@@ -899,22 +869,16 @@ class TestReconcileMetrics:
         reconcile_mod._refs_event_sink("refs_cap_dropped", {})
         assert fake_meter.counter("modulo_work_item_refs_cap_dropped_total").calls == [{"value": 1, "attributes": None}]
 
-    def test_shadow_strip_and_assigned_source_events_are_routed(
-        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-    ) -> None:
+    def test_shadow_strip_and_assigned_source_events_are_routed(self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
         """The shadow-strip and assigned-source branches route to their counters."""
         monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
         monkeypatch.setattr(reconcile_mod, "_journey_advance_total", None)
         monkeypatch.setattr(reconcile_mod, "_refs_shadow_strip_hits_total", None)
         monkeypatch.setattr(reconcile_mod, "_refs_by_source_total", None)
         reconcile_mod._refs_event_sink(reconcile_mod.REFS_EVENT_SHADOW_STRIP_HIT, {"surface": "editor"})
-        assert fake_meter.counter("modulo_work_item_refs_shadow_strip_hits_total").calls == [
-            {"value": 1, "attributes": {"surface": "editor"}}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_shadow_strip_hits_total").calls == [{"value": 1, "attributes": {"surface": "editor"}}]
         reconcile_mod._refs_event_sink(reconcile_mod.REFS_EVENT_ASSIGNED_SOURCE, {"source": "api", "count": 2})
-        assert fake_meter.counter("modulo_work_item_refs_by_source_total").calls == [
-            {"value": 2, "attributes": {"source": "api"}}
-        ]
+        assert fake_meter.counter("modulo_work_item_refs_by_source_total").calls == [{"value": 2, "attributes": {"source": "api"}}]
         # An unknown event is ignored (forward compatibility), not an error.
         reconcile_mod._refs_event_sink("some_future_event", {"count": 1})
 

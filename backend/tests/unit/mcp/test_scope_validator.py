@@ -186,13 +186,9 @@ class TestCheckToolScope:
         assert (allowed, leg) == (True, None)
         # The grant-set leg runs BEFORE the system-admin leg, and the resolver
         # reports it — the ordering is observed, not assumed.
-        allowed, _key, leg = sv._resolve_tool_access_detail(
-            **base, grants=frozenset({"run.trigger"}), is_system_admin=False
-        )
+        allowed, _key, leg = sv._resolve_tool_access_detail(**base, grants=frozenset({"run.trigger"}), is_system_admin=False)
         assert (allowed, leg) == (False, sv._LEG_GRANTS)
-        allowed, _key, leg = sv._resolve_tool_access_detail(
-            **{**base, "tool": "not_a_real_tool"}, grants=None, is_system_admin=False
-        )
+        allowed, _key, leg = sv._resolve_tool_access_detail(**{**base, "tool": "not_a_real_tool"}, grants=None, is_system_admin=False)
         assert (allowed, leg) == (False, sv._LEG_UNMAPPED)
 
     @pytest.mark.parametrize(
@@ -903,14 +899,10 @@ class TestResolveToolAccessMatrix:
             # Org keys — org-wide, team-scoped AND run-scoped (all 'org') —
             # are DENIED caller-scoped tools, kill switch ON or OFF.
             pytest.param("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="orgkey-self-denied"),
-            pytest.param(
-                "org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="orgkey-self-denied-ks-elig"
-            ),
+            pytest.param("org", "api_key", _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="orgkey-self-denied-ks-elig"),
             # Unset key scope fails closed.
             pytest.param(None, None, _CALLER_SCOPED_TEST_TOOL, "admin", True, False, id="unset-self-failclosed"),
-            pytest.param(
-                None, None, _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="unset-self-failclosed-ks-elig"
-            ),
+            pytest.param(None, None, _CALLER_SCOPED_TEST_TOOL, "admin", False, False, id="unset-self-failclosed-ks-elig"),
             # ── role leg still applies to caller-scoped callers ─────────────
             # hitl_email.self will pin at viewer; an unknown role fails closed
             # regardless of key_scope.
@@ -1004,9 +996,7 @@ class TestResolveToolAccessMatrix:
         allowed, _ = resolve_tool_access("create_pipeline", None, "operator", "org", "api_key", None, True)
         assert allowed is True
         # Tool on the list → allowed.
-        allowed, _ = resolve_tool_access(
-            "create_pipeline", None, "operator", "org", "api_key", {"create_pipeline"}, True
-        )
+        allowed, _ = resolve_tool_access("create_pipeline", None, "operator", "org", "api_key", {"create_pipeline"}, True)
         assert allowed is True
         # Tool NOT on the list → denied despite a valid role.
         allowed, _key = resolve_tool_access("create_pipeline", None, "admin", "org", "api_key", {"create_agent"}, True)
@@ -1052,18 +1042,14 @@ class TestCallerScopeClassificationFailFast:
         this pins the invariant against silent regressions of the loop itself."""
         assert CALLER_SCOPE_REQUIREMENTS, "the pinned caller-scope map must not be empty"
         for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
-            assert classification in VALID_CALLER_SCOPE_CLASSIFICATIONS, (
-                f"caller-scope pin '{tool}' = '{classification}' is out of vocabulary"
-            )
+            assert classification in VALID_CALLER_SCOPE_CLASSIFICATIONS, f"caller-scope pin '{tool}' = '{classification}' is out of vocabulary"
 
     def test_classify_caller_scope_raises_on_misspelled_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch_misspelled_classification(monkeypatch)
         with pytest.raises(MCPConfigurationError, match="orgonly"):
             classify_caller_scope("create_pipeline", TOOL_SCOPE_REQUIREMENTS["create_pipeline"])
 
-    def test_resolver_propagates_configuration_error_on_misspelled_classification(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_resolver_propagates_configuration_error_on_misspelled_classification(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``resolve_tool_access`` must RAISE, not fall through to 'any' (a
         misspelled classification silently widening access is the failure mode
         this fail-fast exists to prevent)."""
@@ -1176,9 +1162,7 @@ class TestCheckToolScopeDelegation:
             check_tool_scope("admin", "trigger_pipeline", action="bogus")
         with pytest.raises(MCPAuthorizationError, match=r"Tool 'unknown_tool' is not registered in the scope policy"):
             check_tool_scope("admin", "unknown_tool")
-        with pytest.raises(
-            MCPAuthorizationError, match=r"Tool 'create_pipeline' is outside the node's allowed_tools scope"
-        ):
+        with pytest.raises(MCPAuthorizationError, match=r"Tool 'create_pipeline' is outside the node's allowed_tools scope"):
             check_tool_scope("admin", "create_pipeline", allowed_tools=["create_agent"])
         with pytest.raises(MCPAuthorizationError, match="Insufficient scope for 'MCP tool") as excinfo:
             check_tool_scope("viewer", "create_pipeline")
@@ -1215,9 +1199,7 @@ class TestCallerScopeClassification:
         _patch_caller_scoped_tool(monkeypatch)
         from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
-        assert classify_caller_scope(_CALLER_SCOPED_TEST_TOOL, TOOL_SCOPE_REQUIREMENTS[_CALLER_SCOPED_TEST_TOOL]) == (
-            "caller-scoped"
-        )
+        assert classify_caller_scope(_CALLER_SCOPED_TEST_TOOL, TOOL_SCOPE_REQUIREMENTS[_CALLER_SCOPED_TEST_TOOL]) == ("caller-scoped")
 
     def test_unmapped_mutating_is_org_only(self) -> None:
         for tool in ("create_pipeline", "delete_connector", "perform_housekeeping"):
@@ -1230,10 +1212,7 @@ class TestCallerScopeClassification:
     def test_discover_system_map_is_pinned_org_credential(self) -> None:
         """FAR-2288: the org-wide System Maps scan needs an org-scoped credential."""
         assert CALLER_SCOPE_REQUIREMENTS["discover_system_map"] == "org-credential"
-        assert (
-            classify_caller_scope("discover_system_map", TOOL_SCOPE_REQUIREMENTS["discover_system_map"])
-            == "org-credential"
-        )
+        assert classify_caller_scope("discover_system_map", TOOL_SCOPE_REQUIREMENTS["discover_system_map"]) == "org-credential"
 
     @pytest.mark.parametrize(
         ("key_scope", "auth_type", "has_team", "expected"),

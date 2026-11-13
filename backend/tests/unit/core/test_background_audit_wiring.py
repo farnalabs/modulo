@@ -222,9 +222,7 @@ class TestHitlParkSweepAudit:
         assert result == {"parked": 0}
         record.assert_not_awaited()
 
-    async def test_parks_in_earlier_orgs_are_audited_before_the_sweep_reraises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_parks_in_earlier_orgs_are_audited_before_the_sweep_reraises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A sweep that fails partway still changed run state — the landed
         parks must be recorded before ``HitlParkError`` propagates."""
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
@@ -243,9 +241,7 @@ class TestHitlParkSweepAudit:
         record.assert_awaited_once()
         assert record.await_args.args[1] == [(_RUN, _ORG)]
 
-    async def test_audit_failure_never_fails_the_sweep(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_audit_failure_never_fails_the_sweep(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
         engine = _ParkEngine([_ORG], {_ORG: [_parked_row()]})
 
@@ -443,13 +439,9 @@ class TestRetentionPurgeAudit:
         app_factory, _app_session = _sessionmaker_like(MagicMock())
 
         with ExitStack() as stack:
-            for entry in _retention_patches(
-                deleted=7, targets={_ORG: 7}, system_factory=system_factory, app_factory=app_factory
-            ):
+            for entry in _retention_patches(deleted=7, targets={_ORG: 7}, system_factory=system_factory, app_factory=app_factory):
                 stack.enter_context(entry)
-            append = stack.enter_context(
-                patch.object(background, "append_background_audit_event", new=AsyncMock(return_value=True))
-            )
+            append = stack.enter_context(patch.object(background, "append_background_audit_event", new=AsyncMock(return_value=True)))
             result = await sw.retention_cleanup({})
 
         assert result["deleted"] == 7
@@ -467,9 +459,7 @@ class TestRetentionPurgeAudit:
         with ExitStack() as stack:
             for entry in _retention_patches(deleted=0, targets={}, system_factory=system_factory):
                 stack.enter_context(entry)
-            append = stack.enter_context(
-                patch.object(background, "append_background_audit_event", new=AsyncMock(return_value=True))
-            )
+            append = stack.enter_context(patch.object(background, "append_background_audit_event", new=AsyncMock(return_value=True)))
             await sw.retention_cleanup({})
 
         append.assert_not_awaited()
@@ -493,12 +483,8 @@ class TestRetentionPurgeAudit:
         with ExitStack() as stack:
             stack.enter_context(patch.object(sw, "_make_system_session_factory", return_value=system_factory))
             stack.enter_context(patch.object(sw, "_make_session_factory", return_value=system_factory))
-            stack.enter_context(
-                patch.object(sw, "_retention_purge_targets", new=AsyncMock(side_effect=RuntimeError("count failed")))
-            )
-            stack.enter_context(
-                patch("farna.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=7)
-            )
+            stack.enter_context(patch.object(sw, "_retention_purge_targets", new=AsyncMock(side_effect=RuntimeError("count failed"))))
+            stack.enter_context(patch("farna.db.crud.run.batch_delete_old_terminal_runs", new_callable=AsyncMock, return_value=7))
             stack.enter_context(
                 patch(
                     "farna.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
@@ -754,9 +740,7 @@ class TestSuiteRunAudit:
             ("suite_run_created", "x", set()),
         ],
     )
-    async def test_missing_arguments_fail_closed(
-        self, event_type: str, actor_source: str, expected_states: set[str]
-    ) -> None:
+    async def test_missing_arguments_fail_closed(self, event_type: str, actor_source: str, expected_states: set[str]) -> None:
         factory, _ = _suite_factory(_suite_run())
         with pytest.raises(ValueError, match="record_suite_run_audit requires"):
             await background.record_suite_run_audit(

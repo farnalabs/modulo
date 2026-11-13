@@ -837,10 +837,7 @@ class ApplyExecutor:
         try:
             entity = _find(entities[KIND_SCHEMA], entry["name"])
             assert isinstance(entity, SchemaEntity)
-            if status == "created":
-                schema_id = self._create_schema(entity)
-            else:
-                schema_id = self._update_schema(entity, current_entities[KIND_SCHEMA][entity.name])
+            schema_id = self._create_schema(entity) if status == "created" else self._update_schema(entity, current_entities[KIND_SCHEMA][entity.name])
             existing_versions = {v["version"] for v in current_entities[KIND_SCHEMA][entity.name].get("versions") or []} if status == "updated" else set()
             self._apply_schema_versions(entity, schema_id, existing_versions, report)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
@@ -941,14 +938,7 @@ class ApplyExecutor:
         try:
             entity = _find(entities[KIND_BACKEND], entry["name"])
             assert isinstance(entity, ModelBackendEntity)
-            if status == "created":
-                backend_id = self._create_backend(entity, resolved_api_keys)
-            else:
-                backend_id = self._update_backend(
-                    entity,
-                    current_entities[KIND_BACKEND][entity.name],
-                    resolved_api_keys,
-                )
+            backend_id = self._create_backend(entity, resolved_api_keys) if status == "created" else self._update_backend(entity, current_entities[KIND_BACKEND][entity.name], resolved_api_keys)
             health_error = self._verify_backend_health(backend_id, entity.name)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)

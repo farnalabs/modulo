@@ -7,7 +7,7 @@ Replaces `frontend/scripts/generate-api-types.ps1` (invoked via
 Behaviour (mirrors the `schema-freshness` job in `.github/workflows/ci.yml`):
 1. Writes a temp Python script that imports ``farna.api.main`` and dumps
    ``app.openapi()`` to a temp JSON file, with DATABASE_URL / SECRET_KEY /
-   FERNET_KEY / MODULO_CSRF_ENABLED set to template values (so no real backend
+   FERNET_KEY / FARNA_CONTROL_CSRF_ENABLED set to template values (so no real backend
    or DB is needed to build the schema - same template env CI uses).
 2. Runs it from backend/ with the backend uv venv interpreter.
  3. Runs ``<pkg-manager> dlx openapi-typescript@7.13.0 <schema> --output <output>``
@@ -61,7 +61,7 @@ _TEMPLATE_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite:///TEMPLATE_DB",
     "SECRET_KEY": "a" * 32,
     "FERNET_KEY": "b" * 32,
-    "MODULO_CSRF_ENABLED": "false",
+    "FARNA_CONTROL_CSRF_ENABLED": "false",
 }
 
 
@@ -137,7 +137,7 @@ def _generate_schema(tempdir: str) -> tuple[int, str]:
         f'os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///{db_path.replace(os.sep, "/")}"\n'
         f'os.environ["SECRET_KEY"] = "{_TEMPLATE_ENV["SECRET_KEY"]}"\n'
         f'os.environ["FERNET_KEY"] = "{_TEMPLATE_ENV["FERNET_KEY"]}"\n'
-        f'os.environ["MODULO_CSRF_ENABLED"] = "{_TEMPLATE_ENV["MODULO_CSRF_ENABLED"]}"\n'
+        f'os.environ["FARNA_CONTROL_CSRF_ENABLED"] = "{_TEMPLATE_ENV["FARNA_CONTROL_CSRF_ENABLED"]}"\n'
         "from farna.api.main import app\n"
         f'with open(r"{schema_path.replace(os.sep, "/")}", "w", encoding="utf-8") as f:\n'
         "    json.dump(app.openapi(), f, ensure_ascii=False)\n"

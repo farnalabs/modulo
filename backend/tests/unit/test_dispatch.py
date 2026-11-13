@@ -194,9 +194,7 @@ class TestDispatchRunRouting:
             _enqueue_patch(return_value=(JOB_ID, False)),
             patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
         ):
-            outcome, job_id = await dispatch.dispatch_run(
-                RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"}
-            )
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID, job_type="resume_run", resume_data={"action": "approved"})
 
         assert outcome == "enqueued"
         assert job_id == JOB_ID
@@ -957,9 +955,7 @@ class TestErrorSourceEnum:
         from farna.db.models import Base
 
         table = Base.metadata.tables["error_events"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_source"
-        )
+        check = next(c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_source")
         sql = str(check.sqltext)
         assert "'saq'" in sql
         assert "'celery'" in sql
@@ -1696,9 +1692,7 @@ class TestWritersBoundTheirRowLockWait:
         update_at = [i for i, sql in enumerate(session.statements) if update_marker in sql]
         assert bound_at, f"no transaction-local lock_timeout bound issued; statements={session.statements}"
         assert update_at, f"the writer's UPDATE never ran; statements={session.statements}"
-        assert bound_at[0] < update_at[0], (
-            f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
-        )
+        assert bound_at[0] < update_at[0], f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
         # SET LOCAL semantics: set_config(..., is_local => true) — the bound is
         # transaction-scoped and reverts on COMMIT/ROLLBACK, so it can never
         # leak onto a pooled connection's later statements.

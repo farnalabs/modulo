@@ -23,9 +23,7 @@ pytestmark = [
 ]
 
 
-async def _seed_due_cron_trigger(
-    db_engine: Any, org_id: uuid.UUID, account_id: uuid.UUID, cron_expression: str = "*/30 * * * * *"
-) -> uuid.UUID:
+async def _seed_due_cron_trigger(db_engine: Any, org_id: uuid.UUID, account_id: uuid.UUID, cron_expression: str = "*/30 * * * * *") -> uuid.UUID:
     from sqlalchemy import NullPool, text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -41,11 +39,7 @@ async def _seed_due_cron_trigger(
         pipeline_name = f"saq-test-{uuid.uuid4().hex[:10]}"
         async with eng.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                    "run_context_defaults, visibility, max_concurrent_runs) "
-                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, run_context_defaults, visibility, max_concurrent_runs) VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"),
                 {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
             )
             await conn.execute(
@@ -85,9 +79,7 @@ async def _count_trigger_jobs(redis_url: str, trigger_id: uuid.UUID) -> int:
 
 
 @pytest.mark.asyncio
-async def test_two_concurrent_ticks_enqueue_exactly_one_fire_job(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_two_concurrent_ticks_enqueue_exactly_one_fire_job(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     # Yearly cron: the advanced next_fire_at lands a year out, so a straggler
     # tick in the same test window can never legitimately re-fire it.
     trigger_id = await _seed_due_cron_trigger(db_engine, test_org, test_user, cron_expression="0 0 1 1 *")
@@ -104,9 +96,7 @@ async def test_two_concurrent_ticks_enqueue_exactly_one_fire_job(
 
 
 @pytest.mark.asyncio
-async def test_next_tick_fires_again_after_first_epoch_consumed(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_next_tick_fires_again_after_first_epoch_consumed(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """After the first epoch's advance, the same row is not due again until the
     advanced next_fire_at elapses - a follow-up tick must NOT double-fire."""
     trigger_id = await _seed_due_cron_trigger(db_engine, test_org, test_user, cron_expression="0 0 1 1 *")
@@ -120,9 +110,7 @@ async def test_next_tick_fires_again_after_first_epoch_consumed(
 
 
 @pytest.mark.asyncio
-async def test_paused_org_skips_enqueue_but_advances_next_fire(
-    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_paused_org_skips_enqueue_but_advances_next_fire(saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """Org-wide pause: SKIP-not-defer — zero fire jobs enqueued for the paused
     org but next_fire_at still advances (no catch-up storm on unpause)."""
     from datetime import UTC, datetime

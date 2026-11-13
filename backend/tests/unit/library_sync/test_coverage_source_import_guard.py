@@ -120,7 +120,5 @@ def test_single_module_cov_source_import_does_not_strand_pydantic_root_model(
         "The tests/conftest.py pydantic.root_model residency guard must keep "
         "working. Subprocess output:\n" + output
     )
-    assert "MCP_TYPES_IMPORT_OK" in output, (
-        f"Subprocess did not reach the mcp.types import (rc={proc.returncode}).\n{output}"
-    )
+    assert "MCP_TYPES_IMPORT_OK" in output, f"Subprocess did not reach the mcp.types import (rc={proc.returncode}).\n{output}"
     assert proc.returncode == 0, f"Subprocess exited {proc.returncode} (expected 0).\n{output}"

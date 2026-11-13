@@ -437,9 +437,7 @@ class TestSweepWiresTheReapArm:
         await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
 
         reap_index = next(i for i, sql in enumerate(statements) if ":dead_heartbeat_cutoff" in sql)
-        legacy_index = next(
-            i for i, sql in enumerate(statements) if "status = 'running'" in sql and ":stale_seconds" in sql
-        )
+        legacy_index = next(i for i, sql in enumerate(statements) if "status = 'running'" in sql and ":stale_seconds" in sql)
         assert reap_index < legacy_index
 
     async def test_reap_binds_the_short_bound_as_datetimes(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -463,14 +461,10 @@ class TestSweepWiresTheReapArm:
         assert isinstance(completed_at, datetime)
         assert (completed_at - cutoff).total_seconds() == ra.DEAD_HEARTBEAT_REAP_FLOOR_SECONDS
 
-    async def test_non_node_started_returned_rows_are_not_counted_as_reaped(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_non_node_started_returned_rows_are_not_counted_as_reaped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Defence-in-depth against a row source that omits ``dispatch_phase``."""
         statements: list[str] = []
-        engine = _SweepEngine(
-            statements, [SimpleNamespace(id=uuid.uuid4(), organisation_id=ORG_ID, pipeline_id=PIPELINE_ID)]
-        )
+        engine = _SweepEngine(statements, [SimpleNamespace(id=uuid.uuid4(), organisation_id=ORG_ID, pipeline_id=PIPELINE_ID)])
         monkeypatch.setattr(
             ra,
             "get_settings",

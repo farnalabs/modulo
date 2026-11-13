@@ -1022,9 +1022,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
         ({}, {"dedup_exists": True}, None, lambda: str(int(time.time())), DuplicateWebhookError, None),
     ],
 )
-async def test_handle_webhook_validation_raises(
-    trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, extra_assert
-) -> None:
+async def test_handle_webhook_validation_raises(trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, extra_assert) -> None:
     session_kwargs = dict(session_overrides)
     session_trigger = session_kwargs.pop("trigger", None)
     trigger = _make_trigger(**trigger_overrides)
@@ -1119,9 +1117,7 @@ async def test_handle_webhook_undecryptable_hmac_secret_fails_closed() -> None:
         ),
     ],
 )
-async def test_handle_webhook_logs_trigger_event(
-    trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, expected_vr
-) -> None:
+async def test_handle_webhook_logs_trigger_event(trigger_overrides, session_overrides, hmac_sig, mod_ts_factory, expected_exc, expected_vr) -> None:
     trigger = _make_trigger(**trigger_overrides)
     session = _make_session(trigger=trigger, **session_overrides)
     mod_ts = mod_ts_factory() if callable(mod_ts_factory) else mod_ts_factory
@@ -1300,11 +1296,7 @@ class TestCiFailureCoalesce:
         assert run1.id == run_mock.id
         assert te1.validation_result == "accepted"
         # The suppressed delivery was AUDITED (coalesced event), not silently dropped.
-        found_coalesced = any(
-            getattr(c[0][0], "validation_result", None) == "coalesced"
-            and str(getattr(c[0][0], "error_detail", "")).startswith("ci_failure_coalesced:ci-failure:pr:777")
-            for c in session2.add.call_args_list
-        )
+        found_coalesced = any(getattr(c[0][0], "validation_result", None) == "coalesced" and str(getattr(c[0][0], "error_detail", "")).startswith("ci_failure_coalesced:ci-failure:pr:777") for c in session2.add.call_args_list)
         assert found_coalesced
         # Both deliveries used the SAME dedup marker — a SHA-256 digest of the
         # stable (pr, sha) identity. The readable key never touches the
@@ -1553,9 +1545,7 @@ async def test_handle_webhook_event_type_not_accepted() -> None:
             snapshot_id=_SNAP,
         )
 
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_handle_webhook_event_type_accepted_passes() -> None:
@@ -1647,10 +1637,7 @@ async def test_handle_webhook_event_value_filter_rejects() -> None:
     # Rejected before run creation and before dedup.
     mock_create.assert_not_called()
     mock_dedup.assert_not_called()
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
-        for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
@@ -1674,10 +1661,7 @@ async def test_handle_webhook_event_value_filter_missing_key_rejects() -> None:
         )
 
     mock_create.assert_not_called()
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
-        for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_handle_webhook_event_value_filter_matches_passes() -> None:
@@ -1764,9 +1748,7 @@ async def test_handle_webhook_rate_limit_exceeded() -> None:
     assert exc_info.value.pipeline_id == trigger.pipeline_id
     assert exc_info.value.max_triggers == 1
     assert exc_info.value.window_seconds == 3600
-    rate_limited = [
-        c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None) == "rate_limited"
-    ]
+    rate_limited = [c[0][0] for c in session.add.call_args_list if getattr(c[0][0], "validation_result", None) == "rate_limited"]
     assert len(rate_limited) == 1
     from farna.core.trigger_engine.pre_guardrail import canonical_payload_hash
 
@@ -2148,10 +2130,7 @@ async def test_replay_event_value_filter_not_accepted() -> None:
             snapshot_id=_SNAP,
         )
     mock_create.assert_not_called()
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted"
-        for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "event_value_filter_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_replay_event_accepted_event_present_passes() -> None:

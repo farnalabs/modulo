@@ -300,9 +300,7 @@ def _make_many_teams_mock_session(team_count: int) -> AsyncMock:
         if "model_backends" in text:
             return _MockResult(scalar_one_val=0)
         if "FROM teams" in text:
-            return _MockResult(
-                rows=[_MockRow(id=uuid.UUID(int=i + 1), name=f"Team {i + 1}") for i in range(team_count)]
-            )
+            return _MockResult(rows=[_MockRow(id=uuid.UUID(int=i + 1), name=f"Team {i + 1}") for i in range(team_count)])
         if "archived_at" in text:
             return _MockResult(scalar_one_val=0)
         if "FROM eval_results" in text:
@@ -333,12 +331,8 @@ def _client_for_session(mock_session: AsyncMock, *, org_role: str = "admin") -> 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role)
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role=org_role)
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -361,9 +355,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -395,9 +387,7 @@ def period_client() -> Generator[Callable[..., TestClient], None, None]:
             account_id=_USER_ID,
             org_role="admin",
         )
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = True
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -434,9 +424,7 @@ def flag_off_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = False
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -583,9 +571,7 @@ class TestDashboardSummary:
             account_id=_USER_ID,
             org_role="admin",
         )
-        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         mock_plan = MagicMock()
         mock_plan.feature_enabled.return_value = True
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -637,11 +623,7 @@ class TestLoadConfigWarnings:
             {
                 "type": "assistant_provider_not_configured",
                 "severity": "low",
-                "message": (
-                    "Assistant is configured to use anthropic but no API key is set "
-                    "for that provider. Assistant will auto-detect the first configured "
-                    "provider. Change the default in Assistant Config."
-                ),
+                "message": ("Assistant is configured to use anthropic but no API key is set for that provider. Assistant will auto-detect the first configured provider. Change the default in Assistant Config."),
                 "action_label": "Configure anthropic",
                 "action_url": "/admin/model-backends",
             }
@@ -719,9 +701,7 @@ class TestDashboardSummaryPeriod:
         assert response.status_code == 200
         assert "period" not in response.json()
 
-    def test_flag_off_skips_period_and_uses_flag_scoped_cache_key(
-        self, flag_off_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_flag_off_skips_period_and_uses_flag_scoped_cache_key(self, flag_off_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-92 flag-off, end to end: no ``period`` block AND a flag-scoped key.
 
         Runs the REAL cache helpers against a fake Redis so the key the route
@@ -774,9 +754,7 @@ class TestDashboardSummaryPeriod:
 
     def test_delta_pct_null_when_current_null(self, period_client: Callable[..., TestClient]) -> None:
         # Empty current window → success_rate has no value → delta is undefined.
-        client = period_client(
-            current_facts={"total": 0, "active_pipelines": 0, "tokens": 0, "avg_duration_ms": None, "complete": 0}
-        )
+        client = period_client(current_facts={"total": 0, "active_pipelines": 0, "tokens": 0, "avg_duration_ms": None, "complete": 0})
         metrics = self._period_metrics(client)
         assert metrics["success_rate"]["current"] is None
         assert metrics["success_rate"]["delta_pct"] is None
@@ -788,9 +766,7 @@ class TestDashboardSummaryPeriod:
         assert metrics["eval_pass_rate"]["delta_pct"] is None
 
     def test_success_rate_is_complete_over_total(self, period_client: Callable[..., TestClient]) -> None:
-        client = period_client(
-            current_facts={"total": 10, "active_pipelines": 3, "tokens": 500, "avg_duration_ms": 200.0, "complete": 8}
-        )
+        client = period_client(current_facts={"total": 10, "active_pipelines": 3, "tokens": 500, "avg_duration_ms": 200.0, "complete": 8})
         metrics = self._period_metrics(client)
         assert metrics["total_runs"]["current"] == 10
         assert metrics["active_pipelines"]["current"] == 3
@@ -1039,9 +1015,7 @@ class TestFactsWindowRunDate:
     async def test_facts_status_counts_filters_on_run_date(self) -> None:
         start = date(2026, 1, 1)
         end = date(2026, 1, 8)
-        session = _CapturingSession(
-            _MockResult(rows=[_MockRow(status="complete", cnt=3), _MockRow(status="failed", cnt=1)])
-        )
+        session = _CapturingSession(_MockResult(rows=[_MockRow(status="complete", cnt=3), _MockRow(status="failed", cnt=1)]))
         out = await _facts_status_counts(session, _ORG_ID, start, end)
         assert out == {"complete": 3, "failed": 1}
         sql = self._compiled_sql(session.statements[0])
@@ -1239,9 +1213,7 @@ class TestTrendQueriesOrgLevelScope:
         finally:
             await engine.dispose()
 
-    async def _seed_org_and_team_rows(
-        self, maker: async_sessionmaker[AsyncSession], org_id: uuid.UUID, run_date: date
-    ) -> None:
+    async def _seed_org_and_team_rows(self, maker: async_sessionmaker[AsyncSession], org_id: uuid.UUID, run_date: date) -> None:
         """Seed the row pair ``check_and_record_spend`` leaves for one date.
 
         The org-level row already contains the team-owned run's count/spend;
@@ -1282,9 +1254,7 @@ class TestTrendQueriesOrgLevelScope:
         assert entry["run_count"] == self._ORG_RUN_COUNT
         assert entry["token_spend_usd"] == 5.0
 
-    async def test_load_trend_run_and_spend_is_org_level_scoped(
-        self, ledger_maker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_load_trend_run_and_spend_is_org_level_scoped(self, ledger_maker: async_sessionmaker[AsyncSession]) -> None:
         org_id = uuid.uuid4()
         today = datetime.now(UTC).date()
         await self._seed_org_and_team_rows(ledger_maker, org_id, today)

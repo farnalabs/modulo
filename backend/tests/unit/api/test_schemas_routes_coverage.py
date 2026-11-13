@@ -117,14 +117,10 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     # apply-moved routes (FAR-681) resolve via get_current_tenant_user_or_api_key;
     # both stacks share the same admin principal in these endpoint tests.
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -295,9 +291,7 @@ def test_move_schema_to_folder_happy_path(client: tuple[TestClient, AsyncMock]) 
 def test_move_schema_to_folder_invalid_returns_422(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     with ExitStack() as stack:
-        stack.enter_context(
-            patch(f"{_PREFIX}move_schema_to_folder", new=AsyncMock(side_effect=ValueError("folder mismatch")))
-        )
+        stack.enter_context(patch(f"{_PREFIX}move_schema_to_folder", new=AsyncMock(side_effect=ValueError("folder mismatch"))))
         stack.enter_context(patch(f"{_PREFIX}_assert_owns_schema", new=AsyncMock(return_value=_make_schema())))
         stack.enter_context(patch(f"{_PREFIX}set_rls_org", new_callable=AsyncMock))
         resp = http.patch(f"/api/v1/schemas/{_SCHEMA_ID}/folder", json={"folder_id": str(_FOLDER_ID)})
@@ -970,11 +964,7 @@ def test_import_invalid_json_schema_returns_422(client: tuple[TestClient, AsyncM
 
 def test_import_happy_path_extracts_fields(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
-    content = (
-        '{"title": "Person", "description": "A person", "properties": '
-        '{"name": {"type": "string", "description": "Full name"}, "age": {"type": "integer"}}, '
-        '"required": ["name"]}'
-    )
+    content = '{"title": "Person", "description": "A person", "properties": {"name": {"type": "string", "description": "Full name"}, "age": {"type": "integer"}}, "required": ["name"]}'
 
     resp = http.post("/api/v1/schemas/import", json={"content": content})
 

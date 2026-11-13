@@ -60,19 +60,11 @@ def _frontend_files_text() -> str:
 
 
 def _is_enforced_in_backend(name: str, backend_text: str) -> bool:
-    return (
-        f'require_feature("{name}")' in backend_text
-        or f'feature_enabled("{name}")' in backend_text
-        or f'get_flag("{name}")' in backend_text
-    )
+    return f'require_feature("{name}")' in backend_text or f'feature_enabled("{name}")' in backend_text or f'get_flag("{name}")' in backend_text
 
 
 def _is_enforced_in_frontend(name: str, frontend_text: str) -> bool:
-    return (
-        f'feature-name="{name}"' in frontend_text
-        or f'featureEnabled("{name}")' in frontend_text
-        or f"featureEnabled('{name}')" in frontend_text
-    )
+    return f'feature-name="{name}"' in frontend_text or f'featureEnabled("{name}")' in frontend_text or f"featureEnabled('{name}')" in frontend_text
 
 
 def _unenforced_team_flags() -> set[str]:
@@ -107,9 +99,7 @@ def test_known_unenforced_set_matches_catalog_gap() -> None:
     """
     team_flags = _team_flag_names()
     unknown_known = KNOWN_UNENFORCED_TEAM_FLAGS - team_flags
-    assert not unknown_known, (
-        f"KNOWN_UNENFORCED_TEAM_FLAGS references flags not in the catalog: {sorted(unknown_known)}"
-    )
+    assert not unknown_known, f"KNOWN_UNENFORCED_TEAM_FLAGS references flags not in the catalog: {sorted(unknown_known)}"
 
     actually_unenforced = set()
     backend_text = _backend_files_text()
@@ -120,8 +110,4 @@ def test_known_unenforced_set_matches_catalog_gap() -> None:
         if not backend and not frontend:
             actually_unenforced.add(name)
 
-    assert actually_unenforced == KNOWN_UNENFORCED_TEAM_FLAGS, (
-        f"Gap mismatch: expected unenforced set {sorted(KNOWN_UNENFORCED_TEAM_FLAGS)} "
-        f"but catalog shows {sorted(actually_unenforced)}. If a flag was enforced, remove it "
-        "from KNOWN_UNENFORCED_TEAM_FLAGS. If a new flag is unenforced, add it."
-    )
+    assert actually_unenforced == KNOWN_UNENFORCED_TEAM_FLAGS, f"Gap mismatch: expected unenforced set {sorted(KNOWN_UNENFORCED_TEAM_FLAGS)} but catalog shows {sorted(actually_unenforced)}. If a flag was enforced, remove it from KNOWN_UNENFORCED_TEAM_FLAGS. If a new flag is unenforced, add it."

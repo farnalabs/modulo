@@ -130,9 +130,7 @@ def test_effective_team_role_is_capped_by_both_roles(org_role: str, team_role: s
     effective = get_effective_team_role(org_role, team_role)
     assert effective in TEAM_ROLE_HIERARCHY
     assert team_role_level(effective) <= org_role_level(org_role), f"effective {effective} exceeds org role {org_role}"
-    assert team_role_level(effective) <= team_role_level(team_role), (
-        f"effective {effective} exceeds team role {team_role}"
-    )
+    assert team_role_level(effective) <= team_role_level(team_role), f"effective {effective} exceeds team role {team_role}"
 
 
 @settings(
@@ -240,17 +238,12 @@ def test_tenant_filter_injection_invariant(
     _inject_tenant_filter(state)
 
     if expect_injection:
-        assert state.statement.where.call_count == org_scoped_count, (
-            f"expected {org_scoped_count} tenant predicate(s) for kind={kind} "
-            f"entities={entities!r}, got {state.statement.where.call_count}"
-        )
+        assert state.statement.where.call_count == org_scoped_count, f"expected {org_scoped_count} tenant predicate(s) for kind={kind} entities={entities!r}, got {state.statement.where.call_count}"
         predicate = state.statement.where.call_args[0][0]
         assert predicate.left.name == "organisation_id"
         assert predicate.right.value == org_id
     else:
-        assert state.statement.where.call_count == 0, (
-            f"unexpected tenant injection for org_id={org_id} kind={kind} entities={entities!r}"
-        )
+        assert state.statement.where.call_count == 0, f"unexpected tenant injection for org_id={org_id} kind={kind} entities={entities!r}"
 
 
 def test_no_org_context_never_injects() -> None:

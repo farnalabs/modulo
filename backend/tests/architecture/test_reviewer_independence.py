@@ -102,16 +102,7 @@ class TestLlmJudgeSoftSignal:
         assert _CONTENT_BEGIN == "---BEGIN EVALUATED CONTENT---"
         assert _CONTENT_END == "---END EVALUATED CONTENT---"
 
-        test_content = (
-            f"{_OUTER_DELIMITER}\n"
-            f"{_GUARD_INSTRUCTION}\n"
-            f"{_INNER_DELIMITER}\n"
-            f"{_CONTENT_BEGIN}\n"
-            f"hello\n"
-            f"{_CONTENT_END}\n"
-            f"{_INNER_DELIMITER}\n"
-            f"{_OUTER_DELIMITER}"
-        )
+        test_content = f"{_OUTER_DELIMITER}\n{_GUARD_INSTRUCTION}\n{_INNER_DELIMITER}\n{_CONTENT_BEGIN}\nhello\n{_CONTENT_END}\n{_INNER_DELIMITER}\n{_OUTER_DELIMITER}"
         stripped = _DELIMITER_STRIP_PATTERN.sub("", test_content)
         assert "===EVAL BOUNDARY===" not in stripped
         assert "---CONTENT SEPARATOR---" not in stripped

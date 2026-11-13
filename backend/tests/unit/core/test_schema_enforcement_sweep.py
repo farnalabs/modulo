@@ -25,15 +25,7 @@ from farna.db.models.run_daily_facts import RunDailyFact
 from farna.db.models.run_node_outputs import RunNodeOutput
 
 # The migration file (structural: no DB needed).
-_MIGRATION_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "farna"
-    / "db"
-    / "migrations"
-    / "versions"
-    / "0251_schema_enforcement_telemetry.py"
-)
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0251_schema_enforcement_telemetry.py"
 
 # The sweep module source.
 _SWEEP_MODULE = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "analytics" / "enforcement_sweep.py"
@@ -93,10 +85,7 @@ def test_sweep_accepts_factory_not_session() -> None:
     sig = inspect.signature(sweep_schema_enforcement_facts)
     params = list(sig.parameters.keys())
     # The first parameter must be named 'factory', not 'session'.
-    assert params[0] == "factory", (
-        f"sweep_schema_enforcement_facts first param is '{params[0]}', "
-        f"expected 'factory' — the production caller passes a session factory"
-    )
+    assert params[0] == "factory", f"sweep_schema_enforcement_facts first param is '{params[0]}', expected 'factory' — the production caller passes a session factory"
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +280,7 @@ class TestSweepSchemaEnforcementFacts:
             assert corrected_count >= _SWEEP_MAX_PER_TICK
 
     @pytest.mark.anyio
-    async def test_exception_logs_at_error_not_warning(
-        self, factory: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_exception_logs_at_error_not_warning(self, factory: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture) -> None:
         """A structural failure (e.g. wrong interface) logs at ERROR level.
 
         The old code logged at WARNING which silently hid the factory-vs-session

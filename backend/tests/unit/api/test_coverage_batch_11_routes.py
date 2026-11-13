@@ -50,9 +50,7 @@ def _tenant(*, role: str = "admin") -> TenantPrincipal:
 
 
 def _auth(*, role: str = "admin", is_sys: bool = True) -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(
-        username=role, organisation_id=ORG_ID, account_id=USER_ID, org_role=role, is_system_admin=is_sys
-    )
+    return AuthenticatedPrincipal(username=role, organisation_id=ORG_ID, account_id=USER_ID, org_role=role, is_system_admin=is_sys)
 
 
 def _result(
@@ -214,9 +212,7 @@ async def test_contributions_all_endpoints_and_error_handlers() -> None:
         assert (await contributions.create_contribution(req, session, principal)).id == prim.id
         assert (await contributions.submit_for_review(prim.id, session, principal)).id == prim.id
         assert (await contributions.publish_contribution_endpoint(prim.id, session, principal)).id == prim.id
-        assert (
-            await contributions.submit_contribution_version_endpoint(prim.id, req, session, principal)
-        ).id == prim.id
+        assert (await contributions.submit_contribution_version_endpoint(prim.id, req, session, principal)).id == prim.id
         assert (await contributions.list_contribution_versions_endpoint(prim.id, session, principal)).total == 1
 
     calls = (
@@ -265,9 +261,7 @@ async def test_error_notification_rules_handlers_and_branches() -> None:
     session = _session(results=[_result(scalars=[rule]), _result(scalar_one=1)])
 
     with patch.object(error_notification_rules, "set_rls_org", AsyncMock()):
-        listed = await error_notification_rules.list_notification_rules(
-            limit=20, offset=0, session=session, principal=principal
-        )
+        listed = await error_notification_rules.list_notification_rules(limit=20, offset=0, session=session, principal=principal)
         assert listed["total"] == 1
 
     session.execute = AsyncMock(return_value=_result(scalar_one=0))
@@ -332,22 +326,16 @@ async def test_error_notification_rules_handlers_and_branches() -> None:
 
     # Tier update check refusal
     with pytest.raises(HTTPException) as caught:
-        error_notification_rules._validate_webhook_tier_for_update(
-            error_notification_rules.ErrorNotificationRuleUpdate(action_type="webhook"), False
-        )
+        error_notification_rules._validate_webhook_tier_for_update(error_notification_rules.ErrorNotificationRuleUpdate(action_type="webhook"), False)
     assert caught.value.status_code == 402
     with pytest.raises(HTTPException) as caught:
-        error_notification_rules._validate_webhook_tier_for_update(
-            error_notification_rules.ErrorNotificationRuleUpdate(webhook_url="https://x"), False
-        )
+        error_notification_rules._validate_webhook_tier_for_update(error_notification_rules.ErrorNotificationRuleUpdate(webhook_url="https://x"), False)
     assert caught.value.status_code == 402
 
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     with patch.object(error_notification_rules, "set_rls_org", AsyncMock()):
         with pytest.raises(HTTPException) as caught:
-            await error_notification_rules.update_notification_rule(
-                rule.id, error_notification_rules.ErrorNotificationRuleUpdate(name="u"), session, principal, plan
-            )
+            await error_notification_rules.update_notification_rule(rule.id, error_notification_rules.ErrorNotificationRuleUpdate(name="u"), session, principal, plan)
         assert caught.value.status_code == 404
         with pytest.raises(HTTPException) as caught:
             await error_notification_rules.delete_notification_rule(rule.id, session, principal)
@@ -357,12 +345,8 @@ async def test_error_notification_rules_handlers_and_branches() -> None:
     none_org_user = TenantPrincipal(username="u", organisation_id=None, account_id=USER_ID, org_role="admin")
     for call in (
         lambda: error_notification_rules.list_notification_rules(session=session, principal=none_org_user),
-        lambda: error_notification_rules.create_notification_rule(
-            error_notification_rules.ErrorNotificationRuleCreate(name="n"), session, none_org_user, plan
-        ),
-        lambda: error_notification_rules.update_notification_rule(
-            rule.id, error_notification_rules.ErrorNotificationRuleUpdate(name="n"), session, none_org_user, plan
-        ),
+        lambda: error_notification_rules.create_notification_rule(error_notification_rules.ErrorNotificationRuleCreate(name="n"), session, none_org_user, plan),
+        lambda: error_notification_rules.update_notification_rule(rule.id, error_notification_rules.ErrorNotificationRuleUpdate(name="n"), session, none_org_user, plan),
         lambda: error_notification_rules.delete_notification_rule(rule.id, session, none_org_user),
     ):
         with pytest.raises(HTTPException) as caught:
@@ -449,9 +433,7 @@ async def test_notifications_all_routes_and_error_mappings() -> None:
     session.execute = AsyncMock(return_value=_result(scalar_one_or_none=None))
     for call in (
         lambda: notifications.get_endpoint(ep.id, session, principal),
-        lambda: notifications.update_endpoint(
-            ep.id, notifications.NotificationEndpointUpdate(), session, principal, settings
-        ),
+        lambda: notifications.update_endpoint(ep.id, notifications.NotificationEndpointUpdate(), session, principal, settings),
         lambda: notifications.delete_endpoint(ep.id, session, principal),
         lambda: notifications.restore_endpoint(ep.id, session, principal),
     ):
@@ -556,9 +538,7 @@ async def test_admin_email_full_paths_and_error_mappings() -> None:
         assert caught.value.status_code == 404
 
         with pytest.raises(HTTPException) as caught:
-            await admin_email.admin_update_email_settings(
-                org_id, admin_email.EmailSettingsUpdate(), auth, session, _settings()
-            )
+            await admin_email.admin_update_email_settings(org_id, admin_email.EmailSettingsUpdate(), auth, session, _settings())
         assert caught.value.status_code == 404
 
     # DB error paths on get and update fetch
@@ -573,9 +553,7 @@ async def test_admin_email_full_paths_and_error_mappings() -> None:
         assert caught.value.status_code == expected
 
         with patch.object(admin_email, "set_rls_org", AsyncMock()), pytest.raises(HTTPException) as caught:
-            await admin_email.admin_update_email_settings(
-                org_id, admin_email.EmailSettingsUpdate(), auth, broken, _settings()
-            )
+            await admin_email.admin_update_email_settings(org_id, admin_email.EmailSettingsUpdate(), auth, broken, _settings())
         assert caught.value.status_code == expected
 
     # DB error on second transaction of update
@@ -590,9 +568,7 @@ async def test_admin_email_full_paths_and_error_mappings() -> None:
             patch.object(admin_email, "update_org_settings_patch", AsyncMock(side_effect=exc)),
             pytest.raises(HTTPException) as caught,
         ):
-            await admin_email.admin_update_email_settings(
-                org_id, admin_email.EmailSettingsUpdate(smtp_host="h"), auth, session, _settings()
-            )
+            await admin_email.admin_update_email_settings(org_id, admin_email.EmailSettingsUpdate(smtp_host="h"), auth, session, _settings())
         assert caught.value.status_code == expected
 
     # test email helpers
@@ -606,9 +582,7 @@ async def test_admin_email_full_paths_and_error_mappings() -> None:
         assert caught.value.status_code == expected
 
     with pytest.raises(HTTPException):
-        admin_email._validated_test_email_config(
-            SimpleNamespace(settings_json={}), admin_email.TestEmailRequest(to="x@test.com")
-        )
+        admin_email._validated_test_email_config(SimpleNamespace(settings_json={}), admin_email.TestEmailRequest(to="x@test.com"))
 
     with patch.object(admin_email, "decode_stored_secret_scoped", AsyncMock(side_effect=RuntimeError("x"))):
         with pytest.raises(HTTPException) as caught:
@@ -637,9 +611,7 @@ async def test_admin_system_config_full_paths_and_error_mappings() -> None:
     assert listed[0].key == "k"
 
     with patch.object(admin_system_config, "update_config", AsyncMock(return_value=entry)):
-        set_res = await admin_system_config.admin_set_config(
-            "k", admin_system_config.SetConfigRequest(value="v"), principal, session
-        )
+        set_res = await admin_system_config.admin_set_config("k", admin_system_config.SetConfigRequest(value="v"), principal, session)
         assert set_res.key == "k"
 
     with patch.object(admin_system_config, "delete_config", AsyncMock(return_value=True)):

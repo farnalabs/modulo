@@ -1228,9 +1228,7 @@ def test_restore_non_admin_member_restores_a_soft_deleted_team_map() -> None:
     """
     session = _team_gate_session(is_member_of={_TEAM_ID}, row_deleted=True)
     with _gate_client(session, org_role="operator") as (http, harness):
-        harness.stub(
-            "restore_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
-        )
+        harness.stub("restore_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team")))
         resp = http.post(f"{_BASE}/{_MAP_ID}/restore")
 
     assert resp.status_code == 200, resp.text
@@ -1256,9 +1254,7 @@ def test_restore_non_member_is_denied_403() -> None:
 def test_get_team_private_map_member_is_allowed() -> None:
     session = _team_gate_session(is_member_of={_TEAM_ID})
     with _gate_client(session, org_role="operator") as (http, harness):
-        harness.stub(
-            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
-        )
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team")))
         resp = http.get(f"{_BASE}/{_MAP_ID}")
 
     assert resp.status_code == 200, resp.text
@@ -1317,9 +1313,7 @@ def test_update_transfer_to_a_foreign_team_is_403_before_the_write() -> None:
     """
     session = _team_gate_session(is_member_of={_TEAM_ID})
     with _gate_client(session, org_role="operator") as (http, harness):
-        harness.stub(
-            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
-        )
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team")))
         updater = AsyncMock(return_value=_map_row())
         harness.stub("update_lifecycle_map", updater)
         resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
@@ -1333,12 +1327,8 @@ def test_update_same_team_transfer_still_succeeds() -> None:
     """The validator must not blanket-block: a transfer to the caller's own team lands."""
     session = _team_gate_session(is_member_of={_TEAM_ID})
     with _gate_client(session, org_role="operator") as (http, harness):
-        harness.stub(
-            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
-        )
-        harness.stub(
-            "update_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
-        )
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team")))
+        harness.stub("update_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team")))
         resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_TEAM_ID)})
 
     assert resp.status_code == 200, resp.text
@@ -1441,9 +1431,7 @@ def test_update_non_42501_programming_error_still_maps_to_501(client: tuple[Test
     501 "migration required" — only ``insufficient_privilege`` becomes 403.
     """
     http, harness = client
-    harness.stub(
-        "update_lifecycle_map", AsyncMock(side_effect=ProgrammingError("SELECT nope", {}, _rls_denial("42P01")))
-    )
+    harness.stub("update_lifecycle_map", AsyncMock(side_effect=ProgrammingError("SELECT nope", {}, _rls_denial("42P01"))))
 
     resp = http.put(f"{_BASE}/{_MAP_ID}", json={"name": "Renamed"})
 

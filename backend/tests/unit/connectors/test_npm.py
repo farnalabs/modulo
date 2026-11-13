@@ -70,9 +70,7 @@ async def test_query_package_version(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="package_version", filters={"package": "express", "version": "4.18.2"})
-    )
+    result = await connector.query(ConnectorQuery(resource="package_version", filters={"package": "express", "version": "4.18.2"}))
     assert len(result.records) == 1
     assert result.records[0]["version"] == "4.18.2"
 
@@ -199,9 +197,7 @@ async def test_query_package_files(connector):
             ],
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="package_files", filters={"package": "express", "version": "4.18.2"})
-    )
+    result = await connector.query(ConnectorQuery(resource="package_files", filters={"package": "express", "version": "4.18.2"}))
     assert len(result.records) == 3
     assert result.total == 3
     assert result.records[0]["path"] == "index.js"
@@ -324,9 +320,7 @@ async def test_query_scope_packages_cursor_pagination(connector):
     respx.get(f"{API_BASE}/-/v1/search", params={"scope": "@angular", "size": "10", "from": "10"}).mock(
         return_value=httpx.Response(200, json={"objects": objects, "total": 25}),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="scope_packages", filters={"scope": "@angular"}, limit=10, cursor="10")
-    )
+    result = await connector.query(ConnectorQuery(resource="scope_packages", filters={"scope": "@angular"}, limit=10, cursor="10"))
     assert len(result.records) == 10
     assert result.next_cursor == "20"
 

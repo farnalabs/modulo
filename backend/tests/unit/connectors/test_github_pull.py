@@ -72,8 +72,6 @@ async def test_query_pull_non_string_pull_number_rejected(connector):
 
 @respx.mock
 async def test_query_pull_404_raises(connector):
-    respx.get("https://api.github.com/repos/acme/repo/pulls/404").mock(
-        return_value=httpx.Response(404, json={"message": "Not Found"})
-    )
+    respx.get("https://api.github.com/repos/acme/repo/pulls/404").mock(return_value=httpx.Response(404, json={"message": "Not Found"}))
     with pytest.raises(GitHubNotFoundError):
         await connector.query(ConnectorQuery(resource="pull", filters={"repo": "acme/repo", "pull_number": "404"}))

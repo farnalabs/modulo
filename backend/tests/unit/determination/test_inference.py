@@ -273,9 +273,7 @@ def test_issues_with_empty_records_are_tolerated() -> None:
         pytest.param({"state": {"name": "Ready"}}, True, id="top-level-state-object"),
         pytest.param({"fields": {}, "state": "To Do"}, True, id="empty-fields-falls-back-to-state"),
         pytest.param({"state": "in_progress"}, False, id="top-level-state-non-planning"),
-        pytest.param(
-            {"fields": {"status": None}, "state": "Done"}, False, id="null-status-falls-back-to-non-planning-state"
-        ),
+        pytest.param({"fields": {"status": None}, "state": "Done"}, False, id="null-status-falls-back-to-non-planning-state"),
     ],
 )
 def test_issue_status_is_read_from_fields_or_top_level_state(

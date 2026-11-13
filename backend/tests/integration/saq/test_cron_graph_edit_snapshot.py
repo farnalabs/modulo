@@ -325,11 +325,7 @@ async def _snapshot_exists(db_engine: AsyncEngine, snapshot_id: uuid.UUID) -> bo
 async def _set_org_paused(db_engine: AsyncEngine, org_id: uuid.UUID, paused: bool) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "UPDATE organisations SET triggers_paused = :paused, "
-                "triggers_paused_at = CASE WHEN :paused THEN now() ELSE NULL END "
-                "WHERE id = :oid"
-            ),
+            text("UPDATE organisations SET triggers_paused = :paused, triggers_paused_at = CASE WHEN :paused THEN now() ELSE NULL END WHERE id = :oid"),
             {"paused": paused, "oid": str(org_id)},
         )
 
@@ -342,18 +338,12 @@ async def _cleanup(
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "DELETE FROM trigger_events "
-                "WHERE trigger_id = :tid OR run_id IN (SELECT id FROM runs WHERE pipeline_id = :pid)"
-            ),
+            text("DELETE FROM trigger_events WHERE trigger_id = :tid OR run_id IN (SELECT id FROM runs WHERE pipeline_id = :pid)"),
             {"tid": str(trigger_id), "pid": str(pipeline_id)},
         )
         await conn.execute(text("DELETE FROM runs WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
         await conn.execute(
-            text(
-                "DELETE FROM snapshot_schema_pins WHERE snapshot_id IN "
-                "(SELECT id FROM pipeline_snapshots WHERE pipeline_id = :pid)"
-            ),
+            text("DELETE FROM snapshot_schema_pins WHERE snapshot_id IN (SELECT id FROM pipeline_snapshots WHERE pipeline_id = :pid)"),
             {"pid": str(pipeline_id)},
         )
         await conn.execute(text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
@@ -427,11 +417,7 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
         # supersedes the FAR-1519 H1 premise that the edit path attempts no
         # save (the plan feature that once gated saves is enabled here).
         edit_snapshots_after = await _snapshot_count(db_engine, pipeline_id, version_kind="edit")
-        assert edit_snapshots_after == edit_snapshots_before + 1, (
-            "an explicit graph save must record exactly one FAR-1810 "
-            "version_kind='edit' snapshot "
-            f"(before={edit_snapshots_before}, after={edit_snapshots_after})"
-        )
+        assert edit_snapshots_after == edit_snapshots_before + 1, f"an explicit graph save must record exactly one FAR-1810 version_kind='edit' snapshot (before={edit_snapshots_before}, after={edit_snapshots_after})"
 
         # --- Second fire: the cron run must execute the EDITED graph.
         await _make_due(db_engine, trigger_id)
@@ -441,14 +427,8 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
         run_b_id = uuid.UUID(second["run_id"])
         snap_b = await _run_snapshot_id(db_engine, run_b_id)
         assert snap_b is not None
-        assert snap_b != snap_a, (
-            "stale-snapshot defect (FAR-1519 item 3): the post-edit cron run "
-            f"reused the pre-edit snapshot {snap_a} instead of freezing the "
-            "current live graph"
-        )
-        assert await _snapshot_node_label(db_engine, snap_b) == "v2", (
-            "post-edit cron run's snapshot does not carry the edited graph"
-        )
+        assert snap_b != snap_a, f"stale-snapshot defect (FAR-1519 item 3): the post-edit cron run reused the pre-edit snapshot {snap_a} instead of freezing the current live graph"
+        assert await _snapshot_node_label(db_engine, snap_b) == "v2", "post-edit cron run's snapshot does not carry the edited graph"
 
         # --- Manual path at the same moment: parity is the defect's frame.
         manual = await integration_client.post(
@@ -461,9 +441,7 @@ async def test_cron_fire_after_graph_edit_executes_the_edited_graph(
         assert manual_snap is not None
         assert await _snapshot_node_label(db_engine, manual_snap) == "v2"
         # The cron and manual paths must agree about what runs execute.
-        assert await _snapshot_node_label(db_engine, snap_b) == await _snapshot_node_label(db_engine, manual_snap), (
-            "cron and manual runs at the same moment disagree about the executed graph"
-        )
+        assert await _snapshot_node_label(db_engine, snap_b) == await _snapshot_node_label(db_engine, manual_snap), "cron and manual runs at the same moment disagree about the executed graph"
     finally:
         await _cleanup(db_engine, pipeline_id, trigger_id, schema_id)
 
@@ -573,13 +551,8 @@ async def test_paused_race_fire_skips_without_persisting_a_snapshot(
         # Paused-org semantics are unchanged: a skipped fire, never a failed one.
         assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}, outcome
         assert auto_created, "the fire never reached the snapshot auto-create — the test proves nothing"
-        assert await _snapshot_count(db_engine, pipeline_id) == snapshots_before, (
-            "the paused-race skip committed an unreferenced snapshot "
-            f"(auto-created {auto_created[0] if auto_created else None})"
-        )
-        assert not await _snapshot_exists(db_engine, auto_created[0]), (
-            f"auto-created snapshot {auto_created[0]} survived the pause-race skip"
-        )
+        assert await _snapshot_count(db_engine, pipeline_id) == snapshots_before, f"the paused-race skip committed an unreferenced snapshot (auto-created {auto_created[0] if auto_created else None})"
+        assert not await _snapshot_exists(db_engine, auto_created[0]), f"auto-created snapshot {auto_created[0]} survived the pause-race skip"
         assert await _run_count(db_engine, pipeline_id) == runs_before, "a paused fire must not create a run"
     finally:
         await _set_org_paused(db_engine, test_org, False)

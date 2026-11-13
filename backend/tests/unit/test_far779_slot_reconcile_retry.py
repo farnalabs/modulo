@@ -286,9 +286,7 @@ class TestHeartbeatStaleRetry:
         assert result["retried"] == 1
 
     @pytest.mark.parametrize("claim_count", [DEFAULT_HEARTBEAT_RETRY_BUDGET + 1, DEFAULT_HEARTBEAT_RETRY_BUDGET + 2])
-    async def test_claims_past_raised_budget_terminal_fail(
-        self, monkeypatch: pytest.MonkeyPatch, claim_count: int
-    ) -> None:
+    async def test_claims_past_raised_budget_terminal_fail(self, monkeypatch: pytest.MonkeyPatch, claim_count: int) -> None:
         """Only a claim BEYOND the raised budget terminal-fails (4, 5 at the
         default 3) — the budget still bounds a genuinely-stuck run."""
         statements: list[str] = []

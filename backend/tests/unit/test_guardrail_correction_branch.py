@@ -800,9 +800,7 @@ def test_revalidate_pii_passes_when_list_leaves_are_clean():
 async def test_run_different_family_revalidation_routes_regex_family():
     """REGEX family routes through the regex revalidator and inverts its verdict."""
     engine = MagicMock()
-    engine.evaluate.return_value = EvalResult(
-        run_id=uuid.uuid4(), node_id="correction", eval_id=uuid.uuid4(), passed=True
-    )
+    engine.evaluate.return_value = EvalResult(run_id=uuid.uuid4(), node_id="correction", eval_id=uuid.uuid4(), passed=True)
     correction = CorrectionDefinition(
         id="c1",
         guardrail_id="g1",

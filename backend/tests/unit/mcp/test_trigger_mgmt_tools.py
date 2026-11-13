@@ -827,9 +827,7 @@ class TestTriggerNameRequired(_AuthContext):
 
     @pytest.mark.parametrize("bad_name", ["", "   ", "n" * 256])
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_blank_or_overlong_name_is_a_validation_error(
-        self, mock_validate_auth: AsyncMock, bad_name: str
-    ) -> None:
+    async def test_blank_or_overlong_name_is_a_validation_error(self, mock_validate_auth: AsyncMock, bad_name: str) -> None:
         result = await create_trigger(pipeline_id=str(uuid.uuid4()), name=bad_name)
 
         assert result["error"] == "validation"
@@ -837,9 +835,7 @@ class TestTriggerNameRequired(_AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_name_is_stripped_before_it_is_stored(
-        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_name_is_stripped_before_it_is_stored(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
         mock_sesh = _make_add_session()
         mock_session.return_value = _make_session_context(mock_sesh)
 
@@ -850,9 +846,7 @@ class TestTriggerNameRequired(_AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_duplicate_name_is_a_conflict_not_a_db_error(
-        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_duplicate_name_is_a_conflict_not_a_db_error(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
         from fastapi import HTTPException
 
         mock_sesh = _make_add_session()

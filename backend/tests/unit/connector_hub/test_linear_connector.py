@@ -325,9 +325,7 @@ async def test_query_issue_resource_missing_ref(connector):
 
 @respx.mock
 async def test_query_comments_resource(connector):
-    comments_payload = {
-        "data": {"issue": {"comments": {"nodes": [{"id": "c1", "body": "x", "createdAt": "2026-08-20T09:00:00.000Z"}]}}}
-    }
+    comments_payload = {"data": {"issue": {"comments": {"nodes": [{"id": "c1", "body": "x", "createdAt": "2026-08-20T09:00:00.000Z"}]}}}}
     respx.post(_URL).mock(return_value=httpx.Response(200, json=comments_payload))
     result = await connector.query(ConnectorQuery(resource="comments", filters={"issue_ref": "ENG-123"}))
     assert result.records[0]["body"] == "x"
@@ -348,9 +346,7 @@ async def test_write_comment_resource(connector):
         return _graphql_router(request)
 
     respx.post(_URL).mock(side_effect=_capture)
-    result = await connector.write(
-        ConnectorPayload(resource="comment", data={"issue_ref": "ENG-123", "body": "looks good"})
-    )
+    result = await connector.write(ConnectorPayload(resource="comment", data={"issue_ref": "ENG-123", "body": "looks good"}))
     assert result["comment_id"] == "cm1"
 
     sent = json.loads(captured["body"])
@@ -360,9 +356,7 @@ async def test_write_comment_resource(connector):
 @respx.mock
 async def test_write_status_update_resource(connector):
     respx.post(_URL).mock(side_effect=_graphql_router)
-    result = await connector.write(
-        ConnectorPayload(resource="status_update", data={"issue_ref": "ENG-123", "status": "Done"})
-    )
+    result = await connector.write(ConnectorPayload(resource="status_update", data={"issue_ref": "ENG-123", "status": "Done"}))
     assert result["status"] == "Done"
 
 

@@ -28,9 +28,7 @@ _REMOVED_AUDIT_COLUMNS = frozenset({"updated_at", "updated_by", "deleted_by"})
 
 async def _reflected_columns(engine: AsyncEngine, table: str) -> set[str]:
     async with engine.connect() as connection:
-        return await connection.run_sync(
-            lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns(table)}
-        )
+        return await connection.run_sync(lambda sync_connection: {column["name"] for column in inspect(sync_connection).get_columns(table)})
 
 
 async def test_organisation_orm_columns_exist_in_migrated_schema(db_engine: AsyncEngine) -> None:
@@ -44,10 +42,7 @@ async def test_organisation_orm_columns_exist_in_migrated_schema(db_engine: Asyn
     db_columns = await _reflected_columns(db_engine, "organisations")
 
     missing_in_db = orm_columns - db_columns
-    assert not missing_in_db, (
-        f"ORM declares Organisation columns absent from the migrated schema: {sorted(missing_in_db)}. "
-        f"ORM columns: {sorted(orm_columns)}; DB columns: {sorted(db_columns)}"
-    )
+    assert not missing_in_db, f"ORM declares Organisation columns absent from the migrated schema: {sorted(missing_in_db)}. ORM columns: {sorted(orm_columns)}; DB columns: {sorted(db_columns)}"
 
 
 async def test_organisation_audit_columns_absent_from_migrated_schema(db_engine: AsyncEngine) -> None:

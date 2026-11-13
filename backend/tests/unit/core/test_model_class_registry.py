@@ -427,9 +427,7 @@ def test_node_references_model_var_without_commands_or_prompt_is_false() -> None
 def test_pipeline_map_entry_with_default_but_no_nodes_map(tmp_path: Path) -> None:
     """A dict pipeline entry with a `default` and no `nodes` key resolves the
     default for every node (the `nodes_map is None` branch)."""
-    registry_path = _write_registry(
-        tmp_path, {**_DEFAULT_REGISTRY, "pipelines": {"Default Only": {"default": "planner"}}}
-    )
+    registry_path = _write_registry(tmp_path, {**_DEFAULT_REGISTRY, "pipelines": {"Default Only": {"default": "planner"}}})
     node = _sandbox_node("n1")
 
     resolve_graph_model_classes([node], pipeline_name="Default Only", registry_path=registry_path)
@@ -461,9 +459,7 @@ def test_malformed_pipeline_map_entry_fails_closed(tmp_path: Path, entry: Any) -
 def test_pipelines_default_that_is_not_a_usable_class_skips_the_node(tmp_path: Path) -> None:
     """An unclassified node under a registry whose `pipelines_default` is
     blank/non-string gets no bake — no rung supplies a class."""
-    registry_path = _write_registry(
-        tmp_path, {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "   "}
-    )
+    registry_path = _write_registry(tmp_path, {"classes": {"builder": {"model": "opencode-go/mimo-v2.6-flash"}}, "pipelines_default": "   "})
     node = _sandbox_node("n1")
 
     resolve_graph_model_classes([node], pipeline_name="Any Pipe", registry_path=registry_path)

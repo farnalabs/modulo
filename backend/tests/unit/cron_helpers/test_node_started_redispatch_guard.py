@@ -236,9 +236,7 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
         stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
-        reenqueue = stack.enter_context(
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
-        )
+        reenqueue = stack.enter_context(patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result))
         stack.enter_context(patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock))
         stack.enter_context(
             patch.object(
@@ -249,9 +247,7 @@ async def _run_reconcile(
             )
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
-        stack.enter_context(
-            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
-        )
+        stack.enter_context(patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0))
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session
 

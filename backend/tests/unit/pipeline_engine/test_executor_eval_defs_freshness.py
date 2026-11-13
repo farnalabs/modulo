@@ -46,9 +46,7 @@ def _make_run(*, claim_token: str | None = "tok-claim-abc") -> MagicMock:
 def _make_snapshot() -> MagicMock:
     snap = MagicMock()
     snap.graph_json = {
-        "nodes": [
-            {"id": "R", "node_type": "router", "router_config": {"rules": [{"guard": "state.x == `1`", "target": "A"}]}}
-        ],
+        "nodes": [{"id": "R", "node_type": "router", "router_config": {"rules": [{"guard": "state.x == `1`", "target": "A"}]}}],
         "edges": [],
     }
     snap.run_context_defaults = {}
@@ -86,9 +84,7 @@ def _make_session(snapshot: MagicMock, result_order: str = "execute") -> tuple[A
     scalars_result.scalars.return_value = scalars_mock
     scalars_result.scalar.return_value = 0
 
-    first, second = (
-        (pipeline_result, snapshot_result) if result_order == "execute" else (snapshot_result, pipeline_result)
-    )
+    first, second = (pipeline_result, snapshot_result) if result_order == "execute" else (snapshot_result, pipeline_result)
     state = {"index": 0, "fresh": True}
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:

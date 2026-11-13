@@ -55,9 +55,7 @@ class TestLibraryInstallFromTemplateStrip:
         )
 
         with caplog.at_level(logging.WARNING, logger="farna.api.routes.library"):
-            _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(
-                primitive, None, None
-            )
+            _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(primitive, None, None)
 
         assert all("policy_gate" not in node for node in nodes)
         assert len(nodes) == 2
@@ -73,9 +71,7 @@ class TestLibraryInstallFromTemplateStrip:
         )
 
         with caplog.at_level(logging.WARNING, logger="farna.api.routes.library"):
-            _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(
-                primitive, None, None
-            )
+            _name, _desc, nodes, _edges, _agent_count, _edge_count = _build_pipeline_from_template(primitive, None, None)
 
         assert len(nodes) == 1
         assert "policy_gate declaration(s) stripped" not in caplog.text

@@ -67,16 +67,12 @@ async def _publish_two_revisions(
         revision_number=2,
     )
 
-    published1 = await repo.publish_revision(
-        session, organisation_id=org_id, system_map_id=map_obj.id, revision_id=rev1.id
-    )
+    published1 = await repo.publish_revision(session, organisation_id=org_id, system_map_id=map_obj.id, revision_id=rev1.id)
     assert published1 is not None
     t1 = published1.effective_from
     assert t1 is not None
 
-    published2 = await repo.publish_revision(
-        session, organisation_id=org_id, system_map_id=map_obj.id, revision_id=rev2.id
-    )
+    published2 = await repo.publish_revision(session, organisation_id=org_id, system_map_id=map_obj.id, revision_id=rev2.id)
     assert published2 is not None
     t2 = published2.effective_from
     assert t2 is not None
@@ -110,9 +106,7 @@ async def test_by_time_finds_superseded_archived_revision(
     assert inside.id == rev1_id
 
     # The current revision owns the open-ended window.
-    current = await repo.get_revision_by_time(
-        rls_session, organisation_id=test_org, system_map_id=map_id, at=datetime.now(UTC)
-    )
+    current = await repo.get_revision_by_time(rls_session, organisation_id=test_org, system_map_id=map_id, at=datetime.now(UTC))
     assert current is not None
     assert current.id == rev2_id
 
@@ -159,9 +153,7 @@ async def test_archive_revision_closes_effective_window(
     await set_rls_user_context(rls_session, test_user, "admin")
     map_id, _rev1_id, rev2_id, _t1, _t2 = await _publish_two_revisions(repo, rls_session, test_org, test_user)
 
-    archived = await repo.archive_revision(
-        rls_session, organisation_id=test_org, system_map_id=map_id, revision_id=rev2_id
-    )
+    archived = await repo.archive_revision(rls_session, organisation_id=test_org, system_map_id=map_id, revision_id=rev2_id)
     assert archived is not None
     await rls_session.refresh(archived)
 
@@ -173,9 +165,7 @@ async def test_archive_revision_closes_effective_window(
     assert found is None, "an archived revision must not be active at a future timestamp"
 
     # effective_to is exclusive: the revision is inactive from the closing instant.
-    at_close = await repo.get_revision_by_time(
-        rls_session, organisation_id=test_org, system_map_id=map_id, at=archived.effective_to
-    )
+    at_close = await repo.get_revision_by_time(rls_session, organisation_id=test_org, system_map_id=map_id, at=archived.effective_to)
     assert at_close is None
 
     assert await repo.get_published_revision(rls_session, organisation_id=test_org, system_map_id=map_id) is None
@@ -199,9 +189,7 @@ async def test_draft_revision_never_matches_by_time(
     )
     assert draft.effective_from is None
 
-    found = await repo.get_revision_by_time(
-        rls_session, organisation_id=test_org, system_map_id=map_id, at=datetime.now(UTC)
-    )
+    found = await repo.get_revision_by_time(rls_session, organisation_id=test_org, system_map_id=map_id, at=datetime.now(UTC))
     assert found is not None
     assert found.id == rev2_id
 
@@ -214,12 +202,7 @@ async def _window_hits(session: AsyncSession, map_id: uuid.UUID, at: datetime) -
     limit exists to paper over.
     """
     result = await session.execute(
-        text(
-            "SELECT id FROM system_map_revisions "
-            "WHERE system_map_id = :map AND deleted_at IS NULL "
-            "AND effective_from IS NOT NULL AND effective_from <= :at "
-            "AND (effective_to IS NULL OR :at < effective_to)"
-        ),
+        text("SELECT id FROM system_map_revisions WHERE system_map_id = :map AND deleted_at IS NULL AND effective_from IS NOT NULL AND effective_from <= :at AND (effective_to IS NULL OR :at < effective_to)"),
         {"map": map_id, "at": at},
     )
     return [row.id for row in result.all()]
@@ -240,9 +223,7 @@ async def test_by_time_on_map_with_empty_history_returns_none(
         account_id=test_user,
     )
 
-    found = await repo.get_revision_by_time(
-        rls_session, organisation_id=test_org, system_map_id=map_obj.id, at=datetime.now(UTC)
-    )
+    found = await repo.get_revision_by_time(rls_session, organisation_id=test_org, system_map_id=map_obj.id, at=datetime.now(UTC))
     assert found is None
     assert not await _window_hits(rls_session, map_obj.id, datetime.now(UTC))
     assert await repo.get_published_revision(rls_session, organisation_id=test_org, system_map_id=map_obj.id) is None

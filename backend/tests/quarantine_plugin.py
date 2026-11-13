@@ -70,7 +70,6 @@ def pytest_collection_modifyitems(config, items):
 
         for test_id, expiry_str, reason in expired:
             warnings.warn(
-                f"QUARANTINE EXPIRED: {test_id} expired {expiry_str} — {reason}. "
-                f"Fix the test or extend the quarantine expiry.",
+                f"QUARANTINE EXPIRED: {test_id} expired {expiry_str} — {reason}. Fix the test or extend the quarantine expiry.",
                 stacklevel=2,
             )

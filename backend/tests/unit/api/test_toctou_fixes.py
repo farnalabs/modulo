@@ -346,7 +346,7 @@ def test_rotate_key_conflict_writes_no_started_audit_event() -> None:
             secret_key=_VALID_32,
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
-            farna_control_system_database_url="postgresql+asyncpg://localhost/system",
+            modulo_system_database_url="postgresql+asyncpg://localhost/system",
             redis_url="",
         )
 
@@ -413,7 +413,7 @@ def _no_redis_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        farna_control_system_database_url="postgresql+asyncpg://localhost/system",
+        modulo_system_database_url="postgresql+asyncpg://localhost/system",
         redis_url="",
     )
 

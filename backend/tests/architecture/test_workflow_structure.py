@@ -427,7 +427,9 @@ def test_ci_yml_dispatches_no_reviewer_webhook() -> None:
     (payload construction or HMAC signing against the review secret) must be
     gone from product CI too."""
     raw = _code(CI_YML.read_text(encoding="utf-8"))
-    assert "FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_SECRET" not in raw, "ci.yml signs PR-review webhooks (MODULO_PR_REVIEW_WEBHOOK_SECRET) — reviewer dispatch must live only in pr-review.yml (FAR-1843)"
+    # The secret name is MODULO_PR_REVIEW_WEBHOOK_SECRET (legacy alias),
+    # not FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_SECRET.
+    assert "MODULO_PR_REVIEW_WEBHOOK_SECRET" not in raw, "ci.yml signs PR-review webhooks (MODULO_PR_REVIEW_WEBHOOK_SECRET) — reviewer dispatch must live only in pr-review.yml (FAR-1843)"
 
 
 # --- D2/D5: merge-queue CI gate is product-CI-only -------------------------

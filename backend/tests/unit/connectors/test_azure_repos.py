@@ -24,9 +24,7 @@ def connector():
 @respx.mock
 async def test_query_repos(connector):
     repos = [{"id": "repo-1", "name": "frontend"}, {"id": "repo-2", "name": "backend"}]
-    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json={"value": repos, "count": 2})
-    )
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json={"value": repos, "count": 2}))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "frontend"
@@ -70,9 +68,7 @@ async def test_query_commits(connector):
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/commits",
         params={"searchCriteria.itemVersion.version": "main", "api-version": "7.0"},
     ).mock(return_value=httpx.Response(200, json={"value": commits, "count": 1}))
-    result = await connector.query(
-        ConnectorQuery(resource="commits", filters={"project": "myproject", "repo": "myrepo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="commits", filters={"project": "myproject", "repo": "myrepo"}))
     assert result.records[0]["commitId"] == "abc123"
 
 
@@ -218,9 +214,7 @@ def test_connector_type(connector):
 @respx.mock
 async def test_query_repos_corrupt_total(connector):
     """A non-finite ``count`` must not poison the reported total."""
-    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, content=b'{"value": [{"id": "repo-1"}], "count": 1e999}')
-    )
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, content=b'{"value": [{"id": "repo-1"}], "count": 1e999}'))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
     assert len(result.records) == 1
     assert result.total == 0
@@ -230,9 +224,7 @@ async def test_query_repos_corrupt_total(connector):
 async def test_query_repos_corrupt_body_no_crash(connector):
     """A corrupt/hostile response returning a non-dict body must not crash the
     connector — it falls back to an empty page with no total."""
-    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
     assert not result.records
     assert result.total is None
@@ -242,9 +234,7 @@ async def test_query_repos_corrupt_body_no_crash(connector):
 async def test_query_repos_non_list_value_no_crash(connector):
     """A corrupt body placing a non-list in ``value`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2})
-    )
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2}))
     result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
     assert not result.records
     assert result.total == 2
@@ -256,9 +246,7 @@ async def test_query_commits_corrupt_body_no_crash(connector):
         f"{_BASE}/myproject/_apis/git/repositories/myrepo/commits",
         params={"searchCriteria.itemVersion.version": "main", "api-version": "7.0"},
     ).mock(return_value=httpx.Response(200, json=["garbage"]))
-    result = await connector.query(
-        ConnectorQuery(resource="commits", filters={"project": "myproject", "repo": "myrepo"})
-    )
+    result = await connector.query(ConnectorQuery(resource="commits", filters={"project": "myproject", "repo": "myrepo"}))
     assert not result.records
     assert result.total is None
 

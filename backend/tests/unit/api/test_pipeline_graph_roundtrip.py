@@ -480,9 +480,7 @@ class TestRestGraphRoundtrip:
                 for key, expected_value in n_payload.items():
                     actual_value = persisted.get(key)
                     if key == "env_vars":
-                        assert set(actual_value.keys()) == set(expected_value.keys()), (
-                            f"persisted node {n_payload['id']}.env_vars keys"
-                        )
+                        assert set(actual_value.keys()) == set(expected_value.keys()), f"persisted node {n_payload['id']}.env_vars keys"
                         # Persisted JSON holds the REAL value for every key -
                         # masking happens only at the API response layer - so
                         # every key round-trips verbatim here.
@@ -492,13 +490,9 @@ class TestRestGraphRoundtrip:
                         assert actual_value == expected_value, f"persisted node {n_payload['id']}.context_files"
                     elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
                         for ek, ev in expected_value.items():
-                            assert actual_value.get(ek) == ev, (
-                                f"persisted node {n_payload['id']}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
-                            )
+                            assert actual_value.get(ek) == ev, f"persisted node {n_payload['id']}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
                     else:
-                        assert actual_value == expected_value, (
-                            f"persisted node {n_payload['id']}.{key}: {actual_value!r} != {expected_value!r}"
-                        )
+                        assert actual_value == expected_value, f"persisted node {n_payload['id']}.{key}: {actual_value!r} != {expected_value!r}"
                 # For manual node, also check defaults are present
                 if n_payload["node_type"] == "manual":
                     assert persisted.get("mode") == "llm"
@@ -511,9 +505,7 @@ class TestRestGraphRoundtrip:
                     assert persisted.get("commands_concatenation_string") == " && "
 
             # Edges
-            edges = list(
-                (await s.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == _PIPELINE_ID))).scalars()
-            )
+            edges = list((await s.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == _PIPELINE_ID))).scalars())
             persisted_edges = {e.id: e for e in edges}
             for e_payload in payload["edges"]:
                 eid = uuid.UUID(e_payload["id"])
@@ -540,15 +532,7 @@ class TestRestGraphRoundtrip:
                 )
 
             # 5. Snapshot created (version_kind='edit')
-            snaps = list(
-                (
-                    await s.execute(
-                        select(PipelineSnapshot)
-                        .where(PipelineSnapshot.pipeline_id == _PIPELINE_ID)
-                        .order_by(PipelineSnapshot.snapshot_version)
-                    )
-                ).scalars()
-            )
+            snaps = list((await s.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == _PIPELINE_ID).order_by(PipelineSnapshot.snapshot_version))).scalars())
             assert snaps, "edit snapshot not created"
             latest = snaps[-1]
             assert latest.version_kind == "edit"
@@ -565,24 +549,16 @@ class TestRestGraphRoundtrip:
                 for key, expected_value in n_payload.items():
                     actual_value = snap_node.get(key)
                     if key == "env_vars":
-                        assert set(actual_value.keys()) == set(expected_value.keys()), (
-                            f"snapshot node {nid}.env_vars keys"
-                        )
+                        assert set(actual_value.keys()) == set(expected_value.keys()), f"snapshot node {nid}.env_vars keys"
                         for k, v in expected_value.items():
-                            assert actual_value[k] == v, (
-                                f"snapshot node {nid}.env_vars[{k}]: {actual_value[k]!r} != {v!r}"
-                            )
+                            assert actual_value[k] == v, f"snapshot node {nid}.env_vars[{k}]: {actual_value[k]!r} != {v!r}"
                     elif key == "context_files":
                         assert actual_value == expected_value, f"snapshot node {nid}.context_files"
                     elif isinstance(expected_value, dict) and isinstance(actual_value, dict):
                         for ek, ev in expected_value.items():
-                            assert actual_value.get(ek) == ev, (
-                                f"snapshot node {nid}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
-                            )
+                            assert actual_value.get(ek) == ev, f"snapshot node {nid}.{key}.{ek}: {actual_value.get(ek)!r} != {ev!r}"
                     else:
-                        assert actual_value == expected_value, (
-                            f"snapshot node {nid}.{key}: {actual_value!r} != {expected_value!r}"
-                        )
+                        assert actual_value == expected_value, f"snapshot node {nid}.{key}: {actual_value!r} != {expected_value!r}"
 
             # Snapshot edges use 'source'/'target' instead of
             # 'source_node_id'/'target_node_id', and 'type' instead of 'edge_type'.
@@ -714,18 +690,8 @@ class TestMcpRestEquivalence:
                 s,
                 pipeline_id=_PIPELINE_ID,
                 org_id=_ORG_ID,
-                nodes=[
-                    strip_unset_connector_binding_inputs(n.model_dump(mode="json"))
-                    for n in PipelineGraphUpdate.model_validate(
-                        {"nodes": payload["nodes"], "edges": payload["edges"]}
-                    ).nodes
-                ],
-                edges=[
-                    _pipeline_graph_edge_to_dict(e)
-                    for e in PipelineGraphUpdate.model_validate(
-                        {"nodes": payload["nodes"], "edges": payload["edges"]}
-                    ).edges
-                ],
+                nodes=[strip_unset_connector_binding_inputs(n.model_dump(mode="json")) for n in PipelineGraphUpdate.model_validate({"nodes": payload["nodes"], "edges": payload["edges"]}).nodes],
+                edges=[_pipeline_graph_edge_to_dict(e) for e in PipelineGraphUpdate.model_validate({"nodes": payload["nodes"], "edges": payload["edges"]}).edges],
                 actor=GraphWriteActor(
                     is_privileged=True,
                     caller_type="rest",

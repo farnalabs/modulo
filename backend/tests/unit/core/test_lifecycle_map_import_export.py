@@ -168,9 +168,7 @@ async def test_import_envelope_creates_map_and_primitive(session: AsyncMock) -> 
         patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
         patch("farna.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()) as prim_cls,
     ):
-        result = await import_lifecycle_map_envelope(
-            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=_valid_envelope()
-        )
+        result = await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=_valid_envelope())
 
     assert result is created
     assert model_cls.call_args.kwargs["name"] == "SDLC Workflow"
@@ -286,9 +284,7 @@ async def test_materialize_from_primitive_uses_export_envelope(session: AsyncMoc
     )
     created = _make_map(name="Shared SDLC")
     with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
-        result = await materialize_map_from_primitive(
-            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive
-        )
+        result = await materialize_map_from_primitive(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive)
 
     assert result is created
     assert model_cls.call_args.kwargs["name"] == "Shared SDLC"
@@ -306,9 +302,7 @@ async def test_materialize_from_primitive_treats_content_as_graph(session: Async
     )
     created = _make_map(name="Inline Map")
     with patch("farna.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
-        result = await materialize_map_from_primitive(
-            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive
-        )
+        result = await materialize_map_from_primitive(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive)
 
     assert result is created
     assert model_cls.call_args.kwargs["name"] == "Inline Map"
@@ -363,9 +357,7 @@ def test_build_export_envelope_carries_version_history_metadata() -> None:
 def _valid_v2_envelope() -> dict:
     envelope = _valid_envelope()
     envelope["format_version"] = "2"
-    envelope["versions"] = [
-        {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": [], "notes": ""}
-    ]
+    envelope["versions"] = [{"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": [], "notes": ""}]
     return envelope
 
 
@@ -378,9 +370,7 @@ async def test_import_envelope_v1_payload_imports_single_version(session: AsyncM
         patch("farna.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()),
         patch("farna.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
     ):
-        result = await import_lifecycle_map_envelope(
-            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=_valid_envelope()
-        )
+        result = await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=_valid_envelope())
 
     assert result is created
     assert model_cls.call_args.kwargs.get("version", 1) == 1
@@ -536,9 +526,7 @@ async def test_materialize_from_primitive_recreates_version_history(session: Asy
         patch("farna.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
     ):
         mock_save.return_value = v2_map
-        result = await materialize_map_from_primitive(
-            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive
-        )
+        result = await materialize_map_from_primitive(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive)
 
     assert result is v2_map
     assert model_cls.call_args.kwargs["version"] == 1

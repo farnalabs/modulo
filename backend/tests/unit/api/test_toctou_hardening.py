@@ -49,9 +49,7 @@ from farna.db.models.system_config import SystemConfig
 from farna.db.models.team import Team
 from farna.db.models.team_membership import TeamMembership
 
-_MIGRATION_FILE = (
-    Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
-)
+_MIGRATION_FILE = Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -268,11 +266,7 @@ class TestSeedingMultipleDefaultRules:
         assert seeded == len(DEFAULT_ALERT_RULES)
         await sqlite_session.commit()
 
-        rows = (
-            await sqlite_session.execute(
-                text("SELECT signal, deleted_at FROM error_notification_rules ORDER BY signal")
-            )
-        ).fetchall()
+        rows = (await sqlite_session.execute(text("SELECT signal, deleted_at FROM error_notification_rules ORDER BY signal"))).fetchall()
         signals = {r[0] for r in rows}
         assert signals == {spec["signal"] for spec in DEFAULT_ALERT_RULES}
         assert all(r[1] is None for r in rows)
@@ -372,16 +366,12 @@ async def _assert_unique_rate_limit_index(sqlite_engine: AsyncEngine) -> None:
     would now collide with the model-declared index.
     """
     async with sqlite_engine.begin() as conn:
-        rows = await conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='uq_runs_pipeline_rate_limit_key'"
-        )
+        rows = await conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='index' AND name='uq_runs_pipeline_rate_limit_key'")
         assert rows.fetchall(), "uq_runs_pipeline_rate_limit_key missing from DB — model must declare it"
 
 
 class TestRateLimitConflictPath:
-    async def test_conflict_raises_rate_limit_conflict_and_not_transaction_error(
-        self, sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
-    ) -> None:
+    async def test_conflict_raises_rate_limit_conflict_and_not_transaction_error(self, sqlite_engine: AsyncEngine, sqlite_session: AsyncSession) -> None:
         """A second run with the same (pipeline, rate_limit_key) must surface as a
         RateLimitConflictError. Before the savepoint fix, the failed flush aborted
         the outer transaction and the caller's subsequent flush raised
@@ -422,9 +412,7 @@ class TestRateLimitConflictPath:
             # only the nested insert, not the whole transaction).
             await s.commit()
 
-    async def test_distinct_keys_do_not_conflict(
-        self, sqlite_engine: AsyncEngine, sqlite_session: AsyncSession
-    ) -> None:
+    async def test_distinct_keys_do_not_conflict(self, sqlite_engine: AsyncEngine, sqlite_session: AsyncSession) -> None:
         await _assert_unique_rate_limit_index(sqlite_engine)
         await _seed_run_base(sqlite_session)
         maker = async_sessionmaker(sqlite_engine, expire_on_commit=False)
@@ -501,9 +489,7 @@ class TestTeamGateInsideMutationTxn:
     async def test_member_locked_team_private_pipeline_passes(self, sqlite_session: AsyncSession) -> None:
         member_team = uuid.uuid4()
         self._seed_team_private_pipeline(sqlite_session, pipeline_id=_PIPELINE, team_id=member_team)
-        sqlite_session.add(
-            TeamMembership(team_id=member_team, account_id=_ACCOUNT, organisation_id=_ORG, role="viewer")
-        )
+        sqlite_session.add(TeamMembership(team_id=member_team, account_id=_ACCOUNT, organisation_id=_ORG, role="viewer"))
         await sqlite_session.commit()
 
         async with sqlite_session.begin():
@@ -533,9 +519,7 @@ class TestTeamGateInsideMutationTxn:
     async def test_org_visible_row_not_team_gated(self, sqlite_session: AsyncSession) -> None:
         sqlite_session.add(Organisation(id=_ORG, name="org", slug="org"))
         sqlite_session.add(Account(id=_ACCOUNT, email="a@b.c", display_name="a"))
-        sqlite_session.add(
-            Pipeline(id=_PIPELINE, organisation_id=_ORG, name="org-wide", account_id=_ACCOUNT, visibility="org")
-        )
+        sqlite_session.add(Pipeline(id=_PIPELINE, organisation_id=_ORG, name="org-wide", account_id=_ACCOUNT, visibility="org"))
         await sqlite_session.commit()
 
         async with sqlite_session.begin():
@@ -551,12 +535,7 @@ class TestTeamGateInsideMutationTxn:
             self._seed_team_private_pipeline(s, pipeline_id=_PIPELINE, team_id=uuid.uuid4())
             await s.commit()
 
-        stmt = (
-            select(Pipeline)
-            .where(Pipeline.id == _PIPELINE, Pipeline.organisation_id == _ORG)
-            .where(Pipeline.deleted_at.is_(None))
-            .with_for_update()
-        )
+        stmt = select(Pipeline).where(Pipeline.id == _PIPELINE, Pipeline.organisation_id == _ORG).where(Pipeline.deleted_at.is_(None)).with_for_update()
         compiled = stmt.compile(dialect=postgresql.dialect())
         assert "FOR UPDATE" in compiled.string.upper()
 
@@ -635,9 +614,7 @@ class TestTeamGateBoundedLockWait:
         lock_indexes = [i for i, sql in enumerate(sqls) if "FOR UPDATE" in sql.upper()]
         assert timeout_indexes, f"no lock_timeout statement issued; statements={sqls}"
         assert lock_indexes, f"no FOR UPDATE statement issued; statements={sqls}"
-        assert min(timeout_indexes) < min(lock_indexes), (
-            f"the lock_timeout must be SET before the FOR UPDATE requests the lock, statements={sqls}"
-        )
+        assert min(timeout_indexes) < min(lock_indexes), f"the lock_timeout must be SET before the FOR UPDATE requests the lock, statements={sqls}"
 
     async def test_lock_timeout_is_set_local_and_bounded(self) -> None:
         session, log = _recording_session("postgresql")

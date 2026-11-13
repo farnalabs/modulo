@@ -1448,9 +1448,7 @@ class TestUpdateTriggerRename(_AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_rename_updates_the_name_and_returns_it(
-        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_rename_updates_the_name_and_returns_it(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
         trigger = _make_mock_trigger(name="old-name")
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
@@ -1464,9 +1462,7 @@ class TestUpdateTriggerRename(_AuthContext):
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_rename_to_a_taken_name_is_refused_before_mutating(
-        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_rename_to_a_taken_name_is_refused_before_mutating(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
         from fastapi import HTTPException
 
         trigger = _make_mock_trigger(name="old-name")
