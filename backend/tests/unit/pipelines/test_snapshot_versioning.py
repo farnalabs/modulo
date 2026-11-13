@@ -515,9 +515,7 @@ class TestComputeEdgeChanges:
         assert not _compute_edge_changes(edge, edge)
 
     def test_edge_type_change_still_reported(self):
-        changes = _compute_edge_changes(
-            {"source": "a", "target": "b"}, {"source": "a", "target": "b", "type": "conditional"}
-        )
+        changes = _compute_edge_changes({"source": "a", "target": "b"}, {"source": "a", "target": "b", "type": "conditional"})
         assert "edge_type" in changes
 
     def test_edge_type_aliases_are_equivalent(self):

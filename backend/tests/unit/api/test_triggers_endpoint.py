@@ -108,9 +108,7 @@ def client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -232,9 +230,7 @@ def test_list_triggers_empty_returns_200(client: TestClient) -> None:
 def test_list_triggers_unauthenticated_returns_4xx(client: TestClient) -> None:
     client.app.dependency_overrides.pop(get_current_user, None)
     resp = client.get("/api/v1/triggers")
-    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     assert resp.status_code in (401, 403)
 
 
@@ -1746,9 +1742,7 @@ def test_toggle_deactivated_trigger_viewer_returns_403(client: TestClient) -> No
             yield session
 
         client.app.dependency_overrides[get_db_session] = override_session
-        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-        )
+        client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/toggle", json={})
 
     assert resp.status_code == 403

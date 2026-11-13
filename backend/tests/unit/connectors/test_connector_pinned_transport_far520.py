@@ -257,6 +257,4 @@ def test_pinned_client_sync_rejects_caller_transport(monkeypatch: pytest.MonkeyP
     """
     monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: [_VALIDATED_PUBLIC])
     with pytest.raises(ValueError, match="transport"):
-        ssrf.pinned_async_client_sync(
-            "https://scanner.example.com/", transport=httpx.MockTransport(lambda _req: httpx.Response(200))
-        )
+        ssrf.pinned_async_client_sync("https://scanner.example.com/", transport=httpx.MockTransport(lambda _req: httpx.Response(200)))

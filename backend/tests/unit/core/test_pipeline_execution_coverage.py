@@ -451,9 +451,7 @@ class TestMaybeWatchdogRetry:
         async def _broken_hook(status: str, code: str) -> bool:
             raise RuntimeError("hook boom")
 
-        result = await pe._maybe_watchdog_retry(
-            _broken_hook, "run-1", final_status="stalled", error_code="executor_stalled"
-        )
+        result = await pe._maybe_watchdog_retry(_broken_hook, "run-1", final_status="stalled", error_code="executor_stalled")
         assert result is False
 
     async def test_none_hook_returns_false(self) -> None:
@@ -468,9 +466,7 @@ class TestMaybeWatchdogRetry:
             raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await pe._maybe_watchdog_retry(
-                _cancelled_hook, "run-1", final_status="stalled", error_code="executor_stalled"
-            )
+            await pe._maybe_watchdog_retry(_cancelled_hook, "run-1", final_status="stalled", error_code="executor_stalled")
 
 
 # -----------------------------------------------------------------------

@@ -68,10 +68,7 @@ async def _seed_org(
         org_settings.update(settings)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, CAST(:settings AS json))"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, CAST(:settings AS json))"),
             {
                 "id": str(org_id),
                 "name": name,
@@ -86,10 +83,7 @@ async def _seed_account(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -139,9 +133,7 @@ async def _seed_pipeline(
         "'{}'::json, '[]'::json, 'manual_approval', 'org')"
     )
     async with db_engine.connect() as conn, conn.begin():
-        existing_columns = await conn.run_sync(
-            lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("pipelines")}
-        )
+        existing_columns = await conn.run_sync(lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("pipelines")})
         include_queue_timeout = queue_timeout_seconds is not None and "queue_timeout_seconds" in existing_columns
         if include_queue_timeout:
             params["qts"] = queue_timeout_seconds
@@ -221,9 +213,7 @@ async def _seed_run(
     # Inspector must run inside ``run_sync`` to be safe on the async engine —
     # and insert the intersection with the values we set.
     async with db_engine.connect() as conn:
-        existing_columns = await conn.run_sync(
-            lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("runs")}
-        )
+        existing_columns = await conn.run_sync(lambda sync_conn: {col["name"] for col in inspect(sync_conn).get_columns("runs")})
     # A head-shaped database has every column the ORM maps; a database pinned at
     # an earlier revision does not. At head, every column this seeder sets must
     # exist — silently dropping one there would mask a dropped/renamed column.
@@ -569,9 +559,7 @@ async def test_non_sandbox_running_runs_do_not_consume_sandbox_slots(
     org_id, user_id = await _seed_org_account(db_engine, "MixedCap", cap=1)
     plain_pipe = await _seed_pipeline(db_engine, org_id, "PlainPipe", user_id)
     sandbox_pipe = await _seed_pipeline(db_engine, org_id, "SandboxPipe", user_id)
-    plain_snap = await _seed_snapshot(
-        db_engine, org_id, plain_pipe, {"nodes": [{"id": "a", "node_type": "agent"}], "edges": []}
-    )
+    plain_snap = await _seed_snapshot(db_engine, org_id, plain_pipe, {"nodes": [{"id": "a", "node_type": "agent"}], "edges": []})
     sandbox_snap = await _seed_snapshot(db_engine, org_id, sandbox_pipe, _SANDBOX_GRAPH)
 
     # One non-sandbox run is already executing.
@@ -676,9 +664,7 @@ async def test_sweep_leaves_capacity_marked_runs_pending_without_a_queue_timeout
     assert code == "org_capacity_limited"
     # The week-old stranded run is re-dispatched, not killed.
     assert result["stranded_capacity_redispatched"] >= 1, result
-    assert any(call.args[0] == str(old_marked) for call in patched_redispatch.await_args_list), (
-        "the old capacity-queued run must be re-dispatched, never terminal-failed"
-    )
+    assert any(call.args[0] == str(old_marked) for call in patched_redispatch.await_args_list), "the old capacity-queued run must be re-dispatched, never terminal-failed"
 
     status, code = await _run_state(db_engine, org_id, young_marked)
     assert status == "pending", "young reason-marked pending run must survive the sweep"
@@ -1217,9 +1203,7 @@ async def _seed_saq_running_run(
         # was dispatched into the sandbox.
         "sandbox_dispatch_state": sandbox_dispatch_state,
     }
-    values.update(
-        {col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None}
-    )
+    values.update({col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None})
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await session.execute(insert(Run).values(**values))
@@ -1480,9 +1464,7 @@ async def test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph(
     summary = ch._dispatcher_summary()
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        routed = await _terminalize_aged_nodeless_zombies(
-            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await _terminalize_aged_nodeless_zombies(session, org_id, max_age_minutes=135, summary=summary, max_rows=None)
     assert routed == [run]
     assert summary["claimed_but_never_dispatched"] == 1
 
@@ -1534,9 +1516,7 @@ async def test_node_started_aged_run_routes_to_age_gate_not_nodeless(
     summary = ch._dispatcher_summary()
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        routed = await _terminalize_aged_nodeless_zombies(
-            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await _terminalize_aged_nodeless_zombies(session, org_id, max_age_minutes=135, summary=summary, max_rows=None)
     assert routed == []
     assert summary["claimed_but_never_dispatched"] == 0
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1785,9 +1765,7 @@ async def test_far1803_class_is_never_mislabelled_as_never_dispatched(
     summary = ch._dispatcher_summary()
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        routed = await _terminalize_aged_nodeless_zombies(
-            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await _terminalize_aged_nodeless_zombies(session, org_id, max_age_minutes=135, summary=summary, max_rows=None)
     assert routed == []
     assert summary["claimed_but_never_dispatched"] == 0
     status, _code = await _run_state(db_engine, org_id, run)
@@ -1964,9 +1942,7 @@ async def test_expired_unclaimed_gate_terminalizes_awaiting_human_run(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        completed_at = (
-            await session.execute(text("SELECT completed_at FROM runs WHERE id = :rid"), {"rid": str(run)})
-        ).scalar_one()
+        completed_at = (await session.execute(text("SELECT completed_at FROM runs WHERE id = :rid"), {"rid": str(run)})).scalar_one()
     assert completed_at is not None
 
 
@@ -2192,9 +2168,7 @@ async def test_zero_claim_awaiting_human_older_than_grace_terminalizes(
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        completed_at = (
-            await session.execute(text("SELECT completed_at FROM runs WHERE id = :rid"), {"rid": str(run)})
-        ).scalar_one()
+        completed_at = (await session.execute(text("SELECT completed_at FROM runs WHERE id = :rid"), {"rid": str(run)})).scalar_one()
     assert completed_at is not None
 
 

@@ -64,8 +64,7 @@ def vcr_config(**overrides: Any) -> dict[str, Any]:
 
     if not VCR_CASSETTE_DIR.exists():
         warnings.warn(
-            f"VCR cassette directory does not exist: {VCR_CASSETTE_DIR}. "
-            "Create it or run with VCR_RECORD_MODE=once to record cassettes.",
+            f"VCR cassette directory does not exist: {VCR_CASSETTE_DIR}. Create it or run with VCR_RECORD_MODE=once to record cassettes.",
             stacklevel=2,
         )
 

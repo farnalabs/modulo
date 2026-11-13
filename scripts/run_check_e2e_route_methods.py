@@ -280,7 +280,7 @@ _TEMPLATE_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite://",
     "SECRET_KEY": "a" * 32,
     "FERNET_KEY": "b" * 32,
-    "MODULO_CSRF_ENABLED": "false",
+    "FARNA_CONTROL_CSRF_ENABLED": "false",
 }
 
 _HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})

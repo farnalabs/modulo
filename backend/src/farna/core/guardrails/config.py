@@ -535,14 +535,7 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
         # Fail closed, mirroring the engine's own validation error — an unknown
         # declared detection type must never be silently rebuilt as regex.
         raise GuardrailConfigError(f"Guardrail {engine_def.name!r} must use regex or json_schema detection (got config {config!r})")
-    if detection_type == str(EvalType.JSON_SCHEMA):
-        detection = GuardrailDetection(type="json_schema", schema=effective_config.get("schema"))
-    else:
-        detection = GuardrailDetection(
-            type="regex",
-            pattern=effective_config.get("pattern"),
-            field=effective_config.get("field"),
-        )
+    detection = GuardrailDetection(type="json_schema", schema=effective_config.get("schema")) if detection_type == str(EvalType.JSON_SCHEMA) else GuardrailDetection(type="regex", pattern=effective_config.get("pattern"), field=effective_config.get("field"))
     redaction = [RedactionRule(path=str(raw.get("path") or ""), mode=raw.get("mode", "transform")) for raw in config.get("redaction") or [] if isinstance(raw, dict)]
     try:
         return GuardrailConfigItem(

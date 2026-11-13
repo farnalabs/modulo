@@ -388,9 +388,7 @@ class TestRunToolsTeamScope(_AuthContext):
         mock_cancel.assert_not_awaited()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_run_status_blocked_when_run_owner_unstamped_but_pipeline_other_team(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_get_run_status_blocked_when_run_owner_unstamped_but_pipeline_other_team(self, mock_validate_auth: AsyncMock) -> None:
         # Pre-stamp production state: Run.owner_team_id is NULL (never written
         # by any code path before the create_run inheritance fix). The guard
         # must NOT treat a NULL stamp as org-level — it falls back to the
@@ -411,9 +409,7 @@ class TestRunToolsTeamScope(_AuthContext):
         mock_owner.assert_awaited_once()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_run_status_allowed_when_run_owner_unstamped_and_pipeline_org_level(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_get_run_status_allowed_when_run_owner_unstamped_and_pipeline_org_level(self, mock_validate_auth: AsyncMock) -> None:
         # An unstamped run whose pipeline is org-level (no owner team) stays
         # accessible to a team-scoped key — matches the org-level semantics.
         _ctx_team_id.set(_TEAM_A)
@@ -1277,9 +1273,7 @@ class TestResourceTeamScope(_AuthContext):
         mock_list_runs.assert_not_awaited()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_pipeline_detail_blocked_for_other_teams_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_resource_pipeline_detail_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
         pipeline = MagicMock()
@@ -1295,9 +1289,7 @@ class TestResourceTeamScope(_AuthContext):
         assert "team_boundary_violation" in result
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_pipeline_snapshots_blocked_for_other_teams_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_resource_pipeline_snapshots_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1313,9 +1305,7 @@ class TestResourceTeamScope(_AuthContext):
         mock_list.assert_not_awaited()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_pipeline_snapshot_detail_blocked_for_other_teams_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_resource_pipeline_snapshot_detail_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1325,9 +1315,7 @@ class TestResourceTeamScope(_AuthContext):
             patch("farna.db.crud.pipeline_snapshot_versioning.get_snapshot_detail", AsyncMock()) as mock_detail,
         ):
             mock_session.return_value = _make_session_context(session)
-            result = await resource_pipeline_snapshot_detail(
-                pipeline_id=str(pipeline_id), snapshot_id=str(uuid.uuid4())
-            )
+            result = await resource_pipeline_snapshot_detail(pipeline_id=str(pipeline_id), snapshot_id=str(uuid.uuid4()))
 
         assert "team_boundary_violation" in result
         mock_detail.assert_not_awaited()
@@ -1350,9 +1338,7 @@ class TestResourceTeamScope(_AuthContext):
         mock_rollup.assert_not_awaited()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_run_blocked_when_unstamped_but_pipeline_other_team(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_resource_run_blocked_when_unstamped_but_pipeline_other_team(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -1488,9 +1474,7 @@ class TestCrudTeamFilterSQL:
 
         assert page.total == 0
         count_sql = self._compile(captured[0]).lower()
-        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id)" in count_sql, (
-            "the boundary must use the run snapshot owner with pipeline fallback"
-        )
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id)" in count_sql, "the boundary must use the run snapshot owner with pipeline fallback"
         assert f"'{team}'" in count_sql, "the key's team must be the boundary bound value"
 
     async def test_db_list_runs_applies_account_scope_for_viewer(self) -> None:
@@ -1518,9 +1502,7 @@ class TestCrudTeamFilterSQL:
         sql = self._compile(captured[0])
         assert "team_memberships" in sql, "viewer reads must use the account's team memberships"
         assert f"team_memberships.account_id = '{account_id}'" in sql
-        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id)" in sql.lower(), (
-            "the account boundary must use the same effective owner as the team key"
-        )
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id)" in sql.lower(), "the account boundary must use the same effective owner as the team key"
         assert "is null" in sql.lower(), "org-level runs must stay visible to every viewer"
 
     async def test_db_list_triggers_applies_team_filter(self) -> None:
@@ -1761,26 +1743,20 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
         membership query resolves to the given boolean."""
         scope = SimpleNamespace(owner_team_id=owner, visibility="team")
         stack = contextlib.ExitStack()
-        stack.enter_context(
-            patch("farna.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope))
-        )
+        stack.enter_context(patch("farna.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)))
         stack.enter_context(
             patch(
                 "farna.api.team_scope.team_membership_exists",
                 AsyncMock(return_value=membership),
             )
         )
-        stack.enter_context(
-            patch("farna.api.mcp_server._session", MagicMock(return_value=_make_session_context(make_session_scope())))
-        )
+        stack.enter_context(patch("farna.api.mcp_server._session", MagicMock(return_value=_make_session_context(make_session_scope()))))
         # FAR-2227: the duplicate-name probe needs a real Result the scope session does not model.
         stack.enter_context(patch("farna.api.mcp_server._require_unique_trigger_name", AsyncMock()))
         return stack
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_user_non_member_cannot_create_trigger_on_other_teams_private_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_user_non_member_cannot_create_trigger_on_other_teams_private_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         from farna.api.mcp_server import _MSG_USER_NOT_TEAM_MEMBER
 
         pipeline_id = uuid.uuid4()
@@ -1791,9 +1767,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
         assert result["detail"] == _MSG_USER_NOT_TEAM_MEMBER
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_user_member_can_create_trigger_on_other_teams_private_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_user_member_can_create_trigger_on_other_teams_private_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         from datetime import UTC as _UTC
         from datetime import datetime as _datetime
 
@@ -1812,9 +1786,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
         assert result["pipeline_id"] == str(pipeline_id)
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_user_role_admin_bypasses_membership_for_other_teams_pipeline(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_user_role_admin_bypasses_membership_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
         from datetime import UTC as _UTC
         from datetime import datetime as _datetime
 
@@ -1897,9 +1869,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
         _ctx_role.set("viewer")
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_pending_hitl_viewer_sql_contains_account_team_scope(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_list_pending_hitl_viewer_sql_contains_account_team_scope(self, mock_validate_auth: AsyncMock) -> None:
         from sqlalchemy.dialects import postgresql
 
         self._as_viewer()
@@ -1927,9 +1897,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
         assert f"'{_PLACEHOLDER_USER_ID}'" in sql
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_hitl_reviews_viewer_sql_contains_account_team_scope(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_list_hitl_reviews_viewer_sql_contains_account_team_scope(self, mock_validate_auth: AsyncMock) -> None:
         from sqlalchemy.dialects import postgresql
 
         self._as_viewer()
@@ -1982,9 +1950,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
         assert f"'{_PLACEHOLDER_USER_ID}'" in sql
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_pending_hitl_viewer_without_account_context_fails_closed(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_list_pending_hitl_viewer_without_account_context_fails_closed(self, mock_validate_auth: AsyncMock) -> None:
         from farna.api.mcp_server import _ctx_user_id
 
         self._as_viewer()
@@ -1998,9 +1964,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
         assert result.get("error")
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_hitl_review_viewer_denied_when_run_outside_memberships(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_get_hitl_review_viewer_denied_when_run_outside_memberships(self, mock_validate_auth: AsyncMock) -> None:
         self._as_viewer()
         run = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
@@ -2019,9 +1983,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
         mock_get_gate.assert_not_called()
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_resource_hitl_review_viewer_outside_memberships_is_hidden(
-        self, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_resource_hitl_review_viewer_outside_memberships_is_hidden(self, mock_validate_auth: AsyncMock) -> None:
         self._as_viewer()
         run_id = uuid.uuid4()
         gate = MagicMock()

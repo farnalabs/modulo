@@ -52,9 +52,7 @@ class TestSystemConfigModel:
         from sqlalchemy import UniqueConstraint
 
         table = SystemConfig.__table__
-        has_unique = any(
-            isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["key"] for c in table.constraints
-        )
+        has_unique = any(isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["key"] for c in table.constraints)
         assert has_unique
 
 

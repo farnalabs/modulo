@@ -468,9 +468,7 @@ async def test_parameter_schema_not_found() -> None:
         "edges": [],
     }
     session = MagicMock()
-    session.execute = AsyncMock(
-        return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
-    )
+    session.execute = AsyncMock(return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
 
     result = ValidationResult()
     validator = GraphValidator()

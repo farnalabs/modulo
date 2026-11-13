@@ -77,17 +77,13 @@ class TestTriggerPipelineClientKey:
     def test_api_key_keyed_by_org_and_key_id(self) -> None:
         from farna.api.mcp_server import _trigger_pipeline_client_key
 
-        assert _trigger_pipeline_client_key() == (
-            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:ak:{_PLACEHOLDER_KEY_ID}"
-        )
+        assert _trigger_pipeline_client_key() == (f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:ak:{_PLACEHOLDER_KEY_ID}")
 
     def test_oauth_keyed_by_org_and_user_id(self) -> None:
         from farna.api.mcp_server import _ctx_auth_type, _trigger_pipeline_client_key
 
         _ctx_auth_type.set("oauth")
-        assert _trigger_pipeline_client_key() == (
-            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:oauth:user:{_PLACEHOLDER_USER_ID}"
-        )
+        assert _trigger_pipeline_client_key() == (f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:oauth:user:{_PLACEHOLDER_USER_ID}")
 
     def test_jwt_keyed_by_org_and_user_id(self) -> None:
         """FAR-620 rider: the JWT-segment bucket format is pinned — identity
@@ -95,9 +91,7 @@ class TestTriggerPipelineClientKey:
         from farna.api.mcp_server import _ctx_auth_type, _trigger_pipeline_client_key
 
         _ctx_auth_type.set("jwt")
-        assert _trigger_pipeline_client_key() == (
-            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:jwt:user:{_PLACEHOLDER_USER_ID}"
-        )
+        assert _trigger_pipeline_client_key() == (f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:jwt:user:{_PLACEHOLDER_USER_ID}")
 
     def test_user_scoped_api_key_buckets_by_account_not_key_id(self) -> None:
         """FAR-620: a user-scoped key acts as its creator — it shares the
@@ -106,17 +100,13 @@ class TestTriggerPipelineClientKey:
         from farna.api.mcp_server import _ctx_key_scope, _trigger_pipeline_client_key
 
         _ctx_key_scope.set("user")
-        assert _trigger_pipeline_client_key() == (
-            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:user:{_PLACEHOLDER_USER_ID}"
-        )
+        assert _trigger_pipeline_client_key() == (f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:user:{_PLACEHOLDER_USER_ID}")
 
     def test_org_scoped_api_key_keeps_key_id_bucket(self) -> None:
         from farna.api.mcp_server import _ctx_key_scope, _trigger_pipeline_client_key
 
         _ctx_key_scope.set("org")
-        assert _trigger_pipeline_client_key() == (
-            f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:ak:{_PLACEHOLDER_KEY_ID}"
-        )
+        assert _trigger_pipeline_client_key() == (f"trigger_pipeline:{_PLACEHOLDER_ORG_ID}:api_key:ak:{_PLACEHOLDER_KEY_ID}")
 
     def test_distinct_clients_get_distinct_keys(self) -> None:
         from farna.api.mcp_server import _trigger_pipeline_client_key

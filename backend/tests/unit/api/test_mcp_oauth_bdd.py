@@ -467,15 +467,7 @@ class TestRedirectUriValidation:
 
             from farna.api.mcp_server import _oauth_authorize
 
-            query = (
-                "response_type=code"
-                "&client_id=oauth_client_1"
-                "&redirect_uri=https%3A%2F%2Fevil.com%2Fphish"
-                "&scope=trigger:run"
-                "&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-                "&code_challenge_method=S256"
-                "&state=xyz"
-            )
+            query = "response_type=code&client_id=oauth_client_1&redirect_uri=https%3A%2F%2Fevil.com%2Fphish&scope=trigger:run&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=xyz"
             scope = {
                 "type": "http",
                 "method": "GET",
@@ -786,9 +778,7 @@ class TestConsentContext:
 
         assert resp.status_code == 422
 
-    def test_context_returns_client_name_scopes_team_anonymously(
-        self, anon_consent_client: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_context_returns_client_name_scopes_team_anonymously(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
         client, session = anon_consent_client
         state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
         client_row = _make_mock_client(name="My MCP App")

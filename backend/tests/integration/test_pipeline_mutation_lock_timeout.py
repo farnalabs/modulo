@@ -76,12 +76,7 @@ async def _insert_pipeline(
     pipeline_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
-                "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, "
-                "graph_nodes_json, default_autonomy_level) "
-                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json, :default)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json, default_autonomy_level) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json, :default)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -156,9 +151,7 @@ async def test_contended_patch_times_out_with_a_mapped_409(
         detail = resp.json()["detail"]
         assert "Timed out waiting for a lock" in detail, detail
         # The wait really happened (it did not resolve instantly)...
-        assert elapsed >= expected_seconds * 0.5, (
-            f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
-        )
+        assert elapsed >= expected_seconds * 0.5, f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
         # ...and it was really BOUNDED (the holder never released the lock).
         assert elapsed < bounded_ceiling, f"the wait was NOT bounded - {elapsed:.2f}s for a held row lock"
 
@@ -227,9 +220,7 @@ async def test_contended_clone_name_check_times_out_with_a_mapped_409(
         detail = resp.json()["detail"]
         assert "Timed out waiting for a lock" in detail, detail
         # The wait really happened (it did not resolve instantly)...
-        assert elapsed >= expected_seconds * 0.5, (
-            f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
-        )
+        assert elapsed >= expected_seconds * 0.5, f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
         # ...and it was really BOUNDED (the holder never released the lock).
         assert elapsed < bounded_ceiling, f"the wait was NOT bounded - {elapsed:.2f}s for a held name-row lock"
 
@@ -238,10 +229,7 @@ async def test_contended_clone_name_check_times_out_with_a_mapped_409(
         async with db_engine.connect() as conn:
             count = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM pipelines "
-                        "WHERE organisation_id = :oid AND name = :name AND deleted_at IS NULL"
-                    ),
+                    text("SELECT count(*) FROM pipelines WHERE organisation_id = :oid AND name = :name AND deleted_at IS NULL"),
                     {"oid": str(test_org), "name": target_name},
                 )
             ).scalar_one()

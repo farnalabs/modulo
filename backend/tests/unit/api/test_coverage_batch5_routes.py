@@ -69,12 +69,8 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     plan = MagicMock()
     plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: plan
@@ -99,9 +95,7 @@ class TestCommunityLibraryRoutes:
 
         route_app.dependency_overrides[get_settings] = _settings
         route_app.dependency_overrides[get_db_session] = override_session
-        route_app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-            username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-        )
+        route_app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="user", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         with (
             patch(
                 "farna.api.routes.community_library._community_objects_enabled",
@@ -183,9 +177,7 @@ class TestMetricsRoutes:
         assert client.post("/api/v1/metrics/web-vitals", json={"events": []}).status_code == 204
 
     def test_invalid_metric_value_is_rejected(self, client: TestClient) -> None:
-        response = client.post(
-            "/api/v1/metrics/web-vitals", json={"events": [{"metric_name": "LCP", "metric_value": -1}]}
-        )
+        response = client.post("/api/v1/metrics/web-vitals", json={"events": [{"metric_name": "LCP", "metric_value": -1}]})
         assert response.status_code == 422
 
     def test_summary_window_is_validated(self, client: TestClient) -> None:

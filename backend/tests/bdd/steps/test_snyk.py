@@ -45,9 +45,7 @@ def _build_connector(unauthorized: bool = False) -> AsyncMock:
                 raise ValueError("Snyk project query requires 'org_id' in filters")
             if not q.filters.get("project_id"):
                 raise ValueError("Snyk project query requires 'project_id' in filters")
-            return ConnectorResult(
-                records=[{"id": q.filters["project_id"], "attributes": {"name": "My Project"}}], total=1
-            )
+            return ConnectorResult(records=[{"id": q.filters["project_id"], "attributes": {"name": "My Project"}}], total=1)
         if q.resource == "issues":
             if not q.filters.get("org_id"):
                 raise ValueError("Snyk issues query requires 'org_id' in filters")
@@ -58,9 +56,7 @@ def _build_connector(unauthorized: bool = False) -> AsyncMock:
             if not q.filters.get("org_id"):
                 raise ValueError("Snyk aggregated_issues query requires 'org_id' in filters")
             if not q.filters.get("packages"):
-                raise ValueError(
-                    "Snyk aggregated_issues query requires 'packages' in filters (list of {name, version, ecosystem})"
-                )
+                raise ValueError("Snyk aggregated_issues query requires 'packages' in filters (list of {name, version, ecosystem})")
             return ConnectorResult(records=[{"id": "SNYK-123", "type": "vuln"}], total=1)
         if q.resource == "orgs":
             return ConnectorResult(records=[{"id": "my-org", "attributes": {"name": "My Org"}}], total=1)

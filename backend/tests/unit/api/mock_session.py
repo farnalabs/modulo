@@ -290,9 +290,7 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 install_entity_result = MagicMock()
                 install_entity_result.scalars.return_value.all.return_value = []
                 return install_entity_result
-            raise AssertionError(
-                "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
-            )
+            raise AssertionError("Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True")
 
         execute.side_effect = require_explicit_result
         session.execute = execute

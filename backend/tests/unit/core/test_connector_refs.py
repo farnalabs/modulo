@@ -54,8 +54,6 @@ async def test_resolve_bundle_connectors_reads_connector_type_key() -> None:
         "farna.api.routes.library.resolve_connector_type",
         new=AsyncMock(return_value={"instance_id": "inst-1"}),
     ) as mock_resolve:
-        mapping = await _resolve_bundle_connectors(
-            MagicMock(), MagicMock(organisation_id="org-1"), bundle, resolved, []
-        )
+        mapping = await _resolve_bundle_connectors(MagicMock(), MagicMock(organisation_id="org-1"), bundle, resolved, [])
     assert mapping == {"github": "inst-1"}
     mock_resolve.assert_awaited_once()

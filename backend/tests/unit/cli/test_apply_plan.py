@@ -125,9 +125,7 @@ class TestPlanDecisionTable:
         drifting as a permanent 'updated'."""
         from farna.cli.apply.models import TriggerEntity
 
-        entity = TriggerEntity.model_validate(
-            {"pipeline": "p", "name": "hook", "trigger_type": "ongoing", "daily_spend_limit": 10.55555}
-        )
+        entity = TriggerEntity.model_validate({"pipeline": "p", "name": "hook", "trigger_type": "ongoing", "daily_spend_limit": 10.55555})
         current = {
             "trigger_type": "ongoing",
             "active": True,
@@ -177,9 +175,7 @@ class TestPlanDecisionTable:
         merges declared keys and never deletes foreign ones)."""
         from farna.cli.apply.models import TriggerEntity
 
-        entity = TriggerEntity.model_validate(
-            {"pipeline": "report", "name": "hook", "trigger_type": "webhook", "config_json": {"note": "kept"}}
-        )
+        entity = TriggerEntity.model_validate({"pipeline": "report", "name": "hook", "trigger_type": "webhook", "config_json": {"note": "kept"}})
         current = {
             "trigger_type": "webhook",
             "active": True,

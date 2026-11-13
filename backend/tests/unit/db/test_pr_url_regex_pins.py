@@ -64,10 +64,7 @@ def _copies() -> dict[str, tuple[re.Pattern[str], int]]:
 def test_pr_url_regex_copies_all_share_one_pattern() -> None:
     """No copy may drift from the canonical pattern text (FAR-1402)."""
     for label, (pattern, _) in _copies().items():
-        assert pattern.pattern == _PR_URL_PATTERN, (
-            f"{label} pattern drifted from the canonical GitHub-PR-URL grammar; "
-            "update every copy together — they are pinned precisely so this cannot happen silently"
-        )
+        assert pattern.pattern == _PR_URL_PATTERN, f"{label} pattern drifted from the canonical GitHub-PR-URL grammar; update every copy together — they are pinned precisely so this cannot happen silently"
 
 
 def test_pr_url_regex_copy_flags_are_pinned() -> None:
@@ -81,7 +78,4 @@ def test_pr_url_regex_copy_flags_are_pinned() -> None:
     pairwise-equal or leave them untouched respectively.
     """
     for label, (pattern, expected_flags) in _copies().items():
-        assert pattern.flags == expected_flags, (
-            f"{label} flags drifted: expected {expected_flags} (0x{expected_flags:x}), "
-            f"got {pattern.flags} (0x{pattern.flags:x})"
-        )
+        assert pattern.flags == expected_flags, f"{label} flags drifted: expected {expected_flags} (0x{expected_flags:x}), got {pattern.flags} (0x{pattern.flags:x})"

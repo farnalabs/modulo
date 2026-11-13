@@ -183,9 +183,7 @@ def test_regex_family_requires_revalidation_pattern_at_definition_validation():
         CorrectionDefinition.model_validate({**base, "revalidation_config": {"field": "body"}})
     with pytest.raises(ValueError, match=r"revalidation_config\.field"):
         CorrectionDefinition.model_validate({**base, "revalidation_config": {"pattern": r"(?i)secret[:=]\s*\S+"}})
-    ok = CorrectionDefinition.model_validate(
-        {**base, "revalidation_config": {"pattern": r"(?i)secret[:=]\s*\S+", "field": "body"}}
-    )
+    ok = CorrectionDefinition.model_validate({**base, "revalidation_config": {"pattern": r"(?i)secret[:=]\s*\S+", "field": "body"}})
     assert ok.revalidation_config["pattern"]
 
 
@@ -379,9 +377,7 @@ def test_build_idempotency_key_deterministic():
 def test_convergence_detects_previously_seen_input():
     redacted = {"body": "same"}
     prior = [{"input_fingerprint": fingerprint_state(redacted)}]
-    assert convergence_verdict(redacted_input=redacted, produced_output=None, prior_states=prior) == (
-        CorrectionVerdict.CONVERGED
-    )
+    assert convergence_verdict(redacted_input=redacted, produced_output=None, prior_states=prior) == (CorrectionVerdict.CONVERGED)
 
 
 def test_convergence_allows_fresh_state():
@@ -483,9 +479,7 @@ async def test_still_violating_when_revalidation_fails():
     guardrail = _guardrail()
     correction = _correction()
     # The PII re-validation family flags a long digit run -> still violating.
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "123456789012345678901"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "123456789012345678901"})})
     outcome = await run_single_node_correction(
         correction=correction,
         guardrail=guardrail,
@@ -576,9 +570,7 @@ async def test_corrected_output_redacted_before_returned():
     guardrail = _guardrail()
     correction = _correction()
     # The backend echoes the (already redacted) input plus a new secret value.
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "note secret: hunter2 again"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "note secret: hunter2 again"})})
     outcome = await run_single_node_correction(
         correction=correction,
         guardrail=guardrail,
@@ -640,9 +632,7 @@ async def test_strictly_worse_produced_output_converges_without_burning_budget()
     # The produced output survives redaction (no `secret:`), so it violates BOTH
     # gr_no_digits (long digit run) and gr_no_admin ("admin") -> severity 2,
     # strictly worse than the prior severity 1.
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, redacted): json.dumps({"body": "admin 123456789012345"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, redacted): json.dumps({"body": "admin 123456789012345"})})
     outcome = await run_single_node_correction(
         correction=correction,
         guardrail=guardrail,
@@ -659,9 +649,7 @@ async def test_strictly_worse_produced_output_converges_without_burning_budget()
 async def test_dispatch_maps_budget_exhaustion_to_terminal():
     guardrail = _guardrail()
     correction = _correction(max_attempts=1)
-    backend = _StubCorrectionBackend(
-        {_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "123456789012345678901"})}
-    )
+    backend = _StubCorrectionBackend({_fixture_key(correction, _REDACTED_BODY): json.dumps({"body": "123456789012345678901"})})
     outcome = await dispatch_single_node_correction(
         correction=correction,
         guardrail=guardrail,

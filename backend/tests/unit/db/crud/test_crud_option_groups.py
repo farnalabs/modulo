@@ -92,9 +92,7 @@ class TestLibraryPrimitiveRequiredOptions:
 
     async def test_unknown_option_raises(self) -> None:
         with pytest.raises(TypeError, match="unexpected create_library_primitive options"):
-            await create_library_primitive(
-                session=AsyncMock(spec=AsyncSession), **_library_primitive_kwargs(unexpected_option=True)
-            )
+            await create_library_primitive(session=AsyncMock(spec=AsyncSession), **_library_primitive_kwargs(unexpected_option=True))
 
 
 def _model_backend_kwargs(**overrides: Any) -> dict[str, Any]:

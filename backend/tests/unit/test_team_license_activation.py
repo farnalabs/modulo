@@ -43,10 +43,7 @@ def test_signed_team_license_activates_all_team_flags() -> None:
 
     plan = LicenseKeyTier(validation.license_data)
     for name in _team_flag_names():
-        assert plan.feature_enabled(name), (
-            f"Team license did not activate team-tier flag '{name}'. "
-            "The tier-rank mechanism or license resolution regressed."
-        )
+        assert plan.feature_enabled(name), f"Team license did not activate team-tier flag '{name}'. The tier-rank mechanism or license resolution regressed."
 
 
 def test_team_license_tier_rank_activates_beyond_explicit_features() -> None:

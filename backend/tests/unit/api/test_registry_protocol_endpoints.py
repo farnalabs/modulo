@@ -88,9 +88,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -146,11 +144,7 @@ class TestV2Publish:
         "tags": [],
         "content_json": {},
         "signature": "dGVzdHNpZw==",
-        "public_key_pem": (
-            "-----BEGIN PUBLIC KEY-----\n"
-            "MCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
-            "-----END PUBLIC KEY-----"
-        ),
+        "public_key_pem": ("-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----"),
     }
 
     def test_publish_duplicate_slug_overwrites(self, client: TestClient) -> None:

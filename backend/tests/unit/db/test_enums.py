@@ -53,11 +53,7 @@ class TestModelBackendProviderEnum:
         assert len(values) == len(set(values))
 
     def test_check_constraint_includes_all_enum_values(self) -> None:
-        constraint = next(
-            c
-            for c in ModelBackend.__table_args__
-            if isinstance(c, CheckConstraint) and c.name == "ck_model_backends_provider"
-        )
+        constraint = next(c for c in ModelBackend.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_model_backends_provider")
         sql = str(constraint.sqltext)
         for value in _PROVIDER_VALUES:
             assert repr(value) in sql

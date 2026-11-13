@@ -85,9 +85,7 @@ def _ls_remote_for(shas_by_ref: dict[str, str]) -> str:
     return "".join(lines)
 
 
-def _resolved_input(
-    *, url: str = _URL_A, dest: str = _DEST_A, sha: str = _SHA_A, connector_instance_id: Any = None
-) -> ResolvedInput:
+def _resolved_input(*, url: str = _URL_A, dest: str = _DEST_A, sha: str = _SHA_A, connector_instance_id: Any = None) -> ResolvedInput:
     return ResolvedInput(
         url=url,
         dest=dest,
@@ -154,9 +152,7 @@ def _fake_session_factory() -> Any:
 
 
 class TestResolutionFailureTransitions:
-    async def test_missing_ref_raises_permanent_and_never_returns_partial(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_missing_ref_raises_permanent_and_never_returns_partial(self, monkeypatch: pytest.MonkeyPatch) -> None:
         remote = AsyncMock(return_value=_ls_remote_for({"refs/heads/main": _SHA_A}))
         monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
         inputs = [
@@ -281,18 +277,14 @@ class TestMultiHostTokenIsolation:
         assert not teardown
         assert "GIT_ASKPASS" not in setup
 
-    async def test_resolution_carries_per_host_credentials_only_on_their_own_input(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_resolution_carries_per_host_credentials_only_on_their_own_input(self, monkeypatch: pytest.MonkeyPatch) -> None:
         token_by_connector = {_CONNECTOR_A: _TOKEN_A, _CONNECTOR_B: _TOKEN_B}
 
         async def _fake_resolve(session: Any, *, connector_instance_id: Any, host: str) -> CloneCredential:
             token = token_by_connector[connector_instance_id]
             return CloneCredential(kind="token", host=host, username="x-access-token", secret=token)
 
-        remote = AsyncMock(
-            side_effect=lambda url: _ls_remote_for({"refs/heads/main": _SHA_A if url == _URL_A else _SHA_B})
-        )
+        remote = AsyncMock(side_effect=lambda url: _ls_remote_for({"refs/heads/main": _SHA_A if url == _URL_A else _SHA_B}))
         monkeypatch.setattr("farna.core.pipeline_engine.workspace_input_orchestration._run_git_ls_remote", remote)
         monkeypatch.setattr(
             "farna.core.pipeline_engine.workspace_input_credentials.resolve_clone_credential",
@@ -401,9 +393,7 @@ class TestMultiHostCapabilityConformance:
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is False
 
     def test_two_hosts_is_true(self) -> None:
-        caps = derive_sandbox_capabilities(
-            {"node_type": "sandbox_agent", "allowed_hosts": {"github.com": "TA", "gitlab.com": "TB"}}
-        )
+        caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "allowed_hosts": {"github.com": "TA", "gitlab.com": "TB"}})
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is True
 
     def test_absent_or_none_is_false(self) -> None:
@@ -416,18 +406,14 @@ class TestMultiHostCapabilityConformance:
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is False
 
     def test_smuggled_shapes_fail_closed(self) -> None:
-        caps = derive_sandbox_capabilities(
-            {"node_type": "sandbox_agent", "allowed_hosts": {"github.com": "TA", "gitlab.com": 42}}
-        )
+        caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "allowed_hosts": {"github.com": "TA", "gitlab.com": 42}})
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is None
         caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "allowed_hosts": "github.com"})
         assert caps[SANDBOX_CAPABILITY_MULTI_HOST] is None
 
     def test_capability_values_stay_bool_or_none(self) -> None:
         """ADR 033 contract: every capability value is bool | None, never a set."""
-        caps = derive_sandbox_capabilities(
-            {"node_type": "sandbox_agent", "allowed_hosts": {"a.com": "A", "b.com": "B"}}
-        )
+        caps = derive_sandbox_capabilities({"node_type": "sandbox_agent", "allowed_hosts": {"a.com": "A", "b.com": "B"}})
         for value in caps.values():
             assert isinstance(value, (bool, type(None)))
 
@@ -501,9 +487,7 @@ class TestDriftFailureStillCompletes:
         one_failed = AsyncMock(side_effect=RuntimeError("probe died"))
         sandbox_failed = _fake_sandbox()
         sandbox_failed.commands.run = one_failed
-        drift = await detect_workspace_input_drift(
-            sandbox_failed, [_resolved_input(dest="/home/user/repo-c", sha=_SHA_C)]
-        )
+        drift = await detect_workspace_input_drift(sandbox_failed, [_resolved_input(dest="/home/user/repo-c", sha=_SHA_C)])
         assert drift[0].drift_detected is True
 
         # A healthy reader on its own input still reports no drift:

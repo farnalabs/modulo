@@ -119,16 +119,11 @@ def _call(client: TestClient, method: str, path: str):
 @pytest.mark.parametrize(("feature", "method", "path"), TEAM_ROUTES)
 def test_community_plan_returns_402(community_client: TestClient, feature: str, method: str, path: str) -> None:
     resp = _call(community_client, method, path)
-    assert resp.status_code == 402, (
-        f"Expected 402 for {method.upper()} {path} (feature '{feature}' disabled) but got {resp.status_code}: "
-        f"{resp.text[:200]}"
-    )
+    assert resp.status_code == 402, f"Expected 402 for {method.upper()} {path} (feature '{feature}' disabled) but got {resp.status_code}: {resp.text[:200]}"
     assert feature in resp.text
 
 
 @pytest.mark.parametrize(("feature", "method", "path"), TEAM_ROUTES)
 def test_team_plan_does_not_402(team_client: TestClient, feature: str, method: str, path: str) -> None:
     resp = _call(team_client, method, path)
-    assert resp.status_code != 402, (
-        f"Feature '{feature}' gate blocked {method.upper()} {path} even though the team plan enables it"
-    )
+    assert resp.status_code != 402, f"Feature '{feature}' gate blocked {method.upper()} {path} even though the team plan enables it"

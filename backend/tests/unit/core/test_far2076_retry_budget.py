@@ -134,15 +134,11 @@ def test_the_validator_accepts_the_shared_bound_and_rejects_above_it() -> None:
     from farna.core.graph_validator._types import ValidationResult
 
     at_bound = ValidationResult()
-    graph_validator.GraphValidator.check_retry_policy(
-        {"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES}, at_bound
-    )
+    graph_validator.GraphValidator.check_retry_policy({"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES}, at_bound)
     assert at_bound.is_valid
 
     above_bound = ValidationResult()
-    graph_validator.GraphValidator.check_retry_policy(
-        {"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES + 1}, above_bound
-    )
+    graph_validator.GraphValidator.check_retry_policy({"on": ["failure"], "max_retries": RETRY_POLICY_MAX_RETRIES + 1}, above_bound)
     assert not above_bound.is_valid
 
 
@@ -410,9 +406,7 @@ def _transient_executor(*, execution_attempt_count: int, claim_token: str = "tok
     """A ``PipelineExecutor`` with only the transient-decision seams stubbed."""
     executor = object.__new__(PipelineExecutor)
     executor._claim_token = claim_token
-    executor._load_transient_state = AsyncMock(
-        return_value=(execution_attempt_count, claim_token, None, False, "pipeline:1")
-    )
+    executor._load_transient_state = AsyncMock(return_value=(execution_attempt_count, claim_token, None, False, "pipeline:1"))
     executor._idempotency_gate_ok = MagicMock(return_value=False)
     executor._script_lease_ok = AsyncMock(return_value=True)
     executor._fenced_pending_reset = AsyncMock(return_value=1)
@@ -926,12 +920,7 @@ class _FakeExecutorSession:
 
 
 def _bump_calls(sessions: list[_FakeExecutorSession]) -> list[tuple[str, dict[str, Any] | None]]:
-    return [
-        (sql, params)
-        for session in sessions
-        for sql, params in session.executed
-        if "execution_attempt_count = execution_attempt_count + 1" in sql
-    ]
+    return [(sql, params) for session in sessions for sql, params in session.executed if "execution_attempt_count = execution_attempt_count + 1" in sql]
 
 
 def test_the_execute_claim_does_not_stamp_the_execution_counter() -> None:
@@ -945,9 +934,7 @@ def test_neither_resume_claim_stamps_the_execution_counter() -> None:
     assert "execution_attempt_count" not in str(pe.build_resume_claim_update(_stale_seconds=450, claim_token="tok"))
 
 
-async def _execute_with_capacity(
-    *, active_runs: int, max_concurrent: int = 1
-) -> tuple[list[_FakeExecutorSession], uuid.UUID]:
+async def _execute_with_capacity(*, active_runs: int, max_concurrent: int = 1) -> tuple[list[_FakeExecutorSession], uuid.UUID]:
     """Drive the REAL ``execute()`` to the capacity decision, then make the
     pre-node stage die. Returns every fake session (to inspect the writes)."""
     run_id = uuid.uuid4()
@@ -1111,11 +1098,7 @@ async def _admit(
         cancellation_requested=False,
         claim_token="tok",
     )
-    terminal = (
-        SimpleNamespace(status="failed", error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED)
-        if terminal_write is _TERMINAL_LANDED
-        else terminal_write
-    )
+    terminal = SimpleNamespace(status="failed", error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED) if terminal_write is _TERMINAL_LANDED else terminal_write
     session = _AdmissionSession(retry_policy, refreshed_run=rerun_row)
     if session_sink is not None:
         session_sink.append(session)
@@ -1172,12 +1155,8 @@ async def test_admission_at_the_ceiling_terminalises_with_the_budget_code_and_do
         ({}, 99),
     ],
 )
-async def test_admission_below_the_ceiling_or_without_a_policy_still_executes(
-    retry_policy: Any, execution_attempt_count: int
-) -> None:
-    result, claim, bump, update, _session = await _admit(
-        retry_policy=retry_policy, execution_attempt_count=execution_attempt_count
-    )
+async def test_admission_below_the_ceiling_or_without_a_policy_still_executes(retry_policy: Any, execution_attempt_count: int) -> None:
+    result, claim, bump, update, _session = await _admit(retry_policy=retry_policy, execution_attempt_count=execution_attempt_count)
 
     update.assert_not_awaited()
     claim.assert_awaited_once()

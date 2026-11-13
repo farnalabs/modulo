@@ -183,4 +183,4 @@ def test_settings_validator_delegates_to_url_utils(monkeypatch: pytest.MonkeyPat
 def test_settings_validator_rewrites_asyncmy_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     settings = Settings(**{**_settings_kwargs(), "database_url": "mysql+asyncmy://modulo:pw@db:3306/farna_control"})  # type: ignore[arg-type]
-    assert settings.database_url == "mysql+aiopostgresql://user:pass@host:5432/farna_control"
+    assert settings.database_url == "mysql+aiomysql://modulo:pw@db:3306/farna_control"

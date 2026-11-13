@@ -56,21 +56,14 @@ def test_dependent_modules_reuse_the_canonical_constant() -> None:
     would mean the literal had been re-typed somewhere again.
     """
     for module in _DEPENDENT_MODULES:
-        assert module.SYSTEM_ORG_ID is organisation.SYSTEM_ORG_ID, (
-            f"{module.__name__}.SYSTEM_ORG_ID is not the canonical "
-            f"farna.db.models.organisation.SYSTEM_ORG_ID — import it instead "
-            f"of re-declaring the nil-UUID (FAR-1505)."
-        )
+        assert module.SYSTEM_ORG_ID is organisation.SYSTEM_ORG_ID, f"{module.__name__}.SYSTEM_ORG_ID is not the canonical farna.db.models.organisation.SYSTEM_ORG_ID — import it instead of re-declaring the nil-UUID (FAR-1505)."
 
 
 def test_nil_uuid_literal_lives_only_in_the_canonical_module() -> None:
     """No dependent module may carry its own copy of the nil-UUID literal."""
     for module in _DEPENDENT_MODULES:
         source = _source_of(module)
-        assert _NIL_UUID_LITERAL not in source, (
-            f"{module.__name__} re-types the nil-UUID literal — import "
-            f"farna.db.models.organisation.SYSTEM_ORG_ID instead (FAR-1505)."
-        )
+        assert _NIL_UUID_LITERAL not in source, f"{module.__name__} re-types the nil-UUID literal — import farna.db.models.organisation.SYSTEM_ORG_ID instead (FAR-1505)."
 
 
 def test_canonical_module_defines_the_literal_exactly_once() -> None:

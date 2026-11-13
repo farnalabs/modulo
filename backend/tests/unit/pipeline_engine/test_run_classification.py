@@ -586,9 +586,7 @@ class TestDeliveryProvenance:
         the two provenance keys are purely additive to the record shape."""
         outputs = {"n1": _node_return_with_pr(_PR)}
         telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success"}}
-        record = classify_run(
-            "complete", None, outputs_json=outputs, telemetry_json=telemetry, work_intact=True
-        ).to_dict()
+        record = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry, work_intact=True).to_dict()
         assert record["value"] == "delivered"
         assert record["reason"] == REASON_DELIVERED
         assert record["delivered_pr_urls"] == [_PR]

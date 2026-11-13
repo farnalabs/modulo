@@ -134,9 +134,7 @@ def test_run_response_carries_matched_known_fixes() -> None:
 
 
 def test_run_response_known_fixes_empty_when_no_signature_matches() -> None:
-    resp = _build_run_response(
-        _make_run(status="failed", error_code="node.cancelled", error_detail="something unrelated")
-    )
+    resp = _build_run_response(_make_run(status="failed", error_code="node.cancelled", error_detail="something unrelated"))
 
     assert resp.known_fixes is not None
     assert not resp.known_fixes

@@ -160,10 +160,7 @@ def mock_execute(*, model: type[Any], count: int) -> AsyncMock:
             return scalars_result
         if is_count_select(stmt):
             return scalar_result
-        raise AssertionError(
-            f"statement is none of: {model.__name__} row select, count select "
-            f"(statement-timeout plumbing text is intentionally rejected)\n{stmt}"
-        )
+        raise AssertionError(f"statement is none of: {model.__name__} row select, count select (statement-timeout plumbing text is intentionally rejected)\n{stmt}")
 
     return AsyncMock(side_effect=_route)
 

@@ -47,6 +47,4 @@ def test_direct_import_succeeds_in_fresh_interpreter(import_stmt: str) -> None:
     )
     # Include stdout/stderr in the assertion message for easy debugging.
     combined = (result.stdout + result.stderr).strip()
-    assert result.returncode == 0, (
-        f"'{import_stmt}' failed in a fresh interpreter (exit {result.returncode}):\n{combined}"
-    )
+    assert result.returncode == 0, f"'{import_stmt}' failed in a fresh interpreter (exit {result.returncode}):\n{combined}"

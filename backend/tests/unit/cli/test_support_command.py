@@ -97,9 +97,7 @@ def test_support_command_reports_a_gate_refusal(tmp_path: Path, monkeypatch: pyt
 
     monkeypatch.setattr(bundle, "build_bundle_async", _refuse)
 
-    result = CliRunner().invoke(
-        cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)]
-    )
+    result = CliRunner().invoke(cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)])
 
     assert result.exit_code == 2
     assert "refused: redaction gate refused member 'logs/app.log.tail'" in result.output
@@ -114,9 +112,7 @@ def test_support_command_reports_a_write_failure(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr(bundle, "build_bundle_async", _fail)
 
-    result = CliRunner().invoke(
-        cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)]
-    )
+    result = CliRunner().invoke(cli_main.cli, ["support", "--out", str(tmp_path / "b.zip"), "--data-dir", str(tmp_path)])
 
     assert result.exit_code == 1
     assert "could not write bundle: disk full" in result.output

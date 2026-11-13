@@ -65,9 +65,7 @@ class TestSetHitlEmailPreference:
         not call ``begin()`` itself."""
         account = _make_account({"theme": "dark"})
         session = _mock_session(account)
-        merged = await set_hitl_email_preference(
-            session, _ACCOUNT_ID, default=True, pipeline_overrides={str(_OTHER_UUID): True}
-        )
+        merged = await set_hitl_email_preference(session, _ACCOUNT_ID, default=True, pipeline_overrides={str(_OTHER_UUID): True})
         assert merged["hitl_email"] == {
             "default": True,
             "pipeline_overrides": {str(_OTHER_UUID): True},
@@ -75,9 +73,7 @@ class TestSetHitlEmailPreference:
         session.begin.assert_not_called()
 
     async def test_pipeline_overrides_none_preserves_stored_overrides(self) -> None:
-        account = _make_account(
-            {"theme": "dark", "hitl_email": {"default": False, "pipeline_overrides": {str(_OTHER_UUID): True}}}
-        )
+        account = _make_account({"theme": "dark", "hitl_email": {"default": False, "pipeline_overrides": {str(_OTHER_UUID): True}}})
         session = _mock_session(account)
         merged = await set_hitl_email_preference(session, _ACCOUNT_ID, default=True)
         assert merged["hitl_email"] == {
@@ -89,9 +85,7 @@ class TestSetHitlEmailPreference:
     async def test_pipeline_overrides_replaces_atomically(self) -> None:
         account = _make_account({"hitl_email": {"default": False, "pipeline_overrides": {str(_OTHER_UUID): True}}})
         session = _mock_session(account)
-        merged = await set_hitl_email_preference(
-            session, _ACCOUNT_ID, default=False, pipeline_overrides={str(_UUID3): True}
-        )
+        merged = await set_hitl_email_preference(session, _ACCOUNT_ID, default=False, pipeline_overrides={str(_UUID3): True})
         assert merged["hitl_email"] == {
             "default": False,
             "pipeline_overrides": {str(_UUID3): True},
@@ -162,9 +156,7 @@ class TestDatetimeRaceRegression:
         account = _make_account({})
         session = _mock_session(account)
         await update_account_preferences(session, _ACCOUNT_ID, {"theme": "dark"})
-        merged = await set_hitl_email_preference(
-            session, _ACCOUNT_ID, default=False, pipeline_overrides={str(_OTHER_UUID): True}
-        )
+        merged = await set_hitl_email_preference(session, _ACCOUNT_ID, default=False, pipeline_overrides={str(_OTHER_UUID): True})
         assert merged["theme"] == "dark"
         assert merged["hitl_email"] == {
             "default": False,

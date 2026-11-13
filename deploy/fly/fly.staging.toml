@@ -93,7 +93,7 @@ kill_timeout = 180
     protocol = "http"
 
 [env]
-  MODULO_DB = "postgres"
+  FARNA_CONTROL_DB = "postgres"
   # Deployment environment name stamped on every operator alert email (FAR-1495).
   MODULO_ENV = "staging"
   # Operator-alert environment allowlist: only these MODULO_ENVs may send
@@ -103,14 +103,14 @@ kill_timeout = 180
   # readiness blips are pure operator noise — "production" excludes it while
   # keeping app.modulo.run alerting (same value as fly.toml).
   ALERT_ENVIRONMENTS = "production"
-  # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
+  # FARNA_CONTROL_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the farna_control_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.
-  MODULO_PUBLIC_URL = "https://staging.modulo.run"
-  MODULO_PLUGIN_DISCOVERY = "false"
+  FARNA_CONTROL_PUBLIC_URL = "https://staging.modulo.run"
+  FARNA_CONTROL_PLUGIN_DISCOVERY = "false"
   # Staging-only dev-mode toggle (preview/in-development features via Admin > Feature Flags).
-  MODULO_DEV_MODE = "true"
-  MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  FARNA_CONTROL_DEV_MODE = "true"
+  FARNA_CONTROL_MAX_LOCAL_CONCURRENCY = "4"
   # 2026-09 Redis-usage audit (August Fly invoice) — CANONICAL derivation for
   # BOTH Fly apps: fly.toml cites this block instead of duplicating it.
   #

@@ -56,9 +56,7 @@ async def seed() -> None:
         file=sys.stderr,
     )
     if tier_count == 0 or flag_count == 0:
-        raise RuntimeError(
-            f"Tier catalog seed verification failed: seeded {tier_count} tiers and {flag_count} feature flags."
-        )
+        raise RuntimeError(f"Tier catalog seed verification failed: seeded {tier_count} tiers and {flag_count} feature flags.")
 
 
 if __name__ == "__main__":

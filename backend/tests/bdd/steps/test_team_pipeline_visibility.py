@@ -93,10 +93,7 @@ def user_requests_pipeline_list(username: str, request, ctx, client) -> None:
 
     is_member = username in ctx.get("memberships", {})
     selected = [p for p in ctx["pipelines"].values() if p.get("visibility") == "org" or is_member]
-    items = [
-        make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"])
-        for p in selected
-    ]
+    items = [make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"]) for p in selected]
     page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
 
     with patch(
@@ -115,10 +112,7 @@ def admin_requests_pipeline_list(request, ctx, client) -> None:
     from tests.bdd.conftest import ORG_ID, make_mock_pipeline
 
     selected = list(ctx["pipelines"].values())
-    items = [
-        make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"])
-        for p in selected
-    ]
+    items = [make_mock_pipeline(id=uuid.UUID(p["id"]), org_id=ORG_ID, name=p["name"], visibility=p["visibility"]) for p in selected]
     page = SimpleNamespace(items=items, total=len(items), page=1, page_size=20, next_cursor=None, has_more=False)
 
     with patch(
@@ -424,10 +418,7 @@ def _drive_trigger_request(
     from tests.bdd.conftest import _make_test_client
 
     principal_username = username or "testuser"
-    if username is not None and username in ctx["users"]:
-        account_id = uuid.UUID(ctx["users"][username]["id"])
-    else:
-        account_id = uuid.uuid4()
+    account_id = uuid.UUID(ctx["users"][username]["id"]) if username is not None and username in ctx["users"] else uuid.uuid4()
     member_team_ids: set[uuid.UUID] = set()
     if username is not None:
         for membership in ctx.get("memberships", {}).values():

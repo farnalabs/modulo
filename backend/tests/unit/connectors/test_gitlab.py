@@ -36,9 +36,7 @@ async def test_query_file(connector):
         "file_name": "README.md",
         "content": "SGVsbG8gV29ybGQ=",
     }
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -54,9 +52,7 @@ async def test_query_file_binary_content_left_raw(connector):
         "file_name": "logo.png",
         "content": "\x89PNG\r\n\x1a\n\x00\x00\x00\rbinary\xff\xfe",
     }
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/logo.png").mock(
-        return_value=httpx.Response(200, json=file_data)
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/logo.png").mock(return_value=httpx.Response(200, json=file_data))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -77,13 +73,9 @@ async def test_query_mrs(connector):
 @respx.mock
 async def test_write_file_update_when_exists(connector):
     """PUT (update) is used when the probe GET finds an existing file."""
-    probe_route = respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "abc123", "file_name": "main.py"})
-    )
+    probe_route = respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "abc123", "file_name": "main.py"}))
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -105,13 +97,9 @@ async def test_write_file_update_when_exists(connector):
 @respx.mock
 async def test_write_file_create_when_new(connector):
     """POST (create) is used when the probe GET returns 404."""
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(
-        return_value=httpx.Response(404, text='{"message":"404 File Not Found"}')
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(return_value=httpx.Response(404, text='{"message":"404 File Not Found"}'))
     response_body = {"file_path": "new/file.py", "branch": "main"}
-    post_route = respx.post(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(
-        return_value=httpx.Response(201, json=response_body)
-    )
+    post_route = respx.post(f"{_API}/projects/group%2Fproject/repository/files/new%2Ffile.py").mock(return_value=httpx.Response(201, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -213,12 +201,8 @@ async def test_write_file_unrelated_create_error_is_not_swallowed(connector):
 @respx.mock
 async def test_write_file_honors_branch_key(connector):
     response_body = {"file_path": "src/main.py", "branch": "feature-branch"}
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "def456"})
-    )
-    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "def456"}))
+    route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -240,9 +224,7 @@ async def test_write_file_explicit_sha_skips_probe(connector):
     """When the caller supplies sha, the probe GET is skipped and PUT is issued directly."""
     probe_route = respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py")
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    put_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -264,9 +246,7 @@ async def test_write_file_explicit_sha_skips_probe(connector):
 @respx.mock
 async def test_write_mr(connector):
     mr_response = {"id": 99, "web_url": "https://gitlab.com/group/project/-/merge_requests/99"}
-    respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(
-        return_value=httpx.Response(200, json=mr_response)
-    )
+    respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(return_value=httpx.Response(200, json=mr_response))
     result = await connector.write(
         ConnectorPayload(
             resource="mr",
@@ -342,9 +322,7 @@ async def test_query_projects_no_next_page(connector):
 
 @respx.mock
 async def test_query_projects_passes_cursor_as_page(connector):
-    route = respx.get(f"{_API}/projects").mock(
-        return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"})
-    )
+    route = respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}], headers={"X-Next-Page": "0"}))
     await connector.query(ConnectorQuery(resource="projects", cursor="3"))
     assert route.calls.last.request.url.params.get("page") == "3"
 
@@ -452,9 +430,7 @@ async def test_single_resource_metadata_rate_limit(connector):
             headers={"RateLimit-Remaining": "42"},
         )
     )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"project": "group/project", "path": "README.md"})
-    )
+    result = await connector.query(ConnectorQuery(resource="file", filters={"project": "group/project", "path": "README.md"}))
     assert result.metadata["rate_limit"]["RateLimit-Remaining"] == "42"
 
 
@@ -462,13 +438,9 @@ async def test_single_resource_metadata_rate_limit(connector):
 async def test_self_hosted_base_url():
     """Self-hosted GitLab instances must be reachable via configurable base_url."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "selfhosted"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "selfhosted"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"}))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
@@ -479,13 +451,9 @@ async def test_self_hosted_base_url():
 async def test_self_hosted_base_url_trailing_slash():
     """base_url with a trailing slash must be normalised (rstrip)."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4/")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "selfhosted"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "selfhosted"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"}))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
@@ -517,9 +485,7 @@ def test_default_base_url_is_gitlab_com(connector):
 @respx.mock
 async def test_write_file_delete(connector):
     """DELETE /repository/files/{path} with branch, sha, and commit_message."""
-    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/src%2Fold.py").mock(
-        return_value=httpx.Response(200, json={"file_path": "src/old.py", "branch": "main"})
-    )
+    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/src%2Fold.py").mock(return_value=httpx.Response(200, json={"file_path": "src/old.py", "branch": "main"}))
     result = await connector.write(
         ConnectorPayload(
             resource="file_delete",
@@ -540,12 +506,8 @@ async def test_write_file_delete(connector):
 
 @respx.mock
 async def test_write_file_delete_defaults_ref(connector):
-    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"})
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
-    )
+    route = respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"}))
+    result = await connector.write(ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"}))
     assert result["file_path"] == "README.md"
     assert route.calls.last.request.url.params.get("branch") == "main"
 
@@ -562,9 +524,7 @@ async def test_write_file_delete_missing_project(connector):
 
 @respx.mock
 async def test_write_file_delete_error_response(connector):
-    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(400, text='{"message": "branch is missing"}')
-    )
+    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(return_value=httpx.Response(400, text='{"message": "branch is missing"}'))
     payload = ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
     with pytest.raises(ValueError, match="GitLab API HTTP 400"):
         await connector.write(payload)
@@ -573,9 +533,7 @@ async def test_write_file_delete_error_response(connector):
 @respx.mock
 async def test_write_mr_note(connector):
     note_response = {"id": 123, "body": "Looks good"}
-    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/5/notes").mock(
-        return_value=httpx.Response(200, json=note_response)
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/5/notes").mock(return_value=httpx.Response(200, json=note_response))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_note",
@@ -589,9 +547,7 @@ async def test_write_mr_note(connector):
 @respx.mock
 async def test_write_mr_merge(connector):
     """PUT /merge_requests/{iid}/merge with squash option."""
-    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/7/merge").mock(
-        return_value=httpx.Response(200, json={"id": 99, "state": "merged"})
-    )
+    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/7/merge").mock(return_value=httpx.Response(200, json={"id": 99, "state": "merged"}))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_merge",
@@ -605,9 +561,7 @@ async def test_write_mr_merge(connector):
 @respx.mock
 async def test_write_mr_approve(connector):
     """POST /merge_requests/{iid}/approve."""
-    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approve").mock(
-        return_value=httpx.Response(200, json={"approved": True})
-    )
+    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approve").mock(return_value=httpx.Response(200, json={"approved": True}))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_approve",
@@ -620,9 +574,7 @@ async def test_write_mr_approve(connector):
 @respx.mock
 async def test_write_mr_comment(connector):
     """POST /merge_requests/{iid}/notes with body."""
-    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/notes").mock(
-        return_value=httpx.Response(200, json={"id": 500, "body": "LGTM"})
-    )
+    respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/notes").mock(return_value=httpx.Response(200, json={"id": 500, "body": "LGTM"}))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_comment",
@@ -635,12 +587,8 @@ async def test_write_mr_comment(connector):
 @respx.mock
 async def test_write_file_delete_missing_branch_defaults_main(connector):
     """file_delete without branch defaults to main."""
-    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(
-        return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"})
-    )
-    await connector.write(
-        ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"})
-    )
+    respx.delete(f"{_API}/projects/group%2Fproject/repository/files/README.md").mock(return_value=httpx.Response(200, json={"file_path": "README.md", "branch": "main"}))
+    await connector.write(ConnectorPayload(resource="file_delete", data={"project": "group/project", "path": "README.md"}))
     request = respx.calls.last.request
     assert request.url.params.get("branch") == "main"
 
@@ -655,9 +603,7 @@ async def test_write_mr_merge_missing_iid(connector):
 @respx.mock
 async def test_write_mr_labels(connector):
     labels_response = {"id": 5, "labels": ["review", "backend"]}
-    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/5").mock(
-        return_value=httpx.Response(200, json=labels_response)
-    )
+    route = respx.put(f"{_API}/projects/group%2Fproject/merge_requests/5").mock(return_value=httpx.Response(200, json=labels_response))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_labels",
@@ -680,12 +626,8 @@ async def test_query_mr_changes(connector):
             {"old_path": "README.md", "new_path": "README.md", "new_file": True, "diff": "@@ -0,0 +1 @@"},
         ],
     }
-    respx.get(f"{_API}/projects/group%2Fproject/merge_requests/5/changes").mock(
-        return_value=httpx.Response(200, json=changes_response)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="mr_changes", filters={"project": "group/project", "iid": "5"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/merge_requests/5/changes").mock(return_value=httpx.Response(200, json=changes_response))
+    result = await connector.query(ConnectorQuery(resource="mr_changes", filters={"project": "group/project", "iid": "5"}))
     assert len(result.records) == 1
     changes = result.records[0]["changes"]
     assert len(changes) == 2
@@ -743,12 +685,8 @@ async def test_write_file_absolute_path_rejected(connector):
 @respx.mock
 async def test_query_file_nested_relative_path_allowed(connector):
     """Nested relative paths remain valid."""
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"file_name": "main.py", "content": "cHJpbnQoJ2hpJyk="})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"project": "group/project", "path": "src/main.py"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"file_name": "main.py", "content": "cHJpbnQoJ2hpJyk="}))
+    result = await connector.query(ConnectorQuery(resource="file", filters={"project": "group/project", "path": "src/main.py"}))
     assert result.records[0]["content"] == "print('hi')"
 
 
@@ -759,9 +697,7 @@ async def test_query_tree(connector):
         {"id": "a1", "name": "README.md", "type": "blob", "path": "README.md"},
         {"id": "a2", "name": "src", "type": "tree", "path": "src"},
     ]
-    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(
-        return_value=httpx.Response(200, json=entries)
-    )
+    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(return_value=httpx.Response(200, json=entries))
     result = await connector.query(ConnectorQuery(resource="tree", filters={"project": "group/project"}))
     assert len(result.records) == 2
     assert result.records[0]["type"] == "blob"
@@ -771,9 +707,7 @@ async def test_query_tree(connector):
 @respx.mock
 async def test_query_tree_recursive_with_path_and_ref(connector):
     """recursive + path + ref filters forwarded to the tree endpoint."""
-    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(
-        return_value=httpx.Response(200, json=[{"name": "main.py", "type": "blob", "path": "src/main.py"}])
-    )
+    route = respx.get(f"{_API}/projects/group%2Fproject/repository/tree").mock(return_value=httpx.Response(200, json=[{"name": "main.py", "type": "blob", "path": "src/main.py"}]))
     result = await connector.query(
         ConnectorQuery(
             resource="tree",
@@ -816,9 +750,7 @@ async def test_query_tree_missing_project(connector):
 async def test_write_files_batch_commit(connector):
     """Batch file ops go through the Commits API as one atomic commit."""
     commit_response = {"id": "abc123", "short_id": "abc123", "title": "Update via Modulo"}
-    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
-        return_value=httpx.Response(201, json=commit_response)
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(return_value=httpx.Response(201, json=commit_response))
     result = await connector.write(
         ConnectorPayload(
             resource="files",
@@ -845,9 +777,7 @@ async def test_write_files_batch_commit(connector):
 
 @respx.mock
 async def test_write_files_custom_branch_message(connector):
-    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
-        return_value=httpx.Response(201, json={"id": "x"})
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(return_value=httpx.Response(201, json={"id": "x"}))
     await connector.write(
         ConnectorPayload(
             resource="files",
@@ -866,9 +796,7 @@ async def test_write_files_custom_branch_message(connector):
 
 @respx.mock
 async def test_write_files_move_action(connector):
-    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(
-        return_value=httpx.Response(201, json={"id": "y"})
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/repository/commits").mock(return_value=httpx.Response(201, json={"id": "y"}))
     await connector.write(
         ConnectorPayload(
             resource="files",
@@ -906,9 +834,7 @@ async def test_write_files_invalid_action_type(connector):
 @respx.mock
 async def test_write_files_missing_file_path(connector):
     with pytest.raises(ValueError, match="requires 'file_path'"):
-        await connector.write(
-            ConnectorPayload(resource="files", data={"project": "group/project", "actions": [{"action": "create"}]})
-        )
+        await connector.write(ConnectorPayload(resource="files", data={"project": "group/project", "actions": [{"action": "create"}]}))
 
 
 @respx.mock
@@ -951,9 +877,7 @@ async def test_write_files_move_previous_path_traversal_blocked(connector):
 async def test_write_mr_approval_request(connector):
     """POST /approval_rules creates a rule requesting approval from specific users."""
     rule_response = {"id": 3, "name": "Requested approvers", "rule_type": "approval", "approvals_required": 1}
-    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(
-        return_value=httpx.Response(201, json=rule_response)
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(return_value=httpx.Response(201, json=rule_response))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_approval_request",
@@ -969,9 +893,7 @@ async def test_write_mr_approval_request(connector):
 
 @respx.mock
 async def test_write_mr_approval_request_by_email(connector):
-    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(
-        return_value=httpx.Response(201, json={"id": 4, "name": "Requested approvers"})
-    )
+    route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests/7/approval_rules").mock(return_value=httpx.Response(201, json={"id": 4, "name": "Requested approvers"}))
     result = await connector.write(
         ConnectorPayload(
             resource="mr_approval_request",
@@ -994,9 +916,7 @@ async def test_write_mr_approval_request_by_email(connector):
 @respx.mock
 async def test_write_mr_approval_request_requires_users(connector):
     with pytest.raises(ValueError, match="requires 'user_ids' and/or 'user_emails'"):
-        await connector.write(
-            ConnectorPayload(resource="mr_approval_request", data={"project": "group/project", "iid": "7"})
-        )
+        await connector.write(ConnectorPayload(resource="mr_approval_request", data={"project": "group/project", "iid": "7"}))
 
 
 @respx.mock
@@ -1088,13 +1008,9 @@ async def test_health_check_token_info_empty_scopes_non_fatal(connector):
 async def test_health_check_self_hosted_scope_probe_uses_instance_root(connector):
     """Self-hosted scope probe must hit the instance root, outside /api/v4."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "selfhosted"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "selfhosted"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(200, json={"version": "17.5.0"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(200, json={"version": "17.5.0"}))
     route = respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
     result = await custom.health_check()
     assert route.called
@@ -1154,13 +1070,9 @@ async def test_write_mr_blocked_without_api_scope(connector):
 async def test_write_file_allowed_with_write_repository_scope(connector):
     """write_repository satisfies repository-file writes without the api scope."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]}))
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "aaa111"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "aaa111"}))
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -1176,9 +1088,7 @@ async def test_write_allowed_with_api_scope(connector):
     """The api scope satisfies both repository-file and non-file writes (superset)."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
     response_body = {"id": 99, "web_url": "https://gitlab.com/group/project/-/merge_requests/99"}
-    mr_route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    mr_route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="mr",
@@ -1193,13 +1103,9 @@ async def test_write_allowed_with_api_scope(connector):
 async def test_write_proceeds_when_scopes_unavailable(connector):
     """An unavailable token-info endpoint (old self-hosted) must not block writes."""
     respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "bbb222"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "bbb222"}))
     response_body = {"file_path": "src/main.py", "branch": "main"}
-    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json=response_body)
-    )
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json=response_body))
     result = await connector.write(
         ConnectorPayload(
             resource="file",
@@ -1214,12 +1120,8 @@ async def test_write_proceeds_when_scopes_unavailable(connector):
 async def test_write_proceeds_when_token_info_network_error(connector):
     """A network error probing scopes must degrade to allow, not block the write."""
     respx.get(_TOKEN_INFO).mock(side_effect=httpx.ConnectError("Connection refused"))
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "ccc333"})
-    )
-    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "ccc333"}))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"}))
     await connector.write(
         ConnectorPayload(
             resource="file",
@@ -1252,12 +1154,8 @@ async def test_verify_write_scopes_empty_when_satisfied_or_unknown(connector):
 async def test_write_scope_cache_avoids_reprobe(connector):
     """Declared scopes are cached so consecutive writes don't re-hit token-info."""
     token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "ddd444"})
-    )
-    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "ddd444"}))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"}))
     payload = ConnectorPayload(
         resource="file",
         data={"project": "group/project", "path": "src/main.py", "content": "x", "message": "m"},
@@ -1276,12 +1174,8 @@ async def test_health_check_warms_write_scope_cache(connector):
     token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
     result = await connector.health_check()
     assert result.ok is True
-    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"sha": "eee555"})
-    )
-    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
-        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
-    )
+    respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"sha": "eee555"}))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"}))
     await connector.write(
         ConnectorPayload(
             resource="file",
@@ -1311,12 +1205,8 @@ def test_constructor_rejects_whitespace_token():
 @respx.mock
 async def test_query_file_numeric_project_id_coerced(connector):
     """A numeric project ID is coerced to a string and routed correctly."""
-    route = respx.get(f"{_API}/projects/123/repository/files/README.md").mock(
-        return_value=httpx.Response(200, json={"file_name": "README.md", "content": "SGVsbG8="})
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"project": 123, "path": "README.md", "ref": "main"})
-    )
+    route = respx.get(f"{_API}/projects/123/repository/files/README.md").mock(return_value=httpx.Response(200, json={"file_name": "README.md", "content": "SGVsbG8="}))
+    result = await connector.query(ConnectorQuery(resource="file", filters={"project": 123, "path": "README.md", "ref": "main"}))
     assert result.records[0]["content"] == "Hello"
     assert route.called
 
@@ -1349,6 +1239,4 @@ async def test_query_file_bool_project_raises_descriptive_error(connector):
 @respx.mock
 async def test_write_file_none_project_raises_descriptive_error(connector):
     with pytest.raises(ValueError, match="project ID or path"):
-        await connector.write(
-            ConnectorPayload(resource="file", data={"project": None, "path": "src/main.py", "content": "x"})
-        )
+        await connector.write(ConnectorPayload(resource="file", data={"project": None, "path": "src/main.py", "content": "x"}))

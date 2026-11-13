@@ -440,9 +440,7 @@ def test_test_webhook_success(api: tuple[TestClient, AsyncMock], monkeypatch: py
     assert data["status_code"] == 200
 
 
-def test_test_webhook_endpoint_error_response(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_webhook_endpoint_error_response(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     session.get = AsyncMock(return_value=_endpoint())
     client_http = _http_client()
@@ -478,9 +476,7 @@ def test_test_webhook_transport_error(api: tuple[TestClient, AsyncMock], monkeyp
     assert data["status_code"] is None
 
 
-def test_test_webhook_signs_payload_with_secret(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_webhook_signs_payload_with_secret(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     ep = _endpoint(secret_ciphertext=b"cipher")
     session.get = AsyncMock(return_value=ep)
@@ -494,15 +490,11 @@ def test_test_webhook_signs_payload_with_secret(
     assert sent_headers["X-Modulo-Signature"] == f"sha256={expected_sig}"
 
 
-def test_test_webhook_sign_failure_still_posts(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_webhook_sign_failure_still_posts(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     ep = _endpoint(secret_ciphertext=b"cipher")
     session.get = AsyncMock(return_value=ep)
-    monkeypatch.setattr(
-        admin_notifications, "decode_stored_secret_scoped", AsyncMock(side_effect=RuntimeError("decode failed"))
-    )
+    monkeypatch.setattr(admin_notifications, "decode_stored_secret_scoped", AsyncMock(side_effect=RuntimeError("decode failed")))
     http_client = _http_client()
     monkeypatch.setattr(admin_notifications, "pinned_async_client", AsyncMock(return_value=http_client))
     resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/test")
@@ -645,9 +637,7 @@ def test_retry_delivery_success(api: tuple[TestClient, AsyncMock], monkeypatch: 
     assert data["success"] is True
 
 
-def test_retry_delivery_endpoint_failure_recorded(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_delivery_endpoint_failure_recorded(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     session.get = AsyncMock(side_effect=[_endpoint(), _delivery()])
     http_client = _http_client()
@@ -667,9 +657,7 @@ def test_retry_delivery_endpoint_failure_recorded(
     assert data["status_code"] == 500
 
 
-def test_retry_delivery_dead_letter_threshold_disables(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_delivery_dead_letter_threshold_disables(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     session.get = AsyncMock(side_effect=[_endpoint(), _delivery()])
     http_client = _http_client()
@@ -749,9 +737,7 @@ def _retained_original_payload() -> tuple[bytes, bytes]:
     return original_body, Fernet(_FERNET_KEY.encode()).encrypt(original_body)
 
 
-def test_retry_delivery_replays_retained_payload(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_delivery_replays_retained_payload(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     original_body, ciphertext = _retained_original_payload()
     session.get = AsyncMock(side_effect=[_endpoint(), _delivery(payload_ciphertext=ciphertext)])
@@ -765,9 +751,7 @@ def test_retry_delivery_replays_retained_payload(
     assert new_log.payload_ciphertext == ciphertext
 
 
-def test_retry_delivery_signs_replayed_payload(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_delivery_signs_replayed_payload(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     original_body, ciphertext = _retained_original_payload()
     ep = _endpoint(secret_ciphertext=b"cipher")
@@ -784,9 +768,7 @@ def test_retry_delivery_signs_replayed_payload(
     assert sent_content == original_body
 
 
-def test_retry_delivery_corrupt_retained_payload_falls_back(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retry_delivery_corrupt_retained_payload_falls_back(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     session.get = AsyncMock(side_effect=[_endpoint(), _delivery(payload_ciphertext=b"not-fernet")])
     http_client = _http_client()
@@ -932,9 +914,7 @@ def test_replay_failed_deliveries_success(api: tuple[TestClient, AsyncMock], mon
     assert data["success"] is True
 
 
-def test_replay_failed_deliveries_scopes_to_endpoint(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_replay_failed_deliveries_scopes_to_endpoint(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     session.get = AsyncMock(return_value=_endpoint())
     session.execute = AsyncMock(return_value=_result(scalars=[_delivery(status="dead_lettered")]))
@@ -965,9 +945,7 @@ def test_replay_failed_deliveries_cross_org_404(api: tuple[TestClient, AsyncMock
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_replay_failed_deliveries_error_mapping(
-    api: tuple[TestClient, AsyncMock], exc: Exception, expected: int
-) -> None:
+def test_replay_failed_deliveries_error_mapping(api: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
     client, session = api
     session.get = AsyncMock(side_effect=[exc])
     resp = client.post(f"/api/v1/admin/notifications/{_WEBHOOK_ID}/deliveries/replay")

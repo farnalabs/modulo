@@ -192,12 +192,7 @@ class TestSystemMapCrud:
 
     async def test_get_map_by_id_includes_and_excludes_deleted(self, repo: SystemMapRepository) -> None:
         map_obj = _map()
-        assert (
-            await repo.get_map_by_id(
-                _session(_result(one=map_obj)), organisation_id=_ORG, map_id=_MAP, include_deleted=True
-            )
-            is map_obj
-        )
+        assert await repo.get_map_by_id(_session(_result(one=map_obj)), organisation_id=_ORG, map_id=_MAP, include_deleted=True) is map_obj
         assert await repo.get_map_by_id(_session(_result(one=None)), organisation_id=_ORG, map_id=_MAP) is None
 
     async def test_list_maps_by_org_filters(self, repo: SystemMapRepository) -> None:
@@ -239,20 +234,12 @@ class TestSystemMapCrud:
         assert await repo.soft_delete_map(_session(_result(one=None)), organisation_id=_ORG, map_id=_MAP) is False
 
         with_deleter = _map()
-        assert (
-            await repo.soft_delete_map(
-                _session(_result(one=with_deleter)), organisation_id=_ORG, map_id=_MAP, deleted_by=_ACCOUNT
-            )
-            is True
-        )
+        assert await repo.soft_delete_map(_session(_result(one=with_deleter)), organisation_id=_ORG, map_id=_MAP, deleted_by=_ACCOUNT) is True
         assert with_deleter.deleted_by == _ACCOUNT
         assert with_deleter.deleted_at is not None
 
         without_deleter = _map()
-        assert (
-            await repo.soft_delete_map(_session(_result(one=without_deleter)), organisation_id=_ORG, map_id=_MAP)
-            is True
-        )
+        assert await repo.soft_delete_map(_session(_result(one=without_deleter)), organisation_id=_ORG, map_id=_MAP) is True
 
 
 class TestRevisionCrud:
@@ -277,52 +264,25 @@ class TestRevisionCrud:
 
     async def test_get_revision_by_id_variants(self, repo: SystemMapRepository) -> None:
         revision = _revision()
-        assert (
-            await repo.get_revision_by_id(
-                _session(_result(one=revision)), organisation_id=_ORG, revision_id=_REV, include_deleted=True
-            )
-            is revision
-        )
-        assert (
-            await repo.get_revision_by_id(_session(_result(one=None)), organisation_id=_ORG, revision_id=_REV) is None
-        )
+        assert await repo.get_revision_by_id(_session(_result(one=revision)), organisation_id=_ORG, revision_id=_REV, include_deleted=True) is revision
+        assert await repo.get_revision_by_id(_session(_result(one=None)), organisation_id=_ORG, revision_id=_REV) is None
 
     async def test_get_revision_by_number_and_published(self, repo: SystemMapRepository) -> None:
         revision = _revision()
-        assert (
-            await repo.get_revision_by_number(
-                _session(_result(one=revision)), organisation_id=_ORG, system_map_id=_MAP, revision_number=1
-            )
-            is revision
-        )
-        assert (
-            await repo.get_published_revision(_session(_result(one=revision)), organisation_id=_ORG, system_map_id=_MAP)
-            is revision
-        )
+        assert await repo.get_revision_by_number(_session(_result(one=revision)), organisation_id=_ORG, system_map_id=_MAP, revision_number=1) is revision
+        assert await repo.get_published_revision(_session(_result(one=revision)), organisation_id=_ORG, system_map_id=_MAP) is revision
 
     async def test_list_revisions_filters(self, repo: SystemMapRepository) -> None:
         revision = _revision()
         db = _session(_result(rows=[revision]))
-        assert await repo.list_revisions(
-            db, organisation_id=_ORG, system_map_id=_MAP, include_deleted=True, status="draft"
-        ) == [revision]
+        assert await repo.list_revisions(db, organisation_id=_ORG, system_map_id=_MAP, include_deleted=True, status="draft") == [revision]
         assert not await repo.list_revisions(_session(_result(rows=[])), organisation_id=_ORG, system_map_id=_MAP)
 
     async def test_publish_revision_missing_or_foreign(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.publish_revision(
-                _session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
-            )
-            is None
-        )
+        assert await repo.publish_revision(_session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV) is None
 
         foreign = _revision(map_id=uuid.uuid4())
-        assert (
-            await repo.publish_revision(
-                _session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
-            )
-            is None
-        )
+        assert await repo.publish_revision(_session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV) is None
 
     async def test_publish_revision_updates_map(self, repo: SystemMapRepository) -> None:
         revision = _revision()
@@ -362,19 +322,9 @@ class TestNodeAndRelationshipCrud:
 
     async def test_get_node_variants(self, repo: SystemMapRepository) -> None:
         node = _node()
-        assert (
-            await repo.get_node_by_id(
-                _session(_result(one=node)), organisation_id=_ORG, node_id=_NODE, include_deleted=True
-            )
-            is node
-        )
+        assert await repo.get_node_by_id(_session(_result(one=node)), organisation_id=_ORG, node_id=_NODE, include_deleted=True) is node
         assert await repo.get_node_by_id(_session(_result(one=None)), organisation_id=_ORG, node_id=_NODE) is None
-        assert (
-            await repo.get_node_by_key(
-                _session(_result(one=node)), organisation_id=_ORG, revision_id=_REV, node_key="n1"
-            )
-            is node
-        )
+        assert await repo.get_node_by_key(_session(_result(one=node)), organisation_id=_ORG, revision_id=_REV, node_key="n1") is node
         assert (
             await repo.get_node_by_map_revision_key(
                 _session(_result(one=node)),
@@ -388,12 +338,8 @@ class TestNodeAndRelationshipCrud:
 
     async def test_list_nodes_in_revision(self, repo: SystemMapRepository) -> None:
         node = _node()
-        assert await repo.list_nodes_in_revision(
-            _session(_result(rows=[node])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
-        ) == [node]
-        assert not (
-            await repo.list_nodes_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV)
-        )
+        assert await repo.list_nodes_in_revision(_session(_result(rows=[node])), organisation_id=_ORG, revision_id=_REV, include_deleted=True) == [node]
+        assert not (await repo.list_nodes_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV))
 
     async def test_update_node(self, repo: SystemMapRepository) -> None:
         with pytest.raises(ValueError, match="Unknown SystemMapNode field"):
@@ -412,12 +358,7 @@ class TestNodeAndRelationshipCrud:
         assert await repo.delete_node(_session(_result(one=None)), organisation_id=_ORG, node_id=_NODE) is False
 
         node = _node()
-        assert (
-            await repo.delete_node(
-                _session(_result(one=node)), organisation_id=_ORG, node_id=_NODE, deleted_by=_ACCOUNT
-            )
-            is True
-        )
+        assert await repo.delete_node(_session(_result(one=node)), organisation_id=_ORG, node_id=_NODE, deleted_by=_ACCOUNT) is True
         assert node.deleted_by == _ACCOUNT
 
         plain = _node()
@@ -439,28 +380,14 @@ class TestNodeAndRelationshipCrud:
 
     async def test_list_relationships_in_revision(self, repo: SystemMapRepository) -> None:
         rel = _relationship("a", "b")
-        assert await repo.list_relationships_in_revision(
-            _session(_result(rows=[rel])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
-        ) == [rel]
-        assert not (
-            await repo.list_relationships_in_revision(
-                _session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV
-            )
-        )
+        assert await repo.list_relationships_in_revision(_session(_result(rows=[rel])), organisation_id=_ORG, revision_id=_REV, include_deleted=True) == [rel]
+        assert not (await repo.list_relationships_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV))
 
     async def test_delete_relationship_variants(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.delete_relationship(_session(_result(one=None)), organisation_id=_ORG, relationship_id=_NODE)
-            is False
-        )
+        assert await repo.delete_relationship(_session(_result(one=None)), organisation_id=_ORG, relationship_id=_NODE) is False
 
         rel = _relationship("a", "b")
-        assert (
-            await repo.delete_relationship(
-                _session(_result(one=rel)), organisation_id=_ORG, relationship_id=_NODE, deleted_by=_ACCOUNT
-            )
-            is True
-        )
+        assert await repo.delete_relationship(_session(_result(one=rel)), organisation_id=_ORG, relationship_id=_NODE, deleted_by=_ACCOUNT) is True
         assert rel.deleted_by == _ACCOUNT
 
         plain = _relationship("a", "b")
@@ -487,31 +414,14 @@ class TestLoopConfigAndBindingCrud:
 
     async def test_get_loop_config_variants(self, repo: SystemMapRepository) -> None:
         loop = _loop_config()
-        assert (
-            await repo.get_loop_config_by_id(
-                _session(_result(one=loop)), organisation_id=_ORG, loop_config_id=_NODE, include_deleted=True
-            )
-            is loop
-        )
-        assert (
-            await repo.get_loop_config_by_id(_session(_result(one=None)), organisation_id=_ORG, loop_config_id=_NODE)
-            is None
-        )
-        assert (
-            await repo.get_loop_config_by_node_key(
-                _session(_result(one=loop)), organisation_id=_ORG, revision_id=_REV, node_key="loop"
-            )
-            is loop
-        )
+        assert await repo.get_loop_config_by_id(_session(_result(one=loop)), organisation_id=_ORG, loop_config_id=_NODE, include_deleted=True) is loop
+        assert await repo.get_loop_config_by_id(_session(_result(one=None)), organisation_id=_ORG, loop_config_id=_NODE) is None
+        assert await repo.get_loop_config_by_node_key(_session(_result(one=loop)), organisation_id=_ORG, revision_id=_REV, node_key="loop") is loop
 
     async def test_list_loop_configs_in_revision(self, repo: SystemMapRepository) -> None:
         loop = _loop_config()
-        assert await repo.list_loop_configs_in_revision(
-            _session(_result(rows=[loop])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
-        ) == [loop]
-        assert not (
-            await repo.list_loop_configs_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV)
-        )
+        assert await repo.list_loop_configs_in_revision(_session(_result(rows=[loop])), organisation_id=_ORG, revision_id=_REV, include_deleted=True) == [loop]
+        assert not (await repo.list_loop_configs_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV))
 
     async def test_create_attribution_binding(self, repo: SystemMapRepository) -> None:
         db = _session()
@@ -528,26 +438,12 @@ class TestLoopConfigAndBindingCrud:
         db.flush.assert_awaited_once()
 
     async def test_get_attribution_binding_variants(self, repo: SystemMapRepository) -> None:
-        binding = SystemMapAttributionBinding(
-            organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger"
-        )
-        assert (
-            await repo.get_attribution_binding_by_id(
-                _session(_result(one=binding)), organisation_id=_ORG, binding_id=_NODE, include_deleted=True
-            )
-            is binding
-        )
-        assert (
-            await repo.get_attribution_binding_by_id(
-                _session(_result(one=None)), organisation_id=_ORG, binding_id=_NODE
-            )
-            is None
-        )
+        binding = SystemMapAttributionBinding(organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger")
+        assert await repo.get_attribution_binding_by_id(_session(_result(one=binding)), organisation_id=_ORG, binding_id=_NODE, include_deleted=True) is binding
+        assert await repo.get_attribution_binding_by_id(_session(_result(one=None)), organisation_id=_ORG, binding_id=_NODE) is None
 
     async def test_list_attribution_bindings_filters(self, repo: SystemMapRepository) -> None:
-        binding = SystemMapAttributionBinding(
-            organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger"
-        )
+        binding = SystemMapAttributionBinding(organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger")
         db = _session(_result(rows=[binding]))
         result = await repo.list_attribution_bindings(
             db,
@@ -562,76 +458,38 @@ class TestLoopConfigAndBindingCrud:
         assert not await repo.list_attribution_bindings(_session(_result(rows=[])), organisation_id=_ORG)
 
     async def test_get_trigger_and_action_bindings(self, repo: SystemMapRepository) -> None:
-        binding = SystemMapAttributionBinding(
-            organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger"
-        )
-        assert (
-            await repo.get_trigger_binding(
-                _session(_result(one=binding)), organisation_id=_ORG, pipeline_id=_PIPELINE, node_key="n1"
-            )
-            is binding
-        )
-        assert (
-            await repo.get_action_pipeline_binding(
-                _session(_result(one=binding)), organisation_id=_ORG, pipeline_id=_PIPELINE, node_key="n1"
-            )
-            is binding
-        )
+        binding = SystemMapAttributionBinding(organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger")
+        assert await repo.get_trigger_binding(_session(_result(one=binding)), organisation_id=_ORG, pipeline_id=_PIPELINE, node_key="n1") is binding
+        assert await repo.get_action_pipeline_binding(_session(_result(one=binding)), organisation_id=_ORG, pipeline_id=_PIPELINE, node_key="n1") is binding
 
     async def test_delete_attribution_binding_variants(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.delete_attribution_binding(_session(_result(one=None)), organisation_id=_ORG, binding_id=_NODE)
-            is False
-        )
+        assert await repo.delete_attribution_binding(_session(_result(one=None)), organisation_id=_ORG, binding_id=_NODE) is False
 
-        binding = SystemMapAttributionBinding(
-            organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger"
-        )
-        assert (
-            await repo.delete_attribution_binding(
-                _session(_result(one=binding)), organisation_id=_ORG, binding_id=_NODE, deleted_by=_ACCOUNT
-            )
-            is True
-        )
+        binding = SystemMapAttributionBinding(organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger")
+        assert await repo.delete_attribution_binding(_session(_result(one=binding)), organisation_id=_ORG, binding_id=_NODE, deleted_by=_ACCOUNT) is True
         assert binding.deleted_by == _ACCOUNT
 
-        plain = SystemMapAttributionBinding(
-            organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger"
-        )
-        assert await repo.delete_attribution_binding(
-            _session(_result(one=plain)), organisation_id=_ORG, binding_id=_NODE
-        )
+        plain = SystemMapAttributionBinding(organisation_id=_ORG, pipeline_id=_PIPELINE, system_map_id=_MAP, node_key="n1", binding_kind="trigger")
+        assert await repo.delete_attribution_binding(_session(_result(one=plain)), organisation_id=_ORG, binding_id=_NODE)
 
 
 class TestAdmissionAttemptCrud:
     async def test_create_attempt_reuses_existing(self, repo: SystemMapRepository) -> None:
-        existing = SystemMapLoopAdmissionAttempt(
-            organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending"
-        )
+        existing = SystemMapLoopAdmissionAttempt(organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending")
         db = _session(_result(one=existing))
-        assert (
-            await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
-            is existing
-        )
+        assert await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k") is existing
         db.add.assert_not_called()
 
     async def test_create_attempt_inserts(self, repo: SystemMapRepository) -> None:
         db = _session(_result(one=None))
-        attempt = await repo.create_admission_attempt(
-            db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="admitted"
-        )
+        attempt = await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="admitted")
         assert attempt.status == "admitted"
         db.add.assert_called_once_with(attempt)
 
     async def test_create_attempt_integrity_race_returns_winner(self, repo: SystemMapRepository) -> None:
-        winner = SystemMapLoopAdmissionAttempt(
-            organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending"
-        )
+        winner = SystemMapLoopAdmissionAttempt(organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending")
         db = _session(_result(one=None), _result(one=winner), add_error=IntegrityError("s", {}, Exception("dup")))
-        assert (
-            await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
-            is winner
-        )
+        assert await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k") is winner
 
     async def test_create_attempt_integrity_race_without_winner_reraises(self, repo: SystemMapRepository) -> None:
         db = _session(_result(one=None), _result(one=None), add_error=IntegrityError("s", {}, Exception("dup")))
@@ -639,20 +497,11 @@ class TestAdmissionAttemptCrud:
             await repo.create_admission_attempt(db, organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k")
 
     async def test_update_attempt_status(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.update_admission_attempt_status(
-                _session(_result(one=None)), organisation_id=_ORG, attempt_id=_NODE, status="rejected"
-            )
-            is None
-        )
+        assert await repo.update_admission_attempt_status(_session(_result(one=None)), organisation_id=_ORG, attempt_id=_NODE, status="rejected") is None
 
-        attempt = SystemMapLoopAdmissionAttempt(
-            organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending"
-        )
+        attempt = SystemMapLoopAdmissionAttempt(organisation_id=_ORG, loop_config_id=_NODE, idempotency_key="k", status="pending")
         db = _session(_result(one=attempt))
-        updated = await repo.update_admission_attempt_status(
-            db, organisation_id=_ORG, attempt_id=_NODE, status="rejected"
-        )
+        updated = await repo.update_admission_attempt_status(db, organisation_id=_ORG, attempt_id=_NODE, status="rejected")
         assert updated is attempt
         assert attempt.status == "rejected"
         db.flush.assert_awaited_once()
@@ -735,16 +584,8 @@ class TestReservationCrud:
             idempotency_key="k",
             cooldown_until=datetime.now(UTC),
         )
-        assert (
-            await repo.get_reservation_by_id(
-                _session(_result(one=reservation)), organisation_id=_ORG, reservation_id=_NODE, include_deleted=True
-            )
-            is reservation
-        )
-        assert (
-            await repo.get_reservation_by_id(_session(_result(one=None)), organisation_id=_ORG, reservation_id=_NODE)
-            is None
-        )
+        assert await repo.get_reservation_by_id(_session(_result(one=reservation)), organisation_id=_ORG, reservation_id=_NODE, include_deleted=True) is reservation
+        assert await repo.get_reservation_by_id(_session(_result(one=None)), organisation_id=_ORG, reservation_id=_NODE) is None
 
     async def test_get_active_reservation_for_run(self, repo: SystemMapRepository) -> None:
         reservation = SystemMapLoopReservation(
@@ -754,12 +595,7 @@ class TestReservationCrud:
             idempotency_key="k",
             cooldown_until=datetime.now(UTC),
         )
-        assert (
-            await repo.get_active_reservation_for_run(
-                _session(_result(one=reservation)), organisation_id=_ORG, loop_config_id=_NODE, run_id=_REV
-            )
-            is reservation
-        )
+        assert await repo.get_active_reservation_for_run(_session(_result(one=reservation)), organisation_id=_ORG, loop_config_id=_NODE, run_id=_REV) is reservation
 
     async def test_list_active_reservations_filters(self, repo: SystemMapRepository) -> None:
         reservation = SystemMapLoopReservation(
@@ -770,18 +606,11 @@ class TestReservationCrud:
             cooldown_until=datetime.now(UTC),
         )
         db = _session(_result(rows=[reservation]))
-        assert await repo.list_active_reservations(
-            db, organisation_id=_ORG, loop_config_id=_NODE, before=datetime.now(UTC)
-        ) == [reservation]
+        assert await repo.list_active_reservations(db, organisation_id=_ORG, loop_config_id=_NODE, before=datetime.now(UTC)) == [reservation]
         assert not await repo.list_active_reservations(_session(_result(rows=[])), organisation_id=_ORG)
 
     async def test_update_reservation_status_variants(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.update_reservation_status(
-                _session(_result(one=None)), organisation_id=_ORG, reservation_id=_NODE, status="consumed"
-            )
-            is None
-        )
+        assert await repo.update_reservation_status(_session(_result(one=None)), organisation_id=_ORG, reservation_id=_NODE, status="consumed") is None
 
         reservation = SystemMapLoopReservation(
             organisation_id=_ORG,
@@ -812,55 +641,34 @@ class TestReservationCrud:
             idempotency_key="k",
             cooldown_until=datetime.now(UTC),
         )
-        assert (
-            await repo.update_reservation_status(
-                _session(_result(one=plain)), organisation_id=_ORG, reservation_id=_NODE, status="released"
-            )
-            is plain
-        )
+        assert await repo.update_reservation_status(_session(_result(one=plain)), organisation_id=_ORG, reservation_id=_NODE, status="released") is plain
 
 
 class TestValidateTeamBinding:
     async def test_missing_team(self, repo: SystemMapRepository) -> None:
         db = _session(_result(first=None))
-        error = await repo._validate_team_binding(
-            db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM
-        )
+        error = await repo._validate_team_binding(db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM)
         assert error is not None
         assert "does not exist" in error
 
     async def test_admin_skips_membership(self, repo: SystemMapRepository) -> None:
         db = _session(_result(first=SimpleNamespace(id=_TEAM)))
-        assert (
-            await repo._validate_team_binding(
-                db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin", team_id=_TEAM
-            )
-            is None
-        )
+        assert await repo._validate_team_binding(db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="admin", team_id=_TEAM) is None
         assert db.execute.await_count == 1
 
     async def test_member_with_membership(self, repo: SystemMapRepository) -> None:
         db = _session(_result(first=SimpleNamespace(id=_TEAM)), _result(first=SimpleNamespace(id=_TEAM)))
-        assert (
-            await repo._validate_team_binding(
-                db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM
-            )
-            is None
-        )
+        assert await repo._validate_team_binding(db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM) is None
 
     async def test_member_without_account(self, repo: SystemMapRepository) -> None:
         db = _session(_result(first=SimpleNamespace(id=_TEAM)), _result(first=None))
-        error = await repo._validate_team_binding(
-            db, organisation_id=_ORG, account_id=None, org_role="member", team_id=_TEAM
-        )
+        error = await repo._validate_team_binding(db, organisation_id=_ORG, account_id=None, org_role="member", team_id=_TEAM)
         assert error is not None
         assert "not available" in error
 
     async def test_member_without_membership(self, repo: SystemMapRepository) -> None:
         db = _session(_result(first=SimpleNamespace(id=_TEAM)), _result(first=None))
-        error = await repo._validate_team_binding(
-            db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM
-        )
+        error = await repo._validate_team_binding(db, organisation_id=_ORG, account_id=_ACCOUNT, org_role="member", team_id=_TEAM)
         assert error is not None
         assert "not available" in error
 
@@ -1441,16 +1249,10 @@ class TestOverviewLoopMetrics:
 
     async def test_latest_admission_wins_within_the_window(self, overview_session: AsyncSession) -> None:
         session = overview_session
-        _add_admission(
-            session, loop_config_id=_LOOP_A, status="rejected", created_at=_WINDOW_START + timedelta(hours=1)
-        )
-        _add_admission(
-            session, loop_config_id=_LOOP_A, status="admitted", created_at=_WINDOW_START + timedelta(hours=2)
-        )
+        _add_admission(session, loop_config_id=_LOOP_A, status="rejected", created_at=_WINDOW_START + timedelta(hours=1))
+        _add_admission(session, loop_config_id=_LOOP_A, status="admitted", created_at=_WINDOW_START + timedelta(hours=2))
         # Outside the window — must not be reported as the latest admission.
-        _add_admission(
-            session, loop_config_id=_LOOP_A, status="duplicate", created_at=_WINDOW_END + timedelta(minutes=1)
-        )
+        _add_admission(session, loop_config_id=_LOOP_A, status="duplicate", created_at=_WINDOW_END + timedelta(minutes=1))
         await session.flush()
 
         item = (await _loop_metrics(session, loop_config_ids={_LOOP_A}))[_LOOP_A]
@@ -1744,10 +1546,7 @@ class TestOverviewLoopMetrics:
 
 class TestFullRevisionGraph:
     async def test_missing_revision_returns_none(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.get_full_revision_graph(_session(_result(one=None)), organisation_id=_ORG, revision_id=_REV)
-            is None
-        )
+        assert await repo.get_full_revision_graph(_session(_result(one=None)), organisation_id=_ORG, revision_id=_REV) is None
 
     async def test_graph_assembles_all_parts(self, repo: SystemMapRepository) -> None:
         revision = _revision()
@@ -1793,9 +1592,7 @@ class TestVersionAwareRevisionMethods:
             effective_to=None,
         )
         db = _session(_result(one=rev))
-        result = await repo.get_revision_by_time(
-            db, organisation_id=_ORG, system_map_id=_MAP, at=at, published_only=True
-        )
+        result = await repo.get_revision_by_time(db, organisation_id=_ORG, system_map_id=_MAP, at=at, published_only=True)
         assert result is rev
 
     async def test_get_revision_by_time_not_found(self, repo: SystemMapRepository) -> None:
@@ -1833,20 +1630,10 @@ class TestVersionAwareRevisionMethods:
         assert result[1].revision_number == 2
 
     async def test_archive_revision_missing_or_foreign(self, repo: SystemMapRepository) -> None:
-        assert (
-            await repo.archive_revision(
-                _session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
-            )
-            is None
-        )
+        assert await repo.archive_revision(_session(_result(one=None)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV) is None
 
         foreign = _revision(map_id=uuid.uuid4())
-        assert (
-            await repo.archive_revision(
-                _session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV
-            )
-            is None
-        )
+        assert await repo.archive_revision(_session(_result(one=foreign)), organisation_id=_ORG, system_map_id=_MAP, revision_id=_REV) is None
 
     async def test_archive_revision_closes_open_window(self, repo: SystemMapRepository) -> None:
         rev = self._revision_with_effective(effective_from=datetime(2026, 1, 1, tzinfo=UTC), effective_to=None)

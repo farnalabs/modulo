@@ -671,9 +671,7 @@ async def test_repeated_resolutions_reuse_one_platform_reading_within_the_ttl() 
         constructed += 1
         return _VolumeClient(_VolumeResponse(100))
 
-    capacity.set_platform_capacity_probe(
-        FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: now[0])
-    )
+    capacity.set_platform_capacity_probe(FlyVolumeCapacityProbe(app="app", token="tok", client_factory=factory, clock=lambda: now[0]))
     disk_usage = MagicMock(side_effect=OSError("absent"))
     settings = _fake_settings(capacity_bytes=None, capacity_path="/vol")
     with (

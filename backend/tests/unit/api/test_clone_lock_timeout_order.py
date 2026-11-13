@@ -180,10 +180,7 @@ def test_clone_sets_the_lock_bound_before_the_name_check_for_update() -> None:
     # Transaction-scoped (SET LOCAL): is_local => true, else the bound would
     # leak past the request onto the pooled connection.
     assert ", true)" in lock_sql, lock_sql
-    assert lock_indexes[0] < _first_for_update_index(executed), (
-        "the bound was set AFTER the first FOR UPDATE - the name check could "
-        "park unbounded:\n" + "\n".join(f"{i}: {sql}" for i, sql in enumerate(executed))
-    )
+    assert lock_indexes[0] < _first_for_update_index(executed), "the bound was set AFTER the first FOR UPDATE - the name check could park unbounded:\n" + "\n".join(f"{i}: {sql}" for i, sql in enumerate(executed))
 
 
 async def test_team_gate_helper_still_sets_the_bound_before_its_own_lock() -> None:
@@ -222,7 +219,4 @@ async def test_team_gate_helper_still_sets_the_bound_before_its_own_lock() -> No
 
     lock_indexes = _lock_timeout_indexes(executed)
     assert lock_indexes, "the gate helper never set the lock_timeout bound"
-    assert lock_indexes[0] < _first_for_update_index(executed), (
-        "the gate helper's FOR UPDATE ran before the bound was set:\n"
-        + "\n".join(f"{i}: {sql}" for i, sql in enumerate(executed))
-    )
+    assert lock_indexes[0] < _first_for_update_index(executed), "the gate helper's FOR UPDATE ran before the bound was set:\n" + "\n".join(f"{i}: {sql}" for i, sql in enumerate(executed))

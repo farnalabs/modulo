@@ -113,8 +113,6 @@ class TestContextVarIsolation:
             return _ctx_org_id_val()
 
         empty_ctx = contextvars.Context()
-        task: asyncio.Task[uuid.UUID] = asyncio.get_running_loop().create_task(
-            unauthenticated_handler(), context=empty_ctx
-        )
+        task: asyncio.Task[uuid.UUID] = asyncio.get_running_loop().create_task(unauthenticated_handler(), context=empty_ctx)
         with pytest.raises(McpAuthContextError):
             await task

@@ -56,13 +56,7 @@ def _org_settings_currency_default() -> str | None:
         if not isinstance(node, ast.ClassDef) or node.name != "OrgSettingsResponse":
             continue
         for item in node.body:
-            if (
-                isinstance(item, ast.AnnAssign)
-                and isinstance(item.target, ast.Name)
-                and item.target.id == "currency"
-                and isinstance(item.value, ast.Constant)
-                and isinstance(item.value.value, str)
-            ):
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.target.id == "currency" and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
                 return item.value.value
     return None
 
@@ -174,8 +168,4 @@ class TestCrossRouterWiring:
             source = (ROUTERS / f"{router}.py").read_text(encoding="utf-8")
             tree = ast.parse(source)
             for node in ast.walk(tree):
-                assert not (
-                    isinstance(node, ast.ImportFrom)
-                    and node.module == "farna.core.cost_settings"
-                    and node.names[0].name == "*"
-                )
+                assert not (isinstance(node, ast.ImportFrom) and node.module == "farna.core.cost_settings" and node.names[0].name == "*")

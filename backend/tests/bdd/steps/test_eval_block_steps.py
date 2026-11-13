@@ -289,9 +289,7 @@ def event_includes_name_and_detail(ctx):
 )
 def eval_blocked_on(eval_name: str, ctx):
     assert ctx.get("eval_blocked"), "EvalBlockedError was not raised"
-    assert ctx.get("eval_blocked_detail") == eval_name, (
-        f"Expected EvalBlockedError on {eval_name!r}, got {ctx.get('eval_blocked_detail')!r}"
-    )
+    assert ctx.get("eval_blocked_detail") == eval_name, f"Expected EvalBlockedError on {eval_name!r}, got {ctx.get('eval_blocked_detail')!r}"
 
 
 @then("remaining evals are not evaluated")

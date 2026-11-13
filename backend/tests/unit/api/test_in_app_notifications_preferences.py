@@ -447,9 +447,7 @@ def test_dashboard_respects_stored_preference(client: TestClient) -> None:
 
     dashboard = client.get(_DASHBOARD_PATH).json()
     categories = {n["category"] for n in dashboard["notifications"]}
-    assert "deploy" not in categories, (
-        f"Info-level notification should be excluded with warning preference, got {categories}"
-    )
+    assert "deploy" not in categories, f"Info-level notification should be excluded with warning preference, got {categories}"
 
 
 # ---------------------------------------------------------------------------
@@ -573,12 +571,7 @@ def test_unread_badge_respects_stored_dashboard_level(client: TestClient) -> Non
 
 
 def _success_audit_calls(emit: AsyncMock) -> list:
-    return [
-        call
-        for call in emit.await_args_list
-        if call.kwargs.get("event_type") == "notification_preferences_updated"
-        and call.kwargs.get("payload", {}).get("outcome") == "success"
-    ]
+    return [call for call in emit.await_args_list if call.kwargs.get("event_type") == "notification_preferences_updated" and call.kwargs.get("payload", {}).get("outcome") == "success"]
 
 
 def test_put_with_actual_change_emits_success_audit(client: TestClient) -> None:
@@ -597,9 +590,7 @@ def test_put_no_op_change_emits_no_success_audit(client: TestClient) -> None:
     assert first.status_code == 200, first.text
 
     with patch("farna.core.audit_coverage._emit", new=AsyncMock()) as emit:
-        replay = client.put(
-            _PREFERENCES_PATH, json={"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}}
-        )
+        replay = client.put(_PREFERENCES_PATH, json={"dashboard_level": "info", "notification_opt_outs": {"run.failed": True}})
         assert replay.status_code == 200, replay.text
     assert not _success_audit_calls(emit)
 
@@ -658,9 +649,7 @@ def test_preference_change_is_noop(
 # ---------------------------------------------------------------------------
 
 
-def test_put_preferences_bounds_the_row_lock_before_its_first_write(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_put_preferences_bounds_the_row_lock_before_its_first_write(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from farna.api.routes import in_app_notifications as mod
 
     order: list[str] = []

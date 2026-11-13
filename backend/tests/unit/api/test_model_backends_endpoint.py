@@ -131,14 +131,10 @@ def _client_for_session(mock_session: AsyncMock) -> Generator[TestClient, None, 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     # apply-moved routes (FAR-681) resolve via get_current_tenant_user_or_api_key;
     # both stacks share the same admin principal in these endpoint tests.
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -166,12 +162,8 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -189,12 +181,8 @@ def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
-    )
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner")
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="runneruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="runner")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -703,10 +691,7 @@ def test_create_model_backend_writes_secret_inside_transaction(client: TestClien
 
     assert resp.status_code == 201, resp.text
     assert calls, "set_secret was never called"
-    assert all(calls), (
-        "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret "
-        "requires an active transaction (autobegin=False session)"
-    )
+    assert all(calls), "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret requires an active transaction (autobegin=False session)"
 
 
 def test_update_model_backend_writes_secret_inside_transaction(client: TestClient) -> None:
@@ -733,10 +718,7 @@ def test_update_model_backend_writes_secret_inside_transaction(client: TestClien
 
     assert resp.status_code == 200, resp.text
     assert calls, "set_secret was never called"
-    assert all(calls), (
-        "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret "
-        "requires an active transaction (autobegin=False session)"
-    )
+    assert all(calls), "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret requires an active transaction (autobegin=False session)"
 
 
 def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
@@ -1025,9 +1007,7 @@ def test_get_model_backend_programming_error_returns_501(client: TestClient) -> 
     from sqlalchemy.exc import ProgrammingError as ProgrammingError_
 
     with (
-        patch(
-            "farna.api.routes.model_backends.get_model_backend", side_effect=ProgrammingError_("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.model_backends.get_model_backend", side_effect=ProgrammingError_("mock", "mock", "mock")),
         patch("farna.api.routes.model_backends.set_rls_org"),
         patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -1165,9 +1145,7 @@ def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) ->
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch(
-            "farna.api.routes.model_backends.list_model_backends", side_effect=SQLAlchemyError_("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.model_backends.list_model_backends", side_effect=SQLAlchemyError_("mock", "mock", "mock")),
         patch("farna.api.routes.model_backends.set_rls_org"),
         patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -1237,9 +1215,7 @@ def test_get_model_backend_sqlalchemy_error_returns_503(client: TestClient) -> N
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
     with (
-        patch(
-            "farna.api.routes.model_backends.get_model_backend", side_effect=SQLAlchemyError_("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.model_backends.get_model_backend", side_effect=SQLAlchemyError_("mock", "mock", "mock")),
         patch("farna.api.routes.model_backends.set_rls_org"),
         patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):
@@ -1373,9 +1349,7 @@ def test_create_model_backend_integrity_error_returns_409(client: TestClient) ->
     with (
         patch("farna.api.routes.model_backends.set_rls_org"),
         patch("farna.api.routes.model_backends.set_rls_user_context"),
-        patch(
-            "farna.api.routes.model_backends.create_model_backend", side_effect=IntegrityError_("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.model_backends.create_model_backend", side_effect=IntegrityError_("mock", "mock", "mock")),
     ):
         resp = client.post(
             "/api/v1/model-backends",
@@ -1660,9 +1634,7 @@ def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host
     create_mock.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "https://models.example.com/v1"]
-)
+@pytest.mark.parametrize("host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "https://models.example.com/v1"])
 def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str) -> None:
     backend = _make_backend()
     with (
@@ -1793,11 +1765,7 @@ def test_update_endpoint_change_with_api_key_rebinds_and_health_checks_new_host(
     assert health_mock.await_args.kwargs["base_url"] == _CUSTOM_BASE_URL
     assert health_mock.await_args.args[4] == "sk-fresh"
     # Audit records hosts only, plus whether the credential was re-supplied.
-    updated_payloads = [
-        call.kwargs["payload"]
-        for call in audit_mock.await_args_list
-        if call.kwargs["event_type"] == "model_backend.updated"
-    ]
+    updated_payloads = [call.kwargs["payload"] for call in audit_mock.await_args_list if call.kwargs["event_type"] == "model_backend.updated"]
     assert updated_payloads
     change = updated_payloads[-1]["changed_fields"]["base_url"]
     assert change["from_host"] is None
@@ -2054,11 +2022,7 @@ def test_create_audit_records_the_credential_kind(client: TestClient) -> None:
             json={**_CREATE_BODY, "base_url": _CUSTOM_BASE_URL},
         )
     assert resp.status_code == 201
-    created = [
-        call.kwargs["payload"]
-        for call in audit_mock.await_args_list
-        if call.kwargs["event_type"] == "model_backend.created"
-    ]
+    created = [call.kwargs["payload"] for call in audit_mock.await_args_list if call.kwargs["event_type"] == "model_backend.created"]
     assert created
     assert created[-1]["credential_kind"] == "literal"
 

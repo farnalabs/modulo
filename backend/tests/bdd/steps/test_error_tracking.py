@@ -311,9 +311,7 @@ def ingest_with_breadcrumbs(client, ctx, request):
 @then("the event context_json carries the breadcrumbs")
 def context_json_carries_breadcrumbs(ctx):
     (event,) = ctx["ingested_events"]
-    assert event["context_json"]["breadcrumbs"] == [
-        {"type": "click", "timestamp": "2026-08-13T00:00:00Z", "data": {"target": "button"}}
-    ]
+    assert event["context_json"]["breadcrumbs"] == [{"type": "click", "timestamp": "2026-08-13T00:00:00Z", "data": {"target": "button"}}]
     assert event["context_json"]["url"] == "/api/runs"
 
 

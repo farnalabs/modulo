@@ -158,11 +158,7 @@ def _given_auth_admin() -> None:
 @given(parsers.re(r'runs exist today with (?P<spec>[^"]+)'))
 def _given_runs_today(spec: str, request: Any) -> None:
     day = datetime.now(UTC).date()
-    rows = [
-        _Row(day=day, status=parts[1].strip(), cnt=int(parts[0].strip()))
-        for clause in spec.split(" and ")
-        if (parts := clause.strip().split()) and len(parts) == 2
-    ]
+    rows = [_Row(day=day, status=parts[1].strip(), cnt=int(parts[0].strip())) for clause in spec.split(" and ") if (parts := clause.strip().split()) and len(parts) == 2]
     request.node._ctx = {"rows": rows}
 
 

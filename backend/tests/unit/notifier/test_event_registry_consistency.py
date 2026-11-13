@@ -108,10 +108,7 @@ def test_available_events_have_frontend_labels(section: str, component: str) -> 
     """
     labels = _event_label_map(section, component)
     missing = [event for event in AVAILABLE_EVENTS if event not in labels]
-    assert not missing, (
-        f"{section}.{component} is missing en-US labels for {missing}; "
-        f"add them next to the existing event labels in {_LOCALE_PATH}"
-    )
+    assert not missing, f"{section}.{component} is missing en-US labels for {missing}; add them next to the existing event labels in {_LOCALE_PATH}"
     blank = [event for event in AVAILABLE_EVENTS if not labels.get(event, "").strip()]
     assert not blank, f"{section}.{component} has blank labels for {blank}"
 

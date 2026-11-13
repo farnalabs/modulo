@@ -592,7 +592,7 @@ def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str,
     pinned: dict[str, str | None] = {"action": action, "evaluation_mode": evaluation_mode, "reason": None}
     model_fields = list(evals_routes.PolicyGateUpdateRequest.model_fields)
     assert sorted(pinned) == sorted(model_fields), f"PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
-    return {field: pinned[field] for field in model_fields if field != "reason"}
+    return {field: pinned[field] for field in model_fields}
 
 
 def test_update_gate_operator_can_edit_without_transition_grant() -> None:

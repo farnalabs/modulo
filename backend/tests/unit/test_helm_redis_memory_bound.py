@@ -111,7 +111,4 @@ def test_helm_readme_local_kind_command_supplies_redis_auth() -> None:
 
 def test_helm_redis_policy_only_evicts_ttl_bearing_keys() -> None:
     policy = _flagged_value("--maxmemory-policy")
-    assert policy.startswith("volatile-"), (
-        f"{_TEMPLATE.name} uses policy {policy!r}; an allkeys-* policy can evict the queue's "
-        "structural list/zset, which nothing repairs (FAR-2002)"
-    )
+    assert policy.startswith("volatile-"), f"{_TEMPLATE.name} uses policy {policy!r}; an allkeys-* policy can evict the queue's structural list/zset, which nothing repairs (FAR-2002)"

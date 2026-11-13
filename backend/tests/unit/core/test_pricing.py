@@ -68,9 +68,7 @@ class TestGetPricing:
             "azure-o4-mini",
         ],
     )
-    def test_known_model_pricing(
-        self, provider: str, model: str, expected_input: float, expected_output: float
-    ) -> None:
+    def test_known_model_pricing(self, provider: str, model: str, expected_input: float, expected_output: float) -> None:
         pricing = get_pricing(provider, model)
         assert pricing is not None
         assert pricing.input_price_per_1k == expected_input

@@ -119,9 +119,7 @@ class TestComputeNextFire:
 
     def test_invalid_timezone_raises(self):
         with pytest.raises(ZoneInfoNotFoundError):
-            compute_next_fire(
-                "0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC), timezone="Mars/Olympus"
-            )
+            compute_next_fire("0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC), timezone="Mars/Olympus")
 
     def test_new_york_winter_and_summer_offsets(self):
         winter = compute_next_fire(

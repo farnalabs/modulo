@@ -332,6 +332,4 @@ def is_first_run_false(request):
 def response_contains_add_ai_model(request):
     body = request.node._resp.json()
     action_ids = {a.get("id") for a in body.get("actions", [])}
-    assert "add_ai_model" in action_ids, (
-        f"Expected add_ai_model in the onboarding actions, got: {sorted(i for i in action_ids if i)}"
-    )
+    assert "add_ai_model" in action_ids, f"Expected add_ai_model in the onboarding actions, got: {sorted(i for i in action_ids if i)}"

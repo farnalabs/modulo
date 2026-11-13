@@ -335,9 +335,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     # Community plan: every plan feature off - the threshold must still work.
     community_plan = MagicMock()
     community_plan.feature_enabled.return_value = False
@@ -529,25 +527,19 @@ class TestRestThresholdPermission:
         assert payload["new_threshold_usd"] == expected_new
 
     def test_operator_lowering_allowed(self, client: TestClient) -> None:
-        resp, update, denial_audit = self._patch_threshold(
-            client, role="operator", previous=Decimal("100.000000"), sent=50
-        )
+        resp, update, denial_audit = self._patch_threshold(client, role="operator", previous=Decimal("100.000000"), sent=50)
 
         assert resp.status_code == 200, resp.text
         assert update.await_args.args[2]["circuit_breaker_threshold"] == 50
         denial_audit.assert_not_awaited()
 
     def test_operator_raising_denied_with_audit(self, client: TestClient) -> None:
-        resp, update, denial_audit = self._patch_threshold(
-            client, role="operator", previous=Decimal("50.000000"), sent=100
-        )
+        resp, update, denial_audit = self._patch_threshold(client, role="operator", previous=Decimal("50.000000"), sent=100)
 
         self._assert_denied(resp, denial_audit, update, previous=Decimal("50.000000"), new=100)
 
     def test_operator_clearing_denied_with_audit(self, client: TestClient) -> None:
-        resp, update, denial_audit = self._patch_threshold(
-            client, role="operator", previous=Decimal("50.000000"), sent=None
-        )
+        resp, update, denial_audit = self._patch_threshold(client, role="operator", previous=Decimal("50.000000"), sent=None)
 
         self._assert_denied(resp, denial_audit, update, previous=Decimal("50.000000"), new=None)
 
@@ -559,18 +551,14 @@ class TestRestThresholdPermission:
         denial_audit.assert_not_awaited()
 
     def test_admin_raising_allowed(self, client: TestClient) -> None:
-        resp, update, denial_audit = self._patch_threshold(
-            client, role="admin", previous=Decimal("50.000000"), sent=100
-        )
+        resp, update, denial_audit = self._patch_threshold(client, role="admin", previous=Decimal("50.000000"), sent=100)
 
         assert resp.status_code == 200, resp.text
         assert update.await_args.args[2]["circuit_breaker_threshold"] == 100
         denial_audit.assert_not_awaited()
 
     def test_admin_clearing_allowed(self, client: TestClient) -> None:
-        resp, update, denial_audit = self._patch_threshold(
-            client, role="admin", previous=Decimal("50.000000"), sent=None
-        )
+        resp, update, denial_audit = self._patch_threshold(client, role="admin", previous=Decimal("50.000000"), sent=None)
 
         assert resp.status_code == 200, resp.text
         assert update.await_args.args[2]["circuit_breaker_threshold"] is None
@@ -905,9 +893,7 @@ class TestMcpTools:
         return result, db_update, denial_audit
 
     async def test_set_operator_raising_denied_with_audit(self) -> None:
-        result, db_update, denial_audit = await self._drive_set(
-            threshold=100, previous=Decimal("50.000000"), role="operator"
-        )
+        result, db_update, denial_audit = await self._drive_set(threshold=100, previous=Decimal("50.000000"), role="operator")
 
         assert result["error"] == "permission_denied"
         assert result["field"] == "circuit_breaker_threshold"
@@ -917,9 +903,7 @@ class TestMcpTools:
         assert denial_audit.await_args.kwargs["event_type"] == CIRCUIT_BREAKER_THRESHOLD_CHANGE_DENIED_EVENT
 
     async def test_set_operator_clearing_denied_with_audit(self) -> None:
-        result, db_update, denial_audit = await self._drive_set(
-            threshold=None, previous=Decimal("50.000000"), role="operator"
-        )
+        result, db_update, denial_audit = await self._drive_set(threshold=None, previous=Decimal("50.000000"), role="operator")
 
         assert result["error"] == "permission_denied"
         db_update.assert_not_awaited()
@@ -930,27 +914,21 @@ class TestMcpTools:
         assert payload["new_threshold_usd"] is None
 
     async def test_set_operator_lowering_allowed(self) -> None:
-        result, db_update, denial_audit = await self._drive_set(
-            threshold=50, previous=Decimal("100.000000"), role="operator"
-        )
+        result, db_update, denial_audit = await self._drive_set(threshold=50, previous=Decimal("100.000000"), role="operator")
 
         assert result["circuit_breaker_threshold"] == 50
         assert db_update.await_args.args[2] == {"circuit_breaker_threshold": 50}
         denial_audit.assert_not_awaited()
 
     async def test_set_admin_raising_allowed(self) -> None:
-        result, db_update, denial_audit = await self._drive_set(
-            threshold=100, previous=Decimal("50.000000"), role="admin"
-        )
+        result, db_update, denial_audit = await self._drive_set(threshold=100, previous=Decimal("50.000000"), role="admin")
 
         assert result["circuit_breaker_threshold"] == 100
         assert db_update.await_args.args[2] == {"circuit_breaker_threshold": 100}
         denial_audit.assert_not_awaited()
 
     async def test_set_admin_clearing_allowed(self) -> None:
-        result, db_update, denial_audit = await self._drive_set(
-            threshold=None, previous=Decimal("50.000000"), role="admin"
-        )
+        result, db_update, denial_audit = await self._drive_set(threshold=None, previous=Decimal("50.000000"), role="admin")
 
         assert result["circuit_breaker_threshold"] is None
         assert db_update.await_args.args[2] == {"circuit_breaker_threshold": None}
@@ -1076,9 +1054,7 @@ class TestEnforcementRegression:
             patch("farna.core.cost_controller.set_rls_execution_context", new=AsyncMock()),
             patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()),
         ):
-            approved, reason = await check_pipeline_circuit_breaker(
-                session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("6.00")
-            )
+            approved, reason = await check_pipeline_circuit_breaker(session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("6.00"))
 
         assert approved is False
         assert reason == "circuit_breaker_tripped"
@@ -1099,9 +1075,7 @@ class TestEnforcementRegression:
         session.in_transaction = MagicMock(return_value=True)
         session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result])
         with patch("farna.core.cost_controller.set_rls_execution_context", new=AsyncMock()):
-            approved, reason = await check_pipeline_circuit_breaker(
-                session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("5.00")
-            )
+            approved, reason = await check_pipeline_circuit_breaker(session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal("5.00"))
 
         assert approved is True
         assert reason is None

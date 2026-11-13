@@ -239,9 +239,7 @@ async def test_get_run_logs(ap_runner):
             },
         )
     )
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs/101/logs/1").mock(
-        return_value=httpx.Response(200, text="Build step 1\nBuild step 2\n")
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs/101/logs/1").mock(return_value=httpx.Response(200, text="Build step 1\nBuild step 2\n"))
     logs = await ap_runner.get_run_logs("1/101")
     assert len(logs.lines) >= 2
     assert any("Log: Job 1" in line for line in logs.lines)
@@ -406,9 +404,7 @@ async def test_query_pipelines_corrupt_total(ap_runner):
 async def test_query_projects_corrupt_body_no_crash(ap_runner):
     """A corrupt/hostile response returning a non-dict body must not crash the
     connector — it falls back to an empty page with no total."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await ap_runner.query(ConnectorQuery(resource="projects"))
     assert not result.records
     assert result.total is None
@@ -417,9 +413,7 @@ async def test_query_projects_corrupt_body_no_crash(ap_runner):
 @respx.mock
 async def test_query_pipelines_corrupt_body_no_crash(ap_runner):
     """A non-dict pipelines body must degrade to an empty page, not crash."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await ap_runner.query(ConnectorQuery(resource="pipelines"))
     assert not result.records
     assert result.total is None
@@ -429,9 +423,7 @@ async def test_query_pipelines_corrupt_body_no_crash(ap_runner):
 async def test_query_pipelines_non_list_value_no_crash(ap_runner):
     """A corrupt body placing a non-list in ``value`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2})
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json={"value": "not-a-list", "count": 2}))
     result = await ap_runner.query(ConnectorQuery(resource="pipelines"))
     assert not result.records
     assert result.total == 2
@@ -440,9 +432,7 @@ async def test_query_pipelines_non_list_value_no_crash(ap_runner):
 @respx.mock
 async def test_query_runs_corrupt_body_no_crash(ap_runner):
     """A non-dict runs body must degrade to an empty page, not crash."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await ap_runner.query(ConnectorQuery(resource="runs", filters={"pipeline_id": "1"}))
     assert not result.records
     assert result.total is None
@@ -451,9 +441,7 @@ async def test_query_runs_corrupt_body_no_crash(ap_runner):
 @respx.mock
 async def test_query_releases_corrupt_body_no_crash(ap_runner):
     """A non-dict releases body must degrade to an empty page, not crash."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/release/releases", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/release/releases", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await ap_runner.query(ConnectorQuery(resource="releases"))
     assert not result.records
     assert result.total is None
@@ -462,9 +450,7 @@ async def test_query_releases_corrupt_body_no_crash(ap_runner):
 @respx.mock
 async def test_list_runs_corrupt_body_no_crash(ap_runner):
     """A non-dict runs body must degrade to an empty list, not crash."""
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs", params={"api-version": "7.0"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     runs = await ap_runner.list_runs(pipeline_id="1")
     assert not runs
 

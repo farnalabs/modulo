@@ -162,7 +162,4 @@ async def test_weak_evasion_canary_does_not_fire_informational_only():
     """
     payload = {"body": f"leak {_EVASION_PAYLOAD} here"}
     fired = await _pass_once(GuardrailAction.OBSERVE.value, payload)
-    assert not fired, (
-        f"evasion canary fired for {_EVASION_PAYLOAD!r} — the naive regex "
-        "CANARY_[A-Z0-9]{8} unexpectedly caught this obfuscation"
-    )
+    assert not fired, f"evasion canary fired for {_EVASION_PAYLOAD!r} — the naive regex CANARY_[A-Z0-9]{{8}} unexpectedly caught this obfuscation"

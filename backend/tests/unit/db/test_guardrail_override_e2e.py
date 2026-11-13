@@ -107,12 +107,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
         # model) — the SQLite e2e fixture mirrors its org/thread/ns key so the
         # node-started branch can be exercised for real, with and without a
         # checkpoint row.
-        await conn.exec_driver_sql(
-            "CREATE TABLE IF NOT EXISTS checkpoints ("
-            "organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, "
-            "checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, "
-            "PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))"
-        )
+        await conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS checkpoints (organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))")
     yield eng
     await eng.dispose()
 
@@ -188,10 +183,7 @@ async def _seed_root_checkpoint(session: AsyncSession, run: Run) -> None:
     key columns matter to the override's existence probe.
     """
     await session.execute(
-        text(
-            "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id) "
-            "VALUES (:oid, :tid, '', :cid)"
-        ),
+        text("INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id) VALUES (:oid, :tid, '', :cid)"),
         {"oid": str(_ORG), "tid": run.langgraph_thread_id, "cid": uuid.uuid4().hex},
     )
     await session.flush()
@@ -318,15 +310,9 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
 
     stale_seconds = int(get_settings().run_claim_stale_seconds)
     if session.get_bind().dialect.name == "postgresql":
-        claimable_sql = text(
-            "SELECT 1 FROM runs WHERE id = :rid AND status = 'running' "
-            "AND heartbeat_at < now() - (:stale * interval '1 second')"
-        )
+        claimable_sql = text("SELECT 1 FROM runs WHERE id = :rid AND status = 'running' AND heartbeat_at < now() - (:stale * interval '1 second')")
     else:
-        claimable_sql = text(
-            "SELECT 1 FROM runs WHERE id = :rid AND status = 'running' "
-            "AND heartbeat_at < datetime('now', '-' || :stale || ' seconds')"
-        )
+        claimable_sql = text("SELECT 1 FROM runs WHERE id = :rid AND status = 'running' AND heartbeat_at < datetime('now', '-' || :stale || ' seconds')")
     # ``runs.id`` is a ``Uuid`` column: on SQLite it is stored in the
     # dialect's own encoding, so the raw ``:rid`` bind must go through the
     # same type processor the ORM write used (``str(run_id)`` alone would not
@@ -420,16 +406,8 @@ _PG_URL_ENV = "GUARDRAIL_OVERRIDE_TEST_PG_URL"
 # the override's existence probe and the claim touch. ``run_number_counters``
 # is migration-only DDL (no ORM model) that ``create_run``'s Postgres
 # allocation path writes to.
-_PG_CHECKPOINT_DDL = text(
-    "CREATE TABLE IF NOT EXISTS checkpoints ("
-    "organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, "
-    "checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, "
-    "PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))"
-)
-_PG_RUN_NUMBER_COUNTER_DDL = text(
-    "CREATE TABLE IF NOT EXISTS run_number_counters ("
-    "organisation_id UUID PRIMARY KEY, next_run_number INTEGER NOT NULL DEFAULT 1)"
-)
+_PG_CHECKPOINT_DDL = text("CREATE TABLE IF NOT EXISTS checkpoints (organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))")
+_PG_RUN_NUMBER_COUNTER_DDL = text("CREATE TABLE IF NOT EXISTS run_number_counters (organisation_id UUID PRIMARY KEY, next_run_number INTEGER NOT NULL DEFAULT 1)")
 
 # The reconcile leg's stale window (2 * SAQ_JOB_HEARTBEAT at the default) —
 # the SQL predicate's heartbeat gate. The flip stamps the heartbeat one
@@ -597,9 +575,7 @@ class TestRealPostgresMarkerDurability:
         # -- durable read-back in a FRESH session ----------------------------
         async with maker() as session:
             fresh = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-            assert fresh.guardrail_override_resume_pending is True, (
-                "the override flip's marker must be durably persisted on read-back after commit"
-            )
+            assert fresh.guardrail_override_resume_pending is True, "the override flip's marker must be durably persisted on read-back after commit"
             # The observation column is untouched — never a control-flow marker.
             assert fresh.error_detail == block_detail
             # Mirror the lost-job state this self-heal leg exists for: the
@@ -627,9 +603,7 @@ class TestRealPostgresMarkerDurability:
                 capacity_redispatch_seconds=120,
             )
             selected = (await session.execute(select(Run).where(Run.id == run_id, predicate))).scalars().all()
-            assert len(selected) == 1, (
-                "the reconcile recovery predicate must re-select the flipped row once its heartbeat is stale"
-            )
+            assert len(selected) == 1, "the reconcile recovery predicate must re-select the flipped row once its heartbeat is stale"
             row = selected[0]
             assert cron_helpers._is_override_resume_row(row, _RECONCILE_STALE_WINDOW) is True
 
@@ -640,9 +614,7 @@ class TestRealPostgresMarkerDurability:
         async with maker() as session:
             claimed = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
             assert claimed.dispatch_phase == "claimed"
-            assert claimed.guardrail_override_resume_pending is False, (
-                "the resume claim must clear the marker in the same UPDATE (single clearer)"
-            )
+            assert claimed.guardrail_override_resume_pending is False, "the resume claim must clear the marker in the same UPDATE (single clearer)"
             # And the row has left the self-heal class: the same predicate no
             # longer selects it (phase is 'claimed', marker false).
             predicate = cron_helpers._build_re_dispatch_predicate(

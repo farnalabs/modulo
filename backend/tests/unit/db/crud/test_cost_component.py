@@ -318,9 +318,7 @@ class TestUpdateCostComponent:
     async def test_raises_duplicate_on_name_change(self, mock_session: AsyncMock) -> None:
         comp = _mock_component(name="old", kind=CostComponentKind.SELF_REPORTED.value, enabled=True)
         # get_cost_component → comp, _duplicate_exists → True
-        mock_session.execute = AsyncMock(
-            side_effect=[_exec_scalar_one_or_none(comp), _exec_scalar_one_or_none(uuid.uuid4())]
-        )
+        mock_session.execute = AsyncMock(side_effect=[_exec_scalar_one_or_none(comp), _exec_scalar_one_or_none(uuid.uuid4())])
 
         with pytest.raises(ValueError, match="duplicate_component"):
             await update_cost_component(

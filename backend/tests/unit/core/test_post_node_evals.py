@@ -100,9 +100,7 @@ def _executor() -> PipelineExecutor:
 
 class TestResolvePostNodeEvalTarget:
     def test_sandbox_agent_returns_artifact_output_json(self) -> None:
-        envelope = _sandbox_agent_envelope(
-            {"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]}
-        )
+        envelope = _sandbox_agent_envelope({"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]})
         target = _resolve_post_node_eval_target("reviewer", envelope, {"reviewer": "sandbox_agent"})
         assert target is not envelope["output"]
         assert target == {"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]}
@@ -138,9 +136,7 @@ class TestResolvePostNodeEvalTarget:
 
 class TestResolveNodeContractOutput:
     def test_sandbox_agent_returns_output_json(self) -> None:
-        envelope = _sandbox_agent_envelope(
-            {"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]}
-        )
+        envelope = _sandbox_agent_envelope({"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]})
         found, contract_output = resolve_node_contract_output(envelope, "sandbox_agent")
         assert found is True
         assert contract_output == {"status": "completed", "pr_url": "https://x/pull/1", "changed_files": ["a"]}
@@ -167,9 +163,7 @@ class TestPostNodeEvalsValidateContractOutput:
     async def test_sandbox_envelope_with_valid_artifact_output_passes(self) -> None:
         """A sandbox_agent envelope whose artifact output carries pr_url +
         changed_files PASSES the pr_url-requiring schema eval."""
-        envelope = _sandbox_agent_envelope(
-            {"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]}
-        )
+        envelope = _sandbox_agent_envelope({"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]})
         executor = _executor()
         # failure_behaviour='block' — a failure raises EvalBlockedError (the
         # contract output carries pr_url + changed_files, so it must pass the
@@ -190,9 +184,7 @@ class TestPostNodeEvalsValidateContractOutput:
         """The same schema applied to the outer envelope ``output`` MUST fail —
         proving the engine validates the artifact contract output, not the
         telemetry envelope."""
-        envelope = _sandbox_agent_envelope(
-            {"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]}
-        )
+        envelope = _sandbox_agent_envelope({"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]})
         eval_def = _key_eval_def()
         # The contract output (what the engine now validates) passes...
         contract_output, _ = split_node_output(envelope, "sandbox_agent", None)
@@ -205,9 +197,7 @@ class TestPostNodeEvalsValidateContractOutput:
         """Without a node_type_map the legacy ``envelope["output"]`` read
         remains — validating telemetry fails the pr_url schema (documenting
         why the production path always supplies the map)."""
-        envelope = _sandbox_agent_envelope(
-            {"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]}
-        )
+        envelope = _sandbox_agent_envelope({"status": "completed", "pr_url": "https://github.com/farnalabs/modulo/pull/123", "changed_files": ["a.py"]})
         executor = _executor()
         with pytest.raises(EvalBlockedError, match="pr-review"):
             await executor._run_post_node_evals(

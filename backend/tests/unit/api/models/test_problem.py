@@ -251,9 +251,7 @@ class TestProblemFromHttpException:
             "update_failed",
         ),
     )
-    def test_distinct_code_wins_over_status_derived_type(
-        self, code: str, status: int, expected_type: str, expected_title: str
-    ) -> None:
+    def test_distinct_code_wins_over_status_derived_type(self, code: str, status: int, expected_type: str, expected_title: str) -> None:
         """FAR-1545: a code naming a distinct problem type overrides the
         coarse status lookup, and the problem ``status`` stays identical to
         the status the route raised (RFC 9457 §3.1.2). Without the override,

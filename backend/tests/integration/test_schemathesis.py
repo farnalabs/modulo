@@ -94,10 +94,7 @@ SCHEMA_GROUPS = {
 
 if schema is not None:
     _group = os.environ.get("SCHEMA_GROUP", "").strip()
-    if _group:
-        _regex = SCHEMA_GROUPS[_group]
-    else:
-        _regex = r"^/api/v1/(pipelines|schemas|libraries|connectors|model-backends)(\?.*)?$"
+    _regex = SCHEMA_GROUPS[_group] if _group else r"^/api/v1/(pipelines|schemas|libraries|connectors|model-backends)(\?.*)?$"
 
     filtered = schema.include(method="GET", path_regex=_regex)
 

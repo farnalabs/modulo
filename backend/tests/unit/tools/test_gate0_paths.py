@@ -43,12 +43,8 @@ def _covered(patterns: list[str], path: str) -> bool:
 
 
 def test_gate0_paths_file_exists_and_is_nonempty() -> None:
-    assert _PATHS_FILE is not None, (
-        f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
-    )
-    assert _PATHS_FILE.is_file(), (
-        f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
-    )
+    assert _PATHS_FILE is not None, f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
+    assert _PATHS_FILE.is_file(), f"{_PATHS_FILE} must exist: the Gate 0 workflow trigger filter is checked in, not inline"
     assert _load_patterns(), "the Gate 0 paths filter must contain at least one always-run pattern"
 
 
@@ -61,11 +57,7 @@ def test_gate0_covers_bundled_boot_critical_modules() -> None:
         "backend/src/farna/launcher/service.py",
     ]
     uncovered = [path for path in critical if not _covered(patterns, path)]
-    assert not uncovered, (
-        "Gate 0 always-run filter no longer covers critical launcher-boot modules: "
-        f"{uncovered}. Restore the pattern in {_PATHS_FILE} or update this test with "
-        "an explicit, reviewed justification."
-    )
+    assert not uncovered, f"Gate 0 always-run filter no longer covers critical launcher-boot modules: {uncovered}. Restore the pattern in {_PATHS_FILE} or update this test with an explicit, reviewed justification."
 
 
 def test_gate0_covers_bundled_boot_critical_directories() -> None:

@@ -67,9 +67,7 @@ class TestApplySoftDeleteFilter:
         _apply_soft_delete_filter(fake)
 
         # The statement must have been replaced with a new one carrying options.
-        assert fake.statement is not original_stmt, (
-            "listener must replace the statement with one that has with_loader_criteria"
-        )
+        assert fake.statement is not original_stmt, "listener must replace the statement with one that has with_loader_criteria"
 
     def test_include_soft_deleted_sets_execution_option(self) -> None:
         """include_soft_deleted() must set the include_deleted execution option.

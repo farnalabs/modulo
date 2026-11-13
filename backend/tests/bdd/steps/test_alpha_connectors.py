@@ -333,10 +333,7 @@ def get_connector_health(connector_id, request):
     hub_mock.__aexit__ = AsyncMock(return_value=False)
     hub_mock.initialise = AsyncMock()
     hub_mock.get = MagicMock(return_value=connector_mock)
-    connector_present = not (
-        getattr(request.node, "_missing_connector", None) is not None
-        or getattr(request.node, "_auth_org", None) is not None
-    )
+    connector_present = not (getattr(request.node, "_missing_connector", None) is not None or getattr(request.node, "_auth_org", None) is not None)
     ci = MagicMock() if connector_present else None
     if ci is not None:
         ci.organisation_id = ORG_ID

@@ -478,10 +478,7 @@ def _streak_config(config: dict[str, Any] | None, *, trigger_type: str = "ongoin
         default_threshold if parsed is None or parsed < 1 else parsed
     )
     raw_window = cfg.get("no_delivery_min_window_hours")
-    if raw_window is None or isinstance(raw_window, bool) or not isinstance(raw_window, int):
-        window = _streak_min_window_hours_default(trigger_type)
-    else:
-        window = max(0, raw_window)
+    window = _streak_min_window_hours_default(trigger_type) if raw_window is None or isinstance(raw_window, bool) or not isinstance(raw_window, int) else max(0, raw_window)
     return threshold, window
 
 
@@ -811,10 +808,7 @@ async def record_ongoing_deactivation_lifecycle(
     is_cron = trigger_type == "cron"
     event_type = CRON_STREAK_DEACTIVATION_EVENT_TYPE if is_cron else STREAK_DEACTIVATION_EVENT_TYPE
     type_label = "Cron" if is_cron else "Ongoing"
-    if deactivated_by == STREAK_DEACTIVATED_BY_STREAK:
-        detail = f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold or 0)})"
-    else:
-        detail = f"auto-deactivated after {streak} consecutive failures (config-failure guard)"
+    detail = f"auto-deactivated after {streak} consecutive no-delivery runs (threshold {int(threshold or 0)})" if deactivated_by == STREAK_DEACTIVATED_BY_STREAK else f"auto-deactivated after {streak} consecutive failures (config-failure guard)"
     await append_audit_event(
         session,
         org_id=org_id,

@@ -96,9 +96,7 @@ def test_trim_truncates_long_messages_channel():
 def test_trim_truncates_messages_nested_in_root_channel():
     """A ``messages`` list nested under the ``__root__`` channel is trimmed."""
     long_messages = _messages(_CHECKPOINT_MESSAGE_TRIM_TAIL + 25)
-    checkpoint: dict[str, Any] = {
-        "channel_values": {"__root__": {"messages": long_messages, "run_context": {"input": {"x": 1}}}}
-    }
+    checkpoint: dict[str, Any] = {"channel_values": {"__root__": {"messages": long_messages, "run_context": {"input": {"x": 1}}}}}
     _trim_checkpoint_channels(checkpoint)
     assert len(checkpoint["channel_values"]["__root__"]["messages"]) == _CHECKPOINT_MESSAGE_TRIM_TAIL
     # Non-conversational state under __root__ is preserved byte-for-byte.
@@ -137,9 +135,7 @@ def test_trim_keeps_exactly_at_bound_messages_untouched():
 
 def test_trim_preserves_non_conversational_channels():
     """A checkpoint with no conversational channel is left unchanged."""
-    checkpoint: dict[str, Any] = {
-        "channel_values": {"run_context": {"cancelled": False}, "artifacts": [{"node_id": "a"}]}
-    }
+    checkpoint: dict[str, Any] = {"channel_values": {"run_context": {"cancelled": False}, "artifacts": [{"node_id": "a"}]}}
     _trim_checkpoint_channels(checkpoint)
     assert checkpoint["channel_values"]["run_context"] == {"cancelled": False}
     assert checkpoint["channel_values"]["artifacts"] == [{"node_id": "a"}]

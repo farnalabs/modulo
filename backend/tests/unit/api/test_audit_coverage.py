@@ -223,9 +223,7 @@ def test_fail_open_logs_and_does_not_raise(client: TestClient, caplog: pytest.Lo
     assert f"audit_coverage.{_CREATE_EVENT}.append_failed" in messages, messages
 
 
-def test_fail_open_logs_a_real_append_failure_from_the_shared_helper(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_fail_open_logs_a_real_append_failure_from_the_shared_helper(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """Production-shaped failure: the chained append itself blows up inside the helper."""
     order: list[str] = []
     create, rls_org, rls_user = _route_write_patches(order)
@@ -254,35 +252,27 @@ def _mini_client(principal: TenantPrincipal | None = None) -> TestClient:
     async def override_audit_session() -> AsyncGenerator[AsyncMock, None]:
         yield audit_session_mock
 
-    @api.post(
-        "/loose", dependencies=[Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user))]
-    )
+    @api.post("/loose", dependencies=[Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user))])
     async def loose() -> dict[str, str]:
         return {"ok": "true"}
 
     @api.post(
         "/strict",
-        dependencies=[
-            Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))
-        ],
+        dependencies=[Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))],
     )
     async def strict() -> dict[str, str]:
         return {"ok": "true"}
 
     @api.post(
         "/crash",
-        dependencies=[
-            Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))
-        ],
+        dependencies=[Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))],
     )
     async def crash() -> dict[str, str]:
         raise RuntimeError("handler exploded")
 
     @api.post(
         "/conflict",
-        dependencies=[
-            Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))
-        ],
+        dependencies=[Depends(audited("widget_created", "widget", principal_dep=get_current_tenant_user, fail_closed=True))],
     )
     async def conflict() -> dict[str, str]:
         raise HTTPException(status_code=409, detail="conflict")

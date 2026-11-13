@@ -191,9 +191,7 @@ def audits() -> Generator[dict[str, list[dict[str, Any]]], None, None]:
 
 
 class TestApproval:
-    def test_approve_records_review_and_audit(
-        self, client: TestClient, audits: dict[str, list[dict[str, Any]]]
-    ) -> None:
+    def test_approve_records_review_and_audit(self, client: TestClient, audits: dict[str, list[dict[str, Any]]]) -> None:
         resp = client.post(
             "/api/v1/determination/review",
             json=_review_body(acknowledged_assumption_ids=[_ASSUMPTION_ID]),
@@ -230,9 +228,7 @@ class TestApproval:
         assert coarse["resource_type"] == "determination_proposal"
         assert coarse["payload_json"]["outcome"] == "success"
 
-    def test_approve_blocked_by_unacknowledged_assumption(
-        self, client: TestClient, audits: dict[str, list[dict[str, Any]]]
-    ) -> None:
+    def test_approve_blocked_by_unacknowledged_assumption(self, client: TestClient, audits: dict[str, list[dict[str, Any]]]) -> None:
         resp = client.post("/api/v1/determination/review", json=_review_body())
 
         assert resp.status_code == 422
@@ -242,9 +238,7 @@ class TestApproval:
         assert not audits["rich"]
         assert audits["coarse"][0]["payload_json"]["outcome"] == "error"
 
-    def test_acknowledgement_permits_approval(
-        self, client: TestClient, audits: dict[str, list[dict[str, Any]]]
-    ) -> None:
+    def test_acknowledgement_permits_approval(self, client: TestClient, audits: dict[str, list[dict[str, Any]]]) -> None:
         resp = client.post(
             "/api/v1/determination/review",
             json=_review_body(acknowledged_assumption_ids=[_ASSUMPTION_ID]),
@@ -279,9 +273,7 @@ class TestRejectAndNeedsReview:
         assert audits["rich"][0]["payload_json"]["reason"] == "Evidence covers repositories only"
         assert audits["rich"][0]["payload_json"]["review_state"] == "rejected"
 
-    def test_reject_without_reason_is_refused(
-        self, client: TestClient, audits: dict[str, list[dict[str, Any]]]
-    ) -> None:
+    def test_reject_without_reason_is_refused(self, client: TestClient, audits: dict[str, list[dict[str, Any]]]) -> None:
         resp = client.post("/api/v1/determination/review", json=_review_body(decision="reject"))
 
         assert resp.status_code == 422
@@ -304,9 +296,7 @@ class TestCorrections:
             "/api/v1/determination/review",
             json=_review_body(
                 acknowledged_assumption_ids=[_ASSUMPTION_ID],
-                corrected_derived_elements=[
-                    {"id": str(_DERIVED_ID), "statement": "Delivery stage observed", "confidence": "high"}
-                ],
+                corrected_derived_elements=[{"id": str(_DERIVED_ID), "statement": "Delivery stage observed", "confidence": "high"}],
             ),
         )
 
@@ -380,9 +370,7 @@ class TestRequestValidation:
 
 
 class TestNoActivation:
-    def test_review_writes_no_orm_state_and_records_not_activated(
-        self, client: TestClient, audits: dict[str, list[dict[str, Any]]]
-    ) -> None:
+    def test_review_writes_no_orm_state_and_records_not_activated(self, client: TestClient, audits: dict[str, list[dict[str, Any]]]) -> None:
         session = _make_mock_session()
         _override_app("operator", session)
 

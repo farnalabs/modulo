@@ -315,9 +315,7 @@ def run_context_contains_value(key: str, value: str, ctx: dict[str, Any]) -> Non
 @then(parsers.parse('the write-log has {count:d} entry for node "{node_name}"'))
 def write_log_has_entry_for_node(count: int, node_name: str, ctx: dict[str, Any]) -> None:
     entries = [e for e in ctx.get("write_log", []) if e.get("node_name") == node_name]
-    assert len(entries) == count, (
-        f"Expected {count} write-log entries for node {node_name!r}, got {len(entries)}: {entries}"
-    )
+    assert len(entries) == count, f"Expected {count} write-log entries for node {node_name!r}, got {len(entries)}: {entries}"
 
 
 @then("the write is rejected with ContextSetterViolationError")
@@ -353,16 +351,12 @@ def seeded_context_input_has(key: str, value: str, ctx: dict[str, Any]) -> None:
 def seeded_context_cancelled(expected: str, ctx: dict[str, Any]) -> None:
     expected_bool = expected.lower() == "true"
     rc = ctx["seeded_state"]["run_context"]
-    assert rc.get("cancelled") == expected_bool, (
-        f"run_context['cancelled'] = {rc.get('cancelled')}, expected {expected_bool}"
-    )
+    assert rc.get("cancelled") == expected_bool, f"run_context['cancelled'] = {rc.get('cancelled')}, expected {expected_bool}"
 
 
 @then(parsers.parse("the write-log has {count:d} entries"))
 def write_log_has_count(count: int, ctx: dict[str, Any]) -> None:
-    assert len(ctx.get("write_log", [])) == count, (
-        f"Expected {count} write-log entries, got {len(ctx.get('write_log', []))}"
-    )
+    assert len(ctx.get("write_log", [])) == count, f"Expected {count} write-log entries, got {len(ctx.get('write_log', []))}"
 
 
 @then(parsers.parse('write-log entry {index:d} node_name is "{expected}"'))
@@ -432,13 +426,9 @@ def audit_hook_received_node(node_name: str, fields: str, ctx: dict[str, Any]) -
 
     try:
         received = ctx.get("audit_hook_received", {})
-        assert received.get("node_id") == node_name, (
-            f"audit hook node_id={received.get('node_id')!r}, expected {node_name!r}"
-        )
+        assert received.get("node_id") == node_name, f"audit hook node_id={received.get('node_id')!r}, expected {node_name!r}"
         expected = [f.strip().strip("\"'[]") for f in fields.split(",") if f.strip()]
-        assert received.get("attempted_keys") == expected, (
-            f"audit hook attempted_keys={received.get('attempted_keys')!r}, expected {expected!r}"
-        )
+        assert received.get("attempted_keys") == expected, f"audit hook attempted_keys={received.get('attempted_keys')!r}, expected {expected!r}"
     finally:
         set_audit_hook(None)
 

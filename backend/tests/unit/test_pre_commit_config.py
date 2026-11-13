@@ -103,10 +103,7 @@ def test_every_uv_run_invocation_is_frozen():
     config = _config()
     entry_lines = [line.strip() for line in config.splitlines() if line.strip().startswith("entry:")]
     offenders = [line for line in entry_lines if any("--frozen" not in segment for segment in _uv_run_segments(line))]
-    assert not offenders, (
-        "pre-commit hook uv invocations must pass `--frozen` (FAR-2308) so a stale "
-        "backend/uv.lock is never rewritten mid-gate:\n" + "\n".join(offenders)
-    )
+    assert not offenders, "pre-commit hook uv invocations must pass `--frozen` (FAR-2308) so a stale backend/uv.lock is never rewritten mid-gate:\n" + "\n".join(offenders)
 
 
 def test_check_uv_lock_files_pattern_covers_every_lock_input():
@@ -139,12 +136,8 @@ def test_check_uv_lock_files_pattern_covers_every_lock_input():
         )
         if compiled.search(path)
     ]
-    assert not missing, "check-uv-lock's files: pattern never fires on these lock inputs:\n" + "\n".join(
-        f"  {path}" for path in missing
-    )
-    assert not unexpected, "check-uv-lock's files: pattern fires on unrelated paths:\n" + "\n".join(
-        f"  {path}" for path in unexpected
-    )
+    assert not missing, "check-uv-lock's files: pattern never fires on these lock inputs:\n" + "\n".join(f"  {path}" for path in missing)
+    assert not unexpected, "check-uv-lock's files: pattern fires on unrelated paths:\n" + "\n".join(f"  {path}" for path in unexpected)
 
 
 def test_check_uv_lock_precedes_every_other_uv_run_hook():
@@ -161,22 +154,11 @@ def test_check_uv_lock_precedes_every_other_uv_run_hook():
     assert "check-uv-lock" in ids, "check-uv-lock hook is missing"
     lock_index = ids.index("check-uv-lock")
     lock_stages = set(_hook("check-uv-lock").get("stages") or ["pre-commit"])
-    compared = [
-        hook_id
-        for hook_id in ids
-        if hook_id != "check-uv-lock"
-        and lock_stages & set(_hook(hook_id).get("stages") or ["pre-commit"])
-        and _uv_run_segments(str(_hook(hook_id).get("entry", "")))
-    ]
+    compared = [hook_id for hook_id in ids if hook_id != "check-uv-lock" and lock_stages & set(_hook(hook_id).get("stages") or ["pre-commit"]) and _uv_run_segments(str(_hook(hook_id).get("entry", "")))]
     assert compared, "no other uv-run hook shares check-uv-lock's stage — the ordering guard went vacuous"
     offenders = [hook_id for hook_id in compared if ids.index(hook_id) < lock_index]
-    assert not offenders, (
-        "check-uv-lock must be declared before every other uv-run hook in the same stage "
-        "(FAR-2308), so a hook that could rewrite backend/uv.lock cannot run first:\n"
-        + "\n".join(
-            f"  {hook_id} (index {ids.index(hook_id)}) precedes check-uv-lock (index {lock_index})"
-            for hook_id in offenders
-        )
+    assert not offenders, "check-uv-lock must be declared before every other uv-run hook in the same stage (FAR-2308), so a hook that could rewrite backend/uv.lock cannot run first:\n" + "\n".join(
+        f"  {hook_id} (index {ids.index(hook_id)}) precedes check-uv-lock (index {lock_index})" for hook_id in offenders
     )
 
 
@@ -217,7 +199,4 @@ def test_hook_wrapper_uv_subprocess_argv_is_frozen():
             argv = _uv_run_argv(node)
             if argv is not None and "--frozen" not in argv:
                 offenders.append(f"  scripts/{name}: {' '.join(argv)}")
-    assert not offenders, (
-        "hook wrapper scripts must pass `--frozen` on every uv-run subprocess argv "
-        "(FAR-2308) so a stale backend/uv.lock is never rewritten mid-gate:\n" + "\n".join(offenders)
-    )
+    assert not offenders, "hook wrapper scripts must pass `--frozen` on every uv-run subprocess argv (FAR-2308) so a stale backend/uv.lock is never rewritten mid-gate:\n" + "\n".join(offenders)

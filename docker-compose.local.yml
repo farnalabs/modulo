@@ -43,7 +43,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db-local:5432/farna_control
-      MODULO_DB: postgres
+      FARNA_CONTROL_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
       # FAR-2181: `local-dev-only-change-me` was 24 bytes - below `Settings`'
       # 32-byte minimum, so BOTH workers exited 1 with
@@ -56,8 +56,8 @@ services:
       FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       SSRF_ALLOW_PRIVATE_RANGES: ${SSRF_ALLOW_PRIVATE_RANGES:-}
       REDIS_URL: redis://redis-local:6379/0
-      MODULO_PUBLIC_URL: http://localhost:8000
-      MODULO_USERS: admin:admin
+      FARNA_CONTROL_PUBLIC_URL: http://localhost:8000
+      FARNA_CONTROL_USERS: admin:admin
       # DB capacity monitor (FAR-1882). This worker EXECUTES runs, and two
       # run-creation paths run inside that execution: agent-signal child runs
       # (executor._fire_agent_signals -> trigger_engine.agent_signal) and
@@ -84,15 +84,15 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db-local:5432/farna_control
-      MODULO_DB: postgres
+      FARNA_CONTROL_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
       # FAR-2181: same required key as saq-runner above - see that comment.
       FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       # Match saq-runner and the host-run backend's optional model endpoint allowlist.
       SSRF_ALLOW_PRIVATE_RANGES: ${SSRF_ALLOW_PRIVATE_RANGES:-}
       REDIS_URL: redis://redis-local:6379/0
-      MODULO_PUBLIC_URL: http://localhost:8000
-      MODULO_USERS: admin:admin
+      FARNA_CONTROL_PUBLIC_URL: http://localhost:8000
+      FARNA_CONTROL_USERS: admin:admin
       SAQ_AUTH_USERNAME: admin
       SAQ_AUTH_PASSWORD: admin
       # DB capacity monitor (FAR-1882): cron/polling triggers create their runs

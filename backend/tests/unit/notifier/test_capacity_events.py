@@ -88,10 +88,7 @@ def test_event_is_webhook_subscribable(event: str) -> None:
 
 
 def test_queue_ladder_severity_escalates() -> None:
-    levels = [
-        _EVENT_CONFIG[e]["level"]
-        for e in ("queue_pressure_notice", "queue_pressure_warning", "queue_pressure_critical")
-    ]
+    levels = [_EVENT_CONFIG[e]["level"] for e in ("queue_pressure_notice", "queue_pressure_warning", "queue_pressure_critical")]
     assert levels == ["info", "warning", "error"]
 
 

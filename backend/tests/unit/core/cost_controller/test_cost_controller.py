@@ -229,9 +229,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(50)),  # created-at SUM (excludes current)
         )
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is True
         assert reason is None
@@ -247,9 +245,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(40)),  # other runs at 40; +10 current = 50 (half)
         )
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
-            approved, _ = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, _ = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is True
         assert org_count.total_spend_usd == Decimal(10)
@@ -263,9 +259,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(100)),  # other runs AT the limit
         )
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is False
         assert reason == "daily_limit_exceeded: organisation"
@@ -281,9 +275,7 @@ class TestCheckAndRecordSpend:
             self._scalar_one(Decimal(95)),
         )
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is False
         assert reason == "daily_limit_exceeded: organisation"
@@ -413,9 +405,7 @@ class TestCheckAndRecordSpend:
             self._scalar_none(),
         )
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is True
         assert reason is None
@@ -431,9 +421,7 @@ class TestCheckAndRecordSpend:
             (Decimal("Infinity"), "finite"),
         ],
     )
-    async def test_rejects_invalid_cost(
-        self, mock_session: AsyncMock, cost_usd: Decimal | None, reason_keyword: str
-    ) -> None:
+    async def test_rejects_invalid_cost(self, mock_session: AsyncMock, cost_usd: Decimal | None, reason_keyword: str) -> None:
         approved, reason = await check_and_record_spend(
             mock_session,
             org_id=_ORG_ID,
@@ -451,9 +439,7 @@ class TestCheckAndRecordSpend:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(10))
         mock_session.execute = self._mock_execute(self._scalar_none())
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is True
         assert reason is None
@@ -464,9 +450,7 @@ class TestCheckAndRecordSpend:
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("99999999.999998"))
         mock_session.execute = self._mock_execute(self._scalar_none())
         with patch("farna.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
-            approved, reason = await check_and_record_spend(
-                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
-            )
+            approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY)
 
         assert approved is True
         assert reason is None
@@ -679,9 +663,7 @@ class TestGetCostReport:
 
 
 class TestGetCostExportRows:
-    async def test_group_by_team_delegates_to_get_cost_report(
-        self, mock_session: AsyncMock, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_group_by_team_delegates_to_get_cost_report(self, mock_session: AsyncMock, monkeypatch: pytest.MonkeyPatch) -> None:
         team_rows = [
             {
                 "entity_id": str(_TEAM_ID),

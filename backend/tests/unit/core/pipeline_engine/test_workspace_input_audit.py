@@ -528,9 +528,7 @@ class TestAuditAttemptKeyContract:
         assert audit_row is None  # sweep would find nothing → silent no-op
 
         # And the explicit FINAL read is also empty.
-        audit_row_final = await read_audit_row_outputs_json(
-            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key=FINAL_ATTEMPT_KEY
-        )
+        audit_row_final = await read_audit_row_outputs_json(session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key=FINAL_ATTEMPT_KEY)
         assert audit_row_final is None
 
     @pytest.mark.anyio
@@ -628,9 +626,7 @@ class TestRecordResolvedInputsSanitisation:
     NUL and these assertions fail."""
 
     @pytest.mark.anyio
-    async def test_nul_in_nested_values_and_keys_is_sanitised(
-        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_nul_in_nested_values_and_keys_is_sanitised(self, session: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
         record = _PayloadRecord(_nul_payload_entry())
         with caplog.at_level("WARNING"):
             await record_resolved_inputs(
@@ -646,9 +642,7 @@ class TestRecordResolvedInputsSanitisation:
 
         # Column-only select reads the STORED value (not an identity-mapped
         # ORM instance), so it reflects exactly what the write bound.
-        payload = await read_audit_row_outputs_json(
-            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0"
-        )
+        payload = await read_audit_row_outputs_json(session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0")
         assert payload is not None
         assert "\x00" not in json.dumps(payload)
         entry = payload["workspace_inputs"][0]
@@ -666,9 +660,7 @@ class TestRecordDriftSanitisation:
     it when drift is recorded."""
 
     @pytest.mark.anyio
-    async def test_nul_in_stored_row_is_sanitised_on_drift_rewrite(
-        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_nul_in_stored_row_is_sanitised_on_drift_rewrite(self, session: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
         from sqlalchemy import insert
 
         seed = {
@@ -700,9 +692,7 @@ class TestRecordDriftSanitisation:
             )
         await session.flush()
 
-        payload = await read_audit_row_outputs_json(
-            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0"
-        )
+        payload = await read_audit_row_outputs_json(session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0")
         assert payload is not None
         assert "\x00" not in json.dumps(payload)
         entry = payload["workspace_inputs"][0]

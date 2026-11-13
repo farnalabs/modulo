@@ -196,9 +196,7 @@ async def test_body_db_failure_leaves_no_advisory_lock(
     pipeline_id = await _insert_pipeline(pooled_engine, test_org, test_user)
     key1, key2 = _pipeline_lock_keys(pipeline_id)
 
-    async def _db_level_failure(
-        session: AsyncSession, nodes: object, parameter_schema_ids: object
-    ) -> dict[str, object]:
+    async def _db_level_failure(session: AsyncSession, nodes: object, parameter_schema_ids: object) -> dict[str, object]:
         await session.execute(text("SELECT * FROM table_that_definitely_does_not_exist"))
         return {}
 
@@ -252,9 +250,7 @@ async def test_lock_is_never_held_by_the_callers_session(
     key1, key2 = _pipeline_lock_keys(pipeline_id)
     observed: dict[str, int] = {}
 
-    async def _observe_lock_state(
-        session: AsyncSession, nodes: object, parameter_schema_ids: object
-    ) -> dict[str, object]:
+    async def _observe_lock_state(session: AsyncSession, nodes: object, parameter_schema_ids: object) -> dict[str, object]:
         caller_pid = int((await session.execute(text("SELECT pg_backend_pid()"))).scalar_one())
         caller_locks = int(
             (
@@ -406,18 +402,7 @@ async def _wait_for_allocation_row_lock_waiter(engine: AsyncEngine) -> bool:
     deadline = asyncio.get_running_loop().time() + _BLOCKED_WAIT_SECONDS
     while asyncio.get_running_loop().time() < deadline:
         async with engine.connect() as conn:
-            waiting = int(
-                (
-                    await conn.execute(
-                        text(
-                            "SELECT count(*) FROM pg_stat_activity "
-                            "WHERE datname = current_database() "
-                            "AND wait_event_type = 'Lock' AND wait_event = 'transactionid' "
-                            "AND query LIKE '%pipelines.%'"
-                        )
-                    )
-                ).scalar_one()
-            )
+            waiting = int((await conn.execute(text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'transactionid' AND query LIKE '%pipelines.%'"))).scalar_one())
         if waiting:
             return True
         await asyncio.sleep(0.05)
@@ -483,9 +468,7 @@ async def test_concurrent_creators_after_lock_release_succeed_with_distinct_vers
         first, second = await asyncio.gather(task_a, task_b)
 
         # (1) the race window really was open ...
-        assert blocked, (
-            "B never blocked on the allocation row lock, so the release-before-commit window was not reproduced"
-        )
+        assert blocked, "B never blocked on the allocation row lock, so the release-before-commit window was not reproduced"
         # (2) ... and NEITHER caller saw uq_pipeline_snapshot_version: both
         # creations succeeded with distinct versions. The gather above is the
         # assertion that the constraint was never surfaced — without the
@@ -519,16 +502,7 @@ async def _app_role_can_terminate(app_engine: AsyncEngine) -> tuple[str, bool]:
     """
     async with app_engine.connect() as conn:
         role = str((await conn.execute(text("SELECT current_user"))).scalar_one())
-        allowed = bool(
-            (
-                await conn.execute(
-                    text(
-                        "SELECT r.rolsuper OR pg_has_role(r.rolname, 'pg_signal_backend', 'MEMBER') "
-                        "FROM pg_roles AS r WHERE r.rolname = current_user"
-                    )
-                )
-            ).scalar_one()
-        )
+        allowed = bool((await conn.execute(text("SELECT r.rolsuper OR pg_has_role(r.rolname, 'pg_signal_backend', 'MEMBER') FROM pg_roles AS r WHERE r.rolname = current_user"))).scalar_one())
     return (role, allowed)
 
 
@@ -596,11 +570,7 @@ async def test_operator_snapshot_lock_endpoints_report_then_release(
                 audit_count = int(
                     (
                         await conn.execute(
-                            text(
-                                "SELECT count(*) FROM audit_events "
-                                "WHERE event_type = :event_type AND resource_id = :pipeline_id "
-                                "AND organisation_id = :org_id"
-                            ),
+                            text("SELECT count(*) FROM audit_events WHERE event_type = :event_type AND resource_id = :pipeline_id AND organisation_id = :org_id"),
                             {
                                 "event_type": "pipeline_snapshot_lock_released",
                                 "pipeline_id": pipeline_id,

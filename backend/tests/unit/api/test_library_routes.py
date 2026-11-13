@@ -377,9 +377,7 @@ def test_update_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: Te
     with (
         patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
         patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch(
-            "farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim
-        ) as update_mock,
+        patch("farna.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim) as update_mock,
         patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
@@ -482,9 +480,7 @@ def test_delete_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: Te
     with (
         patch("farna.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
         patch("farna.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
-        patch(
-            "farna.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim
-        ) as delete_mock,
+        patch("farna.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim) as delete_mock,
         patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
@@ -843,10 +839,7 @@ def test_confirm_import_git_content_ref_returns_422(client: TestClient) -> None:
         patch(
             "farna.api.routes.library.materialize_import",
             new_callable=AsyncMock,
-            side_effect=GitContentRefError(
-                "Agent 'Ref Agent' prompt_template git content ref "
-                "'git+https://github.com/org/repo#prompts/ref.md' is not pinned"
-            ),
+            side_effect=GitContentRefError("Agent 'Ref Agent' prompt_template git content ref 'git+https://github.com/org/repo#prompts/ref.md' is not pinned"),
         ),
         patch("farna.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("farna.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -1818,9 +1811,7 @@ def test_resolve_import_bundle_stamps_ids_and_warnings(client: TestClient) -> No
     assert resolution.resolved_connectors == [{"instance_id": "i-1", "warning": None}]
     assert resolution.resolved_model_backends == [{"model_backend_id": "mb-1", "warning": "backend warning"}]
     assert {"type": "pipeline", "original": "Existing", "suggested": "Existing (imported)"} in resolution.name_conflicts
-    assert {"type": "agent", "original": "AgentA"} in [
-        {"type": nc["type"], "original": nc["original"]} for nc in resolution.name_conflicts
-    ]
+    assert {"type": "agent", "original": "AgentA"} in [{"type": nc["type"], "original": nc["original"]} for nc in resolution.name_conflicts]
     assert "Duplicate agent name 'AgentA' found in bundle. Each agent must have a unique name." in resolution.warnings
     assert resolution.available_teams[0]["name"] == "Team A"
     assert client.mock_session.add.call_count == 0  # type: ignore[attr-defined]

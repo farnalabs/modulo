@@ -151,9 +151,7 @@ class TestEvaluateCoverageGap:
             _eval(runs[1].id, eval_id, passed=False),
             _eval(runs[2].id, eval_id, passed=True),
         ]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         gap = summary.evals[0]
         # Mixed pass/fail across diverged variants => the eval did discriminate.
         assert gap.recommended_action == "ok"
@@ -167,9 +165,7 @@ class TestEvaluateCoverageGap:
             _run(uuid.uuid4(), variant_id="v-3", outputs={"answer": "charlie"}),
         ]
         evals = [_eval(r.id, eval_id, passed=True) for r in runs]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         assert summary.evals[0].has_gap is True
 
     def test_below_min_runs_is_insufficient_data(self) -> None:
@@ -182,9 +178,7 @@ class TestEvaluateCoverageGap:
             _eval(runs[0].id, eval_id, score=0.9),
             _eval(runs[1].id, eval_id, score=0.9),
         ]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         assert summary.status == "insufficient_data"
         assert not summary.evals
         assert summary.run_count == 2
@@ -201,9 +195,7 @@ class TestEvaluateCoverageGap:
             _eval(runs[1].id, eval_id, score=0.9),
             _eval(runs[2].id, eval_id, score=0.9),
         ]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         # Only two terminal runs have eval data => below min_runs => no signal.
         assert summary.status == "insufficient_data"
 
@@ -281,9 +273,7 @@ class TestEvaluateCoverageGap:
             # ``single_id`` present on only ONE run -> insufficient-data eval.
             _eval(runs[0].id, single_id, score=0.90),
         ]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         assert summary.status == "complete"
         gaps_by_eval = {str(g.eval_id): g for g in summary.evals}
         single = gaps_by_eval[str(single_id)]
@@ -306,9 +296,7 @@ class TestEvaluateCoverageGap:
             _run(uuid.uuid4(), variant_id=None, variant_name="variant-c", outputs={"answer": "charlie"}),
         ]
         evals = [_eval(r.id, eval_id, score=0.90) for r in runs]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         assert summary.status == "complete"
         assert summary.variant_divergence >= DEFAULT_DIVERGENCE_THRESHOLD
         gap = summary.evals[0]
@@ -336,9 +324,7 @@ class TestEvaluateCoverageGap:
             _eval(v1_second.id, eval_id, score=0.10),  # within-variant run variance
             _eval(v2.id, eval_id, score=0.90),
         ]
-        summary = evaluate_coverage_gap(
-            runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3
-        )
+        summary = evaluate_coverage_gap(runs, evals, outputs_by_run=_outputs_by_run(runs), eval_names=_eval_defs(eval_id), min_runs=3)
         assert summary.status == "complete"
         gap = summary.evals[0]
         # ONE value per variant: [0.90 (v-1 rep), 0.90 (v-2)] => std 0 => gap.

@@ -184,11 +184,7 @@ class TestClassifyRunProperties:
         result = classify_run(status, None)
         assert result.value == RunClassificationValue.no_delivery
 
-    @given(
-        status=st.sampled_from(
-            sorted(TERMINAL - _EXCLUDED_STATUSES - _COUNTABLE_NO_DELIVERY_STATUSES - _DELIVERABLE_STATUSES)
-        )
-    )
+    @given(status=st.sampled_from(sorted(TERMINAL - _EXCLUDED_STATUSES - _COUNTABLE_NO_DELIVERY_STATUSES - _DELIVERABLE_STATUSES)))
     @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_unknown_terminal_classifies_as_excluded(self, status: str) -> None:
         """Terminal statuses outside known buckets hit fail-safe excluded."""

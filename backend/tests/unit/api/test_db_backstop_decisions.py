@@ -116,10 +116,7 @@ def test_backstop_rows_match_the_decorator(module_name: str) -> None:
         if verdict == "backstop":
             assert route.has_backstop, f"{module_name}.{name} is recorded as 'backstop' but carries no decorator"
         else:
-            assert not route.has_backstop, (
-                f"{module_name}.{name} carries @handle_db_errors but is recorded as {verdict!r} — "
-                "the decision map and the code disagree"
-            )
+            assert not route.has_backstop, f"{module_name}.{name} carries @handle_db_errors but is recorded as {verdict!r} — the decision map and the code disagree"
 
 
 @pytest.mark.parametrize("module_name", sorted(_MODULES))
@@ -149,9 +146,7 @@ def test_local_contract_rows_reproduce_the_contract(module_name: str) -> None:
         if verdict != "local_contract":
             continue
         route = by_name[name]
-        assert route.has_session_contract_guard, (
-            f"{module_name}.{name} is recorded 'local_contract' but has no raise_session_contract_error guard"
-        )
+        assert route.has_session_contract_guard, f"{module_name}.{name} is recorded 'local_contract' but has no raise_session_contract_error guard"
 
 
 def test_streaming_export_is_recorded_as_excluded_and_unwrapped() -> None:

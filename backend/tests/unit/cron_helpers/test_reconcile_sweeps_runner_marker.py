@@ -139,13 +139,9 @@ async def test_best_effort_sweeps_swallow_drift_runner_enforcement_failures(
         stack.enter_context(patch.object(ch, "_open_factory", lambda: make_session_factory()))
         stack.enter_context(patch.object(ch, "_open_system_factory", lambda: make_session_factory()))
         stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
-        stack.enter_context(
-            patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, side_effect=boom)
-        )
+        stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, side_effect=boom))
         stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
-        stack.enter_context(
-            patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={})
-        )
+        stack.enter_context(patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, return_value={}))
         stack.enter_context(
             patch(
                 "farna.core.rollback_thresholds.evaluate_rollback_thresholds",

@@ -138,9 +138,7 @@ class _ReadFailingSession:
     """Session double whose read raises, exactly like a DB outage would."""
 
     async def execute(self, *args: object, **kwargs: object) -> object:
-        raise OperationalError(
-            "SELECT archived_at, deleted_at, run_enabled FROM pipelines", {}, Exception("connection lost")
-        )
+        raise OperationalError("SELECT archived_at, deleted_at, run_enabled FROM pipelines", {}, Exception("connection lost"))
 
 
 class TestCreateRunRefusesNonRunnablePipelines:
@@ -266,9 +264,7 @@ class TestPipelineStateGateOrgScope:
     the team-visibility case pinned above.
     """
 
-    async def test_archived_pipeline_of_another_org_is_row_absent(
-        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_archived_pipeline_of_another_org_is_row_absent(self, session: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
         """The archived row belongs to ``_ORG``; asking with a different org id
         sees nothing to refuse on. The gate's own row-absent log is the
         observable proof that the read (not the refusal) was org-scoped."""
@@ -318,15 +314,10 @@ class TestPipelineNotRunnableStateHelper:
     def test_archived_outranks_paused(self) -> None:
         """An archived pipeline already implies non-executing: report the
         archived state, not paused."""
-        assert (
-            _pipeline_not_runnable_state(archived_at=datetime.now(UTC), deleted_at=None, run_enabled=False)
-            == "archived"
-        )
+        assert _pipeline_not_runnable_state(archived_at=datetime.now(UTC), deleted_at=None, run_enabled=False) == "archived"
 
     def test_deleted_outranks_paused(self) -> None:
-        assert (
-            _pipeline_not_runnable_state(archived_at=None, deleted_at=datetime.now(UTC), run_enabled=False) == "deleted"
-        )
+        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=datetime.now(UTC), run_enabled=False) == "deleted"
 
     def test_run_enabled_is_required(self) -> None:
         """Fail closed: a caller that forgets ``run_enabled`` must fail loudly

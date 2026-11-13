@@ -56,9 +56,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
         return team.id
 
 
-async def _seed_team_private_profile(
-    db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID, team_id: uuid.UUID
-) -> uuid.UUID:
+async def _seed_team_private_profile(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID, team_id: uuid.UUID) -> uuid.UUID:
     """A committed TEAM-PRIVATE environment profile (provider ``e2b`` so no
     hub/provider registration is involved in route resolution)."""
     from farna.db.crud.environment_profile import create_environment_profile
@@ -117,9 +115,7 @@ async def _org_only_session_sees_profile(app_engine: AsyncEngine, org_id: uuid.U
     shape dispatch ran with before the execution-context widening."""
     async with app_engine.connect() as conn:
         await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
-        row = (
-            await conn.execute(text("SELECT id FROM environment_profiles WHERE id = :id"), {"id": str(profile_id)})
-        ).scalar_one_or_none()
+        row = (await conn.execute(text("SELECT id FROM environment_profiles WHERE id = :id"), {"id": str(profile_id)})).scalar_one_or_none()
     return row is not None
 
 

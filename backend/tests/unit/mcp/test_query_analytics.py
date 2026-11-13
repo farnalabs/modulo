@@ -394,9 +394,7 @@ class TestQueryAnalytics(_AuthContext):
         patches.append(
             patch(
                 "farna.api.mcp_server.run_analytics_query",
-                new=AsyncMock(
-                    side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")
-                ),
+                new=AsyncMock(side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")),
             )
         )
         with contextlib.ExitStack() as stack:

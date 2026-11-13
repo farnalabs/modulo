@@ -100,11 +100,7 @@ _ROOTS_BY_NAME: dict[str, Path] = {name: path for path, _prefix, name in _ROOTS}
 #: guard, mapped to the reason the exemption is legitimate (FAR-1464).
 #: Keys are ``"<root name>/<path under src/farna>"`` (FAR-1481).
 _EXEMPT = {
-    "api/db_error_handling.py": (
-        "The shared classifier itself: _translate_wrapped_exception's SQLAlchemyError "
-        "backstop IS the canonical 503 mapping every other arm's guard delegates to — "
-        "guarding it would be self-referential."
-    ),
+    "api/db_error_handling.py": ("The shared classifier itself: _translate_wrapped_exception's SQLAlchemyError backstop IS the canonical 503 mapping every other arm's guard delegates to — guarding it would be self-referential."),
 }
 
 #: REST/HTTP rendering of the shared classifier: raises 500, never returns.
@@ -185,12 +181,7 @@ def _returns_mcp_db_unavailable(node: ast.Return) -> bool:
         return bool(value.args) and _name_of(value.args[0]) == _MCP_DB_UNAVAILABLE_MSG_ARG
     if isinstance(value, ast.Dict):
         for key, item in zip(value.keys, value.values, strict=False):
-            if (
-                isinstance(key, ast.Constant)
-                and key.value == "error"
-                and isinstance(item, ast.Constant)
-                and item.value == _MCP_DB_UNAVAILABLE_CODE
-            ):
+            if isinstance(key, ast.Constant) and key.value == "error" and isinstance(item, ast.Constant) and item.value == _MCP_DB_UNAVAILABLE_CODE:
                 return True
     return False
 
@@ -226,9 +217,7 @@ def _body_shape(body: list[ast.stmt]) -> tuple[bool, list[ast.expr]]:
     call_funcs: list[ast.expr] = []
     for stmt in body:
         for sub in ast.walk(stmt):
-            if (isinstance(sub, ast.Raise) and _raises_503(sub)) or (
-                isinstance(sub, ast.Return) and _returns_503_response(sub)
-            ):
+            if (isinstance(sub, ast.Raise) and _raises_503(sub)) or (isinstance(sub, ast.Return) and _returns_503_response(sub)):
                 direct = True
             elif isinstance(sub, ast.Call):
                 call_funcs.append(sub.func)
@@ -458,25 +447,16 @@ def _iter_violations(
                 if "SQLAlchemyError" not in _except_type_names(handler):
                     continue
                 direct, call_funcs = _body_shape(handler.body)
-                reports_503 = direct or any(
-                    (key := _resolve_def_key(index, module, func)) is not None and state.get(key, False)
-                    for func in call_funcs
-                )
+                reports_503 = direct or any((key := _resolve_def_key(index, module, func)) is not None and state.get(key, False) for func in call_funcs)
                 reports_mcp_payload = _body_returns_mcp_db_unavailable(handler.body)
                 if not reports_503 and not reports_mcp_payload:
                     continue
                 if _leads_with_guard(handler):
                     continue
                 if reports_mcp_payload:
-                    violations.append(
-                        f"  {rel}:{handler.lineno} — except SQLAlchemyError returns an MCP "
-                        f"database-unavailable payload without a leading session-contract guard"
-                    )
+                    violations.append(f"  {rel}:{handler.lineno} — except SQLAlchemyError returns an MCP database-unavailable payload without a leading session-contract guard")
                 else:
-                    violations.append(
-                        f"  {rel}:{handler.lineno} — except SQLAlchemyError reports a 503 "
-                        f"without a leading {_HTTP_GUARD_NAME}(...) guard"
-                    )
+                    violations.append(f"  {rel}:{handler.lineno} — except SQLAlchemyError reports a 503 without a leading {_HTTP_GUARD_NAME}(...) guard")
     return violations
 
 
@@ -597,9 +577,7 @@ def test_cross_module_delegating_503_helper_is_flagged_when_unguarded(tmp_path: 
     )
     violations = _iter_violations(tmp_path, exempt={}, auth_root=None)
 
-    assert any("routes/cross_route.py" in v for v in violations), (
-        f"cross-module-delegated 503 was NOT flagged (the QA-gate hole): {violations}"
-    )
+    assert any("routes/cross_route.py" in v for v in violations), f"cross-module-delegated 503 was NOT flagged (the QA-gate hole): {violations}"
     flagged_lines = sum(1 for v in violations if "routes/cross_route.py" in v)
     assert flagged_lines == 2, f"both synthetic arms (from-import and dotted-import) must be flagged: {violations}"
 
@@ -617,9 +595,7 @@ def test_module_local_delegating_503_helper_is_flagged_when_unguarded(tmp_path: 
     _write_synthetic_tree(tmp_path, {"routes/local_route.py": _LOCAL_ROUTE})
     violations = _iter_violations(tmp_path, exempt={}, auth_root=None)
 
-    assert any("routes/local_route.py" in v for v in violations), (
-        f"module-local delegation must stay flagged: {violations}"
-    )
+    assert any("routes/local_route.py" in v for v in violations), f"module-local delegation must stay flagged: {violations}"
 
 
 # ---------------------------------------------------------------------------
@@ -670,9 +646,7 @@ def test_mcp_database_unavailable_payload_is_flagged_when_unguarded(tmp_path: Pa
     _write_synthetic_tree(tmp_path, {"routes/mcp_payload.py": _MCP_PAYLOAD_UNGUARDED})
     violations = _iter_violations(tmp_path, exempt={})
 
-    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), (
-        f"MCP database-unavailable payload without the guard was NOT flagged: {violations}"
-    )
+    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), f"MCP database-unavailable payload without the guard was NOT flagged: {violations}"
 
 
 def test_mcp_temporarily_unavailable_payload_is_flagged_when_unguarded(tmp_path: Path) -> None:
@@ -680,9 +654,7 @@ def test_mcp_temporarily_unavailable_payload_is_flagged_when_unguarded(tmp_path:
     _write_synthetic_tree(tmp_path, {"routes/mcp_payload.py": _MCP_TEMPORARILY_UNGUARDED})
     violations = _iter_violations(tmp_path, exempt={})
 
-    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), (
-        f"_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE) without the guard was NOT flagged: {violations}"
-    )
+    assert any("routes/mcp_payload.py" in v and "database-unavailable payload" in v for v in violations), f"_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE) without the guard was NOT flagged: {violations}"
 
 
 def test_mcp_payload_guard_shape_is_accepted(tmp_path: Path) -> None:
@@ -742,9 +714,7 @@ def test_auth_root_unguarded_503_arm_is_flagged(tmp_path: Path) -> None:
 
     violations = _iter_violations(None, exempt={}, auth_root=auth_root)
 
-    assert any("auth/deps.py" in v for v in violations), (
-        f"an unguarded auth-root 503 arm was NOT flagged (auth root not wired in?): {violations}"
-    )
+    assert any("auth/deps.py" in v for v in violations), f"an unguarded auth-root 503 arm was NOT flagged (auth root not wired in?): {violations}"
 
 
 def test_auth_root_guarded_503_arm_is_clean(tmp_path: Path) -> None:

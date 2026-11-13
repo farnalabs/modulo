@@ -52,9 +52,7 @@ def test_egress_deny_all_is_false():
 
 
 def test_egress_selected_is_false():
-    caps = derive_sandbox_capabilities(
-        _sandbox_node(egress_policy="selected", egress_allowlist=[{"host": "api.github.com", "port": 443}])
-    )
+    caps = derive_sandbox_capabilities(_sandbox_node(egress_policy="selected", egress_allowlist=[{"host": "api.github.com", "port": 443}]))
     assert caps[SANDBOX_CAPABILITY_EGRESS] is False
 
 
