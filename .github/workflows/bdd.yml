@@ -31,6 +31,12 @@ env:
   CORS_ORIGINS: "http://localhost:4173"
   FARNA_CONTROL_PLUGIN_DISCOVERY: "false"
   FARNA_CONTROL_CSRF_ENABLED: "false"
+  # Enable developer mode so internal preview surfaces (e.g. System Maps) are
+  # reachable; the feature-flag gate must return 402, not 403.
+  FARNA_CONTROL_DEV_MODE: "true"
+  # Disable auth rate limiting in BDD; Redis is present and would otherwise
+  # return 429 on the high request volume from scenario steps.
+  FARNA_CONTROL_AUTH_RATE_LIMIT_ENABLED: "false"
 
 concurrency:
   group: bdd-${{ github.ref }}
