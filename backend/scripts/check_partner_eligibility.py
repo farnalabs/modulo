@@ -235,9 +235,7 @@ def _extract_next_link(link_header: str | None) -> str | None:
         end = segment.find(">", start)
         if start != -1 and end != -1 and start + 1 < end:
             return segment[start + 1 : end]
-        raise GithubApiError(
-            'GitHub API Link header contains rel="next" with an unparseable URL; pagination cannot be trusted.'
-        )
+        raise GithubApiError('GitHub API Link header contains rel="next" with an unparseable URL; pagination cannot be trusted.')
     return None
 
 
@@ -329,9 +327,7 @@ def _gh_fetch_with_retries(path: str) -> tuple[dict[str, Any], Any] | None:
     return None
 
 
-def _process_response(
-    resp: requests.Response, attempt: int, allow_codes: tuple[int, ...]
-) -> tuple[dict[str, Any], Any] | None:
+def _process_response(resp: requests.Response, attempt: int, allow_codes: tuple[int, ...]) -> tuple[dict[str, Any], Any] | None:
     """Interpret one API response. Returns ``(json, headers)``, or ``None`` to
     signal the caller to retry."""
     if resp.status_code == 403 and resp.headers.get("X-RateLimit-Remaining") == "0":
@@ -661,11 +657,7 @@ def check_eligibility(
             "verdict": VERDICT_INCONCLUSIVE,
             "criteria": {"api": {"status": STATUS_INCONCLUSIVE, "reason": RC_API_FAILURE}},
             "evidence": {"error": str(exc)},
-            "escalation": (
-                "API unreachable or rate-limited. Do NOT reject on this result. "
-                "Escalate to a human to verify manually (e.g. check the repo in "
-                "a browser, or retry with a valid GITHUB_TOKEN / gh auth)."
-            ),
+            "escalation": ("API unreachable or rate-limited. Do NOT reject on this result. Escalate to a human to verify manually (e.g. check the repo in a browser, or retry with a valid GITHUB_TOKEN / gh auth)."),
         }
 
 

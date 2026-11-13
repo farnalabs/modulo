@@ -231,9 +231,7 @@ def test_read_log_members_without_a_data_dir() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_bundle_container_mode_keeps_going_without_settings_or_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_bundle_container_mode_keeps_going_without_settings_or_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import farna.settings as settings_module
 
     def _boom() -> Any:
@@ -382,9 +380,7 @@ def test_main_rejects_list_and_show_together(tmp_path: Path, capsys: pytest.Capt
     assert "mutually exclusive" in capsys.readouterr().err
 
 
-def test_main_reports_a_write_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_reports_a_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     async def _boom(*_args: Any, **_kwargs: Any) -> Any:
         raise OSError("disk full")
 
@@ -444,9 +440,7 @@ def test_unclassified_secret_ignores_single_class_tokens() -> None:
     assert _looks_like_unclassified_secret("abcdef0123456789abcdef01") is False
 
 
-def test_redact_stdin_preserves_input_without_a_trailing_newline(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_redact_stdin_preserves_input_without_a_trailing_newline(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     import io
 
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"clean line"), encoding="utf-8"))

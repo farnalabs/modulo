@@ -48,11 +48,7 @@ def pagerduty_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def pagerduty_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    response = (
-        httpx.Response(200, json={"users": [{"id": "U1"}]})
-        if ctx["valid"]
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"users": [{"id": "U1"}]}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/users", params={"limit": 1}).mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
@@ -67,9 +63,7 @@ def pagerduty_query_incidents(ctx: dict) -> None:
         {"id": "I2", "title": "Degraded performance", "status": "acknowledged"},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/incidents").mock(
-            return_value=httpx.Response(200, json={"incidents": incidents, "total": 2, "more": False})
-        )
+        respx.get(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, json={"incidents": incidents, "total": 2, "more": False}))
         ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="incidents")))
 
 
@@ -82,9 +76,7 @@ def pagerduty_query_services(ctx: dict) -> None:
         {"id": "S2", "name": "Database", "status": "active"},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/services").mock(
-            return_value=httpx.Response(200, json={"services": services, "total": 2, "more": False})
-        )
+        respx.get(f"{_BASE}/services").mock(return_value=httpx.Response(200, json={"services": services, "total": 2, "more": False}))
         ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="services")))
 
 
@@ -93,12 +85,8 @@ def pagerduty_write_trigger_incident(title: str, service: str, ctx: dict) -> Non
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/incidents").mock(
-            return_value=httpx.Response(201, json={"incident": {"id": "INC1", "title": title, "status": "triggered"}})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="incident", data={"title": title, "service_id": service}))
-        )
+        respx.post(f"{_BASE}/incidents").mock(return_value=httpx.Response(201, json={"incident": {"id": "INC1", "title": title, "status": "triggered"}}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="incident", data={"title": title, "service_id": service})))
 
 
 @when(parsers.parse('the connector acknowledges incident "{incident_id}"'))
@@ -106,12 +94,8 @@ def pagerduty_write_acknowledge(incident_id: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.put(f"{_BASE}/incidents/{incident_id}").mock(
-            return_value=httpx.Response(200, json={"incident": {"id": incident_id, "status": "acknowledged"}})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="incident_acknowledge", data={"incident_id": incident_id}))
-        )
+        respx.put(f"{_BASE}/incidents/{incident_id}").mock(return_value=httpx.Response(200, json={"incident": {"id": incident_id, "status": "acknowledged"}}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="incident_acknowledge", data={"incident_id": incident_id})))
 
 
 @when(parsers.parse('the connector resolves incident "{incident_id}"'))
@@ -119,12 +103,8 @@ def pagerduty_write_resolve(incident_id: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.put(f"{_BASE}/incidents/{incident_id}").mock(
-            return_value=httpx.Response(200, json={"incident": {"id": incident_id, "status": "resolved"}})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="incident_resolve", data={"incident_id": incident_id}))
-        )
+        respx.put(f"{_BASE}/incidents/{incident_id}").mock(return_value=httpx.Response(200, json={"incident": {"id": incident_id, "status": "resolved"}}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="incident_resolve", data={"incident_id": incident_id})))
 
 
 @then(parsers.parse('the health check returns "{status}"'))

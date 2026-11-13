@@ -160,9 +160,7 @@ class TestIterDeclaredPolicyGates:
         assert _iter_declared_policy_gates(nodes) == [(str(_EVAL_ID), "n5", "block")]
 
     def test_declared_map_keys_by_eval_id(self) -> None:
-        assert _declared_policy_gates([_gate_node("n5", action="warn")]) == {
-            str(_EVAL_ID): {"node_id": "n5", "action": "warn"}
-        }
+        assert _declared_policy_gates([_gate_node("n5", action="warn")]) == {str(_EVAL_ID): {"node_id": "n5", "action": "warn"}}
 
 
 class TestRejectDuplicatePolicyGates:
@@ -193,40 +191,30 @@ class TestRejectDeclaredPolicyGates:
 class TestLoadGateEvalForNode:
     async def test_returns_the_bound_eval(self, session: AsyncSession) -> None:
         await _seed_eval(session)
-        row = await _load_gate_eval_for_node(
-            session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID
-        )
+        row = await _load_gate_eval_for_node(session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID)
         assert row.id == _EVAL_ID
 
     async def test_missing_eval_is_rejected(self, session: AsyncSession) -> None:
         with pytest.raises(HTTPException) as exc:
-            await _load_gate_eval_for_node(
-                session, eval_id=_OTHER_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID
-            )
+            await _load_gate_eval_for_node(session, eval_id=_OTHER_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID)
         assert exc.value.status_code == 422
 
     async def test_cross_pipeline_eval_is_rejected(self, session: AsyncSession) -> None:
         await _seed_eval(session)
         with pytest.raises(HTTPException) as exc:
-            await _load_gate_eval_for_node(
-                session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=uuid.uuid4(), node_id=_NODE_ID
-            )
+            await _load_gate_eval_for_node(session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=uuid.uuid4(), node_id=_NODE_ID)
         assert exc.value.status_code == 422
 
     async def test_unbound_node_eval_is_rejected(self, session: AsyncSession) -> None:
         await _seed_eval(session, node_id=None)
         with pytest.raises(HTTPException) as exc:
-            await _load_gate_eval_for_node(
-                session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID
-            )
+            await _load_gate_eval_for_node(session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_NODE_ID)
         assert exc.value.status_code == 422
 
     async def test_mismatched_node_eval_is_rejected(self, session: AsyncSession) -> None:
         await _seed_eval(session)
         with pytest.raises(HTTPException) as exc:
-            await _load_gate_eval_for_node(
-                session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_OTHER_NODE_ID
-            )
+            await _load_gate_eval_for_node(session, eval_id=_EVAL_ID, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, node_id=_OTHER_NODE_ID)
         assert exc.value.status_code == 422
 
 
@@ -280,18 +268,14 @@ class TestEnsureDeclaredGate:
     async def test_invalid_action_is_rejected(self, session: AsyncSession) -> None:
         eval_row = await _seed_eval(session)
         with pytest.raises(HTTPException) as exc:
-            await _ensure_declared_gate(
-                session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="explode"
-            )
+            await _ensure_declared_gate(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="explode")
         assert exc.value.status_code == 422
 
     async def test_creates_then_updates_the_gate_in_place(self, session: AsyncSession) -> None:
         eval_row = await _seed_eval(session)
         audit = AsyncMock()
         with patch.object(pipeline_crud, "append_audit_event", new=audit):
-            await _ensure_declared_gate(
-                session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="block"
-            )
+            await _ensure_declared_gate(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="block")
             await session.flush()
             gates = await _live_gates(session)
             assert len(gates) == 1
@@ -301,18 +285,14 @@ class TestEnsureDeclaredGate:
             assert gates[0].enabled_at is not None
 
             # A repeated declaration with the same action is a no-op (no churn).
-            await _ensure_declared_gate(
-                session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="block"
-            )
+            await _ensure_declared_gate(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="block")
             await session.flush()
             gates = await _live_gates(session)
             assert len(gates) == 1
             assert gates[0].version == 1
 
             # A changed action updates the SAME row in place, bumping the version.
-            await _ensure_declared_gate(
-                session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="warn"
-            )
+            await _ensure_declared_gate(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, eval_row=eval_row, action="warn")
             await session.flush()
             gates = await _live_gates(session)
             assert len(gates) == 1

@@ -413,10 +413,7 @@ class ConnectorHub:
         sibling ``last_health_check_error`` String(2000) column.
         """
         redactor = self._redactors.get(instance.id)
-        if redactor is not None:
-            summary = f"{type(exc).__name__}: {redactor.redact(str(exc))}"
-        else:
-            summary = f"{type(exc).__name__}: {exc}"
+        summary = f"{type(exc).__name__}: {redactor.redact(str(exc))}" if redactor is not None else f"{type(exc).__name__}: {exc}"
         self.skipped[instance.id] = summary.replace("\x00", "")[:_SKIP_SUMMARY_LIMIT]
 
     async def initialise(

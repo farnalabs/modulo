@@ -97,9 +97,7 @@ class TestLoadEvalDefsReadsEvals:
         compiled = str(stmt)
         assert "evals" in compiled, f"loading query must read from evals, got: {compiled}"
         assert "policy_gates" in compiled, f"loading query must outer-join policy_gates, got: {compiled}"
-        assert "eval_definitions" not in compiled, (
-            f"loading query must NOT reference eval_definitions after the cutover, got: {compiled}"
-        )
+        assert "eval_definitions" not in compiled, f"loading query must NOT reference eval_definitions after the cutover, got: {compiled}"
 
     async def test_loader_selects_eval_and_policy_gate_entities(self) -> None:
         """The SELECT projects ``(Eval, PolicyGate)`` entity pairs — the row

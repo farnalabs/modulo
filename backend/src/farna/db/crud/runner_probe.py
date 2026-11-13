@@ -111,7 +111,7 @@ async def prune_stale_runner_probe_rows(session: AsyncSession, *, retention_seco
     that stopped probing — a decommissioned machine whose corpse row would
     otherwise pin the strip's worst-of aggregate to "stale" forever.
     Returns the number of rows deleted. Cross-org by design: the probe runs
-    on the modulo_system role (BYPASSRLS) and prunes every org's corpses.
+    on the farna_control_system role (BYPASSRLS) and prunes every org's corpses.
     """
     from sqlalchemy import delete
 

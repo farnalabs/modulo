@@ -201,7 +201,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
 # ---------------------------------------------------------------------------
 # Non-superuser role tests — reproduces the production RLS scenario
 #
-# In production the app connects as ``modulo_app``, a DML-granted non-owner
+# In production the app connects as ``farna_control_app``, a DML-granted non-owner
 # role that is subject to RLS on ``org_api_keys``. The superuser-based tests
 # above cannot catch an RLS regression (superusers bypass RLS even with
 # FORCE ROW LEVEL SECURITY), so these tests run the real auth path as a

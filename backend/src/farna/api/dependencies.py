@@ -1027,16 +1027,16 @@ def system_engine_is_fallback() -> bool:
 
 
 def get_or_create_system_engine() -> AsyncEngine:
-    """Return the process-global system engine (``modulo_system`` role, BYPASSRLS).
+    """Return the process-global system engine (``farna_control_system`` role, BYPASSRLS).
 
     Used for cross-org reads that must bypass per-org RLS — e.g. pre-auth SSO
     provider resolution (provider config is instance-global, not tenant data)
     and the FAR-523 trigger-delivery bootstrap. Mirrors
     ``saq_worker._get_system_async_engine``: when ``MODULO_SYSTEM_DATABASE_URL``
-    is set, builds a dedicated engine connected as the ``modulo_system`` role
+    is set, builds a dedicated engine connected as the ``farna_control_system`` role
     (LOGIN, BYPASSRLS); otherwise falls back to the regular engine with a
     warning AND records the fallback via :func:`system_engine_is_fallback` —
-    the fallback runs as ``modulo_app`` (NOBYPASSRLS), so an RLS-scoped read
+    the fallback runs as ``farna_control_app`` (NOBYPASSRLS), so an RLS-scoped read
     returns zero rows and callers must fail loud rather than treat the empty
     result as "not found".
     """
@@ -1088,7 +1088,7 @@ def get_or_create_system_engine() -> AsyncEngine:
 
 
 def get_or_create_system_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Return the process-global system session factory (``modulo_system`` role)."""
+    """Return the process-global system session factory (``farna_control_system`` role)."""
     global _SYSTEM_SESSION_FACTORY
     if _SYSTEM_SESSION_FACTORY is None:
         _SYSTEM_SESSION_FACTORY = async_sessionmaker(
@@ -1106,7 +1106,7 @@ def _get_system_session_factory() -> async_sessionmaker[AsyncSession]:
 async def get_system_db_session(
     factory: async_sessionmaker[AsyncSession] = Depends(_get_system_session_factory),
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Yield a system (``modulo_system``, BYPASSRLS) AsyncSession for global reads.
+    """Yield a system (``farna_control_system``, BYPASSRLS) AsyncSession for global reads.
 
     Transaction management is left to the caller (mirrors ``get_db_session``).
     The system role sees all orgs; pre-auth SSO route resolution relies on it so

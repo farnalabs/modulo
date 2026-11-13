@@ -60,12 +60,7 @@ async def _insert_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -124,12 +119,7 @@ async def _insert_run_with_token(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status, claim_token, cancellation_requested) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :tok, :cr)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status, claim_token, cancellation_requested) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :tok, :cr)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -405,11 +395,7 @@ async def test_inline_resume_claim_fence_real_pg(
             )
 
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, claim_token, claim_count FROM runs WHERE id=:rid"), {"rid": str(run_id)}
-            )
-        ).fetchone()
+        row = (await conn.execute(text("SELECT status, claim_token, claim_count FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
     assert row is not None
     assert row[0] == "awaiting_human"
     assert row[1] == "expected-token"
@@ -427,11 +413,7 @@ async def test_inline_resume_claim_fence_real_pg(
         assert claimed.status == "running"
 
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, claim_token, claimed_by FROM runs WHERE id=:rid"), {"rid": str(run_id)}
-            )
-        ).fetchone()
+        row = (await conn.execute(text("SELECT status, claim_token, claimed_by FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
     assert row is not None
     assert row[0] == "running"
     assert row[1] == "expected-token"
@@ -465,9 +447,7 @@ async def test_inline_resume_failure_recovery_does_not_rewrite_successor_real_pg
     )
     assert restored is False
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})
-        ).fetchone()
+        row = (await conn.execute(text("SELECT status, claim_token FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
     assert row is not None
     assert row[0] == "running"
     assert row[1] == "successor-token"
@@ -483,11 +463,7 @@ async def _insert_committed_hitl_decision(
 ) -> None:
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
-                "expires_at, decision, decision_at, decision_payload) "
-                "VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, expires_at, decision, decision_at, decision_payload) VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"),
             {
                 "cid": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -709,11 +685,7 @@ async def test_claim_resume_run_async_matches_hitl_parked_with_committed_decisio
     # shape the decide route writes: verdict action + stamped gate id.
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
-                "expires_at, decision, decision_at, decision_payload) "
-                "VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, expires_at, decision, decision_at, decision_payload) VALUES (:cid, :oid, :rid, :pid, :gid, now(), 'approved', now(), CAST(:p AS json))"),
             {
                 "cid": str(uuid.uuid4()),
                 "oid": str(test_org),
@@ -821,9 +793,7 @@ async def test_capacity_denied_resume_refunds_the_claim_real_pg(
         assert token is not None, f"resume claim must still succeed on cycle {cycle} (claim refunded)"
         # The executor's capacity gate denied the resume; the fenced defer reset
         # returns the row to awaiting_human and refunds the claim it consumed.
-        reset = await pe.defer_capacity_denied_run_to_awaiting_human(
-            app_engine, str(run_id), str(test_org), claim_token=token
-        )
+        reset = await pe.defer_capacity_denied_run_to_awaiting_human(app_engine, str(run_id), str(test_org), claim_token=token)
         assert reset is True, f"the capacity-defer reset must land on cycle {cycle}"
         assert await _claim_count(db_engine, run_id) == 0, f"claim refunded to 0 on cycle {cycle}"
 
@@ -883,9 +853,7 @@ async def test_update_run_status_refund_claim_count_fenced_real_pg(
 
     # A second refund from 0 clamps at 0 (never violates the nonneg CHECK).
     async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text("UPDATE runs SET claim_count = 0, status = 'running' WHERE id=:rid"), {"rid": str(run_id)}
-        )
+        await conn.execute(text("UPDATE runs SET claim_count = 0, status = 'running' WHERE id=:rid"), {"rid": str(run_id)})
     async with factory() as session, session.begin():
         await set_rls_org(session, test_org)
         await update_run_status(

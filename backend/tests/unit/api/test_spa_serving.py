@@ -120,7 +120,7 @@ def test_runtime_config_route_serves_allowlisted_keys_only(tmp_path: Path, monke
 
 
 def test_runtime_config_route_excludes_ambient_env_values(tmp_path: Path, monkeypatch: Any) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://modulo:secret@db/modulo")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
     monkeypatch.delenv("FARNA_CONTROL_MODULO_MONITOR_CONFIG", raising=False)
     dist = _dist(tmp_path)
     _, client = _spa_app(dist)

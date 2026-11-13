@@ -218,9 +218,7 @@ async def _clone(snapshot_row: _Row) -> tuple[AsyncMock, Any]:
 
 
 def _cloned_snapshot(main_session: AsyncMock) -> Any:
-    added = [
-        call.args[0] for call in main_session.add.call_args_list if type(call.args[0]).__name__ == "PipelineSnapshot"
-    ]
+    added = [call.args[0] for call in main_session.add.call_args_list if type(call.args[0]).__name__ == "PipelineSnapshot"]
     assert added, "expected the cloned PipelineSnapshot to be added"
     return added[0]
 

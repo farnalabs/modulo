@@ -967,11 +967,11 @@ def _get_engine() -> AsyncEngine:
 
 
 def _get_system_engine() -> AsyncEngine:
-    """Engine for cross-org system crons using the modulo_system role.
+    """Engine for cross-org system crons using the farna_control_system role.
 
     FAIL CLOSED when MODULO_SYSTEM_DATABASE_URL is not set: cross-org system
-    crons require the modulo_system role (LOGIN, BYPASSRLS). Falling back to the
-    regular engine would run them as modulo_app, which is NOBYPASSRLS (see
+    crons require the farna_control_system role (LOGIN, BYPASSRLS). Falling back to the
+    regular engine would run them as farna_control_app, which is NOBYPASSRLS (see
     bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
     RLS-scoped read silently returns zero rows — a silent no-op that masks a
     misconfigured deployment. Instead, a clear ``RuntimeError`` is raised. The
@@ -1029,9 +1029,9 @@ def _get_system_engine() -> AsyncEngine:
         else:
             _log.error(
                 "cron_helpers.system_engine_misconfigured",
-                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would silently return zero rows. Set the modulo_system role URL.")},
+                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org system crons as farna_control_app (NOBYPASSRLS); RLS-scoped reads would silently return zero rows. Set the farna_control_system role URL.")},
             )
-            raise RuntimeError("MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to modulo_app (NOBYPASSRLS), which would silently return zero rows.")
+            raise RuntimeError("MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require the farna_control_system role (LOGIN, BYPASSRLS). Refusing to fail open to farna_control_app (NOBYPASSRLS), which would silently return zero rows.")
     return _SYSTEM_ENGINE
 
 
@@ -1040,7 +1040,7 @@ def _open_factory() -> async_sessionmaker[AsyncSession]:
 
 
 def _open_system_factory() -> async_sessionmaker[AsyncSession]:
-    """Session factory for cross-org system crons (modulo_system role)."""
+    """Session factory for cross-org system crons (farna_control_system role)."""
     return async_sessionmaker(_get_system_engine(), expire_on_commit=False, autobegin=False)
 
 
@@ -5831,10 +5831,7 @@ async def _ingest_zombie_error(
     started_at: Any,
 ) -> None:
     """Ingest SAQ error event for zombie terminalization."""
-    if node_started:
-        stable_message = "dispatcher_reconcile: node-started zombie terminal-failed (first node STARTED but no super-step completed within the nodeless window)"
-    else:
-        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+    stable_message = "dispatcher_reconcile: node-started zombie terminal-failed (first node STARTED but no super-step completed within the nodeless window)" if node_started else _NODELESS_ZOMBIE_STABLE_MESSAGE
 
     await _ingest_saq_error(
         session,
@@ -8545,7 +8542,7 @@ async def run_classification_reconcile() -> dict[str, int]:
     without this their ``run_classification`` stays NULL forever and the
     FAR-190 streak walk loses the infra failures this feature exists to count.
 
-    Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS): the sweep itself
+    Runs system-scoped (farna_control_system role, LOGIN, BYPASSRLS): the sweep itself
     processes each org under its own RLS context. Bounded + idempotent, so an
     every-60s tick simply drains whatever backlog remains. Best-effort and never
     raises: a sweep failure is logged by the caller and must never fail the
@@ -11729,7 +11726,7 @@ async def legacy_agent_return_sweep() -> dict[str, Any]:
     ``saq_worker.legacy_agent_return_sweep`` wrapper, mirroring the sibling
     detection crons.
 
-    Cross-org: the system session factory (modulo_system role, BYPASSRLS). Any
+    Cross-org: the system session factory (farna_control_system role, BYPASSRLS). Any
     failure is logged and RE-RAISED so SAQ's ``retries`` engage — a scan that
     cannot run must never be mistaken for a clean zero (fail-loud, never
     silently pass).

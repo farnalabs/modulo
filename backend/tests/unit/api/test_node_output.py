@@ -672,12 +672,7 @@ class TestMaskOutputValueSecretValues:
         # A private-key block whose body exceeds the 5000-char ReDoS cap must
         # still be masked in full. Previously its close delimiter fell outside
         # the bounded window and the whole block leaked unmasked.
-        key = (
-            "-----BEGIN RSA PRIVATE KEY-----\n"
-            + ("MIIBOgIBAAJBAKj34GkxFhD" * 200)
-            + ("X" * 4000)
-            + "\n-----END RSA PRIVATE KEY-----"
-        )
+        key = "-----BEGIN RSA PRIVATE KEY-----\n" + ("MIIBOgIBAAJBAKj34GkxFhD" * 200) + ("X" * 4000) + "\n-----END RSA PRIVATE KEY-----"
         assert len(key) > SECRET_VALUE_REDACT_CHAR_CAP
         text = "a" * 1000 + key + "b" * 100
         masked = mask_secret_values_in_text(text)

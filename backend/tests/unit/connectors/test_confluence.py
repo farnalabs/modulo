@@ -55,9 +55,7 @@ async def test_query_spaces_corrupt_body_no_crash(connector: ConfluenceConnector
 @respx.mock
 async def test_query_content_corrupt_body_no_crash(connector: ConfluenceConnector) -> None:
     """A non-dict body from the content search endpoint must degrade to an empty page."""
-    respx.get(f"{_BASE}/wiki/rest/api/content/search", params={"cql": "text~bug"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_BASE}/wiki/rest/api/content/search", params={"cql": "text~bug"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="content", filters={"cql": "text~bug"}))
     assert not result.records
 

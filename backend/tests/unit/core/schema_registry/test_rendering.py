@@ -822,9 +822,7 @@ class TestSchemaProfileSourceOfTruth:
         sql_text = str(schema_profile_check.sqltext)
         values_in_check = set(re.findall(r"'([^']+)'", sql_text))
         expected_values = set(get_args(SchemaProfile))
-        assert values_in_check == expected_values, (
-            f"SQL CHECK values {values_in_check} do not match get_args(SchemaProfile) = {expected_values}"
-        )
+        assert values_in_check == expected_values, f"SQL CHECK values {values_in_check} do not match get_args(SchemaProfile) = {expected_values}"
 
     def test_agent_model_valid_profiles_matches_literal_args(self) -> None:
         """The _VALID_SCHEMA_PROFILES tuple in db.models.agent must match
@@ -837,9 +835,7 @@ class TestSchemaProfileSourceOfTruth:
 
         expected = get_args(SchemaProfile)
         db_profiles = _agent_mod._VALID_SCHEMA_PROFILES
-        assert set(db_profiles) == set(expected), (
-            f"db.models.agent._VALID_SCHEMA_PROFILES {db_profiles} does not match get_args(SchemaProfile) = {expected}"
-        )
+        assert set(db_profiles) == set(expected), f"db.models.agent._VALID_SCHEMA_PROFILES {db_profiles} does not match get_args(SchemaProfile) = {expected}"
 
 
 # ---------------------------------------------------------------------------

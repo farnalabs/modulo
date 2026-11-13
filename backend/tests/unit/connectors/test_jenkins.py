@@ -37,9 +37,7 @@ def test_connector_type(jenkins):
 
 @respx.mock
 async def test_trigger_run(jenkins):
-    route = respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(
-        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/42/"})
-    )
+    route = respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/42/"}))
     run = await jenkins.trigger_run(pipeline_id="my-job")
     assert run.pipeline_id == "my-job"
     assert run.status == CIRunStatus.QUEUED
@@ -48,9 +46,7 @@ async def test_trigger_run(jenkins):
 
 @respx.mock
 async def test_trigger_run_with_parameters(jenkins):
-    route = respx.post(f"{_JENKINS_BASE}/job/my-job/buildWithParameters").mock(
-        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/43/"})
-    )
+    route = respx.post(f"{_JENKINS_BASE}/job/my-job/buildWithParameters").mock(return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/43/"}))
     run = await jenkins.trigger_run(pipeline_id="my-job", variables={"BRANCH": "main", "TAG": "v1"})
     assert run.pipeline_id == "my-job"
     assert run.status == CIRunStatus.QUEUED
@@ -328,9 +324,7 @@ async def test_get_run_status_running(jenkins):
 
 @respx.mock
 async def test_get_run_logs(jenkins):
-    respx.get(f"{_JENKINS_BASE}/job/my-job/42/consoleText").mock(
-        return_value=httpx.Response(200, text="line1\nline2\nline3\n")
-    )
+    respx.get(f"{_JENKINS_BASE}/job/my-job/42/consoleText").mock(return_value=httpx.Response(200, text="line1\nline2\nline3\n"))
     logs = await jenkins.get_run_logs("my-job/42")
     assert len(logs.lines) == 3
     assert logs.lines == ["line1", "line2", "line3"]
@@ -338,9 +332,7 @@ async def test_get_run_logs(jenkins):
 
 @respx.mock
 async def test_get_run_logs_with_cursor(jenkins):
-    respx.get(f"{_JENKINS_BASE}/job/my-job/42/consoleText").mock(
-        return_value=httpx.Response(200, text="line1\nline2\nline3\n")
-    )
+    respx.get(f"{_JENKINS_BASE}/job/my-job/42/consoleText").mock(return_value=httpx.Response(200, text="line1\nline2\nline3\n"))
     logs = await jenkins.get_run_logs("my-job/42", cursor="2")
     assert logs.lines == ["line3"]
 
@@ -481,9 +473,7 @@ async def test_query_jobs_non_list_jobs_no_crash(jenkins):
 
 @respx.mock
 async def test_write_build(jenkins):
-    route = respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(
-        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/42/"})
-    )
+    route = respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/job/my-job/42/"}))
     payload = ConnectorPayload(resource="build", data={"job_name": "my-job"})
     result = await jenkins.write(payload)
     assert result["location"] == "http://jenkins.example.com/job/my-job/42/"
@@ -699,9 +689,7 @@ async def test_queue_executable_404_fails_loud(jenkins):
     from unittest.mock import AsyncMock
 
     client = AsyncMock()
-    client.get.return_value = httpx.Response(
-        404, request=httpx.Request("GET", f"{_JENKINS_BASE}/queue/item/7/api/json")
-    )
+    client.get.return_value = httpx.Response(404, request=httpx.Request("GET", f"{_JENKINS_BASE}/queue/item/7/api/json"))
     with pytest.raises(ValueError, match="no longer exists"):
         await jenkins._queue_executable(client, "7", "my-job/queue/7")
 

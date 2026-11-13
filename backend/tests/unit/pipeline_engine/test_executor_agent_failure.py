@@ -95,9 +95,7 @@ def elevation_disabled(monkeypatch):
     return fake
 
 
-async def _run_stream_graph(
-    events: list[dict[str, Any]], broker: MagicMock | None = None
-) -> tuple[tuple[Any, ...], MagicMock]:
+async def _run_stream_graph(events: list[dict[str, Any]], broker: MagicMock | None = None) -> tuple[tuple[Any, ...], MagicMock]:
     executor = PipelineExecutor(MagicMock())
     completed_node_outputs: dict[str, Any] = {}
     broker = broker or MagicMock()
@@ -125,9 +123,7 @@ def _run_failed_publishes(broker: MagicMock) -> list[tuple[Any, ...]]:
 
 
 def test_node_output_agent_failure_detects_agent_status_failed():
-    reason = _node_output_agent_failure(
-        {"output": {"status": "completed", "agent_status": "failed", "summary": "all sub-calls timed out"}}
-    )
+    reason = _node_output_agent_failure({"output": {"status": "completed", "agent_status": "failed", "summary": "all sub-calls timed out"}})
     assert reason == "all sub-calls timed out"
 
 
@@ -186,9 +182,7 @@ async def test_agent_status_failed_exit_zero_elevates_to_run_failed(elevation_en
 
 async def test_outcome_failed_nonzero_exit_elevates(elevation_enabled):
     """outcome=failed with a failed (exit != 0) node → elevation still fires."""
-    result, _broker = await _run_stream_graph(
-        [_agent_failed_event(agent_status="completed", agent_outcome="failed", node_status="failed")]
-    )
+    result, _broker = await _run_stream_graph([_agent_failed_event(agent_status="completed", agent_outcome="failed", node_status="failed")])
 
     final_status, error_code, _error_detail, _node_token_usage = result
     assert final_status == "failed"
@@ -337,13 +331,7 @@ def _session_lost_402_envelope_event() -> dict[str, Any]:
     ``no_output_reason`` (a JSON string), NOT in the placeholder summary. The
     top-level telemetry view omits ``output_json``, so only the artifact view
     carries it (mirrors ``_build_sandbox_node_envelope``)."""
-    no_output_reason = (
-        '{"type":"error","sessionID":"ses_ec1f9b8c0ffeUzdix1G59mOuhV",'
-        '"error":{"name":"APIError","data":'
-        '{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402,"isRetryable":false,'
-        '"metadata":{"url":"https://opencode.ai/inference/go/v1/chat/completions"}}}}'
-    )
+    no_output_reason = '{"type":"error","sessionID":"ses_ec1f9b8c0ffeUzdix1G59mOuhV","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402,"isRetryable":false,"metadata":{"url":"https://opencode.ai/inference/go/v1/chat/completions"}}}}'
     return {
         "event": "on_chain_end",
         "name": "node-a",
@@ -403,12 +391,7 @@ def _session_lost_402_in_agent_stdout_envelope_event() -> dict[str, Any]:
     ``output.json``'s ``no_output_reason``; this pins that second surface. The
     envelope deliberately carries NO ``no_output_reason`` and no 402 text
     anywhere else, so classification can only succeed via ``agent_stdout``."""
-    agent_stdout = (
-        '{"type":"error","sessionID":"ses_stdout_only",'
-        '"error":{"name":"APIError","data":'
-        '{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402,"isRetryable":false}}}}'
-    )
+    agent_stdout = '{"type":"error","sessionID":"ses_stdout_only","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402,"isRetryable":false}}}}'
     return {
         "event": "on_chain_end",
         "name": "node-a",
@@ -469,9 +452,7 @@ async def test_genuine_verdict_stays_agent_failed(elevation_enabled):
     assert final_status == "failed"
     assert error_code == "agent.failed"
     assert error_detail == "the task is impossible because X"
-    assert ("run_failed", {"error": "agent.failed", "detail": "the task is impossible because X"}) in (
-        _run_failed_publishes(broker)
-    )
+    assert ("run_failed", {"error": "agent.failed", "detail": "the task is impossible because X"}) in (_run_failed_publishes(broker))
     assert is_retryable("agent.failed") is False
 
 
@@ -606,12 +587,7 @@ def test_work_intact_computed_for_harness_failure_with_full_dag():
 
 def test_work_intact_none_for_non_terminal():
     executor = _executor_instance()
-    assert (
-        executor._compute_run_work_intact(
-            "awaiting_human", None, {"node-a": {"output": {"status": "completed"}}}, {"node-a"}
-        )
-        is None
-    )
+    assert executor._compute_run_work_intact("awaiting_human", None, {"node-a": {"output": {"status": "completed"}}}, {"node-a"}) is None
 
 
 # ---------------------------------------------------------------------------

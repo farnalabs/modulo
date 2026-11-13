@@ -130,9 +130,7 @@ async def _create_team(session: AsyncSession, org_id: uuid.UUID, account_id: uui
     return team.id
 
 
-async def _create_eval(
-    session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID, pipeline_id: uuid.UUID
-) -> uuid.UUID:
+async def _create_eval(session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
     eval_def = Eval(
         id=uuid.uuid4(),
         organisation_id=org_id,
@@ -253,8 +251,7 @@ async def _create_shared_nodes(
             session,
             org_id,
             revision_id,
-            _node_fields(seed, loop_key, node_type="improvement_loop")
-            | {"position_x": Decimal("3.00"), "position_y": Decimal("4.00"), "config_json": {}},
+            _node_fields(seed, loop_key, node_type="improvement_loop") | {"position_x": Decimal("3.00"), "position_y": Decimal("4.00"), "config_json": {}},
         )
 
     changes = _axis_node_changes(seed)
@@ -282,9 +279,7 @@ async def _create_loop_configs(
         await repo.create_loop_config(session, organisation_id=org_id, revision_id=revision_id, **fields)
 
 
-async def _seed_graph(
-    repo: SystemMapRepository, session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID
-) -> tuple[SystemMap, SystemMapRevision, SystemMapRevision]:
+async def _seed_graph(repo: SystemMapRepository, session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID) -> tuple[SystemMap, SystemMapRevision, SystemMapRevision]:
     """Create a map with two revisions whose graphs differ in every diff axis."""
     map_obj = await repo.create_map(
         session,
@@ -526,15 +521,9 @@ async def test_restore_published_revision_copies_the_graph_into_a_new_draft(
     assert any(node.position_y != 0 for node in source_nodes)
     assert any(rel.config_json for rel in source_graph["relationships"])
 
-    assert _sorted([_node_tuple(node) for node in restored_graph["nodes"]]) == _sorted(
-        [_node_tuple(node) for node in source_nodes]
-    )
-    assert _sorted([_relationship_tuple(rel) for rel in restored_graph["relationships"]]) == _sorted(
-        [_relationship_tuple(rel) for rel in source_graph["relationships"]]
-    )
-    assert _sorted([_loop_config_tuple(loop) for loop in restored_graph["loop_configs"]]) == _sorted(
-        [_loop_config_tuple(loop) for loop in source_graph["loop_configs"]]
-    )
+    assert _sorted([_node_tuple(node) for node in restored_graph["nodes"]]) == _sorted([_node_tuple(node) for node in source_nodes])
+    assert _sorted([_relationship_tuple(rel) for rel in restored_graph["relationships"]]) == _sorted([_relationship_tuple(rel) for rel in source_graph["relationships"]])
+    assert _sorted([_loop_config_tuple(loop) for loop in restored_graph["loop_configs"]]) == _sorted([_loop_config_tuple(loop) for loop in source_graph["loop_configs"]])
 
     # Restoring never mutates or supersedes the source revision: it stays the
     # published revision until the new draft is itself published.

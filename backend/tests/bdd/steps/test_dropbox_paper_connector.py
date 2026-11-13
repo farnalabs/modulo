@@ -50,11 +50,7 @@ def dropbox_paper_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def dropbox_paper_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    response = (
-        httpx.Response(200, json={"email": "admin@example.com"})
-        if ctx["valid"]
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"email": "admin@example.com"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.post(f"{_BASE}/users/get_current_account").mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
@@ -70,9 +66,7 @@ def dropbox_paper_query_docs(filter_by: str, ctx: dict) -> None:
     }
     with respx.mock:
         respx.post(f"{_BASE}/paper/docs/list").mock(return_value=httpx.Response(200, json=json_body))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="docs", filters={"filter_by": filter_by}, limit=10))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="docs", filters={"filter_by": filter_by}, limit=10)))
 
 
 @when(parsers.parse('the connector downloads doc "{doc_id}"'))
@@ -82,9 +76,7 @@ def dropbox_paper_query_doc(doc_id: str, ctx: dict) -> None:
     content = "# My Paper Doc\n\nHello world."
     with respx.mock:
         respx.post(f"{_BASE}/paper/docs/download").mock(return_value=httpx.Response(200, text=content))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="doc", filters={"doc_id": doc_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="doc", filters={"doc_id": doc_id})))
 
 
 @when(parsers.parse('the connector lists folders at path "{path}"'))
@@ -96,12 +88,8 @@ def dropbox_paper_query_folders(path: str, ctx: dict) -> None:
         {".tag": "file", "name": "notes.md", "id": "id:file1"},
     ]
     with respx.mock:
-        respx.post(f"{_BASE}/files/list_folder").mock(
-            return_value=httpx.Response(200, json={"entries": entries, "cursor": "cursor_val"})
-        )
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="folders", filters={"path": path, "recursive": True}))
-        )
+        respx.post(f"{_BASE}/files/list_folder").mock(return_value=httpx.Response(200, json={"entries": entries, "cursor": "cursor_val"}))
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="folders", filters={"path": path, "recursive": True})))
 
 
 @when(parsers.parse('the connector creates a Paper doc titled "{title}" with markdown content'))
@@ -109,17 +97,10 @@ def dropbox_paper_write_doc(title: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     content = "# Meeting Notes\n\nAction items for the sprint review."
-    result_headers = {
-        "Dropbox-API-Result": (
-            '{"doc_id": "new_doc_123", "title": "Meeting Notes", "url": '
-            '"https://paper.dropbox.com/doc/Meeting-Notes-abc123"}'
-        )
-    }
+    result_headers = {"Dropbox-API-Result": ('{"doc_id": "new_doc_123", "title": "Meeting Notes", "url": "https://paper.dropbox.com/doc/Meeting-Notes-abc123"}')}
     with respx.mock:
         respx.post(f"{_BASE}/paper/docs/create").mock(return_value=httpx.Response(200, json={}, headers=result_headers))
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="doc", data={"title": title, "content": content}))
-        )
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="doc", data={"title": title, "content": content})))
 
 
 @when(parsers.parse('the connector queries unsupported resource "{resource}"'))

@@ -84,9 +84,7 @@ class TestHitlZombieTerminalizers:
         _TERMINALIZER_CASES,
     )
     @pytest.mark.asyncio
-    async def test_records_cancel_reason_on_the_status_flip(
-        self, terminalize: Any, error_code: str, cancel_reason: str
-    ) -> None:
+    async def test_records_cancel_reason_on_the_status_flip(self, terminalize: Any, error_code: str, cancel_reason: str) -> None:
         session = _CaptureSession()
 
         await terminalize(session, ORG, grace_seconds=60)
@@ -102,9 +100,7 @@ class TestHitlZombieTerminalizers:
         _TERMINALIZER_CASES,
     )
     @pytest.mark.asyncio
-    async def test_reason_pairs_with_the_error_code(
-        self, terminalize: Any, error_code: str, cancel_reason: str
-    ) -> None:
+    async def test_reason_pairs_with_the_error_code(self, terminalize: Any, error_code: str, cancel_reason: str) -> None:
         """The run's ``error_code`` and ``cancel_reason`` name the same cause
         — a drift between them reads as two different failures in the UI."""
         session = _CaptureSession()

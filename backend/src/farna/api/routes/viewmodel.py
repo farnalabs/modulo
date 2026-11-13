@@ -670,10 +670,7 @@ async def _fetch_pending_hitl_reviews(
             Run.status.in_(HITL_ACTIONABLE_RUN_STATUSES),
         )
     )
-    if user_team_ids:
-        hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids))
-    else:
-        hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
+    hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None) | HitlClaim.required_team_id.in_(user_team_ids)) if user_team_ids else hitl_query.where(HitlClaim.required_team_id.is_(None))
 
     # FAR-1653: include_soft_deleted so a soft-deleted required
     # team's name still renders on this historical read (the

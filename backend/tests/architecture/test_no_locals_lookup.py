@@ -39,8 +39,4 @@ def test_no_locals_lookup():
                 violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  locals().get(...)")
             elif isinstance(node, ast.Subscript) and _is_locals_call(node.value):
                 violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  locals()[...]")
-    assert not violations, (
-        f"Found {len(violations)} locals() magic-string variable lookup(s).\n"
-        "Reference the variable directly — pre-initialize it before the try/except\n"
-        "instead of probing locals() for a possibly-unassigned name.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} locals() magic-string variable lookup(s).\nReference the variable directly — pre-initialize it before the try/except\ninstead of probing locals() for a possibly-unassigned name.\n" + "\n".join(violations)

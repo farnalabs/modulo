@@ -127,9 +127,7 @@ def test_check_users_prints_count_and_rows(monkeypatch: pytest.MonkeyPatch, caps
     assert connects == [((module.url,), {})]
 
 
-def test_check_users_prints_count_without_listing_when_empty(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_check_users_prints_count_without_listing_when_empty(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     module, _connects = _load_script_with_fake_asyncpg(monkeypatch, "check_users.py")
     module.url = "postgres://user:password@db.internal:5432/modulo"
 
@@ -149,9 +147,7 @@ def test_check_users_prints_count_without_listing_when_empty(
     assert "SELECT email" not in output
 
 
-def test_check_users_closes_connection_after_query_error(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_check_users_closes_connection_after_query_error(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     module, _connects = _load_script_with_fake_asyncpg(monkeypatch, "check_users.py")
     module.url = "postgres://user:password@db.internal:5432/modulo"
     closed = False

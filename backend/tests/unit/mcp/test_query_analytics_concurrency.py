@@ -319,9 +319,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         patches.append(
             patch(
                 "farna.api.mcp_server.run_concurrency_query",
-                new=AsyncMock(
-                    side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")
-                ),
+                new=AsyncMock(side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")),
             )
         )
         with contextlib.ExitStack() as stack:
@@ -382,9 +380,7 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
         import contextlib
 
         patches = _plan_enabled_patches()
-        patches.append(
-            patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(side_effect=RuntimeError("boom")))
-        )
+        patches.append(patch("farna.api.mcp_server.run_concurrency_query", new=AsyncMock(side_effect=RuntimeError("boom"))))
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)

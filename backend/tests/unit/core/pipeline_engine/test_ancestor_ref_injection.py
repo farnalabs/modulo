@@ -233,10 +233,6 @@ class TestPurity:
             "a": [_ref("github_pr", "2", "agent")],
             "b": [_ref("linear", "3", "derived")],
         }
-        first = collect_injected_refs(
-            run_create_time_refs=create_refs, dag_ancestor_ids=ancestors, completed_node_outputs=completed, cap=2
-        )
-        second = collect_injected_refs(
-            run_create_time_refs=create_refs, dag_ancestor_ids=ancestors, completed_node_outputs=completed, cap=2
-        )
+        first = collect_injected_refs(run_create_time_refs=create_refs, dag_ancestor_ids=ancestors, completed_node_outputs=completed, cap=2)
+        second = collect_injected_refs(run_create_time_refs=create_refs, dag_ancestor_ids=ancestors, completed_node_outputs=completed, cap=2)
         assert first == second

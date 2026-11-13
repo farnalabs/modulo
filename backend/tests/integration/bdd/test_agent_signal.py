@@ -45,12 +45,7 @@ async def target_pipeline_id(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, visibility, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, "
-                "node_timeout_seconds, account_id, run_context_defaults, "
-                "graph_nodes_json) "
-                "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
-                "'{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, visibility, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, account_id, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pid),
@@ -108,11 +103,7 @@ async def source_run_id(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                "input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', "
-                ":thread, :hash, :rn)",
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, langgraph_thread_id, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, 'complete', 'manual', :thread, :hash, :rn)",
             ),
             {
                 "id": str(rid),
@@ -145,11 +136,7 @@ async def trigger_id(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, "
-                "account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, "
-                "CAST(:config AS json), :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, CAST(:config AS json), :uid)",
             ),
             {
                 "id": str(tid),
@@ -202,9 +189,7 @@ class TestFireAgentSignalIntegration:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT validation_result, run_id, trigger_type "
-                        "FROM trigger_events "
-                        "WHERE organisation_id = :oid",
+                        "SELECT validation_result, run_id, trigger_type FROM trigger_events WHERE organisation_id = :oid",
                     ),
                     {"oid": str(org_id)},
                 )
@@ -269,11 +254,7 @@ class TestFireAgentSignalIntegration:
                 await set_rls_org(session, org_id)
                 await session.execute(
                     text(
-                        "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                        "trigger_type, active, max_concurrent_runs, config_json, "
-                        "account_id) "
-                        "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 1, "
-                        "CAST(:config AS json), :uid)",
+                        "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 1, CAST(:config AS json), :uid)",
                     ),
                     {
                         "id": str(tight_tid),
@@ -287,11 +268,7 @@ class TestFireAgentSignalIntegration:
                 # Create an active run linked to the tight trigger to hit the limit.
                 await session.execute(
                     text(
-                        "INSERT INTO runs (id, organisation_id, pipeline_id, "
-                        "snapshot_id, status, trigger_type, langgraph_thread_id, "
-                        "input_hash, trigger_id, run_number) "
-                        "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', "
-                        ":thread, :hash, :tid, :rn)",
+                        "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, langgraph_thread_id, input_hash, trigger_id, run_number) VALUES (:id, :oid, :pid, :sid, 'running', 'manual', :thread, :hash, :tid, :rn)",
                     ),
                     {
                         "id": str(rid),
@@ -326,9 +303,7 @@ class TestFireAgentSignalIntegration:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT validation_result, error_detail "
-                        "FROM trigger_events "
-                        "WHERE organisation_id = :oid AND trigger_id = :tid",
+                        "SELECT validation_result, error_detail FROM trigger_events WHERE organisation_id = :oid AND trigger_id = :tid",
                     ),
                     {"oid": str(org_id), "tid": str(tight_tid)},
                 )
@@ -394,12 +369,7 @@ class TestFireAgentSignalIntegration:
                 for pid in (pid_b, pid_c):
                     await session.execute(
                         text(
-                            "INSERT INTO pipelines (id, organisation_id, name, "
-                            "visibility, max_concurrent_runs, "
-                            "lock_wait_timeout_seconds, node_timeout_seconds, "
-                            "account_id, run_context_defaults, graph_nodes_json) "
-                            "VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, "
-                            "'{}'::json, '[]'::json)",
+                            "INSERT INTO pipelines (id, organisation_id, name, visibility, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, account_id, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, 'org', 5, 300, 300, :uid, '{}'::json, '[]'::json)",
                         ),
                         {
                             "id": str(pid),
@@ -434,11 +404,7 @@ class TestFireAgentSignalIntegration:
                 for pid in (pid_b, pid_c):
                     await session.execute(
                         text(
-                            "INSERT INTO triggers (name, id, organisation_id, "
-                            "pipeline_id, trigger_type, active, "
-                            "max_concurrent_runs, config_json, account_id) "
-                            "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, "
-                            "5, CAST(:config AS json), :uid)",
+                            "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, CAST(:config AS json), :uid)",
                         ),
                         {
                             "id": uuid.uuid4(),

@@ -138,9 +138,7 @@ class TestResolveFromSnapshot:
         )
         session = _make_session(snapshot=snapshot)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == config
         # FAR-634: the claim-stamp lookup runs FIRST (claim_row=None here —
@@ -157,9 +155,7 @@ class TestResolveFromSnapshot:
         )
         session = _make_session(snapshot=snapshot)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == config
 
@@ -171,9 +167,7 @@ class TestResolveFromSnapshot:
         )
         session = _make_session(snapshot=snapshot, edge=None)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result is None
 
@@ -189,9 +183,7 @@ class TestResolveFromSnapshot:
         live_edge.hitl_review_config = {"human_only": True}
         session = _make_session(snapshot=snapshot, edge=live_edge)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == {"human_only": True}
 
@@ -202,9 +194,7 @@ class TestResolveFallbacks:
         live_edge.hitl_review_config = {"human_only": True}
         session = _make_session(snapshot=None, edge=live_edge)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         assert result == {"human_only": True}
         # FAR-634: claim-stamp lookup first (None — legacy row), then the
@@ -217,9 +207,7 @@ class TestResolveFallbacks:
         live_edge.hitl_review_config = {"human_only": False}
         session = _make_session(snapshot=None, edge=live_edge)
 
-        await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         stmt = session.execute.await_args.args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
@@ -265,9 +253,7 @@ class TestResolveFallbacks:
 
         session.execute = AsyncMock(side_effect=_execute)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         assert result == {"human_only": True}
 
@@ -284,9 +270,7 @@ class TestResolveFallbacks:
     async def test_returns_none_for_non_review_id(self) -> None:
         session = _make_session(snapshot=None, edge=None)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         assert result is None
 
@@ -305,9 +289,7 @@ class TestResolveStampedConfigFirst:
         stamped_config = {"human_only": True, "label": "Sign-off"}
         session = _make_session(claim_row=stamped_config)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == stamped_config
         # ONLY the claim-stamp lookup ran — no snapshot, no live edges, no
@@ -320,9 +302,7 @@ class TestResolveStampedConfigFirst:
         stamped_config = {"human_only": True}
         session = _make_session(claim_row=stamped_config)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         result["human_only"] = False
         assert stamped_config == {"human_only": True}
@@ -331,14 +311,10 @@ class TestResolveStampedConfigFirst:
         """Legacy row (fired before the stamp column existed): NULL config —
         the snapshot walk resolves as before."""
         config = {"human_only": True}
-        snapshot = _snapshot(
-            edges=[{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config}]
-        )
+        snapshot = _snapshot(edges=[{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": config}])
         session = _make_session(snapshot=snapshot, claim_row=None)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == config
         assert session.execute.await_count == 2
@@ -360,9 +336,7 @@ class TestResolveStampedConfigFirst:
 
         session.execute = AsyncMock(side_effect=_execute)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id="node-1", org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         assert result is None
 
@@ -370,9 +344,7 @@ class TestResolveStampedConfigFirst:
         """Defence in depth: the stamp lookup filters run + gate + org."""
         session = _make_session(claim_row=None)
 
-        await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         stmt = session.execute.await_args_list[0].args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
@@ -409,9 +381,7 @@ class TestResolveFromHitlNodes:
     async def test_resolves_node_config_from_snapshot(self) -> None:
         session = _make_session(snapshot=_hitl_node_snapshot())
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result == {"human_only": True, "label": "Sign-off"}
         # FAR-634: claim-stamp lookup first (None — legacy row), then the
@@ -423,9 +393,7 @@ class TestResolveFromHitlNodes:
         honouring it here would over-block, so it must not resolve."""
         session = _make_session(snapshot=_hitl_node_snapshot(node_type="agent"), edge=None)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result is None
 
@@ -434,9 +402,7 @@ class TestResolveFromHitlNodes:
         other_source = uuid.UUID("00000000-0000-0000-0000-00000000000c")
         session = _make_session(snapshot=_hitl_node_snapshot(source_id=other_source), edge=None)
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run()
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run())
 
         assert result is None
 
@@ -451,9 +417,7 @@ class TestResolveFromHitlNodes:
             ],
         )
 
-        result = await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        result = await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         assert result == {"human_only": True}
         # FAR-634: claim-stamp lookup first (None — legacy row), then live
@@ -463,9 +427,7 @@ class TestResolveFromHitlNodes:
     async def test_live_node_lookup_filters_by_pipeline_and_org(self) -> None:
         session = _make_session(snapshot=None, edge=None, pipeline_nodes=None)
 
-        await resolve_hitl_review_config(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None)
-        )
+        await resolve_hitl_review_config(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID, run=_make_run(snapshot_id=None))
 
         stmt = session.execute.await_args_list[2].args[0]
         bind_values = [str(value) for value in stmt.compile().params.values()]
@@ -480,18 +442,14 @@ class TestHitlReviewExistsButUnresolved:
     async def test_true_when_claim_row_exists(self) -> None:
         session = _make_session(claim_row=MagicMock())
 
-        result = await hitl_review_exists_but_unresolved(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID
-        )
+        result = await hitl_review_exists_but_unresolved(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID)
 
         assert result is True
 
     async def test_false_when_no_claim_row(self) -> None:
         session = _make_session(claim_row=None)
 
-        result = await hitl_review_exists_but_unresolved(
-            session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID
-        )
+        result = await hitl_review_exists_but_unresolved(session, run_id=_RUN_ID, review_id=_review_id(), org_id=_ORG_ID)
 
         assert result is False
 
@@ -795,9 +753,7 @@ class TestResolveGateDescriptions:
         gate = self._gate(_RUN_ID, _review_id())
         graph = {
             "nodes": [],
-            "edges": [
-                {"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": {"label": "no desc"}}
-            ],
+            "edges": [{"source": str(_SOURCE_ID), "target": str(_TARGET_ID), "hitl_review_config": {"label": "no desc"}}],
         }
         session = self._make_batched_session(run_rows=[(_RUN_ID, _SNAPSHOT_ID)], snapshot_rows=[(_SNAPSHOT_ID, graph)])
 

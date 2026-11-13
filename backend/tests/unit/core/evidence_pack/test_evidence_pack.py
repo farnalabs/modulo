@@ -42,9 +42,7 @@ def _make_events() -> list[dict[str, Any]]:
         event_id = f"00000000-0000-0000-0000-00000000000{index}"
         created_at = f"2026-01-0{index}T00:00:00+00:00"
         previous_hash = previous
-        previous = compute_event_hash(
-            event_type, None, None, None, payload, None, previous_hash, event_id, ORG, created_at
-        )
+        previous = compute_event_hash(event_type, None, None, None, payload, None, previous_hash, event_id, ORG, created_at)
         events.append(
             {
                 "id": event_id,

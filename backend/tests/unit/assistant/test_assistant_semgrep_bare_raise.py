@@ -52,14 +52,7 @@ DANGEROUS_SNIPPETS = [
     ),
     (
         "bare raise still flagged when comment lines precede it",
-        (
-            "async def handler():\n"
-            "    try:\n"
-            "        await work()\n"
-            "    except Exception:\n"
-            "        # nothing to log here\n"
-            "        raise\n"
-        ),
+        ("async def handler():\n    try:\n        await work()\n    except Exception:\n        # nothing to log here\n        raise\n"),
     ),
     (
         "bare raise with bound name is still a silent re-raise",
@@ -74,45 +67,22 @@ LEGITIMATE_SNIPPETS = [
     ),
     (
         "except HTTPException re-raise after broader handlers is valid",
-        (
-            "async def handler():\n"
-            "    try:\n"
-            "        await work()\n"
-            "    except SQLAlchemyError:\n"
-            "        logger.exception('db down')\n"
-            "        raise HTTPException(status_code=503) from None\n"
-            "    except HTTPException:\n"
-            "        raise\n"
-        ),
+        ("async def handler():\n    try:\n        await work()\n    except SQLAlchemyError:\n        logger.exception('db down')\n        raise HTTPException(status_code=503) from None\n    except HTTPException:\n        raise\n"),
     ),
     (
         "logging before re-raise is not a silent re-raise",
-        (
-            "async def handler():\n"
-            "    try:\n"
-            "        await work()\n"
-            "    except Exception:\n"
-            "        logger.exception('work failed')\n"
-            "        raise\n"
-        ),
+        ("async def handler():\n    try:\n        await work()\n    except Exception:\n        logger.exception('work failed')\n        raise\n"),
     ),
     (
         "raise from None supplies explicit context",
-        (
-            "async def handler():\n"
-            "    try:\n"
-            "        await work()\n"
-            "    except Exception as exc:\n"
-            "        raise HTTPException(status_code=500) from None\n"
-        ),
+        ("async def handler():\n    try:\n        await work()\n    except Exception as exc:\n        raise HTTPException(status_code=500) from None\n"),
     ),
     (
         "re-raise of a concrete ValueError is a targeted re-raise",
         ("async def handler():\n    try:\n        await work()\n    except ValueError:\n        raise\n"),
     ),
     (
-        "handler with real code is not a silent re-raise even when a later "
-        "CancelledError bare re-raise appears in the same file",
+        "handler with real code is not a silent re-raise even when a later CancelledError bare re-raise appears in the same file",
         (
             "async def handler():\n"
             "    try:\n"

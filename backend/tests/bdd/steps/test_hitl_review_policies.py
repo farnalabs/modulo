@@ -132,9 +132,7 @@ def resume_carries_modified_output(ctx: dict[str, Any]) -> None:
     assert resume is not None, "Pipeline execution was not resumed"
     resume_data = resume.await_args.kwargs.get("resume_data", {}) if resume.await_args else {}
     assert resume_data.get("action") == "approved", f"Expected approved action, got {resume_data}"
-    assert resume_data.get("modified_output") == _MODIFIED_OUTPUT, (
-        f"Expected modified output in resume data, got {resume_data}"
-    )
+    assert resume_data.get("modified_output") == _MODIFIED_OUTPUT, f"Expected modified output in resume data, got {resume_data}"
 
 
 @when("an API-key credential approves the gate")

@@ -24,7 +24,4 @@ def test_composite_engine_has_zero_hitl_references() -> None:
     for path, text in files:
         low = text.lower()
         violations.extend(f"{path.name}: contains '{token}'" for token in _FORBIDDEN if token in low)
-    assert not violations, (
-        "core/composite_engine must not reference HITL gates (no write path exists; "
-        "hitl-gate-removal-guard-plan.md v19 §3.6). Violations:\n" + "\n".join(violations)
-    )
+    assert not violations, "core/composite_engine must not reference HITL gates (no write path exists; hitl-gate-removal-guard-plan.md v19 §3.6). Violations:\n" + "\n".join(violations)

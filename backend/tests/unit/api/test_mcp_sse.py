@@ -634,12 +634,7 @@ async def test_trigger_pipeline_storage_exhausted_returns_error() -> None:
         patch("farna.db.crud.run._ensure_org_not_deleted", new=AsyncMock()),
         patch(
             "farna.db.capacity.enforce_capacity_gate",
-            new=AsyncMock(
-                side_effect=StorageExhaustedError(
-                    "Storage capacity exhausted (99% of configured capacity, hard-stop 98%). "
-                    "Export/clear old runs via Run Retention."
-                )
-            ),
+            new=AsyncMock(side_effect=StorageExhaustedError("Storage capacity exhausted (99% of configured capacity, hard-stop 98%). Export/clear old runs via Run Retention.")),
         ),
     ):
         mock_session.return_value = session_cm

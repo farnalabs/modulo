@@ -296,13 +296,9 @@ def test_auth_api_key_whitespace_query_param_name_falls_back_to_default() -> Non
 def test_auth_api_key_explicit_non_empty_names_pass_through() -> None:
     """Explicit non-empty ``header_name``/``query_param_name`` values pass
     through verbatim — the empty/whitespace coercion never touches a real name."""
-    auth = RestConnector._normalise_auth(
-        {"auth_mode": "api_key", "api_key": "k1", "in": "header", "header_name": "X-Custom-Auth"}
-    )
+    auth = RestConnector._normalise_auth({"auth_mode": "api_key", "api_key": "k1", "in": "header", "header_name": "X-Custom-Auth"})
     assert auth["header_name"] == "X-Custom-Auth"
-    auth = RestConnector._normalise_auth(
-        {"auth_mode": "api_key", "api_key": "k1", "in": "query", "query_param_name": "auth_token"}
-    )
+    auth = RestConnector._normalise_auth({"auth_mode": "api_key", "api_key": "k1", "in": "query", "query_param_name": "auth_token"})
     assert auth["query_param_name"] == "auth_token"
 
 
@@ -426,9 +422,7 @@ def test_validate_credentials_rejects_masked_secret() -> None:
     # when in fact a (placeholder) value WAS supplied.
     with pytest.raises(ValueError, match=r"requires creds\['token'\].*redaction-mask placeholder"):
         RestConnector.validate_credentials(masked_bearer)
-    with pytest.raises(
-        ValueError, match=r"requires creds\['username'\] and creds\['password'\].*redaction-mask placeholder"
-    ):
+    with pytest.raises(ValueError, match=r"requires creds\['username'\] and creds\['password'\].*redaction-mask placeholder"):
         RestConnector.validate_credentials(masked_basic)
     with pytest.raises(ValueError, match=r"requires creds\['api_key'\].*redaction-mask placeholder"):
         RestConnector.validate_credentials(masked_api_key)
@@ -1111,9 +1105,7 @@ def test_write_fanout_sequentially_emits_each_item() -> None:
         {"auth_mode": "bearer", "token": "t"},
     )
     c._transport = httpx.MockTransport(handler)
-    result = asyncio_run(
-        c.write(ConnectorPayload(resource="default", data={"items": [{"name": "Ada"}, {"name": "Grace"}]}))
-    )
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": "Ada"}, {"name": "Grace"}]})))
 
     assert result["fanout"] is True
     assert result["total"] == 2
@@ -1291,9 +1283,7 @@ def test_write_fanout_applies_per_destination_rate_limit() -> None:
         {"auth_mode": "bearer", "token": "t"},
     )
     c._transport = httpx.MockTransport(handler)
-    result = asyncio_run(
-        c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(5)]}))
-    )
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": f"n{i}"} for i in range(5)]})))
     assert result["total"] == 5
     assert result["success_count"] == 5
     assert len(calls) == 5
@@ -1509,9 +1499,7 @@ def test_fanout_outcome_redacts_credential_bearing_item():
         {"auth_mode": "bearer", "token": "super-secret-token"},
     )
     c._transport = httpx.MockTransport(handler)
-    result = asyncio_run(
-        c.write(ConnectorPayload(resource="default", data={"items": [{"name": "super-secret-token"}]}))
-    )
+    result = asyncio_run(c.write(ConnectorPayload(resource="default", data={"items": [{"name": "super-secret-token"}]})))
     summary = result["outcomes"][0]["item_summary"]
     assert "super-secret-token" not in summary
     assert "***" in summary

@@ -312,11 +312,7 @@ def _assert_real_verify_identity() -> None:
     current = module._verify_identity
     if current is not captured:
         raise AssertionError(
-            "farna.auth.dependencies._verify_identity was replaced and not "
-            "restored before test setup: a fixture leaked a patch (teardown "
-            "restored a stale value). Expected the real function "
-            f"{captured!r} but found {current!r}. Fix the leaking "
-            "fixture's teardown so it restores the original callable."
+            f"farna.auth.dependencies._verify_identity was replaced and not restored before test setup: a fixture leaked a patch (teardown restored a stale value). Expected the real function {captured!r} but found {current!r}. Fix the leaking fixture's teardown so it restores the original callable."
         )
 
 
@@ -429,10 +425,7 @@ pytest_plugins = ["tests.quarantine_plugin"]
 
 POSIX_ONLY_MARKER = "posix_only"
 
-POSIX_ONLY_SKIP_REASON = (
-    f"{POSIX_ONLY_MARKER}: requires a POSIX shell (executable-bit semantics and a POSIX PATH) and jq; "
-    "skipped on Windows - runs for real on Linux CI"
-)
+POSIX_ONLY_SKIP_REASON = f"{POSIX_ONLY_MARKER}: requires a POSIX shell (executable-bit semantics and a POSIX PATH) and jq; skipped on Windows - runs for real on Linux CI"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

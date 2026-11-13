@@ -93,9 +93,7 @@ def _patch_create_env(role: str | None = "admin"):
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch("farna.api.mcp_server.validate_current_auth", return_value=True))
         mock_session = stack.enter_context(patch("farna.api.mcp_server._session"))
-        stack.enter_context(
-            patch("farna.api.mcp_server.resolve_role_from_membership", new=AsyncMock(return_value=role))
-        )
+        stack.enter_context(patch("farna.api.mcp_server.resolve_role_from_membership", new=AsyncMock(return_value=role)))
         yield mock_session
 
 

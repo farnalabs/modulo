@@ -267,9 +267,7 @@ _ERROR_ENDPOINTS: list[tuple[str, object, str, object, bool, bool, bool]] = [
         "test_forwarder",
         _make_fwd_app,
         f"{_FP}.select",
-        lambda c: c.post(
-            "/api/v1/errors/forwarders/sentry/test", json={"config_json": {"dsn": "https://key@sentry.io/123"}}
-        ),
+        lambda c: c.post("/api/v1/errors/forwarders/sentry/test", json={"config_json": {"dsn": "https://key@sentry.io/123"}}),
         False,
         False,
         False,
@@ -282,18 +280,9 @@ class TestErrorDatabaseErrors:
 
     @pytest.mark.parametrize(
         ("idx", "error_type", "expected_status", "detail_check"),
-        [
-            pytest.param(i, "programming", 501, "migrations", id=f"{_ERROR_ENDPOINTS[i][0]}_501")
-            for i in range(len(_ERROR_ENDPOINTS))
-        ]
-        + [
-            pytest.param(i, "sqlalchemy", 503, None, id=f"{_ERROR_ENDPOINTS[i][0]}_503")
-            for i in range(len(_ERROR_ENDPOINTS))
-        ],
+        [pytest.param(i, "programming", 501, "migrations", id=f"{_ERROR_ENDPOINTS[i][0]}_501") for i in range(len(_ERROR_ENDPOINTS))] + [pytest.param(i, "sqlalchemy", 503, None, id=f"{_ERROR_ENDPOINTS[i][0]}_503") for i in range(len(_ERROR_ENDPOINTS))],
     )
-    def test_error_returns_expected(
-        self, idx: int, error_type: str, expected_status: int, detail_check: str | None
-    ) -> None:
+    def test_error_returns_expected(self, idx: int, error_type: str, expected_status: int, detail_check: str | None) -> None:
         name, app_factory, mock_target, request_builder, need_group_mock, needs_hmac, is_async = _ERROR_ENDPOINTS[idx]
 
         app = app_factory()

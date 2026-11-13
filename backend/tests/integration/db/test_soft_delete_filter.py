@@ -222,9 +222,7 @@ class TestSoftDeleteFilter:
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
             # Use include_soft_deleted with a select to re-include the deleted row
-            result = await session.execute(
-                include_soft_deleted(select(_TestSoftEntity).where(_TestSoftEntity.id == deleted_id))
-            )
+            result = await session.execute(include_soft_deleted(select(_TestSoftEntity).where(_TestSoftEntity.id == deleted_id)))
             found_deleted = result.scalar_one_or_none()
 
         assert found_deleted is not None, "include_soft_deleted must re-include the soft-deleted row"

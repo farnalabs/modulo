@@ -154,9 +154,7 @@ def test_patch_pipeline_returns_200_when_updated_at_is_db_computed(
 ) -> None:
     client, pipeline = make_client()
 
-    async def _apply_update(
-        session: object, pipeline_id: uuid.UUID, updates: dict[str, object], **kwargs: object
-    ) -> _ExpiredPipeline:
+    async def _apply_update(session: object, pipeline_id: uuid.UUID, updates: dict[str, object], **kwargs: object) -> _ExpiredPipeline:
         pipeline.description = updates.get("description", pipeline.description)
         return pipeline
 

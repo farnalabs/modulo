@@ -38,8 +38,8 @@ saq_worker wrapper persists its failure stats first — zero counts + the
 error flag); non-infra per-org errors stay fail-open (logged, org skipped,
 tick continues). The 60s cadence is itself the retry for fail-open orgs.
 
-System cron: uses the modulo_system role (LOGIN, BYPASSRLS) for cross-org
-access — modulo_app is NOBYPASSRLS.
+System cron: uses the farna_control_system role (LOGIN, BYPASSRLS) for cross-org
+access — farna_control_app is NOBYPASSRLS.
 """
 
 from __future__ import annotations

@@ -1300,8 +1300,8 @@ def test_prepare_database_env_with_admin_url() -> None:
 
 
 def test_prepare_database_env_with_system_url() -> None:
-    entry_module._prepare_database_env({"FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
-    assert os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
+    entry_module._prepare_database_env({"FARNA_CONTROL_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
+    assert os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
 
 
 def test_prepare_database_env_missing_keys() -> None:

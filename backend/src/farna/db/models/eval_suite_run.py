@@ -22,7 +22,7 @@ workers cannot both transition the same run to ``completed``.
 RLS
 ---
 ``ENABLE`` + ``FORCE ROW LEVEL SECURITY`` + ``rls_org_isolation`` on
-``suite_runs`` (owned by ``modulo_migrate``), so the app role cannot bypass
+``suite_runs`` (owned by ``farna_control_migrate``), so the app role cannot bypass
 org isolation. The ``OrgScoped`` mixin alone is insufficient — the migration
 installs the same FORCE-RLS ceremony as the other eval tables.
 """

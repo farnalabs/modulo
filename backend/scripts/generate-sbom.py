@@ -120,9 +120,7 @@ def parse_pnpm_lock(lock_path: Path) -> list[dict[str, Any]]:
     return sorted(components, key=lambda c: c["name"].lower())
 
 
-def generate_sbom(
-    components: list[dict[str, Any]], version: str, timestamp: str, supplier: str, product: str
-) -> dict[str, Any]:
+def generate_sbom(components: list[dict[str, Any]], version: str, timestamp: str, supplier: str, product: str) -> dict[str, Any]:
     serial = str(uuid.uuid4())
 
     return {

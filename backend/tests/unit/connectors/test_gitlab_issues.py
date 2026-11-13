@@ -191,9 +191,7 @@ async def test_query_issue_notes_sort(connector):
 async def test_query_issue_discussions(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/issues/42/discussions")
     route.mock(return_value=httpx.Response(200, json=[{"id": "disc1", "notes": []}]))
-    result = await connector.query(
-        ConnectorQuery(resource="issue_discussions", filters={"project": "group/project", "iid": 42})
-    )
+    result = await connector.query(ConnectorQuery(resource="issue_discussions", filters={"project": "group/project", "iid": 42}))
     assert len(result.records) == 1
 
 
@@ -285,9 +283,7 @@ async def test_query_pipelines(connector):
 async def test_query_jobs(connector):
     route = respx.get(f"{_API}/projects/group%2Fproject/pipelines/1/jobs")
     route.mock(return_value=httpx.Response(200, json=[{"id": 10, "name": "test", "status": "success"}]))
-    result = await connector.query(
-        ConnectorQuery(resource="jobs", filters={"project": "group/project", "pipeline_id": 1})
-    )
+    result = await connector.query(ConnectorQuery(resource="jobs", filters={"project": "group/project", "pipeline_id": 1}))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "test"
 

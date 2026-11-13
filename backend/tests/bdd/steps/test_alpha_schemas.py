@@ -47,9 +47,7 @@ def _make_mock_schema_version(version: str = "1", version_number: int = 1, **kwa
     sv.schema_id = kwargs.get("schema_id", uuid.uuid4())
     sv.version = version
     sv.version_number = version_number
-    sv.definition_json = kwargs.get(
-        "definition_json", {"type": "object", "properties": {}, "additionalProperties": True}
-    )
+    sv.definition_json = kwargs.get("definition_json", {"type": "object", "properties": {}, "additionalProperties": True})
     sv.published = False
     sv.account_id = USER_ID
     sv.created_at = _NOW
@@ -103,9 +101,7 @@ def create_nested_schema(name: str, client, request):
         patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
             "farna.api.routes.schemas.create_schema_version",
-            return_value=_make_mock_schema_version(
-                version="1", version_number=1, schema_id=schema_id, definition_json=_NESTED_DEFINITION
-            ),
+            return_value=_make_mock_schema_version(version="1", version_number=1, schema_id=schema_id, definition_json=_NESTED_DEFINITION),
         ),
         patch("farna.api.routes.schemas.set_rls_org"),
     ):
@@ -214,9 +210,7 @@ def update_schema(client, request):
         patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
             "farna.api.routes.schemas.create_schema_version",
-            return_value=_make_mock_schema_version(
-                version=str(next_number), version_number=next_number, schema_id=_schema_id_for(name)
-            ),
+            return_value=_make_mock_schema_version(version=str(next_number), version_number=next_number, schema_id=_schema_id_for(name)),
         ),
         patch("farna.api.routes.schemas.set_rls_org"),
     ):
@@ -238,9 +232,7 @@ def update_schema_to_version(version: int, client, request):
         patch("farna.api.routes.schemas.get_schema", return_value=_make_mock_schema(name=name)),
         patch(
             "farna.api.routes.schemas.create_schema_version",
-            return_value=_make_mock_schema_version(
-                version=str(version), version_number=version, schema_id=_schema_id_for(name)
-            ),
+            return_value=_make_mock_schema_version(version=str(version), version_number=version, schema_id=_schema_id_for(name)),
         ),
         patch("farna.api.routes.schemas.set_rls_org"),
     ):

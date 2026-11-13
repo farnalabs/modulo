@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  DATABASE_URL: "postgresql+asyncpg://modulo:${{ secrets.POSTGRES_PASSWORD || 'modulo' }}@localhost:5432/modulo"
+  DATABASE_URL: "postgresql+asyncpg://farna_control:${{ secrets.POSTGRES_PASSWORD || 'modulo' }}@localhost:5432/farna_control"
   # Dependabot PR runs never receive repository secrets (GitHub withholds them
   # for `dependabot[bot]`-authored pull_request events), so these two Settings
   # fields would arrive empty and the backend would exit at boot with
@@ -26,11 +26,17 @@ env:
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
   REDIS_URL: "redis://localhost:6379/0"
-  MODULO_PUBLIC_URL: "http://localhost:8000"
-  MODULO_USERS: "admin:admin"
+  FARNA_CONTROL_PUBLIC_URL: "http://localhost:8000"
+  FARNA_CONTROL_USERS: "admin:admin"
   CORS_ORIGINS: "http://localhost:4173"
-  MODULO_PLUGIN_DISCOVERY: "false"
-  MODULO_CSRF_ENABLED: "false"
+  FARNA_CONTROL_PLUGIN_DISCOVERY: "false"
+  FARNA_CONTROL_CSRF_ENABLED: "false"
+  # Enable developer mode so internal preview surfaces (e.g. System Maps) are
+  # reachable; the feature-flag gate must return 402, not 403.
+  FARNA_CONTROL_DEV_MODE: "true"
+  # Disable auth rate limiting in BDD; Redis is present and would otherwise
+  # return 429 on the high request volume from scenario steps.
+  FARNA_CONTROL_AUTH_RATE_LIMIT_ENABLED: "false"
 
 concurrency:
   group: bdd-${{ github.ref }}
@@ -144,14 +150,14 @@ jobs:
         run: |
           docker rm -f modulo-bdd-pg 2>/dev/null || true
           docker run -d --name modulo-bdd-pg \
-            -e POSTGRES_USER=modulo \
+            -e POSTGRES_USER=farna_control \
             -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD || 'modulo' }} \
-            -e POSTGRES_DB=modulo \
+            -e POSTGRES_DB=farna_control \
             -p 5432:5432 \
             postgres:16-alpine
           echo "Waiting for Postgres..."
           for i in $(seq 1 60); do
-            if docker exec modulo-bdd-pg pg_isready -U modulo >/dev/null 2>&1; then
+            if docker exec modulo-bdd-pg pg_isready -U farna_control >/dev/null 2>&1; then
               echo "Postgres ready after ${i}s"
               exit 0
             fi
@@ -218,7 +224,7 @@ jobs:
         if: steps.detect.outputs.bdd == 'true'
         shell: bash
         run: |
-          docker exec modulo-bdd-pg psql -U modulo -d modulo -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
+          docker exec modulo-bdd-pg psql -U farna_control -d farna_control -c "CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY);"
 
       - name: Run migrations
         if: steps.detect.outputs.bdd == 'true'

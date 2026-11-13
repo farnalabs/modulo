@@ -368,9 +368,7 @@ class TestNonLimitCostSurfacesGatedByGoverningFeature:
         ):
             resp = controls_only_client.get("/api/v1/admin/costs/controls")
 
-        assert resp.status_code == 200, (
-            f"Expected 200 with admin_cost_controls enabled (no spend limits), got {resp.status_code}"
-        )
+        assert resp.status_code == 200, f"Expected 200 with admin_cost_controls enabled (no spend limits), got {resp.status_code}"
 
     def test_get_limits_still_402_without_spend_limits(self, controls_only_client: TestClient) -> None:
         resp = controls_only_client.get("/api/v1/admin/costs/limits")
@@ -384,9 +382,7 @@ class TestNonLimitCostSurfacesGatedByGoverningFeature:
         ):
             resp = breakdown_only_client.get("/api/v1/admin/costs/anomalies")
 
-        assert resp.status_code == 200, (
-            f"Expected 200 with admin_cost_breakdown enabled (no spend limits), got {resp.status_code}"
-        )
+        assert resp.status_code == 200, f"Expected 200 with admin_cost_breakdown enabled (no spend limits), got {resp.status_code}"
 
     def test_get_cost_report_succeeds_with_no_features(self, client: TestClient) -> None:
         rows = [{"entity_id": str(_TEAM_ID), "entity_name": "Team A", "total_spend_usd": 100.0, "total_runs": 5}]

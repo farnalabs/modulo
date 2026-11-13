@@ -252,10 +252,7 @@ def _at_least_two_schemas(ctx: dict[str, Any]) -> None:
 def _response_matches_search(ctx: dict[str, Any], term: str) -> None:
     items = ctx["response"].json()["items"]
     term_lower = term.strip('"').lower()
-    assert any(
-        term_lower in (p.get("name", "") or "").lower() or term_lower in (p.get("description", "") or "").lower()
-        for p in items
-    ), f"No primitive matched search term '{term_lower}'"
+    assert any(term_lower in (p.get("name", "") or "").lower() or term_lower in (p.get("description", "") or "").lower() for p in items), f"No primitive matched search term '{term_lower}'"
 
 
 @then("the response contains only organisation-local primitives")
@@ -283,9 +280,7 @@ def _response_only_community(ctx: dict[str, Any]) -> None:
 @then(parsers.parse('the response includes a primitive named "{name}"'))
 def _response_includes_named_primitive(ctx: dict[str, Any], name: str) -> None:
     items = ctx["response"].json()["items"]
-    assert any(p["name"] == name for p in items), (
-        f"Expected a primitive named '{name}' in response, got names: {[p['name'] for p in items]}"
-    )
+    assert any(p["name"] == name for p in items), f"Expected a primitive named '{name}' in response, got names: {[p['name'] for p in items]}"
 
 
 @given(parsers.parse('a specific primitive exists with id "{primitive_id}"'))
@@ -308,9 +303,7 @@ def _response_has_name(ctx: dict[str, Any], expected_name: str) -> None:
 @then(parsers.parse('the response has primitive_type "{expected_type}"'))
 def _response_has_primitive_type(ctx: dict[str, Any], expected_type: str) -> None:
     data = ctx["response"].json()
-    assert data["primitive_type"] == expected_type, (
-        f"Expected primitive_type '{expected_type}', got '{data['primitive_type']}'"
-    )
+    assert data["primitive_type"] == expected_type, f"Expected primitive_type '{expected_type}', got '{data['primitive_type']}'"
 
 
 # ============================================================================
@@ -367,9 +360,7 @@ def _mcp_copy_community_primitive(viewer_client, ctx: dict[str, Any], request) -
 def _response_contains_error(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     detail = data.get("detail", "")
-    assert "browser UI" in detail or "read only" in detail.lower() or "403" in str(ctx["response"].status_code), (
-        f"Expected community_primitive_read_only error, got: {data}"
-    )
+    assert "browser UI" in detail or "read only" in detail.lower() or "403" in str(ctx["response"].status_code), f"Expected community_primitive_read_only error, got: {data}"
 
 
 @then("the response detail explains the browser UI must be used")
@@ -471,9 +462,7 @@ def _request_submit_rating_inline(client, primitive_id: str, thumbs_up: str, ctx
         r"\n      | comment   | {comment} |"
     )
 )
-def _request_submit_rating_with_comment(
-    client, primitive_id: str, thumbs_up: str, comment: str, ctx: dict[str, Any]
-) -> None:
+def _request_submit_rating_with_comment(client, primitive_id: str, thumbs_up: str, comment: str, ctx: dict[str, Any]) -> None:
     body: dict[str, Any] = {
         "thumbs_up": thumbs_up.strip().lower() == "true",
         "comment": comment,
@@ -847,9 +836,7 @@ def _response_contains_in_dev(ctx: dict[str, Any]) -> None:
     items = ctx["response"].json()["items"]
     in_dev = [p for p in items if p.get("tier") == "in_dev"]
     assert in_dev, "Expected the in_dev primitive to be present"
-    assert any(p.get("name") == "In-Dev Tier Example" for p in in_dev), (
-        f"Expected 'In-Dev Tier Example' among in_dev items, got: {[p['name'] for p in in_dev]}"
-    )
+    assert any(p.get("name") == "In-Dev Tier Example" for p in in_dev), f"Expected 'In-Dev Tier Example' among in_dev items, got: {[p['name'] for p in in_dev]}"
 
 
 # ============================================================================
@@ -866,9 +853,7 @@ def _community_primitives_exist_mock(ctx: dict[str, Any]) -> None:
 def _new_primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
     expected_bool = expected.strip().lower() == "true"
-    assert data.get("auto_update") == expected_bool, (
-        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
-    )
+    assert data.get("auto_update") == expected_bool, f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
 
 
 @given(parsers.parse('a local primitive exists with id "{primitive_id}"'))
@@ -905,9 +890,7 @@ def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[
 def _primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
     expected_bool = expected.strip().lower() == "true"
-    assert data.get("auto_update") == expected_bool, (
-        f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
-    )
+    assert data.get("auto_update") == expected_bool, f"Expected auto_update={expected_bool}, got {data.get('auto_update')}"
 
 
 @given(parsers.parse('a published contribution with id "{primitive_id}" has a new version "{version}"'))

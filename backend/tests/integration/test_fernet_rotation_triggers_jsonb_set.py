@@ -47,11 +47,7 @@ async def rotation_trigger(
     }
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
-            ),
+            text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"),
             {
                 "id": str(trigger_id),
                 "oid": str(test_org),

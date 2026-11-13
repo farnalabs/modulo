@@ -22,8 +22,8 @@ requires_posix = pytest.mark.skipif(sys.platform != "linux", reason="POSIX mode/
 
 def test_write_env_file_roundtrip(tmp_path: Path) -> None:
     target = tmp_path / "database_url.env"
-    _write_env_file(str(target), "postgresql://modulo:pw@localhost:5432/modulo")
-    assert target.read_text(encoding="utf-8") == "postgresql://modulo:pw@localhost:5432/modulo"
+    _write_env_file(str(target), "postgresql://user:pass@host:5432/farna_control")
+    assert target.read_text(encoding="utf-8") == "postgresql://user:pass@host:5432/farna_control"
 
 
 @requires_posix

@@ -122,9 +122,7 @@ class TestFlagDeclaration:
         # Only DIRECT subclasses of ModelBackendBase need an explicit
         # declaration. Indirect subclasses (e.g. OpenCodeBackend extends
         # OpenAICompatibleBackend) inherit from their parent and are fine.
-        direct = [
-            cls for cls in ModelBackendBase.__subclasses__() if cls.__module__.startswith("farna.model_backends.")
-        ]
+        direct = [cls for cls in ModelBackendBase.__subclasses__() if cls.__module__.startswith("farna.model_backends.")]
         assert len(direct) > 0, "Expected at least one direct ModelBackendBase subclass"
 
         undeclared = [cls.__name__ for cls in direct if "supports_native_structured_output" not in cls.__dict__]

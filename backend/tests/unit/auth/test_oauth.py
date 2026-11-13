@@ -324,9 +324,7 @@ class TestAuthorizationCode:
         code_record.used = used
         code_record.code_challenge = challenge
         code_record.code_challenge_method = method
-        code_record.expires_at = (
-            datetime.now(UTC) - timedelta(minutes=1) if expired else datetime.now(UTC) + timedelta(minutes=10)
-        )
+        code_record.expires_at = datetime.now(UTC) - timedelta(minutes=1) if expired else datetime.now(UTC) + timedelta(minutes=10)
         return code_record
 
     def _session_returning(self, client: MagicMock, code_record: MagicMock) -> AsyncMock:

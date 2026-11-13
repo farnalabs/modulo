@@ -33,9 +33,7 @@ async def test_query_secrets(connector: AzureKeyVaultConnector) -> None:
 @respx.mock
 async def test_query_secrets_with_limit(connector: AzureKeyVaultConnector) -> None:
     secrets = {"value": [{"id": "s1"}, {"id": "s2"}, {"id": "s3"}]}
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4", "maxresults": 2}).mock(
-        return_value=httpx.Response(200, json=secrets)
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4", "maxresults": 2}).mock(return_value=httpx.Response(200, json=secrets))
     result = await connector.query(ConnectorQuery(resource="secrets", limit=2))
     assert len(result.records) == 2
 
@@ -43,9 +41,7 @@ async def test_query_secrets_with_limit(connector: AzureKeyVaultConnector) -> No
 @respx.mock
 async def test_query_secrets_with_cursor(connector: AzureKeyVaultConnector) -> None:
     secrets = {"value": [{"id": "s3"}], "nextLink": "https://myvault.vault.azure.net/secrets?$skiptoken=abc"}
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4", "$skiptoken": "abc"}).mock(
-        return_value=httpx.Response(200, json=secrets)
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4", "$skiptoken": "abc"}).mock(return_value=httpx.Response(200, json=secrets))
     result = await connector.query(ConnectorQuery(resource="secrets", cursor="abc"))
     assert len(result.records) == 1
     assert result.next_cursor is not None
@@ -72,9 +68,7 @@ async def test_query_secrets_non_string_next_link(connector: AzureKeyVaultConnec
 @respx.mock
 async def test_query_secret(connector: AzureKeyVaultConnector) -> None:
     secret_data = {"value": "my-secret-value", "id": "https://myvault.vault.azure.net/secrets/my-secret"}
-    respx.get(f"{_BASE}/secrets/my-secret", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=secret_data)
-    )
+    respx.get(f"{_BASE}/secrets/my-secret", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secret_data))
     result = await connector.query(ConnectorQuery(resource="secret", filters={"name": "my-secret"}))
     assert len(result.records) == 1
     assert result.records[0]["value"] == "my-secret-value"
@@ -90,9 +84,7 @@ async def test_query_secret_missing_name(connector: AzureKeyVaultConnector) -> N
 @respx.mock
 async def test_query_secret_versions(connector: AzureKeyVaultConnector) -> None:
     versions = {"value": [{"id": "v1", "attributes": {"enabled": True}}, {"id": "v2"}]}
-    respx.get(f"{_BASE}/secrets/my-secret/versions", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=versions)
-    )
+    respx.get(f"{_BASE}/secrets/my-secret/versions", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=versions))
     result = await connector.query(ConnectorQuery(resource="secret_versions", filters={"name": "my-secret"}))
     assert len(result.records) == 2
 
@@ -107,12 +99,8 @@ async def test_query_secret_versions_missing_name(connector: AzureKeyVaultConnec
 @respx.mock
 async def test_query_secret_by_version(connector: AzureKeyVaultConnector) -> None:
     secret_data = {"value": "versioned-value", "id": "https://myvault.vault.azure.net/secrets/my-secret/abc123"}
-    respx.get(f"{_BASE}/secrets/my-secret/abc123", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=secret_data)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="secret_by_version", filters={"name": "my-secret", "version": "abc123"})
-    )
+    respx.get(f"{_BASE}/secrets/my-secret/abc123", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secret_data))
+    result = await connector.query(ConnectorQuery(resource="secret_by_version", filters={"name": "my-secret", "version": "abc123"}))
     assert len(result.records) == 1
     assert result.records[0]["value"] == "versioned-value"
 
@@ -142,9 +130,7 @@ async def test_query_keys(connector: AzureKeyVaultConnector) -> None:
 @respx.mock
 async def test_query_keys_with_limit(connector: AzureKeyVaultConnector) -> None:
     keys = {"value": [{"kid": "k1"}, {"kid": "k2"}]}
-    respx.get(f"{_BASE}/keys", params={"api-version": "7.4", "maxresults": 1}).mock(
-        return_value=httpx.Response(200, json=keys)
-    )
+    respx.get(f"{_BASE}/keys", params={"api-version": "7.4", "maxresults": 1}).mock(return_value=httpx.Response(200, json=keys))
     result = await connector.query(ConnectorQuery(resource="keys", limit=1))
     assert len(result.records) == 1
 
@@ -176,9 +162,7 @@ async def test_query_certificates(connector: AzureKeyVaultConnector) -> None:
 @respx.mock
 async def test_query_certificates_with_cursor(connector: AzureKeyVaultConnector) -> None:
     certs = {"value": [{"id": "c2"}], "nextLink": "https://myvault.vault.azure.net/certificates?$skiptoken=xyz"}
-    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4", "$skiptoken": "xyz"}).mock(
-        return_value=httpx.Response(200, json=certs)
-    )
+    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4", "$skiptoken": "xyz"}).mock(return_value=httpx.Response(200, json=certs))
     result = await connector.query(ConnectorQuery(resource="certificates", cursor="xyz"))
     assert len(result.records) == 1
     assert result.next_cursor is not None
@@ -190,9 +174,7 @@ async def test_query_certificate(connector: AzureKeyVaultConnector) -> None:
         "id": "https://myvault.vault.azure.net/certificates/cert1",
         "policy": {"x509_props": {"subject": "CN=test"}},
     }
-    respx.get(f"{_BASE}/certificates/cert1", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=cert_data)
-    )
+    respx.get(f"{_BASE}/certificates/cert1", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=cert_data))
     result = await connector.query(ConnectorQuery(resource="certificate", filters={"name": "cert1"}))
     assert len(result.records) == 1
     assert result.records[0]["policy"]["x509_props"]["subject"] == "CN=test"
@@ -212,9 +194,7 @@ async def test_write_secret(connector: AzureKeyVaultConnector) -> None:
         "value": "s3cret",
         "attributes": {"enabled": True},
     }
-    respx.put(f"{_BASE}/secrets/new-secret", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=created)
-    )
+    respx.put(f"{_BASE}/secrets/new-secret", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=created))
     result = await connector.write(ConnectorPayload(resource="secret", data={"name": "new-secret", "value": "s3cret"}))
     assert result["value"] == "s3cret"
     assert "new-secret" in result["id"]
@@ -228,9 +208,7 @@ async def test_write_secret_with_content_type_and_tags(connector: AzureKeyVaultC
         "contentType": "text/plain",
         "tags": {"env": "prod"},
     }
-    respx.put(f"{_BASE}/secrets/tagged", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=created)
-    )
+    respx.put(f"{_BASE}/secrets/tagged", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=created))
     result = await connector.write(
         ConnectorPayload(
             resource="secret",
@@ -258,21 +236,15 @@ async def test_write_secret_missing_value(connector: AzureKeyVaultConnector) -> 
 @respx.mock
 async def test_write_secret_update(connector: AzureKeyVaultConnector) -> None:
     updated = {"id": "https://myvault.vault.azure.net/secrets/existing", "attributes": {"enabled": False}}
-    respx.patch(f"{_BASE}/secrets/existing", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=updated)
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="secret_update", data={"name": "existing", "enabled": False})
-    )
+    respx.patch(f"{_BASE}/secrets/existing", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=updated))
+    result = await connector.write(ConnectorPayload(resource="secret_update", data={"name": "existing", "enabled": False}))
     assert result["attributes"]["enabled"] is False
 
 
 @respx.mock
 async def test_write_secret_update_with_tags(connector: AzureKeyVaultConnector) -> None:
     updated = {"id": "https://myvault.vault.azure.net/secrets/existing", "tags": {"team": "platform"}}
-    respx.patch(f"{_BASE}/secrets/existing", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=updated)
-    )
+    respx.patch(f"{_BASE}/secrets/existing", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=updated))
     result = await connector.write(
         ConnectorPayload(
             resource="secret_update",
@@ -295,9 +267,7 @@ async def test_write_secret_delete(connector: AzureKeyVaultConnector) -> None:
         "id": "https://myvault.vault.azure.net/secrets/to-delete",
         "recoveryId": "https://myvault.vault.azure.net/deletedsecrets/to-delete",
     }
-    respx.delete(f"{_BASE}/secrets/to-delete", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=deleted)
-    )
+    respx.delete(f"{_BASE}/secrets/to-delete", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=deleted))
     result = await connector.write(ConnectorPayload(resource="secret_delete", data={"name": "to-delete"}))
     assert "recoveryId" in result
 
@@ -312,9 +282,7 @@ async def test_write_secret_delete_missing_name(connector: AzureKeyVaultConnecto
 @respx.mock
 async def test_write_secret_backup(connector: AzureKeyVaultConnector) -> None:
     backup_response = {"value": "base64-encoded-backup-blob"}
-    respx.post(f"{_BASE}/secrets/my-secret/backup", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=backup_response)
-    )
+    respx.post(f"{_BASE}/secrets/my-secret/backup", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=backup_response))
     result = await connector.write(ConnectorPayload(resource="secret_backup", data={"name": "my-secret"}))
     assert "value" in result
 
@@ -328,9 +296,7 @@ async def test_write_secret_backup_missing_name(connector: AzureKeyVaultConnecto
 @respx.mock
 async def test_write_secret_restore(connector: AzureKeyVaultConnector) -> None:
     restored = {"id": "https://myvault.vault.azure.net/secrets/restored-secret", "value": "restored-val"}
-    respx.post(f"{_BASE}/secrets/restore", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=restored)
-    )
+    respx.post(f"{_BASE}/secrets/restore", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=restored))
     result = await connector.write(ConnectorPayload(resource="secret_restore", data={"value": "base64-backup-blob"}))
     assert result["value"] == "restored-val"
 
@@ -355,27 +321,21 @@ async def test_write_invalid_resource(connector: AzureKeyVaultConnector) -> None
 
 @respx.mock
 async def test_query_http_401(connector: AzureKeyVaultConnector) -> None:
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="secrets"))
 
 
 @respx.mock
 async def test_query_http_500(connector: AzureKeyVaultConnector) -> None:
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="secrets"))
 
 
 @respx.mock
 async def test_write_http_403(connector: AzureKeyVaultConnector) -> None:
-    respx.put(f"{_BASE}/secrets/blocked", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(403, text="Forbidden")
-    )
+    respx.put(f"{_BASE}/secrets/blocked", params={"api-version": "7.4"}).mock(return_value=httpx.Response(403, text="Forbidden"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.write(ConnectorPayload(resource="secret", data={"name": "blocked", "value": "val"}))
 
@@ -384,9 +344,7 @@ async def test_write_http_403(connector: AzureKeyVaultConnector) -> None:
 async def test_query_secrets_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
     """A corrupt/hostile response returning a non-dict body must not crash the
     connector — it falls back to an empty page with no cursor."""
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="secrets"))
     assert not result.records
     assert result.next_cursor is None
@@ -396,9 +354,7 @@ async def test_query_secrets_corrupt_body_no_crash(connector: AzureKeyVaultConne
 async def test_query_secrets_non_list_value_no_crash(connector: AzureKeyVaultConnector) -> None:
     """A corrupt body placing a non-list in ``value`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json={"value": "not-a-list"})
-    )
+    respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json={"value": "not-a-list"}))
     result = await connector.query(ConnectorQuery(resource="secrets"))
     assert not result.records
 
@@ -406,9 +362,7 @@ async def test_query_secrets_non_list_value_no_crash(connector: AzureKeyVaultCon
 @respx.mock
 async def test_query_secret_versions_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
     """A non-dict versions page must degrade to an empty page, not crash."""
-    respx.get(f"{_BASE}/secrets/my-secret/versions", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_BASE}/secrets/my-secret/versions", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="secret_versions", filters={"name": "my-secret"}))
     assert not result.records
     assert result.next_cursor is None
@@ -426,9 +380,7 @@ async def test_query_keys_corrupt_body_no_crash(connector: AzureKeyVaultConnecto
 @respx.mock
 async def test_query_certificates_corrupt_body_no_crash(connector: AzureKeyVaultConnector) -> None:
     """A non-dict certificates page must degrade to an empty page, not crash."""
-    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4"}).mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_BASE}/certificates", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await connector.query(ConnectorQuery(resource="certificates"))
     assert not result.records
     assert result.next_cursor is None

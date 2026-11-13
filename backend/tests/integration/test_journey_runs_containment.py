@@ -8,7 +8,7 @@ Postgres path (dialect-detected containment, the same operator class the
 ``ix_runs_work_item_refs_gin`` partial GIN index serves) and assert the
 mixing run IS surfaced — never asserting only the empty side.
 
-Sessions run as the production ``modulo_app`` role with RLS org context set
+Sessions run as the production ``farna_control_app`` role with RLS org context set
 to a dedicated ``journey_org`` (not the shared ``test_org``), mirroring the
 REST route posture while keeping seeded ``run_number`` values collision-free.
 """
@@ -51,12 +51,12 @@ async def containment_org(db_engine: AsyncEngine) -> uuid.UUID:
 
 @pytest_asyncio.fixture
 async def containment_session(
-    modulo_app_engine: AsyncEngine,
+    farna_control_app_engine: AsyncEngine,
     containment_org: uuid.UUID,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """AsyncSession as the production ``modulo_app`` role (RLS enforced) scoped
+    """AsyncSession as the production ``farna_control_app`` role (RLS enforced) scoped
     to a freshly created, isolated organisation."""
-    factory = async_sessionmaker(modulo_app_engine, expire_on_commit=False)
+    factory = async_sessionmaker(farna_control_app_engine, expire_on_commit=False)
     async with factory() as session:
         await session.begin()
         await set_rls_org(session, containment_org)
@@ -80,10 +80,7 @@ async def containment_pipeline(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pipeline_id),

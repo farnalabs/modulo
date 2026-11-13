@@ -125,9 +125,7 @@ def test_split_merge_already_pure_rows_are_idempotent_noop() -> None:
     never re-split, never clobbered by a later segment."""
     pure_return = {"summary": "x", "data": 1}
     stored_telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 10}}
-    outputs, telemetry = _split_merge_outputs(
-        {"node-a": pure_return}, stored_telemetry, {"node-a": pure_return}, {"node-a": "sandbox_agent"}
-    )
+    outputs, telemetry = _split_merge_outputs({"node-a": pure_return}, stored_telemetry, {"node-a": pure_return}, {"node-a": "sandbox_agent"})
     assert outputs["node-a"] is pure_return
     assert telemetry["node-a"] is stored_telemetry["node-a"]
 
@@ -308,9 +306,7 @@ def test_enrich_union_keeps_stored_genuine_zero_without_outputs() -> None:
         (True, "sandbox_agent", True, False),  # pin_failed gate
     ],
 )
-def test_enrich_union_schema_drift_increment_gated(
-    is_terminal: bool, map_type: str, pin_failed: bool, should_increment: bool
-) -> None:
+def test_enrich_union_schema_drift_increment_gated(is_terminal: bool, map_type: str, pin_failed: bool, should_increment: bool) -> None:
     output = {"schema_drift": True}
     if pin_failed:
         output["pin_failed"] = True
@@ -3145,11 +3141,7 @@ async def test_finalize_cancelled_run_does_not_salvage_on_the_request_path() -> 
     run.heartbeat_at = run.completed_at
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
-    markers = {
-        "run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(
-            pr_url="https://github.com/farnalabs/modulo/pull/1837"
-        )
-    }
+    markers = {"run:00000000-0000-0000-0000-000000000002:node:n1:1": _step_finish_marker(pr_url="https://github.com/farnalabs/modulo/pull/1837")}
     with (
         patch(
             "farna.core.cost_controller.finalize.read_run_blobs",

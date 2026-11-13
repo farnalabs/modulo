@@ -231,7 +231,4 @@ class TestUninstallCollectionPartialDecisionBlock:
         result = await uninstall_collection(session, org_id, install_id, collection_id)
 
         # If the warning was swallowed (no blocked entry), this assertion fails
-        assert len(result["blocked"]) == 1, (
-            "A swallowed decision-FK IntegrityError would produce an empty blocked list — "
-            "the criterion requires the blocked entry to be present with blocked_by and remediation message"
-        )
+        assert len(result["blocked"]) == 1, "A swallowed decision-FK IntegrityError would produce an empty blocked list — the criterion requires the blocked entry to be present with blocked_by and remediation message"

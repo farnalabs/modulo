@@ -505,9 +505,7 @@ async def test_create_run_excludes_soft_deleted_guardrail_from_live_binding(sess
     assert run.guardrail_summary_json is None
 
 
-async def test_create_run_replay_soft_deleted_pin_skips_with_audit(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_replay_soft_deleted_pin_skips_with_audit(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     """FAR-309 PR B two-step soft-delete + replay: a pinned guardrail whose live
     row was SOFT-deleted (deleted_at/deleted_by stamped — NOT hard-removed) is
     skipped on replay exactly like a hard-deleted row. The soft-deleted pin is

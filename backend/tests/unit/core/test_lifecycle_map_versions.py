@@ -934,9 +934,7 @@ async def test_check_pipeline_uniqueness_skips_non_dict_stage(session: AsyncMock
 
 
 async def test_check_pipeline_uniqueness_skips_invalid_pipeline_uuid(session: AsyncMock) -> None:
-    lm = _make_map(
-        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": "not-a-uuid"}]}
-    )
+    lm = _make_map(content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": "not-a-uuid"}]})
     await _check_pipeline_uniqueness(session, lm)
     session.execute.assert_not_awaited()
 
@@ -1461,9 +1459,7 @@ async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(sessio
     """The create path runs the friendly pipeline-uniqueness pre-check, so a
     duplicate pipeline-in-active-map fails with a clear conflict error before
     the DB partial unique index fires (which would surface as a generic 409)."""
-    created = _make_map(
-        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]}
-    )
+    created = _make_map(content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]})
     session.execute.return_value = MagicMock(all=MagicMock(return_value=[(_PIPE_ID,)]))
 
     with (
@@ -1822,11 +1818,7 @@ async def test_create_route_maps_content_error_to_422_when_content_provided() ->
     with (
         patch(
             "farna.api.routes.lifecycle_maps.create_lifecycle_map",
-            AsyncMock(
-                side_effect=LifecycleMapContentError(
-                    "lifecycle-map edge/transition #0: source stage 'ghost' is not defined"
-                )
-            ),
+            AsyncMock(side_effect=LifecycleMapContentError("lifecycle-map edge/transition #0: source stage 'ghost' is not defined")),
         ),
         patch("farna.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
         patch("farna.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
@@ -2164,9 +2156,7 @@ class TestUpdateLifecycleMapRoute:
                     f"/api/v1/lifecycle-maps/{_MAP_ID}",
                     json={
                         "name": "SDLC v2",
-                        "content_json": {
-                            "stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]
-                        },
+                        "content_json": {"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]},
                     },
                 )
             app.dependency_overrides.clear()
@@ -2351,10 +2341,7 @@ class TestLegacyBackfillScript:
                 ).scalar_one()
                 content = json.loads(content_raw)
                 stage_rows = conn.execute(
-                    text(
-                        "SELECT stage_id, stage_name, position, pipeline_id "
-                        "FROM lifecycle_map_stages WHERE map_id = :mid"
-                    ),
+                    text("SELECT stage_id, stage_name, position, pipeline_id FROM lifecycle_map_stages WHERE map_id = :mid"),
                     {"mid": _MAP_ID.hex},
                 ).fetchall()
         finally:

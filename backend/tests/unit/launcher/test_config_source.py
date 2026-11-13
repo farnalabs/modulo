@@ -94,8 +94,8 @@ def test_compose_config_derives_all_bundled_endpoints() -> None:
     assert composed["DATABASE_URL"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert composed["DATABASE_ADMIN_URL"] == composed["DATABASE_URL"]
     assert composed["REDIS_URL"] == "redis://:redis-pw@127.0.0.1:16379/0"
-    system_url = composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]
-    assert system_url.startswith("postgresql+asyncpg://modulo_system:pg-pw@127.0.0.1:15432/modulo")
+    system_url = composed["FARNA_CONTROL_SYSTEM_DATABASE_URL"]
+    assert system_url.startswith("postgresql+asyncpg://farna_control_system:pg-pw@127.0.0.1:15432/modulo")
 
 
 def test_compose_config_is_password_free_on_state_alone() -> None:
@@ -140,7 +140,7 @@ def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     monkeypatch.setenv("REDIS_URL", "redis://operator:secret@cache.example.com:6379/7")
     resolved = LauncherConfigSource(data_dir)()
     assert "redis_url" not in resolved  # the operator's env wins
@@ -148,7 +148,7 @@ def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.Mon
 
 
 def test_source_system_database_url_environment_wins_over_composed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """MODULO_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
+    """FARNA_CONTROL_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
@@ -157,7 +157,7 @@ def test_source_system_database_url_environment_wins_over_composed(monkeypatch: 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgresql://system:op@db.example.com:5432/modulo")
+    monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", "postgresql://user:pass@host:5432/modulo")
     resolved = LauncherConfigSource(data_dir)()
     assert "modulo_system_database_url" not in resolved  # the operator's env wins
     assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
@@ -173,14 +173,14 @@ def test_source_derives_system_url_from_the_operators_database_url(monkeypatch: 
     import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app:op-pass@db.example.com:5432/modulo")
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/modulo")
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     assert "database_url" not in resolved
     system = resolved.get("modulo_system_database_url", "")
     expected_prefixes = (
-        "postgresql://modulo_system:op-pass@db.example.com:5432/modulo",
-        "postgresql+asyncpg://modulo_system:op-pass@db.example.com:5432/modulo",
+        "postgresql://farna_control_system:pass@host:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:pass@host:5432/modulo",
     )
     assert system.startswith(expected_prefixes)
     assert "127.0.0.1" not in system
@@ -204,7 +204,7 @@ def test_source_skips_empty_composed_values(clean_launcher_env, monkeypatch: pyt
 
     De-stubbed (review finding): the composition with a NO-PASSWORD URL is
     the case that caused the regression — ``compose_config`` returns a
-    real dict whose ``MODULO_SYSTEM_DATABASE_URL`` is present-but-blank —
+    real dict whose ``FARNA_CONTROL_SYSTEM_DATABASE_URL`` is present-but-blank —
     and the source must omit it, never write ``modulo_system_database_url=''``.
     """
     data_dir = tmp_path / "data"
@@ -215,9 +215,9 @@ def test_source_skips_empty_composed_values(clean_launcher_env, monkeypatch: pyt
     password_free = LauncherSecrets(postgres_password="", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
     monkeypatch.setattr(sf, "load_or_create", lambda _path: password_free)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     composed = compose_config(_state(), password_free)
-    assert not composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
+    assert not composed["FARNA_CONTROL_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
     resolved = LauncherConfigSource(data_dir)()
     assert "modulo_system_database_url" not in resolved  # blank value omitted, not injected
     assert resolved  # the non-blank composed values are still injected

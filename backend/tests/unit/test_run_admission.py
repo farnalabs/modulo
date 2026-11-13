@@ -472,10 +472,7 @@ class TestReadCiFailureCoalesceKey:
         assert read_ci_failure_coalesce_key(payload) == "ci-failure:pr:7:sha:s"
 
     def test_json_text_payload(self) -> None:
-        assert (
-            read_ci_failure_coalesce_key('{"' + CI_FAILURE_COALESCE_KEY_FIELD + '": "ci-failure:pr:7:sha:s"}')
-            == "ci-failure:pr:7:sha:s"
-        )
+        assert read_ci_failure_coalesce_key('{"' + CI_FAILURE_COALESCE_KEY_FIELD + '": "ci-failure:pr:7:sha:s"}') == "ci-failure:pr:7:sha:s"
 
     def test_absent_or_foreign_shapes_return_none(self) -> None:
         assert read_ci_failure_coalesce_key({"prNumber": 7}) is None
@@ -1037,9 +1034,7 @@ class TestCoalescePendingRun:
         assert pending.input_payload == {"_coalesce_key": "github:o/r:pr:1", "user": "a"}
         session.flush.assert_not_awaited()
 
-    async def test_postgres_coalesce_requires_never_claimed_never_started(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_postgres_coalesce_requires_never_claimed_never_started(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-1623: the Postgres fold target predicate carries the
         never-claimed / never-started guards, so a claimed-then-reset run
         (pending, claim_count >= 1) is never folded. The mocked session returns
@@ -1207,9 +1202,7 @@ class TestEvaluateBackpressure:
         assert skip is False
         assert reason == ""
 
-    async def test_pipeline_capacity_aged_pending_still_skips_on_filtered_age(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_pipeline_capacity_aged_pending_still_skips_on_filtered_age(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # FAR-1826 (narrowed): ``pipeline_capacity`` is NOT a benign capacity
         # marker. It is written when THIS pipeline's OWN active-run count reaches
         # ``max_concurrent_runs`` — a count that includes leaked ``running`` rows
@@ -1236,9 +1229,7 @@ class TestEvaluateBackpressure:
         # excluded org-capacity row.
         assert "oldest_age=10800s" not in reason
 
-    async def test_org_capacity_demoted_and_wedged_mixed_uses_filtered_age(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_org_capacity_demoted_and_wedged_mixed_uses_filtered_age(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Mixed queue: the unfiltered oldest is an aged ``org_capacity_limited``
         # row, but a genuinely-wedged (non-capacity) pending row is only 10 min
         # old — the pipeline is draining, so the age leg must admit. (Pre-fix
@@ -1867,9 +1858,7 @@ class TestParkExpiredHitlRuns:
     def _settings(self, grace_seconds: int = 86400) -> MagicMock:
         return MagicMock(hitl_park_grace_seconds=grace_seconds)
 
-    async def test_parks_expired_unclaimed_gate_run(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_parks_expired_unclaimed_gate_run(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         statements: list[str] = []
         engine = _ParkEngine(statements, [_parked_row()])
         monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
@@ -1961,9 +1950,7 @@ class TestParkExpiredHitlRuns:
         assert excinfo.value.parked == 1
         assert str(excinfo.value.__cause__) == "db down"
 
-    async def test_failure_still_logs_already_parked_rows(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_failure_still_logs_already_parked_rows(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """Parks achieved before a later org's failure are still logged."""
         parked_row = _parked_row()
         org2 = OTHER_ORG_ID
@@ -1986,9 +1973,7 @@ class TestParkExpiredHitlRuns:
 
         assert any("hitl_park.parked" in r.message for r in caplog.records)
 
-    async def test_no_phantom_park_when_org_update_fails(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_no_phantom_park_when_org_update_fails(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """qa F6: the parked count/log is recorded only AFTER the org's park
         UPDATE succeeds — a failing park UPDATE rolls the org's transaction
         back, so its rows are neither parked nor counted: no phantom
@@ -2025,9 +2010,7 @@ class TestParkExpiredHitlRuns:
         assert excinfo.value.parked == 0
         assert not any("hitl_park.parked" in r.message for r in caplog.records)
 
-    async def test_two_org_sweep_parks_each_orgs_own_rows(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_two_org_sweep_parks_each_orgs_own_rows(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """qa F12(b): a two-org pass parks each org's own expired runs and
         never crosses the boundary — every bound ``oid`` is one of the
         enumerated orgs, the org predicate is IN the statement itself
@@ -2275,9 +2258,7 @@ class TestSweepRowLockBoundFAR1592:
         update_at = [i for i, sql in enumerate(sqls) if "UPDATE runs SET" in sql]
         assert bound_at, f"no transaction-local lock bound issued; statements={sqls}"
         assert update_at, f"the sweep's UPDATE never ran; statements={sqls}"
-        assert bound_at[0] < update_at[0], (
-            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
-        )
+        assert bound_at[0] < update_at[0], f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
         # SET LOCAL semantics: set_config(..., is_local => true) — reverts on
         # COMMIT/ROLLBACK, never leaks onto a pooled connection.
         assert ", true)" in sqls[bound_at[0]]
@@ -2455,9 +2436,7 @@ class TestFar1999TriggerSlotCount:
         )
 
     async def _count(self, session: AsyncSession, trigger_id: uuid.UUID, now: datetime) -> int:
-        result = await session.execute(
-            select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=300, now=now))
-        )
+        result = await session.execute(select(func.count()).where(trigger_slot_count_predicate(trigger_id, pending_grace_seconds=300, now=now)))
         return int(result.scalar_one())
 
     async def test_running_run_counts_at_any_age(self, session: AsyncSession) -> None:

@@ -117,25 +117,19 @@ class TestCoerceUuid:
 class TestModuloCredentialIssuer:
     async def test_issue_without_session_factory_returns_none(self) -> None:
         issuer = ModuloCredentialIssuer()
-        issued = await issuer.issue_for_run(
-            session_factory=None, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-        )
+        issued = await issuer.issue_for_run(session_factory=None, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
         assert issued is None
 
     async def test_issue_with_unparseable_org_returns_none(self) -> None:
         _session, factory = _session_factory()
         issuer = ModuloCredentialIssuer()
-        issued = await issuer.issue_for_run(
-            session_factory=factory, org_id="not-a-uuid", run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-        )
+        issued = await issuer.issue_for_run(session_factory=factory, org_id="not-a-uuid", run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
         assert issued is None
 
     async def test_issue_with_unparseable_run_returns_none(self) -> None:
         _session, factory = _session_factory()
         issuer = ModuloCredentialIssuer()
-        issued = await issuer.issue_for_run(
-            session_factory=factory, org_id=_ORG_ID, run_id="not-a-uuid", node_id="n1", sandbox_timeout=300
-        )
+        issued = await issuer.issue_for_run(session_factory=factory, org_id=_ORG_ID, run_id="not-a-uuid", node_id="n1", sandbox_timeout=300)
         assert issued is None
 
     async def test_issue_success_stamps_modulo_minted(self) -> None:
@@ -151,9 +145,7 @@ class TestModuloCredentialIssuer:
             patch("farna.auth.api_key.mint_run_api_key", new=_mint),
             patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
-            issued = await ModuloCredentialIssuer().issue_for_run(
-                session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-            )
+            issued = await ModuloCredentialIssuer().issue_for_run(session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
 
         assert issued is not None
         assert issued.secret == _FAKE_KEY
@@ -178,9 +170,7 @@ class TestModuloCredentialIssuer:
             patch("farna.auth.api_key.mint_run_api_key", new=_mint),
             patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
-            issued = await ModuloCredentialIssuer().issue_for_run(
-                session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-            )
+            issued = await ModuloCredentialIssuer().issue_for_run(session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
 
         assert issued is not None
         assert captured["account_id"] == admin_id
@@ -191,9 +181,7 @@ class TestModuloCredentialIssuer:
             patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
-            issued = await ModuloCredentialIssuer().issue_for_run(
-                session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-            )
+            issued = await ModuloCredentialIssuer().issue_for_run(session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
         assert issued is None
 
     async def test_issue_failure_is_swallowed(self) -> None:
@@ -202,9 +190,7 @@ class TestModuloCredentialIssuer:
             patch("farna.auth.api_key.mint_run_api_key", new=AsyncMock(side_effect=RuntimeError("boom"))),
             patch("farna.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
         ):
-            issued = await ModuloCredentialIssuer().issue_for_run(
-                session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300
-            )
+            issued = await ModuloCredentialIssuer().issue_for_run(session_factory=factory, org_id=_ORG_ID, run_id=_RUN_ID, node_id="n1", sandbox_timeout=300)
         assert issued is None
 
     async def test_revoke_for_run_delegates_to_revoke_run_api_key(self) -> None:

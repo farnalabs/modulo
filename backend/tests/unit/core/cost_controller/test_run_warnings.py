@@ -225,9 +225,7 @@ def test_rejected_explicit_zero_reason_is_zero_report_unproven() -> None:
     usage, outputs, telemetry = _free_model_node_shapes()
     union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
     tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
-    breakdown, _total = build_cost_breakdown(
-        tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union)
-    )
+    breakdown, _total = build_cost_breakdown(tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union))
     entry = breakdown[0]
     assert entry["source"] == "self_reported"
     assert entry["missing_self_report"] is True
@@ -244,9 +242,7 @@ def test_absent_cost_key_still_reports_agent_not_reported() -> None:
     assert "model_cost_rejected" not in union["node1"]
     assert not _rejected_zero_nodes(union)
     tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
-    breakdown, _total = build_cost_breakdown(
-        tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union)
-    )
+    breakdown, _total = build_cost_breakdown(tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union))
     entry = breakdown[0]
     assert entry["missing_self_report"] is True
     assert entry["missing_self_report_reason"] == "agent_not_reported"
@@ -291,9 +287,7 @@ def _rejected_zero_breakdown() -> list[dict[str, object]]:
     usage, outputs, telemetry = _free_model_node_shapes()
     union = _enrich_union(usage, outputs, {"node1": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
     tele, _per_node_cost = build_telemetry(union, [_self_reported_comp()])
-    breakdown, _total = build_cost_breakdown(
-        tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union)
-    )
+    breakdown, _total = build_cost_breakdown(tele, [_self_reported_comp()], rejected_zero_nodes=_rejected_zero_nodes(union))
     return breakdown
 
 
@@ -621,7 +615,5 @@ def test_dominant_rejection_reason_unknown_vocabulary_falls_back() -> None:
 
 def test_dominant_rejection_reason_prefers_zero_over_sub_floor() -> None:
     """A mixed refusal keeps the older, more specific zero-unproven label."""
-    assert (
-        _dominant_rejection_reason({"n1": "sub_floor_rejected", "n2": "zero_report_unproven"}) == "zero_report_unproven"
-    )
+    assert _dominant_rejection_reason({"n1": "sub_floor_rejected", "n2": "zero_report_unproven"}) == "zero_report_unproven"
     assert _dominant_rejection_reason({"n1": "sub_floor_rejected"}) == "sub_floor_rejected"

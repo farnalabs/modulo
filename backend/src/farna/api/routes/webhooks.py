@@ -793,7 +793,7 @@ def _require_system_engine(code: str) -> None:
     """Refuse the delivery when the BYPASSRLS bootstrap session is unavailable."""
     if not system_engine_is_fallback():
         return
-    # No modulo_system role provisioned: the BYPASSRLS bootstrap read would
+    # No farna_control_system role provisioned: the BYPASSRLS bootstrap read would
     # silently match zero rows and every delivery would 404. Refuse loudly
     # (same contract as admin_rotation's system-role check) — 503 is
     # distinguishable from a genuine 404.

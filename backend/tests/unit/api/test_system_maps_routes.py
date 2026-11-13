@@ -332,9 +332,7 @@ def _install_overrides(
     session.rollback = AsyncMock()
     execute_result = MagicMock()
     execute_result.scalar_one.return_value = 1
-    execute_result.scalar_one_or_none.return_value = MagicMock(
-        id=uuid.uuid4(), organisation_id=_ORG_ID, deleted_at=None
-    )
+    execute_result.scalar_one_or_none.return_value = MagicMock(id=uuid.uuid4(), organisation_id=_ORG_ID, deleted_at=None)
     session.execute = AsyncMock(return_value=execute_result)
     session.info = {}
     session.add = MagicMock()
@@ -642,13 +640,9 @@ def test_create_system_map_returns_201(client: tuple[TestClient, _Harness]) -> N
     assert body["visibility"] == "org"
 
 
-def test_create_system_map_runs_owner_team_validation(
-    client: tuple[TestClient, _Harness], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_system_map_runs_owner_team_validation(client: tuple[TestClient, _Harness], monkeypatch: pytest.MonkeyPatch) -> None:
     http, harness = client
-    validate_owner_team = AsyncMock(
-        side_effect=HTTPException(status_code=404, detail="Team not found in this organisation")
-    )
+    validate_owner_team = AsyncMock(side_effect=HTTPException(status_code=404, detail="Team not found in this organisation"))
     monkeypatch.setattr("farna.api.routes.system_maps.validate_owner_team_for_create", validate_owner_team)
     harness.stub("create_map", AsyncMock(return_value=_map_row()))
 
@@ -1415,9 +1409,7 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
 
 
 @pytest.mark.parametrize("window_days", [3, 7, 30, 90])
-def test_overview_passes_window_and_graph_ids_to_the_repository(
-    client: tuple[TestClient, _Harness], window_days: int
-) -> None:
+def test_overview_passes_window_and_graph_ids_to_the_repository(client: tuple[TestClient, _Harness], window_days: int) -> None:
     http, harness = client
     pipeline_id = uuid.uuid4()
     node = _node_row(node_key="node-1")
@@ -2478,9 +2470,7 @@ def test_restore_revision_as_new_returns_200(client: tuple[TestClient, _Harness]
     harness.stub("get_revision_by_id", AsyncMock(return_value=published_rev))
     harness.stub("restore_revision_as_new_draft", AsyncMock(return_value=new_rev))
 
-    resp = http.post(
-        f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored from revision 2"}
-    )
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/restore-as-new", json={"notes": "Restored from revision 2"})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -3091,9 +3081,7 @@ def test_system_map_revision_schema_rejects_duplicate_and_dangling_entries() -> 
     with pytest.raises(ValidationError):
         SystemMapRevisionCreate(
             nodes=[node],
-            relationships=[
-                SystemMapRelationshipCreate(source_node_key="ghost", target_node_key="a", relationship_type="flow")
-            ],
+            relationships=[SystemMapRelationshipCreate(source_node_key="ghost", target_node_key="a", relationship_type="flow")],
         )
 
     with pytest.raises(ValidationError):
@@ -3359,9 +3347,7 @@ def test_demo_viewer_still_cannot_mutate() -> None:
     _install_viewer_overrides(harness, org_role=DEMO_ORG_ROLE)
     try:
         with harness:
-            resp = TestClient(app).post(
-                _BASE, json={"name": "Demo mutation", "visibility": "org", "default_map": False}
-            )
+            resp = TestClient(app).post(_BASE, json={"name": "Demo mutation", "visibility": "org", "default_map": False})
     finally:
         app.dependency_overrides.clear()
 

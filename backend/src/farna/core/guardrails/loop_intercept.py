@@ -185,10 +185,7 @@ def serialize_tool_event(
     if isinstance(args, dict):
         try:
             blob = json.dumps(args, separators=(",", ":"), default=str)
-            if len(blob) > MAX_LOOP_INTERCEPT_ARGS_BYTES:
-                args_out = {"_truncated": True, "_arg_count": len(args)}
-            else:
-                args_out = json.loads(blob)
+            args_out = {"_truncated": True, "_arg_count": len(args)} if len(blob) > MAX_LOOP_INTERCEPT_ARGS_BYTES else json.loads(blob)
         except (TypeError, ValueError):
             args_out = {"_unserializable": True}
     return {

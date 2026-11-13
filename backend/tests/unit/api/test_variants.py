@@ -581,9 +581,7 @@ class TestPromptDiffs:
         ):
             mock_group = MagicMock()
             mock_get.return_value = mock_group
-            mock_diffs.return_value = [
-                {"base_variant": {"name": "control"}, "variant": {"name": "a"}, "agent_diffs": []}
-            ]
+            mock_diffs.return_value = [{"base_variant": {"name": "control"}, "variant": {"name": "a"}, "agent_diffs": []}]
 
             result = await prompt_diffs(group_id, mock_session, principal)
         assert len(result) == 1
@@ -2090,9 +2088,7 @@ class TestRunVariantBatchEvalCoverage:
             mock_group.pipeline_id = uuid.uuid4()
             mock_group.variants = [{"name": "v", "snapshot_id": str(uuid.uuid4())}]
             mock_get.return_value = mock_group
-            mock_run.return_value = [
-                {"run_id": uuid.uuid4(), "batch_id": batch_id, "variant": {"name": "v"}, "merged_payload": {}}
-            ]
+            mock_run.return_value = [{"run_id": uuid.uuid4(), "batch_id": batch_id, "variant": {"name": "v"}, "merged_payload": {}}]
 
             result = await run_batch(group_id, body, mock_session, principal)
 

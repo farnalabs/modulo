@@ -154,9 +154,7 @@ class TestSelfReportedCost:
         assert _extract_reported_cost({"model_cost_usd": -5}) is None
 
     def test_extract_accepts_genuine_zero_with_proven_token_usage(self) -> None:
-        raw, clamped, was_clamped, oob = _extract_reported_cost(
-            {"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0}}
-        )
+        raw, clamped, was_clamped, oob = _extract_reported_cost({"model_cost_usd": 0.0, "token_usage": {"input": 0, "output": 0, "total": 0}})
         assert raw == 0.0
         assert clamped == 0.0
         assert was_clamped is False
@@ -226,9 +224,7 @@ class TestAgentReportedTokenUsage:
         assert not _build_token_usage_fields({"token_usage": None})
 
     def test_valid_report_full_including_cache_keys(self) -> None:
-        fields = _build_token_usage_fields(
-            {"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100, "cache_write": 8}}
-        )
+        fields = _build_token_usage_fields({"token_usage": {"input": 1234, "output": 567, "total": 1801, "cache_read": 100, "cache_write": 8}})
         assert fields == {
             "model_tokens_input": 1234,
             "model_tokens_output": 567,
@@ -275,9 +271,7 @@ class TestAgentReportedTokenUsage:
         ``1234.0``) is tolerated — an integral float normalises to ``int``
         (mirroring the cost extractor's finite-numeric tolerance); a
         non-integral float and non-finite floats stay invalid."""
-        fields = _build_token_usage_fields(
-            {"token_usage": {"input": 1234.0, "output": 5.0, "total": 1801.0, "cache_read": 100.0}}
-        )
+        fields = _build_token_usage_fields({"token_usage": {"input": 1234.0, "output": 5.0, "total": 1801.0, "cache_read": 100.0}})
         assert fields == {
             "model_tokens_input": 1234,
             "model_tokens_output": 5,
@@ -295,9 +289,7 @@ class TestAgentReportedTokenUsage:
         assert "model_tokens_input" not in fields
         assert fields["model_tokens_output"] == 5
         assert fields["model_tokens_total"] == 15
-        at_ceiling = _build_token_usage_fields(
-            {"token_usage": {"input": MAX_REPORTABLE_TOKEN_COUNT, "output": 1, "total": 2}}
-        )
+        at_ceiling = _build_token_usage_fields({"token_usage": {"input": MAX_REPORTABLE_TOKEN_COUNT, "output": 1, "total": 2}})
         assert at_ceiling["model_tokens_input"] == MAX_REPORTABLE_TOKEN_COUNT
 
     def test_token_usage_field_map_derives_from_shared_chain(self) -> None:
@@ -305,10 +297,7 @@ class TestAgentReportedTokenUsage:
         ``REPORTED_TOKEN_CHAIN`` in (src, dst) reading order — the three
         layers (producer key -> ``model_tokens_*`` -> ``reported_*`` ->
         counter) cannot drift apart."""
-        assert (
-            tuple((binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN)
-            == nr._TOKEN_USAGE_FIELD_MAP
-        )
+        assert tuple((binding.producer_key, binding.node_field) for binding in REPORTED_TOKEN_CHAIN) == nr._TOKEN_USAGE_FIELD_MAP
 
     def test_envelope_carries_reported_tokens_in_both_views(self) -> None:
         """The envelope's telemetry view carries the extracted fields; a node
@@ -345,14 +334,10 @@ class TestAgentReportedTokenUsage:
         """A truthy producer ``schema_drift`` flag suppresses the token report
         entirely (returns ``{}``) — mirroring ``_extract_reported_cost``: a
         drifted-schema node reports NO tokens."""
-        assert not _build_token_usage_fields(
-            {"schema_drift": True, "token_usage": {"input": 10, "output": 5, "total": 15}}
-        )
+        assert not _build_token_usage_fields({"schema_drift": True, "token_usage": {"input": 10, "output": 5, "total": 15}})
 
     def test_clean_producer_report_extracts_normally(self) -> None:
-        fields = _build_token_usage_fields(
-            {"schema_drift": False, "token_usage": {"input": 10, "output": 5, "total": 15}}
-        )
+        fields = _build_token_usage_fields({"schema_drift": False, "token_usage": {"input": 10, "output": 5, "total": 15}})
         assert fields == {"model_tokens_input": 10, "model_tokens_output": 5, "model_tokens_total": 15}
 
     def test_drifted_producer_tokens_not_folded_into_envelope(self) -> None:
@@ -836,9 +821,7 @@ def test_api_node_rejects_stdout_retention_off_sandbox():
     the agent-only validation, which would mask this check.
     """
     with pytest.raises(ValueError, match="sandbox_agent"):
-        PipelineGraphNode(
-            **_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_retention_mode="full")
-        )
+        PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_retention_mode="full"))
     with pytest.raises(ValueError, match="sandbox_agent"):
         PipelineGraphNode(**_sandbox_node_kwargs(node_type="agent", agent_id=uuid.uuid4(), stdout_max_bytes=2048))
 

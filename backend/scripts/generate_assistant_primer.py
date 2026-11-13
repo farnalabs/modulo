@@ -60,23 +60,15 @@ def _safe_output_path(path: Path) -> Path:
 _GLOSSARY_TERMS: dict[str, str] = {
     "Pipeline": "An ordered graph of agents with explicit ConnectorBindings, executed as Runs.",
     "Run": "A single execution against a PipelineSnapshot, with unique ID, trace, cost record, and result.",
-    "Agent": (
-        "An atomic unit of work that takes defined input, applies a sandboxed prompt against a model backend, "
-        "and produces defined output."
-    ),
+    "Agent": ("An atomic unit of work that takes defined input, applies a sandboxed prompt against a model backend, and produces defined output."),
     "Schema": "A versioned, reusable data structure definition that users control.",
     "Connector": "A configured, authenticated binding to an external system such as a git host or issue tracker.",
     "Trigger": "A first-class object that initiates a pipeline run (manual, webhook, cron, polling).",
     "HITL Gate": "A Human-in-the-Loop transition point that pauses execution until a human approves or rejects.",
     "Eval": "An automated quality check on agent output (llm_judge, regex, json_schema, custom_function).",
-    "Variant": (
-        "A set of runs against the same pipeline and input differing only in context overrides, used for A/B testing."
-    ),
+    "Variant": ("A set of runs against the same pipeline and input differing only in context overrides, used for A/B testing."),
     "Library": "Published community primitives — schemas, workflows, agents, and integrations with metadata.",
-    "Assistant": (
-        "Your AI SDLC assistant that can navigate the UI, trigger runs, review results, approve HITL gates, "
-        "and configure settings."
-    ),
+    "Assistant": ("Your AI SDLC assistant that can navigate the UI, trigger runs, review results, approve HITL gates, and configure settings."),
 }
 
 _KEY_CONCEPTS = [

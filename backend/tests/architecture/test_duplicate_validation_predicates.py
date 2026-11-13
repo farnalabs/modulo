@@ -261,13 +261,7 @@ def _validation_details(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
                 details.add(value.value)
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values, strict=False):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value == "detail"
-                    and isinstance(value, ast.Constant)
-                    and isinstance(value.value, str)
-                    and value.value
-                ):
+                if isinstance(key, ast.Constant) and key.value == "detail" and isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value:
                     details.add(value.value)
     return details
 
@@ -362,12 +356,7 @@ def _body_without_docstring(node: ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     standalone string expression is still compared.
     """
     body = list(node.body)
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
         body = body[1:]
     return body
 
@@ -379,10 +368,7 @@ def _statement_fingerprints(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tup
     two equal fingerprints are a verbatim copy (formatting and docstrings
     aside).
     """
-    return tuple(
-        ast.dump(statement, annotate_fields=False, include_attributes=False)
-        for statement in _body_without_docstring(node)
-    )
+    return tuple(ast.dump(statement, annotate_fields=False, include_attributes=False) for statement in _body_without_docstring(node))
 
 
 def _duplicate_block_bodies_in(sources: list[tuple[str, str]]) -> dict[tuple[str, ...], set[tuple[str, str]]]:
@@ -545,20 +531,9 @@ def _is_per_entity_scaffolding(first: _FunctionBody, second: _FunctionBody) -> b
     shared_models = first.models & second.models
     if first.models and second.models and not shared_models:
         return True
-    if (
-        _module_package(first.module) == _module_package(second.module)
-        and _is_data_access_name(first.name)
-        and _is_data_access_name(second.name)
-        and not shared_models
-    ):
+    if _module_package(first.module) == _module_package(second.module) and _is_data_access_name(first.name) and _is_data_access_name(second.name) and not shared_models:
         return True
-    return bool(
-        first.class_name
-        and second.class_name
-        and first.name == second.name
-        and first.class_name != second.class_name
-        and first.class_bases & second.class_bases
-    )
+    return bool(first.class_name and second.class_name and first.name == second.name and first.class_name != second.class_name and first.class_bases & second.class_bases)
 
 
 def _near_body_groups_in(sources: list[tuple[str, str]]) -> dict[frozenset[tuple[str, str]], float]:
@@ -607,10 +582,7 @@ def _near_body_groups_in(sources: list[tuple[str, str]]) -> dict[frozenset[tuple
             # even the shared-character proportion is below the threshold, the
             # SequenceMatcher cannot reach it. This is the expensive stage's
             # exact prefilter.
-            common = sum(
-                min(first.char_counts[char], second.char_counts[char])
-                for char in first.char_counts.keys() & second.char_counts.keys()
-            )
+            common = sum(min(first.char_counts[char], second.char_counts[char]) for char in first.char_counts.keys() & second.char_counts.keys())
             if 2 * common < _NEAR_BODY_SIMILARITY * (len(first.signature) + len(second.signature)):
                 continue
             # autojunk=False: the default heuristic drops matches for a
@@ -735,11 +707,7 @@ _BASELINE_HEADER = (
 
 
 def _read_baseline() -> set[str]:
-    return {
-        stripped
-        for raw in BASELINE_PATH.read_text(encoding="utf-8").splitlines()
-        if (stripped := raw.strip()) and not stripped.startswith("#")
-    }
+    return {stripped for raw in BASELINE_PATH.read_text(encoding="utf-8").splitlines() if (stripped := raw.strip()) and not stripped.startswith("#")}
 
 
 def _render_baseline(keys: set[str]) -> str:
@@ -756,9 +724,7 @@ def _format_offenders(duplicates: dict[str, list[tuple[str, str, int]]], baselin
     return offenders
 
 
-def _format_constant_offenders(
-    constants: dict[tuple[str, str], list[tuple[str, str, int]]], baseline: set[str]
-) -> list[str]:
+def _format_constant_offenders(constants: dict[tuple[str, str], list[tuple[str, str, int]]], baseline: set[str]) -> list[str]:
     offenders: list[str] = []
     for (name, value), members in sorted(constants.items()):
         if _constant_baseline_key(name, value, [m[0] for m in members]) in baseline:
@@ -866,21 +832,14 @@ def test_duplicate_validation_predicate_baseline_has_no_stale_entries() -> None:
     removed) must leave the baseline: the ratchet only shrinks, so a completed
     sweep is recorded and never silently re-opens."""
     stale = _read_baseline() - _current_baseline_keys()
-    assert not stale, (
-        f"{len(stale)} duplicate-logic baseline entries are no longer duplicates - regenerate\n"
-        "the baseline with `cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py`:\n  "
-        + "\n  ".join(sorted(stale))
-    )
+    assert not stale, f"{len(stale)} duplicate-logic baseline entries are no longer duplicates - regenerate\nthe baseline with `cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py`:\n  " + "\n  ".join(sorted(stale))
 
 
 def test_duplicate_validation_predicate_baseline_is_sorted_and_regenerable() -> None:
     """The baseline must be byte-stable (fixed header + sorted entries) so
     regeneration is idempotent and review diffs stay minimal."""
     current = BASELINE_PATH.read_text(encoding="utf-8")
-    assert current == _render_baseline(_read_baseline()), (
-        "the duplicate-logic baseline is not in canonical form - regenerate it with "
-        "`cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py`"
-    )
+    assert current == _render_baseline(_read_baseline()), "the duplicate-logic baseline is not in canonical form - regenerate it with `cd backend && uv run python scripts/update_duplicate_validation_predicate_baseline.py`"
 
 
 def test_block_baseline_group_keys_are_unique() -> None:
@@ -919,11 +878,7 @@ def test_scan_finds_the_known_live_constants() -> None:
 def test_scan_finds_the_known_live_block_copy() -> None:
     """Guard probe 3: the REST<->MCP parity copy of the expires-at parser
     (``api/mcp_server.py`` / ``api/routes/api_keys.py``) must still be seen."""
-    found = any(
-        ("api/mcp_server.py", "_parse_api_key_expires_at") in members
-        and ("api/routes/api_keys.py", "_parse_expires_at") in members
-        for members in _current_block_bodies().values()
-    )
+    found = any(("api/mcp_server.py", "_parse_api_key_expires_at") in members and ("api/routes/api_keys.py", "_parse_expires_at") in members for members in _current_block_bodies().values())
     assert found, "the live expires-at body duplication was not detected"
 
 
@@ -966,9 +921,7 @@ def test_provider_plugin_trees_are_excluded() -> None:
     scan drops them, so the exclusion cannot silently widen to swallow the
     whole tree."""
     scanned = {module for module, _source in _tree_sources()}
-    assert not {module for module in scanned if module.startswith(_SKIP_PREFIXES)}, (
-        "the provider-plugin trees leaked into the scanned set"
-    )
+    assert not {module for module in scanned if module.startswith(_SKIP_PREFIXES)}, "the provider-plugin trees leaked into the scanned set"
 
 
 # ---------------------------------------------------------------------------
@@ -984,13 +937,11 @@ def test_duplicate_validation_predicate_lens_flags_copies() -> None:
     positive = [
         (
             "api/routes/a.py",
-            "def _parse_future_expires_at(v):\n"
-            '    raise HTTPException(status_code=422, detail="expires_at must be in the future")\n',
+            'def _parse_future_expires_at(v):\n    raise HTTPException(status_code=422, detail="expires_at must be in the future")\n',
         ),
         (
             "api/routes/b.py",
-            "def _parse_future_expires_at(v):\n"
-            '    raise HTTPException(status_code=422, detail="expires_at must be in the future")\n',
+            'def _parse_future_expires_at(v):\n    raise HTTPException(status_code=422, detail="expires_at must be in the future")\n',
         ),
     ]
     assert _duplicate_validation_predicates_in(positive), "lens should flag identical detail in two modules"
@@ -1086,14 +1037,7 @@ def test_duplicate_block_lens_flags_copies() -> None:
     differs by an identifier, a same-module copy, a below-threshold fragment
     and a block that no function defines as its complete body."""
     helper = "def helper(value):\n    text = value.strip()\n    if text:\n        return text\n    return None\n"
-    inlined = (
-        "def caller(value):\n"
-        "    prefix = value[:1]\n"
-        "    text = value.strip()\n"
-        "    if text:\n"
-        "        return text\n"
-        "    return None\n"
-    )
+    inlined = "def caller(value):\n    prefix = value[:1]\n    text = value.strip()\n    if text:\n        return text\n    return None\n"
     positive = [("core/one.py", helper), ("api/two.py", inlined)]
     assert _duplicate_block_bodies_in(positive), "lens should flag a helper body inlined into another module"
 
@@ -1136,61 +1080,28 @@ def test_near_body_lens_flags_drifted_copies() -> None:
     no model, same-named protocol methods sharing a base, a below-threshold
     pair, a same-module pair, and an exact copy (probe 3's shape).
     """
-    guard = (
-        "def _safe_path(path):\n"
-        "    resolved = os.path.realpath(path)\n"
-        "    base = os.path.realpath(Path.cwd())\n"
-        "    if resolved != base and not resolved.startswith(base + os.sep):\n"
-        "        raise ValueError(f'path {path!r} is outside the working directory')\n"
-        "    return resolved\n"
-    )
-    drifted = guard.replace("_safe_path", "_safe_config_path").replace(
-        "raise ValueError(f'path", "raise RuntimeError(f'config"
-    )
-    assert _near_body_groups_in([("core/one.py", guard), ("api/two.py", drifted)]), (
-        "lens should flag a drifted near-copy in another module"
-    )
+    guard = "def _safe_path(path):\n    resolved = os.path.realpath(path)\n    base = os.path.realpath(Path.cwd())\n    if resolved != base and not resolved.startswith(base + os.sep):\n        raise ValueError(f'path {path!r} is outside the working directory')\n    return resolved\n"
+    drifted = guard.replace("_safe_path", "_safe_config_path").replace("raise ValueError(f'path", "raise RuntimeError(f'config")
+    assert _near_body_groups_in([("core/one.py", guard), ("api/two.py", drifted)]), "lens should flag a drifted near-copy in another module"
 
     getters = [
         (
             "db/crud/run.py",
-            "async def get_run(session, run_id):\n"
-            "    stmt = select(Run).where(Run.id == run_id)\n"
-            "    if run_id is None:\n"
-            "        return None\n"
-            "    result = await session.execute(stmt)\n"
-            "    return result.scalar_one_or_none()\n",
+            "async def get_run(session, run_id):\n    stmt = select(Run).where(Run.id == run_id)\n    if run_id is None:\n        return None\n    result = await session.execute(stmt)\n    return result.scalar_one_or_none()\n",
         ),
         (
             "db/crud/mcp_server.py",
-            "async def get_mcp_server(session, server_id):\n"
-            "    stmt = select(McpServer).where(McpServer.id == server_id)\n"
-            "    if server_id is None:\n"
-            "        return None\n"
-            "    result = await session.execute(stmt)\n"
-            "    return result.scalar_one_or_none()\n",
+            "async def get_mcp_server(session, server_id):\n    stmt = select(McpServer).where(McpServer.id == server_id)\n    if server_id is None:\n        return None\n    result = await session.execute(stmt)\n    return result.scalar_one_or_none()\n",
         ),
     ]
     siblings = [
         (
             "db/crud/agent.py",
-            "async def delete_agent(session, agent_id):\n"
-            "    agent = await get_agent(session, agent_id)\n"
-            "    if agent is None:\n"
-            "        return False\n"
-            "    await session.delete(agent)\n"
-            "    await session.flush()\n"
-            "    return True\n",
+            "async def delete_agent(session, agent_id):\n    agent = await get_agent(session, agent_id)\n    if agent is None:\n        return False\n    await session.delete(agent)\n    await session.flush()\n    return True\n",
         ),
         (
             "db/crud/parameter_set.py",
-            "async def delete_set(session, set_id):\n"
-            "    ps = await get_set(session, set_id)\n"
-            "    if ps is None:\n"
-            "        return False\n"
-            "    await session.delete(ps)\n"
-            "    await session.flush()\n"
-            "    return True\n",
+            "async def delete_set(session, set_id):\n    ps = await get_set(session, set_id)\n    if ps is None:\n        return False\n    await session.delete(ps)\n    await session.flush()\n    return True\n",
         ),
     ]
     protocol = [
@@ -1218,19 +1129,11 @@ def test_near_body_lens_flags_drifted_copies() -> None:
     distinct = [
         (
             "core/one.py",
-            "def validate_name(value):\n"
-            "    text = value.strip()\n"
-            "    if not text:\n"
-            "        raise ValueError('empty')\n"
-            "    return text\n",
+            "def validate_name(value):\n    text = value.strip()\n    if not text:\n        raise ValueError('empty')\n    return text\n",
         ),
         (
             "core/two.py",
-            "def validate_age(value):\n"
-            "    number = int(value)\n"
-            "    if number < 1:\n"
-            "        raise ValueError('too small')\n"
-            "    return number\n",
+            "def validate_age(value):\n    number = int(value)\n    if number < 1:\n        raise ValueError('too small')\n    return number\n",
         ),
     ]
     negative = [

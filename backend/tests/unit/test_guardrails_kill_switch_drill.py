@@ -112,9 +112,7 @@ async def test_reader_fails_closed_to_off_on_read_failure() -> None:
     assert await _read_guardrails_kill_switch(faulty, uuid.UUID(int=0)) is False
 
 
-async def test_read_check_uses_the_failing_stub_not_a_real_org(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_read_check_uses_the_failing_stub_not_a_real_org(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6 — the only session handed to the reader is the failing stub.
 
     A real org's session is never passed to ``_read_guardrails_kill_switch``, so
@@ -135,9 +133,7 @@ async def test_read_check_uses_the_failing_stub_not_a_real_org(
     assert isinstance(seen[0], drill_module._FailingReadSession)
 
 
-async def test_cron_ctx_path_opens_owned_session_and_commits_one_row(
-    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_cron_ctx_path_opens_owned_session_and_commits_one_row(engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1/AC5 — the SAQ cron path (a plain ctx dict) owns its transaction.
 
     The cron scheduler invokes ``run_kill_switch_drill(ctx)`` with a context

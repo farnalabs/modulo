@@ -328,9 +328,7 @@ async def _run_reconcile(
             stack.enter_context(patch.object(ch, "_terminalize_hitl_review_missing", terminalizer_missing))
         if review_expiry is not None:
             stack.enter_context(patch.object(ch, "record_review_expiry_outcomes", review_expiry))
-        reenqueue = stack.enter_context(
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
-        )
+        reenqueue = stack.enter_context(patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result))
         ingest = stack.enter_context(patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock))
         awaiting_guard = stack.enter_context(
             patch.object(
@@ -340,20 +338,12 @@ async def _run_reconcile(
                 return_value=awaiting_committed,
             )
         )
-        record_facts = stack.enter_context(
-            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
-        )
-        attribute_age_gate = stack.enter_context(
-            patch.object(ch, "_attribute_age_gate_derived_cost", new_callable=AsyncMock)
-        )
+        record_facts = stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
+        attribute_age_gate = stack.enter_context(patch.object(ch, "_attribute_age_gate_derived_cost", new_callable=AsyncMock))
         if capacity_free is False:
-            stack.enter_context(
-                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5)
-            )
+            stack.enter_context(patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5))
         else:
-            stack.enter_context(
-                patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
-            )
+            stack.enter_context(patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0))
         summary = await ch.dispatcher_reconcile()
 
     session.record_facts = record_facts
@@ -402,9 +392,7 @@ def _pipeline_capacity_marker_update(session: _MockSession, run_id: uuid.UUID) -
 class TestReconcilePredicateMatrix:
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_free_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)]
-        )
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)])
         assert summary["repaired"] == 1
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "execute_run"
@@ -412,9 +400,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_full_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _ingest, _, _, session = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)], capacity_free=False
-        )
+        summary, reenqueue, _ingest, _, _, session = await _run_reconcile(monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)], capacity_free=False)
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         # FAR-225: the pipeline-capacity skip MARKs the run (error_code
@@ -425,9 +411,7 @@ class TestReconcilePredicateMatrix:
         assert _pipeline_capacity_marker_update(session, RUN_PENDING_UNDISPATCHED) is not None
 
     @pytest.mark.asyncio
-    async def test_capacity_full_mark_is_idempotent_on_already_marked_run(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_capacity_full_mark_is_idempotent_on_already_marked_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A pending+undispatched run ALREADY carrying the pipeline_capacity
         marker is re-marked idempotently (the guard keeps the UPDATE a no-op
         on the marker) — never terminal-failed by the reconcile."""
@@ -469,23 +453,17 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_running_stale_redispatch_execute(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _, _, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)]
-        )
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
         assert summary["repaired"] == 1
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
-    async def test_awaiting_human_committed_decision_stale_redispatched_as_resume_run(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_awaiting_human_committed_decision_stale_redispatched_as_resume_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """F6a gated recovery WITH a committed gate decision: an awaiting_human
         run with a stale heartbeat, NO SAQ job in Redis (a half-resumed run
         whose resume_run job was lost), and a committed HITL decision IS
         re-dispatched as resume_run."""
-        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=True
-        )
+        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=True)
         assert summary["repaired"] == 1
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "resume_run"
@@ -493,17 +471,13 @@ class TestReconcilePredicateMatrix:
         awaiting_guard.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_awaiting_human_stale_no_committed_decision_not_redispatched(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_awaiting_human_stale_no_committed_decision_not_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """F6a auto-approve guard: an awaiting_human run with a stale heartbeat
         and NO SAQ job but NO committed gate decision (a genuinely-waiting run
         whose finished job hash expired + heartbeat froze) must NOT be
         re-dispatched — resume_run with empty resume_data would inject
         {"_hitl_decision": {}} and auto-approve the gate."""
-        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=False
-        )
+        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=False)
         assert summary["repaired"] == 0
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
@@ -518,9 +492,7 @@ class TestReconcilePredicateMatrix:
         committed + resume job lost; resume_data is reconstructed from the
         decision payload). FAR-541 removed the claimed exemption, so the
         decision guard now applies to claimed rows too."""
-        summary, reenqueue, _, _, awaiting_guard, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)], awaiting_committed=True
-        )
+        summary, reenqueue, _, _, awaiting_guard, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)], awaiting_committed=True)
         assert summary["repaired"] == 1
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "resume_run"
@@ -535,9 +507,7 @@ class TestReconcilePredicateMatrix:
         the gate node treated the empty dict as an approval and the run posted
         a formal GitHub approval. Now: a claimed row with NO committed decision
         (stale heartbeat, no Redis job) is SKIPPED — no resume_run enqueue."""
-        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)], awaiting_committed=False
-        )
+        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)], awaiting_committed=False)
         assert summary["repaired"] == 0
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
@@ -634,9 +604,7 @@ class TestReconcilePredicateMatrix:
         assert summary["nodeless_failed"] == 0
         reenqueue.assert_awaited_once()
 
-    async def test_running_nodeless_retry_policy_excludes_stall_terminal_failed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_running_nodeless_retry_policy_excludes_stall_terminal_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """retry_policy that does NOT include 'stall' in 'on' must NOT re-dispatch
         a nodeless zombie — it is terminal-failed."""
         summary, reenqueue, _, _, _, session = await _run_reconcile(
@@ -768,9 +736,7 @@ class TestHitlResumeOrSkipPredicateMatrix:
         resume was structurally dead (FIX C) and lives no more; claimed-run
         crash recovery routes through the no-undecided-rows guard branch."""
         payload = {"action": "rejected", "reason": "needs work"}
-        skip, data, summary, guard, resume = await self._resolve(
-            monkeypatch, "claimed", committed=True, resume_data=payload
-        )
+        skip, data, summary, guard, resume = await self._resolve(monkeypatch, "claimed", committed=True, resume_data=payload)
         assert skip is False
         assert data == payload
         assert summary["skipped"] == 0
@@ -792,9 +758,7 @@ class TestHitlResumeOrSkipPredicateMatrix:
     async def test_awaiting_human_with_committed_decision_resumes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unchanged: awaiting_human + committed decision -> resume."""
         payload = {"action": "approved", "notes": "looks good"}
-        skip, data, summary, guard, resume = await self._resolve(
-            monkeypatch, "awaiting_human", committed=True, resume_data=payload
-        )
+        skip, data, summary, guard, resume = await self._resolve(monkeypatch, "awaiting_human", committed=True, resume_data=payload)
         assert skip is False
         assert data == payload
         assert summary["skipped"] == 0
@@ -819,9 +783,7 @@ class TestHitlResumeOrSkipPredicateMatrix:
         self-heals via the existing reconcile→resume path instead of being
         stranded parked forever."""
         payload = {"action": "approved", "review_id": "hitl_review_a_b"}
-        skip, data, summary, guard, resume = await self._resolve(
-            monkeypatch, "hitl_parked", committed=True, resume_data=payload
-        )
+        skip, data, summary, guard, resume = await self._resolve(monkeypatch, "hitl_parked", committed=True, resume_data=payload)
         assert skip is False
         assert data == payload
         assert summary["skipped"] == 0
@@ -982,10 +944,7 @@ class TestNodelessZombiePredicateCompiled:
         from farna.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
         _sql, params = self._compiled_predicate()
-        assert FINAL_ATTEMPT_KEY in params.values(), (
-            "the NOT EXISTS leg must gate on the __final__ attempt key — a marker-only run "
-            "(non-final rows only) never matches EXISTS and stays re-dispatch-eligible"
-        )
+        assert FINAL_ATTEMPT_KEY in params.values(), "the NOT EXISTS leg must gate on the __final__ attempt key — a marker-only run (non-final rows only) never matches EXISTS and stays re-dispatch-eligible"
 
 
 class TestNodelessRedispatchBudget:
@@ -1041,9 +1000,7 @@ class TestNodelessRedispatchBudget:
         monkeypatch.setattr(ch, "get_settings", lambda: _settings())
         assert ch._should_redispatch_nodeless(self._row(5)) is False
 
-    def test_policy_less_raised_default_keeps_third_and_fourth_claim_alive(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_policy_less_raised_default_keeps_third_and_fourth_claim_alive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-812 regression: under the raised default budget (4, was 2), a
         nodeless zombie on its THIRD claim (claim_count=3) and FOURTH claim
         (claim_count=4) is re-dispatched — the pre-FAR-812 default of 2 would
@@ -1081,9 +1038,7 @@ class TestNodelessRedispatchBudget:
         """A policy whose `on` NAMES events but WITHOUT 'stall' is terminal-failed
         regardless of claim_count or the configured budget."""
         monkeypatch.setattr(ch, "get_settings", lambda: _settings(saq_nodeless_redispatch_budget=10))
-        assert (
-            ch._should_redispatch_nodeless(self._row(1, retry_policy={"on": ["ci_failure"], "max_retries": 5})) is False
-        )
+        assert ch._should_redispatch_nodeless(self._row(1, retry_policy={"on": ["ci_failure"], "max_retries": 5})) is False
 
     def test_empty_policy_treated_as_policy_less(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An empty dict policy (the column default) is treated as policy-less:
@@ -1096,9 +1051,7 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(4, retry_policy={})) is True
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={})) is False
 
-    def test_noop_panel_save_policy_uses_the_shared_one_execution_ceiling(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_noop_panel_save_policy_uses_the_shared_one_execution_ceiling(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2076 — the no-op panel save is a NON-EMPTY policy with an
         explicit empty ``on`` and ``max_retries: 0``
         (``{on: [], max_retries: 0, backoff_schedule: {...}}``). A saveable
@@ -1125,9 +1078,7 @@ class TestNodelessRedispatchBudget:
         assert ch._should_redispatch_nodeless(self._row(4, retry_policy={"max_retries": 3})) is False
         assert ch._should_redispatch_nodeless(self._row(5, retry_policy={"max_retries": 3})) is False
 
-    def test_absent_on_policy_with_zero_or_malformed_budget_uses_shared_ceiling(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_absent_on_policy_with_zero_or_malformed_budget_uses_shared_ceiling(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2076 — a NON-EMPTY policy with an absent ``on`` and a 0 (or
         malformed) budget is still a budget: its shared ceiling is
         ``1 + 0 == 1`` execution, so a nodeless zombie (consumed >= 1) is
@@ -1229,9 +1180,7 @@ class TestNodelessRedispatchThrottle:
     async def test_dispatched_at_null_budget_available_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A never-dispatched nodeless zombie (dispatched_at NULL) is never
         throttled: budget available → re-dispatched (enqueue called, no fail)."""
-        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
-            monkeypatch, [self._row(dispatched_minutes_ago=None)]
-        )
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, [self._row(dispatched_minutes_ago=None)])
         assert summary["nodeless_redispatched"] == 1
         assert summary["nodeless_failed"] == 0
         assert summary["repaired"] == 0
@@ -1246,9 +1195,7 @@ class TestNodelessRedispatchThrottle:
         window) is THROTTLED: no duplicate enqueue, no terminal-fail — the run
         is left untouched for a later tick (the throttle bounds the enqueue
         rate; the budget bounds the claim cycles)."""
-        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
-            monkeypatch, [self._row(dispatched_minutes_ago=10)]
-        )
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(monkeypatch, [self._row(dispatched_minutes_ago=10)])
         assert summary["nodeless_redispatched"] == 0
         assert summary["nodeless_failed"] == 0
         assert summary["repaired"] == 0
@@ -1271,9 +1218,7 @@ class TestNodelessRedispatchThrottle:
         """Ordering pinned: the budget check wins over the throttle. A run past
         its claim budget is terminal-failed even with a fresh dispatched_at —
         waiting cannot help a run that can no longer be re-dispatched."""
-        summary, reenqueue, _, _, _, session = await _run_reconcile(
-            monkeypatch, [self._row(dispatched_minutes_ago=10, claim_count=5)]
-        )
+        summary, reenqueue, _, _, _, session = await _run_reconcile(monkeypatch, [self._row(dispatched_minutes_ago=10, claim_count=5)])
         assert summary["nodeless_failed"] == 1
         assert summary["nodeless_redispatched"] == 0
         reenqueue.assert_not_awaited()
@@ -1321,9 +1266,7 @@ class TestNodelessRedispatchPerTickCap:
         ]
 
     @pytest.mark.asyncio
-    async def test_burst_above_cap_enqueues_cap_and_defers_rest(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_burst_above_cap_enqueues_cap_and_defers_rest(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """4 eligible zombies with the cap patched to 2: exactly 2 enqueues,
         the other 2 untouched (no enqueue, no terminal-fail), nodeless_capped
         == 2, and the warning logs ONCE per tick (not per capped row)."""
@@ -1343,9 +1286,7 @@ class TestNodelessRedispatchPerTickCap:
         assert ch._dispatcher_reconcile_stats["nodeless_capped"] == 2
 
     @pytest.mark.asyncio
-    async def test_budget_exhausted_still_terminal_fails_when_cap_hit(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_budget_exhausted_still_terminal_fails_when_cap_hit(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """Ordering pinned: the cap gates only the re-dispatch outcome. The
         budget-exhausted zombie is placed AFTER the cap is already hit — it
         still terminal-fails (the budget check precedes the cap; terminal-fail
@@ -1370,9 +1311,7 @@ class TestNodelessRedispatchPerTickCap:
         session.record_facts.assert_awaited_once_with(exhausted.id, ORG)
 
     @pytest.mark.asyncio
-    async def test_burst_at_cap_enqueues_all_without_capping(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_burst_at_cap_enqueues_all_without_capping(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """Exactly *cap* eligible zombies (boundary): all enqueued,
         nodeless_capped == 0, no cap warning."""
         monkeypatch.setattr(ch, "NODELESS_REDISPATCH_MAX_PER_TICK", 2)
@@ -1481,9 +1420,7 @@ class TestClaimedButNeverDispatchedCounter:
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_terminal_fail_logs_alert_grade_at_error_level(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_terminal_fail_logs_alert_grade_at_error_level(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """The repair logs at ERROR level (alert-grade, not the old WARNING)
         with the run id, claim_count and the wasted zombie age; the tick summary
         adds its own ERROR-level alert line."""
@@ -1508,9 +1445,7 @@ class TestClaimedButNeverDispatchedCounter:
         assert "1 run(s)" in tick_summary[0].getMessage()
 
     @pytest.mark.asyncio
-    async def test_no_zombies_no_summary_alert(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_no_zombies_no_summary_alert(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A quiet tick emits no claimed-but-never-dispatched summary alert."""
         with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
             summary, _, _, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
@@ -1680,9 +1615,7 @@ class TestNoSaqEvictionRedispatch:
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
-            patch.object(
-                ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job")
-            ) as reenqueue,
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "new-job")) as reenqueue,
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
         ):
             summary = await ch.dispatcher_reconcile()
@@ -1734,9 +1667,7 @@ class TestEnqueueFailedRecovery:
     bounded interval, terminal-failed ONLY past the TTL backstop when Redis is
     reachable, and capped per tick."""
 
-    def _enqueue_failed_row(
-        self, run_id: uuid.UUID, *, marker_minutes_ago: int = 1, stale: bool = True
-    ) -> SimpleNamespace:
+    def _enqueue_failed_row(self, run_id: uuid.UUID, *, marker_minutes_ago: int = 1, stale: bool = True) -> SimpleNamespace:
         return _run_row(
             run_id,
             "pending",
@@ -1759,14 +1690,10 @@ class TestEnqueueFailedRecovery:
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_enqueue_failed_ttl_backstop_terminal_fails_when_redis_reachable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_enqueue_failed_ttl_backstop_terminal_fails_when_redis_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """enqueue_failed_at older than the backstop -> terminal-failed
         'dispatch_failed' ONLY when Redis is verifiably reachable."""
-        summary, reenqueue, ingest, redis_client, _, session = await _run_reconcile(
-            monkeypatch, [self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)]
-        )
+        summary, reenqueue, ingest, redis_client, _, session = await _run_reconcile(monkeypatch, [self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)])
         assert summary["dispatch_failed_terminalized"] == 1
         assert summary["enqueue_failed_ttl_terminalized"] == 1
         assert summary["repaired"] == 0
@@ -1777,15 +1704,11 @@ class TestEnqueueFailedRecovery:
         session.record_facts.assert_awaited_once_with(RUN_EVICTED, ORG)
 
     @pytest.mark.asyncio
-    async def test_enqueue_failed_ttl_backstop_keeps_pending_when_redis_down(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_enqueue_failed_ttl_backstop_keeps_pending_when_redis_down(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Redis down at the backstop check -> the run stays pending (no
         terminal-fail), deferred to a later tick."""
         _patch_env(monkeypatch)
-        session = _MockSession(
-            [_org_result([ORG]), _rows_result([self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)])]
-        )
+        session = _MockSession([_org_result([ORG]), _rows_result([self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)])])
         factory = MagicMock(return_value=session)
         redis_client = make_redis_client()
         redis_client.ping.side_effect = RuntimeError("redis down")
@@ -1958,9 +1881,7 @@ class TestAgedNodelessRouting:
         """A quiet tick collects nothing (and therefore bumps no counters)."""
         session = _MockSession([])
         summary = ch._dispatcher_summary()
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, ORG, max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, ORG, max_age_minutes=135, summary=summary, max_rows=None)
         assert routed == []
         assert summary["claimed_but_never_dispatched"] == 0
         stmt, params = session.executed[-1]
@@ -2100,9 +2021,7 @@ class TestReconcilePersistsSharedStats:
 
     @pytest.mark.asyncio
     async def test_reconcile_persists_stats_to_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, _reenqueue, _ingest, redis_client, _, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)]
-        )
+        summary, _reenqueue, _ingest, redis_client, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
         assert summary["repaired"] == 1
         stats_sets = [c for c in redis_client.set.await_args_list if c.args[0] == ch.DISPATCHER_RECONCILE_STATS_KEY]
         assert stats_sets, "dispatcher_reconcile must persist its outcome to the shared Redis stats key"
@@ -2225,9 +2144,7 @@ class TestTerminalizerSyntheticErrorDetail:
         # absent checkpoints) is split between the row-shape tests in
         # test_nodeless_dispatch_phase.py and the real-Postgres wedge in
         # test_org_sandbox_capacity.py.)
-        expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(
-            ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL
-        ).replace(ch._NODE_OUTPUT_PROGRESS_ABSENT_TOKEN, ch._NODE_OUTPUT_PROGRESS_ABSENT_SQL)
+        expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL).replace(ch._NODE_OUTPUT_PROGRESS_ABSENT_TOKEN, ch._NODE_OUTPUT_PROGRESS_ABSENT_SQL)
         assert sql == expect_wedge_sql
 
     @pytest.mark.asyncio
@@ -2281,9 +2198,7 @@ class TestAgeGateDerivedCostWiring:
     @pytest.mark.asyncio
     async def test_other_terminalizers_are_not_attributed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run_id = uuid.uuid4()
-        _summary, *_rest, session = await _run_reconcile(
-            monkeypatch, [], terminalizer_ids={"claim_cap_exhausted": [run_id]}
-        )
+        _summary, *_rest, session = await _run_reconcile(monkeypatch, [], terminalizer_ids={"claim_cap_exhausted": [run_id]})
         session.attribute_age_gate.assert_not_awaited()
 
 
@@ -2996,9 +2911,7 @@ class TestHitlReviewExpiryTerminalizerWiring:
     async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
         expired_run = uuid.uuid4()
         terminalizer = AsyncMock(return_value=[expired_run])
-        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
-            monkeypatch, [], terminalizer=terminalizer
-        )
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(monkeypatch, [], terminalizer=terminalizer)
 
         terminalizer.assert_awaited_once()
         assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
@@ -3043,9 +2956,7 @@ class TestHitlReviewExpiryTerminalizerWiring:
         assert session.review_expiry.await_args.args[1] == [(expired_run, ORG)]
 
     @pytest.mark.asyncio
-    async def test_expiry_recorder_failure_is_logged_and_does_not_fail_the_tick(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_expiry_recorder_failure_is_logged_and_does_not_fail_the_tick(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """The cancellations have committed: a recorder error must not undo them."""
         expired_run = uuid.uuid4()
         terminalizer = AsyncMock(return_value=[expired_run])
@@ -3175,9 +3086,7 @@ class TestHitlReviewMissingTerminalizerWiring:
     async def test_reconcile_invokes_terminalizer_with_settings_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
         orphaned_run = uuid.uuid4()
         terminalizer = AsyncMock(return_value=[orphaned_run])
-        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(
-            monkeypatch, [], terminalizer_missing=terminalizer
-        )
+        summary, _reenqueue, _ingest, _redis, _awaiting, session = await _run_reconcile(monkeypatch, [], terminalizer_missing=terminalizer)
 
         terminalizer.assert_awaited_once()
         assert terminalizer.await_args.kwargs["grace_seconds"] == 3600
@@ -3301,9 +3210,7 @@ class TestDispatcherReconcileInnerDeadline:
 
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
-            stack.enter_context(
-                patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0))
-            )
+            stack.enter_context(patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0)))
             stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
             stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
             stack.enter_context(patch.object(ch, "_dispatcher_reconcile_body", _slow_body))
@@ -3336,9 +3243,7 @@ class TestDispatcherReconcileInnerDeadline:
 
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(ch, "_open_system_factory", return_value=factory))
-            stack.enter_context(
-                patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0))
-            )
+            stack.enter_context(patch.object(ch, "get_settings", return_value=_settings(dispatcher_reconcile_budget_seconds=0)))
             stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
             stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
             stack.enter_context(patch.object(ch, "_dispatcher_reconcile_body", _slow_body))
@@ -3424,9 +3329,7 @@ class TestDispatcherReconcileFactsBatchCap:
             stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_five_terminalized))
             stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
             stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
-            record_facts = stack.enter_context(
-                patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
-            )
+            record_facts = stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
             summary = await ch.dispatcher_reconcile()
 
         # Only 2 facts were written (the cap); 3 were deferred.
@@ -3468,9 +3371,7 @@ class TestDispatcherReconcileFactsBatchCap:
             stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=_two_terminalized))
             stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
             stack.enter_context(patch.object(ch, "_update_reconcile_telemetry", new_callable=AsyncMock))
-            record_facts = stack.enter_context(
-                patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock)
-            )
+            record_facts = stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
             summary = await ch.dispatcher_reconcile()
 
         assert record_facts.await_count == 2
@@ -3722,9 +3623,7 @@ class TestNodelessEarlyDetect:
         assert summary["nodeless_redispatched"] == 1
 
     @pytest.mark.asyncio
-    async def test_early_detect_logs_gap(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_early_detect_logs_gap(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """The early-detect re-dispatch log includes the started_at gap for
         diagnosis."""
         run_id = uuid.uuid4()
@@ -3756,9 +3655,7 @@ class TestNodelessEarlyDetect:
         assert "early-detect at 15 min" in gap_records[0].message
 
     @pytest.mark.asyncio
-    async def test_early_detect_window_only_matches_early_branch(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_early_detect_window_only_matches_early_branch(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A run started 20 min ago is inside the early-detect window (15 min)
         but OUTSIDE the full nodeless window (35 min), so ONLY the early-detect
         predicate matches.  This proves the early-detect branch — not the full
@@ -3791,9 +3688,7 @@ class TestNodelessEarlyDetect:
         assert any("nodeless_early_detect_redispatched" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_early_detect_obeys_per_tick_fleet_cap(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_early_detect_obeys_per_tick_fleet_cap(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """The early-detect branch obeys NODELESS_REDISPATCH_MAX_PER_TICK — a
         mass worker wedge making many fresh-heartbeat zombies eligible in the
         SAME tick must not re-dispatch them unbounded. Rows started 20 min ago

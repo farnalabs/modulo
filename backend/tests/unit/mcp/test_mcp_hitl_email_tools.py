@@ -87,10 +87,7 @@ class TestCallerScopeGate:
             result = await get_hitl_email_alerts()
         assert result == {
             "error": "insufficient_scope",
-            "detail": (
-                "Tool 'get_hitl_email_alerts' is caller-scoped and requires a "
-                "user-scoped credential; this caller's key scope is 'org'"
-            ),
+            "detail": ("Tool 'get_hitl_email_alerts' is caller-scoped and requires a user-scoped credential; this caller's key scope is 'org'"),
         }
 
     @pytest.mark.asyncio
@@ -283,9 +280,7 @@ class TestSetHitlEmailAlerts:
         ):
             result = await set_hitl_email_alerts(enabled=True, pipeline_ids=[str(_OTHER_PIPELINE)])
         assert result == {"default": True, "pipeline_overrides": {str(_OTHER_PIPELINE): True}}
-        helper.assert_awaited_once_with(
-            session, _USER_ID, default=True, pipeline_overrides={str(_OTHER_PIPELINE): True}
-        )
+        helper.assert_awaited_once_with(session, _USER_ID, default=True, pipeline_overrides={str(_OTHER_PIPELINE): True})
 
     @pytest.mark.asyncio
     async def test_empty_pipeline_ids_clears_overrides_but_omitted_preserves(self) -> None:

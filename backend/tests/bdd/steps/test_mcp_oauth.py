@@ -233,11 +233,7 @@ def refresh_token_exists(rt: str, client_id: str, scopes: str, request):
     request.node._refresh_demoted = False
 
 
-@given(
-    parsers.parse(
-        'a refresh token "{rt}" for client "{client_id}" with scopes {scopes} issued to an account demoted to viewer'
-    )
-)
+@given(parsers.parse('a refresh token "{rt}" for client "{client_id}" with scopes {scopes} issued to an account demoted to viewer'))
 def refresh_token_demoted(rt: str, client_id: str, scopes: str, request):
     request.node._refresh_claims = OAuthAccessTokenClaims(
         client_id=client_id,
@@ -266,20 +262,7 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
     mock_raw_secret = "raw_secret_40_chars_long_here"
 
     is_viewer = getattr(request.node, "_viewer_auth", False)
-    if is_viewer:
-        auth_principal = AuthenticatedPrincipal(
-            username="viewer",
-            organisation_id=ORG_ID,
-            account_id=uuid.uuid4(),
-            org_role="viewer",
-        )
-    else:
-        auth_principal = AuthenticatedPrincipal(
-            username="admin",
-            organisation_id=ORG_ID,
-            account_id=USER_ID,
-            org_role="admin",
-        )
+    auth_principal = AuthenticatedPrincipal(username="viewer", organisation_id=ORG_ID, account_id=uuid.uuid4(), org_role="viewer") if is_viewer else AuthenticatedPrincipal(username="admin", organisation_id=ORG_ID, account_id=USER_ID, org_role="admin")
     from farna.api.main import app
     from farna.auth.jwt import TenantPrincipal
 
@@ -309,13 +292,7 @@ def register_oauth_client(name: str, uris: str, scopes: str, client, request):
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        "I GET /mcp/oauth/authorize with client_id "
-        '"{cid}" and redirect_uri "{ru}" and scope "{scope}" '
-        'and code_challenge "{cc}" and code_challenge_method "{ccm}" and state "{state}"'
-    )
-)
+@when(parsers.parse('I GET /mcp/oauth/authorize with client_id "{cid}" and redirect_uri "{ru}" and scope "{scope}" and code_challenge "{cc}" and code_challenge_method "{ccm}" and state "{state}"'))
 def authorize_get(cid: str, ru: str, scope: str, cc: str, ccm: str, state: str, client, request):
     client_mock = getattr(request.node, "_oauth_client", None) or _make_mock_client(client_id=cid, redirect_uris=ru)
     with (
@@ -375,14 +352,7 @@ def approve_consent(state: str, client, request):
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        "I POST /mcp/oauth/token with grant_type "
-        '"{gt}" and code "{code}" and client_id "{cid}" and '
-        'client_secret "{secret}" and redirect_uri "{ru}" and '
-        'code_verifier "{cv}"'
-    )
-)
+@when(parsers.parse('I POST /mcp/oauth/token with grant_type "{gt}" and code "{code}" and client_id "{cid}" and client_secret "{secret}" and redirect_uri "{ru}" and code_verifier "{cv}"'))
 def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, client, request):
     from farna.auth.oauth import InvalidClientError
 
@@ -427,13 +397,7 @@ def token_exchange(gt: str, code: str, cid: str, secret: str, ru: str, cv: str, 
     _store_resp(request, resp)
 
 
-@when(
-    parsers.parse(
-        "I POST /mcp/oauth/refresh with grant_type "
-        '"{gt}" and refresh_token "{rt}" and '
-        'client_id "{cid}" and client_secret "{secret}"'
-    )
-)
+@when(parsers.parse('I POST /mcp/oauth/refresh with grant_type "{gt}" and refresh_token "{rt}" and client_id "{cid}" and client_secret "{secret}"'))
 def refresh_token_flow(gt: str, rt: str, cid: str, secret: str, client, request):
     claims = getattr(request.node, "_refresh_claims", None)
     demoted = getattr(request.node, "_refresh_demoted", False)

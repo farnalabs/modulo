@@ -176,9 +176,7 @@ def _attempt_create_org_duplicate(slug: str, request, client):
     _set_auth_override(True)
 
     existing_org = _make_mock_org(slug=slug)
-    with patch(
-        "farna.api.routes.admin_orgs.get_organisation_by_slug", new_callable=AsyncMock, return_value=existing_org
-    ):
+    with patch("farna.api.routes.admin_orgs.get_organisation_by_slug", new_callable=AsyncMock, return_value=existing_org):
         resp = client.post("/api/v1/admin/orgs", json={"name": "Temp Org", "slug": slug})
     request.node._resp = resp
 
@@ -247,9 +245,7 @@ def _view_org_license(request, client):
         validation = LicenseValidation(
             valid=True,
             error=None,
-            license_data=SimpleNamespace(
-                tier="enterprise", features=["sso", "audit"], expires_at=None, org_id=str(org_id)
-            ),
+            license_data=SimpleNamespace(tier="enterprise", features=["sso", "audit"], expires_at=None, org_id=str(org_id)),
         )
         with (
             patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
@@ -292,9 +288,7 @@ def _set_valid_org_license(key: str, request, client):
     )
     with (
         patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
-        patch(
-            "farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
-        ) as mock_update,
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org) as mock_update,
         patch("farna.core.license.parse_and_verify", return_value=validation),
     ):
         resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
@@ -311,9 +305,7 @@ def _set_invalid_org_license(key: str, request, client):
     validation = LicenseValidation(valid=False, error="Invalid license key", license_data=None)
     with (
         patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
-        patch(
-            "farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
-        ) as mock_update,
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org) as mock_update,
         patch("farna.core.license.parse_and_verify", return_value=validation),
     ):
         resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
@@ -327,9 +319,7 @@ def _set_license_missing_org(key: str, request, client):
     org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
     with (
         patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
-        patch(
-            "farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None
-        ) as mock_update,
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None) as mock_update,
         patch("farna.core.license.parse_and_verify"),
     ):
         resp = client.put(f"/api/v1/admin/orgs/{org_id}/license", json={"license_key": key})
@@ -345,9 +335,7 @@ def _remove_org_license(request, client):
     org.settings_json = {"license_key": "old.key"} if getattr(request.node, "_org_has_key", False) else {"other": 1}
     with (
         patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
-        patch(
-            "farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org
-        ) as mock_update,
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=org) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
     request.node._resp = resp
@@ -360,9 +348,7 @@ def _remove_license_missing_org(request, client):
     org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
     with (
         patch("farna.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=None),
-        patch(
-            "farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None
-        ) as mock_update,
+        patch("farna.api.routes._org_settings.update_org_settings_patch", new_callable=AsyncMock, return_value=None) as mock_update,
     ):
         resp = client.delete(f"/api/v1/admin/orgs/{org_id}/license")
     request.node._resp = resp
@@ -714,9 +700,7 @@ def _license_removed(request):
     # exactly one top-level key removed, and no whole-column blob is passed.
     # QA F12: the route helper always passes ``patch`` positionally now (None
     # on this path), so the positional args are (session, org_id, None).
-    assert update_mock.call_args.kwargs.get("delete_keys") == ["license_key"], (
-        f"expected a delete_keys clear of license_key, got {update_mock.call_args}"
-    )
+    assert update_mock.call_args.kwargs.get("delete_keys") == ["license_key"], f"expected a delete_keys clear of license_key, got {update_mock.call_args}"
     assert len(update_mock.call_args.args) == 3, f"expected no whole-column blob, got {update_mock.call_args.args}"
     assert update_mock.call_args.args[2] is None
 

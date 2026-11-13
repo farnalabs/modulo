@@ -8,7 +8,7 @@ transaction the STRICT-RLS ``audit_events`` INSERT is rejected by the WITH
 CHECK policy and the event is silently dropped (the route swallows the error).
 
 These tests drive the real endpoint functions against a NOBYPASSRLS role — the
-production ``modulo_app`` scenario — and assert the rows actually land in
+production ``farna_control_app`` scenario — and assert the rows actually land in
 ``audit_events``. The unit tests mock ``append_audit_event`` / ``set_rls_org``
 so they cannot catch this rejection; only a real Postgres path can.
 """
@@ -55,7 +55,7 @@ def _make_principal(org_id: uuid.UUID, account_id: uuid.UUID) -> TenantPrincipal
 async def rls_session(app_engine: AsyncEngine) -> AsyncSession:
     """Session whose connections run as a NOBYPASSRLS role, so RLS applies.
 
-    Mirrors production where the app connects as ``modulo_app`` (NOBYPASSRLS).
+    Mirrors production where the app connects as ``farna_control_app`` (NOBYPASSRLS).
     """
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     session = factory()
@@ -79,10 +79,7 @@ async def _fetch_audit_event(
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT id::text, organisation_id::text, event_type, "
-                "account_id::text, resource_id::text, payload_json "
-                "FROM audit_events WHERE organisation_id = :oid AND event_type = :et "
-                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                "SELECT id::text, organisation_id::text, event_type, account_id::text, resource_id::text, payload_json FROM audit_events WHERE organisation_id = :oid AND event_type = :et ORDER BY created_at DESC, id DESC LIMIT 1",
             ),
             {"oid": str(org_id), "et": event_type},
         )

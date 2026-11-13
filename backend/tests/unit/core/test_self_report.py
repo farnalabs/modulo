@@ -97,9 +97,7 @@ def test_parse_nested_node_output_extraction() -> None:
 
 
 def test_parse_single_dict_value_counts_as_one_entry() -> None:
-    assert parse_self_report_refs({"work_item_refs": {"kind": "linear", "ref": "FAR-1"}}) == [
-        {"kind": "linear", "ref": "FAR-1"}
-    ]
+    assert parse_self_report_refs({"work_item_refs": {"kind": "linear", "ref": "FAR-1"}}) == [{"kind": "linear", "ref": "FAR-1"}]
 
 
 def test_parse_scalar_value_surfaces_as_malformed_entry() -> None:

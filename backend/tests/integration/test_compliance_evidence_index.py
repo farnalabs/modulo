@@ -93,9 +93,7 @@ async def _seed_org(session: AsyncSession, slug: str) -> dict[str, uuid.UUID]:
     )
     await session.flush()
 
-    for index, (decision, human_only) in enumerate(
-        (("approved", True), ("approved", True), ("rejected", True), ("approved", False))
-    ):
+    for index, (decision, human_only) in enumerate((("approved", True), ("approved", True), ("rejected", True), ("approved", False))):
         session.add(
             HitlClaim(
                 id=uuid.uuid4(),

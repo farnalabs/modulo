@@ -49,15 +49,11 @@ class TestEvaluateRunSpendCeiling:
         assert not d.reason
 
     def test_within_ceiling_allowed(self) -> None:
-        d = evaluate_run_spend_ceiling(
-            run_cost_so_far_cents=500, estimated_next_step_cents=100, max_run_cost_cents=1000
-        )
+        d = evaluate_run_spend_ceiling(run_cost_so_far_cents=500, estimated_next_step_cents=100, max_run_cost_cents=1000)
         assert d.allowed is True
 
     def test_next_step_pushes_over_ceiling_refused(self) -> None:
-        d = evaluate_run_spend_ceiling(
-            run_cost_so_far_cents=900, estimated_next_step_cents=200, max_run_cost_cents=1000
-        )
+        d = evaluate_run_spend_ceiling(run_cost_so_far_cents=900, estimated_next_step_cents=200, max_run_cost_cents=1000)
         assert d.allowed is False
         assert d.reason == RUN_CEILING_EXCEEDED
 
@@ -91,24 +87,18 @@ class TestEvaluateOrgSpendCeiling:
         assert d.allowed is True
 
     def test_within_ceiling_allowed(self) -> None:
-        d = evaluate_org_spend_ceiling(
-            org_cumulative_spend_cents=4000, additional_cents=5000, spend_ceiling_cents=10_000
-        )
+        d = evaluate_org_spend_ceiling(org_cumulative_spend_cents=4000, additional_cents=5000, spend_ceiling_cents=10_000)
         assert d.allowed is True
         assert d.projected_org_cumulative_cents == 9000
 
     def test_exceeds_ceiling_refused(self) -> None:
-        d = evaluate_org_spend_ceiling(
-            org_cumulative_spend_cents=9000, additional_cents=2000, spend_ceiling_cents=10_000
-        )
+        d = evaluate_org_spend_ceiling(org_cumulative_spend_cents=9000, additional_cents=2000, spend_ceiling_cents=10_000)
         assert d.allowed is False
         assert d.reason == ORG_CEILING_EXCEEDED
         assert d.projected_org_cumulative_cents == 11_000
 
     def test_exact_ceiling_allowed(self) -> None:
-        d = evaluate_org_spend_ceiling(
-            org_cumulative_spend_cents=8000, additional_cents=2000, spend_ceiling_cents=10_000
-        )
+        d = evaluate_org_spend_ceiling(org_cumulative_spend_cents=8000, additional_cents=2000, spend_ceiling_cents=10_000)
         assert d.allowed is True
 
     def test_zero_ceiling_kill_switch(self) -> None:
@@ -117,9 +107,7 @@ class TestEvaluateOrgSpendCeiling:
 
     def test_already_at_ceiling_blocks_new_spend(self) -> None:
         # At ceiling with a new (non-zero) run: projected exceeds the ceiling.
-        d = evaluate_org_spend_ceiling(
-            org_cumulative_spend_cents=10_000, additional_cents=1, spend_ceiling_cents=10_000
-        )
+        d = evaluate_org_spend_ceiling(org_cumulative_spend_cents=10_000, additional_cents=1, spend_ceiling_cents=10_000)
         assert d.allowed is False
 
 

@@ -74,9 +74,7 @@ class TestCorsLoggingMiddleware:
         assert resp.status_code == 200
         assert any("CORS preflight" in record.message for record in caplog.records)
 
-    async def test_preflight_denied_origin_rejected_and_warns(
-        self, app: FastAPI, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_preflight_denied_origin_rejected_and_warns(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger=_LOGGER):
             resp = await _options(
                 app,
@@ -88,9 +86,7 @@ class TestCorsLoggingMiddleware:
         assert any("CORS rejected" in record.message for record in caplog.records)
         assert any(_DENIED in record.message for record in caplog.records)
 
-    async def test_denied_origin_warning_includes_method_and_path(
-        self, app: FastAPI, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_denied_origin_warning_includes_method_and_path(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger=_LOGGER):
             await _options(
                 app,
@@ -107,9 +103,7 @@ class TestCorsLoggingMiddleware:
         assert resp.status_code == 200
         assert resp.headers["access-control-allow-origin"] == _ALLOWED
 
-    async def test_simple_request_denied_origin_warns_but_passes(
-        self, app: FastAPI, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_simple_request_denied_origin_warns_but_passes(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.WARNING, logger=_LOGGER):
             resp = await _get(app, "/hello", {"Origin": _DENIED})
         assert resp.status_code == 200
@@ -117,18 +111,14 @@ class TestCorsLoggingMiddleware:
         assert "access-control-allow-origin" not in resp.headers
         assert any("CORS rejected" in record.message for record in caplog.records)
 
-    async def test_request_without_origin_passes_through_without_logs(
-        self, app: FastAPI, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_request_without_origin_passes_through_without_logs(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.DEBUG, logger=_LOGGER):
             resp = await _get(app, "/hello", {})
         assert resp.status_code == 200
         assert "access-control-allow-origin" not in resp.headers
         assert not any(record.name == _LOGGER for record in caplog.records)
 
-    async def test_preflight_without_origin_is_not_logged_as_preflight(
-        self, app: FastAPI, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_preflight_without_origin_is_not_logged_as_preflight(self, app: FastAPI, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.DEBUG, logger=_LOGGER):
             resp = await _options(app, "/hello", {})
         assert resp.status_code == 405

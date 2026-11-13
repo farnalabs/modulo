@@ -92,8 +92,7 @@ async def _seed_env(db_engine: AsyncEngine) -> _Env:
         )
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": f"far1627-{account_id.hex[:8]}@test.local", "name": "FAR-1627 User"},
         )
@@ -183,11 +182,7 @@ async def _seed_node_evidence(
     """Seed one final per-node output row using the production flat split shape."""
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO run_node_outputs "
-                "(run_id, organisation_id, node_id, attempt_key, outputs_json, node_telemetry_json) "
-                "VALUES (:rid, :oid, 'n1', '__final__', CAST(:outputs AS jsonb), CAST(:telemetry AS jsonb))"
-            ),
+            text("INSERT INTO run_node_outputs (run_id, organisation_id, node_id, attempt_key, outputs_json, node_telemetry_json) VALUES (:rid, :oid, 'n1', '__final__', CAST(:outputs AS jsonb), CAST(:telemetry AS jsonb))"),
             {
                 "rid": str(run_id),
                 "oid": str(env.org_id),
@@ -200,11 +195,7 @@ async def _seed_node_evidence(
 async def _fetch_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, object]:
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT status, error_code, error_detail, dispatched_at, dispatcher, heartbeat_at, "
-                "claim_token, completed_at "
-                "FROM runs WHERE id = :id"
-            ),
+            text("SELECT status, error_code, error_detail, dispatched_at, dispatcher, heartbeat_at, claim_token, completed_at FROM runs WHERE id = :id"),
             {"id": str(run_id)},
         )
         row = result.one()
@@ -328,9 +319,7 @@ async def test_shutdown_releases_inflight_runs_promptly_with_truthful_code(
     immediately after stop() returns, that the rows are admitted by the real
     re-dispatch predicate, and that the claim path can re-claim them at once.
     """
-    zero_node = await _seed_running_run(
-        db_engine, far1627_env, run_number=1, claim_token="tok-zero-node", dispatch_phase="claimed"
-    )
+    zero_node = await _seed_running_run(db_engine, far1627_env, run_number=1, claim_token="tok-zero-node", dispatch_phase="claimed")
     node_started = await _seed_running_run(
         db_engine,
         far1627_env,
@@ -385,12 +374,8 @@ async def test_handoff_fences_rotated_claim_terminal_and_cancelled_runs(
     guards: a successor rotated the claim token, the run's fate already landed
     (complete), and a cancellation is in flight (cancel wins).
     """
-    rotated = await _seed_running_run(
-        db_engine, far1627_env, run_number=1, claim_token="tok-old", dispatch_phase="claimed"
-    )
-    completed = await _seed_running_run(
-        db_engine, far1627_env, run_number=2, claim_token="tok-complete", dispatch_phase="claimed"
-    )
+    rotated = await _seed_running_run(db_engine, far1627_env, run_number=1, claim_token="tok-old", dispatch_phase="claimed")
+    completed = await _seed_running_run(db_engine, far1627_env, run_number=2, claim_token="tok-complete", dispatch_phase="claimed")
     cancelling = await _seed_running_run(
         db_engine,
         far1627_env,
@@ -445,9 +430,7 @@ async def test_handoff_is_org_scoped(
     """
     org_b = await _seed_env(db_engine)
     try:
-        run_a = await _seed_running_run(
-            db_engine, far1627_env, run_number=1, claim_token="tok-a", dispatch_phase="claimed"
-        )
+        run_a = await _seed_running_run(db_engine, far1627_env, run_number=1, claim_token="tok-a", dispatch_phase="claimed")
         run_b = await _seed_running_run(db_engine, org_b, run_number=1, claim_token="tok-b", dispatch_phase="claimed")
 
         registry = clean_registry
@@ -473,12 +456,8 @@ async def test_self_reported_only_output_requeues_but_engine_evidence_terminalis
     clean_registry: InFlightRunRegistry,
 ) -> None:
     """The real SQL evidence gate ignores reported values but keeps engine facts."""
-    self_reported = await _seed_running_run(
-        db_engine, far1627_env, run_number=1, claim_token="tok-reported", dispatch_phase="first_node_dispatched"
-    )
-    observed = await _seed_running_run(
-        db_engine, far1627_env, run_number=2, claim_token="tok-observed", dispatch_phase="first_node_dispatched"
-    )
+    self_reported = await _seed_running_run(db_engine, far1627_env, run_number=1, claim_token="tok-reported", dispatch_phase="first_node_dispatched")
+    observed = await _seed_running_run(db_engine, far1627_env, run_number=2, claim_token="tok-observed", dispatch_phase="first_node_dispatched")
     await _seed_node_evidence(
         db_engine,
         far1627_env,

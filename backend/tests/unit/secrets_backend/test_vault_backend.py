@@ -158,26 +158,16 @@ class TestVaultSecretsBackend:
         [
             pytest.param("get_secret", "timeout", RuntimeError, "timeout reading secret", id="get-timeout"),
             pytest.param("get_secret", "network", RuntimeError, "unexpected error reading secret", id="get-network"),
-            pytest.param(
-                "get_secret", "vault-error", RuntimeError, "unexpected error reading secret", id="get-vault-error"
-            ),
-            pytest.param(
-                "get_secret", "rate-limited-429", RuntimeError, "rate-limited reading secret", id="get-rate-limited"
-            ),
+            pytest.param("get_secret", "vault-error", RuntimeError, "unexpected error reading secret", id="get-vault-error"),
+            pytest.param("get_secret", "rate-limited-429", RuntimeError, "rate-limited reading secret", id="get-rate-limited"),
             pytest.param("get_secret", "cancelled", asyncio.CancelledError, None, id="get-cancelled"),
             pytest.param("set_secret", "timeout", RuntimeError, "timeout writing secret", id="set-timeout"),
             pytest.param("set_secret", "network", RuntimeError, "unexpected error writing secret", id="set-network"),
-            pytest.param(
-                "set_secret", "vault-error", RuntimeError, "unexpected error writing secret", id="set-vault-error"
-            ),
-            pytest.param(
-                "set_secret", "rate-limited-503", RuntimeError, "rate-limited writing secret", id="set-rate-limited"
-            ),
+            pytest.param("set_secret", "vault-error", RuntimeError, "unexpected error writing secret", id="set-vault-error"),
+            pytest.param("set_secret", "rate-limited-503", RuntimeError, "rate-limited writing secret", id="set-rate-limited"),
             pytest.param("set_secret", "cancelled", asyncio.CancelledError, None, id="set-cancelled"),
             pytest.param("delete_secret", "timeout", RuntimeError, "timeout deleting secret", id="delete-timeout"),
-            pytest.param(
-                "delete_secret", "network", RuntimeError, "unexpected error deleting secret", id="delete-network"
-            ),
+            pytest.param("delete_secret", "network", RuntimeError, "unexpected error deleting secret", id="delete-network"),
             pytest.param(
                 "delete_secret",
                 "vault-error",

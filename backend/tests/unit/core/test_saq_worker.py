@@ -1,10 +1,10 @@
-"""Unit tests for the modulo_system engine selection and worker-sizing math
+"""Unit tests for the farna_control_system engine selection and worker-sizing math
 in farna.core.saq_worker.
 
 Proves that _get_system_async_engine creates an engine from
 MODULO_SYSTEM_DATABASE_URL when set, and FAILS CLOSED (raises RuntimeError +
 logs an error) when it is not set — refusing to fall back to the app engine
-(modulo_app, NOBYPASSRLS) that would silently return zero RLS-scoped rows. Also
+(farna_control_app, NOBYPASSRLS) that would silently return zero RLS-scoped rows. Also
 locks the pool-sizing helpers (_max_concurrent_ops, _effective_redis_pool_size,
 _effective_db_pool_size), the cron-interval mapping, queue-name derivation,
 fail-closed web auth, and the fail-open startup cron reconciliation — the
@@ -69,7 +69,7 @@ async def test_demo_daily_refresh_runs_seed_when_enabled(monkeypatch: pytest.Mon
 
 
 def test_creates_engine_with_system_url_when_configured(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    system_url = "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo"
+    system_url = "postgresql+asyncpg://farna_control_system:s3cret@db.internal:5432/farna_control"
     monkeypatch.setattr(sw, "get_settings", lambda: _settings(system_url))
     create_engine = MagicMock(return_value=MagicMock())
     monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", create_engine)
@@ -86,7 +86,7 @@ def test_system_engine_pool_recycle_from_settings_below_the_proxy_window(reset_s
     Settings.db_pool_recycle_seconds (default 1500 s), strictly below the
     Fly HAProxy 30-minute session window (1800 s) — never unbounded, never
     the old 3600 s pattern."""
-    system_url = "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo"
+    system_url = "postgresql+asyncpg://farna_control_system:s3cret@db.internal:5432/farna_control"
     monkeypatch.setattr(sw, "get_settings", lambda: _settings(system_url))
     create_engine = MagicMock(return_value=MagicMock())
     monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", create_engine)
@@ -104,7 +104,7 @@ def test_fails_closed_when_unset(reset_system_engine, monkeypatch: pytest.Monkey
     errors: list[tuple[object, object]] = []
     monkeypatch.setattr(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra)))
 
-    with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"):
+    with pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"):
         sw._get_system_async_engine()
 
     assert len(errors) == 1

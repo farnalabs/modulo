@@ -101,9 +101,7 @@ async def test_circuit_state_exposes_observability(connector, fast_clock):
 @respx.mock
 async def test_circuit_recovers_after_cooldown_probe_success(connector, fast_clock):
     """A successful half-open probe closes the circuit."""
-    route = respx.get("https://api.github.com/user/repos").mock(
-        side_effect=lambda *_: httpx.Response(500, text="Server Error")
-    )
+    route = respx.get("https://api.github.com/user/repos").mock(side_effect=lambda *_: httpx.Response(500, text="Server Error"))
     for _ in range(connector._circuit_failure_threshold):
         with pytest.raises(GitHubAPIError):
             await connector.query(ConnectorQuery(resource="repos"))
@@ -227,9 +225,7 @@ async def test_client_errors_do_not_trip_circuit(connector, fast_clock):
 @respx.mock
 async def test_success_resets_consecutive_failures(connector, fast_clock):
     """One service failure then a success resets the failure counter."""
-    respx.get("https://api.github.com/user/repos").mock(
-        side_effect=[httpx.Response(500, text="Server Error"), httpx.Response(200, json=[{"id": 1}])]
-    )
+    respx.get("https://api.github.com/user/repos").mock(side_effect=[httpx.Response(500, text="Server Error"), httpx.Response(200, json=[{"id": 1}])])
     with pytest.raises(GitHubAPIError, match="500"):
         await connector.query(ConnectorQuery(resource="repos"))
     assert connector.circuit_state()["consecutive_failures"] == 1
@@ -260,9 +256,7 @@ async def test_health_check_bypasses_circuit_and_closes_it(connector, fast_clock
             await connector.query(ConnectorQuery(resource="repos"))
     assert connector.circuit_state()["open"] is True
 
-    respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org"})
-    )
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org"}))
     result = await connector.health_check()
     assert result.ok is True
     assert connector.circuit_state()["open"] is False

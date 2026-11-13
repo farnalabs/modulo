@@ -54,15 +54,13 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -117,13 +115,7 @@ async def _insert_running_run(
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
     await db_session.execute(
-        text(
-            "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-            "status, input_hash, langgraph_thread_id, run_number, started_at, created_at, "
-            "claim_token) "
-            "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :hash, :thread, :run_number, "
-            ":started, :created, :tok)"
-        ),
+        text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number, started_at, created_at, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', 'running', :hash, :thread, :run_number, :started, :created, :tok)"),
         {
             "id": str(run_id),
             "oid": str(org_id),
@@ -320,7 +312,5 @@ class TestAfterProcessTaskFailureFacts:
         await saq_hooks.after_process({"job": _failed_job(run_id, org, "tok-abc", "boom")})  # must not raise
 
         async with db_session.begin():
-            status = (
-                await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})
-            ).scalar_one()
+            status = (await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})).scalar_one()
         assert status == "failed", "the run must still be marked failed despite the facts failure"

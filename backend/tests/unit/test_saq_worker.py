@@ -2396,7 +2396,7 @@ class TestMakeSystemSessionFactory:
 
 class TestGetSystemAsyncEngine:
     def test_creates_engine_from_system_url(self) -> None:
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2486,7 +2486,7 @@ class TestGetSystemAsyncEngine:
     def test_non_postgres_url_gets_no_ssl_kwargs(self) -> None:
         """The ssl/statement_cache_size connect args are asyncpg-only: a
         non-Postgres system URL must not receive them (FAR-1441)."""
-        mock_settings = _settings(modulo_system_database_url="mysql+aiomysql://sys:pass@db:3306/modulo")
+        mock_settings = _settings(modulo_system_database_url="mysql+aiopostgresql://user:pass@host:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (
@@ -2509,7 +2509,7 @@ class TestGetSystemAsyncEngine:
             with (
                 patch.object(sw, "get_settings", return_value=mock_settings),
                 patch.object(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra))),
-                pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
+                pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
             ):
                 sw._get_system_async_engine()
 
@@ -2524,7 +2524,7 @@ class TestGetSystemAsyncEngine:
 
     def test_caches_engine_singleton(self) -> None:
         system_engine = MagicMock()
-        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/farna_control")
         sw._SYSTEM_ASYNC_ENGINE = None  # reset singleton
         try:
             with (

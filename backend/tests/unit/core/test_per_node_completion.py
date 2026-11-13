@@ -77,9 +77,7 @@ async def _insert_output(
 
 
 @pytest.mark.asyncio
-async def test_completion_probe_reads_current_attempt(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_completion_probe_reads_current_attempt(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="claim-a")
 
@@ -174,9 +172,7 @@ async def test_node_deadline_hook_skips_completion_record_without_database_conte
 
 
 @pytest.mark.asyncio
-async def test_completion_writer_persists_timestamp(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_completion_writer_persists_timestamp(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=False, claim_token="claim-a")
 
@@ -209,13 +205,9 @@ async def test_all_node_families_use_same_completion_writer(
 @pytest.mark.asyncio
 async def test_completion_reader_requires_completed_at(sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(
-        sqlite_sessionmaker, run_id=run_id, node_id="unfinished", completed=False, claim_token="claim-a"
-    )
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="unfinished", completed=False, claim_token="claim-a")
     async with sqlite_sessionmaker() as session, session.begin():
-        assert not await has_completed_nodes_in_attempt(
-            session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a"
-        )
+        assert not await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a")
 
 
 @pytest.mark.asyncio
@@ -225,9 +217,7 @@ async def test_completion_reader_rejects_prior_attempt_completion(
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="old-claim")
     async with sqlite_sessionmaker() as session, session.begin():
-        assert not await has_completed_nodes_in_attempt(
-            session, run_id=run_id, organisation_id=_ORG, claim_token="new-claim"
-        )
+        assert not await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG, claim_token="new-claim")
 
 
 @pytest.mark.asyncio
@@ -235,13 +225,9 @@ async def test_completion_reader_accepts_current_attempt_completion(
     sqlite_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(
-        sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="current-claim"
-    )
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="current-claim")
     async with sqlite_sessionmaker() as session, session.begin():
-        assert await has_completed_nodes_in_attempt(
-            session, run_id=run_id, organisation_id=_ORG, claim_token="current-claim"
-        )
+        assert await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG, claim_token="current-claim")
 
 
 @pytest.mark.asyncio
@@ -259,15 +245,11 @@ async def test_completion_reader_ignores_sentinel_rows(sqlite_sessionmaker: asyn
             )
         )
     async with sqlite_sessionmaker() as session, session.begin():
-        assert not await has_completed_nodes_in_attempt(
-            session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a"
-        )
+        assert not await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a")
 
 
 @pytest.mark.asyncio
-async def test_deadline_gate_terminal_fails_without_completion(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_deadline_gate_terminal_fails_without_completion(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
@@ -307,9 +289,7 @@ async def test_deadline_gate_terminal_fails_without_completion(
 
 
 @pytest.mark.asyncio
-async def test_deadline_gate_fences_successor_reclamation_before_triage_and_cost(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_deadline_gate_fences_successor_reclamation_before_triage_and_cost(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
@@ -360,17 +340,13 @@ async def test_deadline_gate_fences_successor_reclamation_before_triage_and_cost
 
 
 @pytest.mark.asyncio
-async def test_deadline_gate_skips_triage_and_cost_when_terminal_write_is_rejected(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_deadline_gate_skips_triage_and_cost_when_terminal_write_is_rejected(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
-            ) as fail,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False) as fail,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
             patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
@@ -394,17 +370,13 @@ async def test_deadline_gate_skips_triage_and_cost_when_terminal_write_is_reject
             await exec_task
 
 
-async def test_deadline_gate_allows_retry_after_completion(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_deadline_gate_allows_retry_after_completion(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
-            ) as retry,
+            patch("farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True) as retry,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
@@ -455,9 +427,7 @@ async def test_has_completed_nodes_in_attempt_with_none_claim_token(
 
 
 @pytest.mark.asyncio
-async def test_write_node_completion_creates_new_row(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_write_node_completion_creates_new_row(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _write_node_completion creates a new row when none exists."""
     run_id = uuid.uuid4()
     await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "new-node", "claim-a")
@@ -494,9 +464,7 @@ async def test_write_node_completion_swallows_exception(
 
 
 @pytest.mark.asyncio
-async def test_wire_node_deadline_hooks_with_claim_token(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_wire_node_deadline_hooks_with_claim_token(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _wire_node_deadline_hooks writes completion record when claim_token provided."""
     run_id = uuid.uuid4()
     executor = SimpleNamespace()
@@ -532,9 +500,7 @@ async def test_wire_node_deadline_hooks_with_claim_token(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_no_completions_branch(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_no_completions_branch(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node no-completions branch (lines 2498-2540)."""
     run_id = uuid.uuid4()
     # Insert a row WITHOUT completed_at (simulating no completions in this attempt)
@@ -576,9 +542,7 @@ async def test_fail_overdue_node_no_completions_branch(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_early_return_when_run_done(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_early_return_when_run_done(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node early return when run_done_event.is_set()."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -608,9 +572,7 @@ async def test_fail_overdue_node_early_return_when_run_done(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_early_return_when_exec_task_done(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_early_return_when_exec_task_done(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node early return when exec_task.done()."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -640,9 +602,7 @@ async def test_fail_overdue_node_early_return_when_exec_task_done(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_with_stall_requested(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_with_stall_requested(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node stall_requested branch (lines 2458-2465)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -653,9 +613,7 @@ async def test_fail_overdue_node_with_stall_requested(
             patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
             patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock),
-            patch(
-                "farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock
-            ) as firing,
+            patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock) as firing,
         ):
             await _fail_overdue_node(
                 sqlite_engine,
@@ -677,9 +635,7 @@ async def test_fail_overdue_node_with_stall_requested(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_with_completion_probe_callback(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_with_completion_probe_callback(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node with completion_probe callback (line 2472)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -692,9 +648,7 @@ async def test_fail_overdue_node_with_completion_probe_callback(
     try:
         with (
             patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch(
-                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
-            ) as retry,
+            patch("farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True) as retry,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
@@ -719,9 +673,7 @@ async def test_fail_overdue_node_with_completion_probe_callback(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_non_async_engine_branch(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_non_async_engine_branch(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node non-AsyncEngine branch (line 2478)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -730,9 +682,7 @@ async def test_fail_overdue_node_non_async_engine_branch(
     try:
         with (
             patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch(
-                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
-            ) as retry,
+            patch("farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True) as retry,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
@@ -757,9 +707,7 @@ async def test_fail_overdue_node_non_async_engine_branch(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_completion_probe_exception(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_completion_probe_exception(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node completion probe exception handling (lines 2481-2496)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
@@ -798,18 +746,14 @@ async def test_fail_overdue_node_completion_probe_exception(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_terminal_written_false_branch(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_terminal_written_false_branch(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node when terminal_written is False (lines 2526-2540)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
-            ) as fail,
+            patch("farna.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False) as fail,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
             patch("farna.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
@@ -834,9 +778,7 @@ async def test_fail_overdue_node_terminal_written_false_branch(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_retry_branch(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_retry_branch(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node retry branch (lines 2561-2567, 2585-2613)."""
     run_id = uuid.uuid4()
     # Insert a COMPLETED node to trigger the retry path
@@ -844,9 +786,7 @@ async def test_fail_overdue_node_retry_branch(
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=None
-            ) as retry,
+            patch("farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=None) as retry,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
@@ -871,18 +811,14 @@ async def test_fail_overdue_node_retry_branch(
 
 
 @pytest.mark.asyncio
-async def test_fail_overdue_node_retry_true_branch(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+async def test_fail_overdue_node_retry_true_branch(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _fail_overdue_node retry=True branch (lines 2568-2575)."""
     run_id = uuid.uuid4()
     await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
-            patch(
-                "farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True
-            ) as retry,
+            patch("farna.core.pipeline_execution._maybe_watchdog_retry", new_callable=AsyncMock, return_value=True) as retry,
             patch("farna.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
             patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
@@ -906,9 +842,7 @@ async def test_fail_overdue_node_retry_true_branch(
             await exec_task
 
 
-def test_wire_node_deadline_hooks_on_node_started(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
+def test_wire_node_deadline_hooks_on_node_started(sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     """Test _wire_node_deadline_hooks _on_node_started (lines 3170-3172)."""
     executor = SimpleNamespace()
     deadlines: dict[str, tuple[float, int]] = {}

@@ -4,7 +4,7 @@ Two isolated "machines" (two temp launcher data dirs, no real CI jobs —
 the simulation lives entirely in this test file):
 
 * machine A boots, seeds, and backs up into an archive (the REAL
-  ``modulo backup`` snapshot semantics: the state.json ride-along emits a
+  ``farna-control backup`` snapshot semantics: the state.json ride-along emits a
   state_mac fingerprint and ``--include-secrets`` adds secrets.json + the
   conf profile; a fabricated ``database.sql`` stands in for pg_dump).
 * machine B (a fresh runner) restores from the archive into a fresh data
@@ -72,7 +72,7 @@ def _enter_restore_patches(stack: contextlib.ExitStack, fernet_key: str) -> None
             "farna.cli.backup.get_settings",
             **{
                 "return_value.fernet_key": fernet_key,
-                "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/modulo",
+                "return_value.database_url": "postgresql+asyncpg://modulo:pw@127.0.0.1:5432/farna_control",
             },
         ),
         lambda: patch("farna.cli.backup._db_has_modulo_tables", return_value=False),

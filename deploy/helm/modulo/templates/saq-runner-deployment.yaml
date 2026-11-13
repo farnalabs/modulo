@@ -56,11 +56,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "farna-control.fullname" . }}-secrets
                   key: DATABASE_URL
-            - name: MODULO_SYSTEM_DATABASE_URL
+            - name: FARNA_CONTROL_SYSTEM_DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "farna-control.fullname" . }}-secrets
-                  key: MODULO_SYSTEM_DATABASE_URL
+                  key: FARNA_CONTROL_SYSTEM_DATABASE_URL
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
@@ -77,7 +77,7 @@ spec:
                   name: {{ include "farna-control.fullname" . }}-secrets
                   key: FERNET_KEY
             {{- range $key, $value := .Values.saqRunner.env }}
-            {{- if and (ne $key "DATABASE_URL") (ne $key "MODULO_SYSTEM_DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") (ne $key "SAQ_AUTH_USERNAME") (ne $key "SAQ_AUTH_PASSWORD") }}
+            {{- if and (ne $key "DATABASE_URL") (ne $key "FARNA_CONTROL_SYSTEM_DATABASE_URL") (ne $key "REDIS_URL") (ne $key "SECRET_KEY") (ne $key "FERNET_KEY") (ne $key "SAQ_AUTH_USERNAME") (ne $key "SAQ_AUTH_PASSWORD") }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}

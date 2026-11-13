@@ -62,9 +62,7 @@ def _section_lines(source: str, section: str) -> list[str]:
 
 def _section_entries(source: str, section: str) -> list[str]:
     """The non-blank, non-comment entries of one ``[Section]``."""
-    return [
-        line.strip() for line in _section_lines(source, section) if line.strip() and not line.strip().startswith(";")
-    ]
+    return [line.strip() for line in _section_lines(source, section) if line.strip() and not line.strip().startswith(";")]
 
 
 def _setup_values(source: str, key: str) -> list[str]:

@@ -180,11 +180,7 @@ def get_permission_tag(route) -> dict | None:
     if not tags:
         return None
     primary = next(
-        (
-            t
-            for t in tags
-            if t["permission_kind"] in ("tenant", "tenant_or_api_key", "scoped_hybrid", "system", "system_or_org")
-        ),
+        (t for t in tags if t["permission_kind"] in ("tenant", "tenant_or_api_key", "scoped_hybrid", "system", "system_or_org")),
         tags[0],
     )
     return {**primary, "tags": tags}

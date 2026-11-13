@@ -546,9 +546,9 @@ class TestSystemSessionFactory:
     ``_build_payload`` reads TEAM-SCOPED tables (pipelines, model_backends,
     connector_instances, environment_profiles, library_primitives) across all
     consenting orgs with no ``set_rls_org`` context. Those reads only return
-    every org's rows because the system factory connects as the ``modulo_system``
+    every org's rows because the system factory connects as the ``farna_control_system``
     role (LOGIN, BYPASSRLS) — the strict ``rls_org_isolation`` policy is bypassed.
-    Swapping to ``_make_session_factory`` (``modulo_app``, NOBYPASSRLS) would
+    Swapping to ``_make_session_factory`` (``farna_control_app``, NOBYPASSRLS) would
     silently filter those reads to the empty ``app.organisation_id`` and return
     ZERO rows. These tests pin the system factory so a future swap is caught.
     """

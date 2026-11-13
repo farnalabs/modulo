@@ -232,9 +232,7 @@ class TestIoRoundTrip:
             "summary": "Skipped: missing input fields",
         }
 
-    def test_seeded_secret_in_agent_stdout_never_reaches_outputs_surface(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_seeded_secret_in_agent_stdout_never_reaches_outputs_surface(self, client: TestClient, mock_session: AsyncMock) -> None:
         secret = "sk-seeded-ultra-secret-42"
         run = _make_run(
             input_payload={"prompt": "Hello"},
@@ -289,9 +287,7 @@ class TestIoLogTotals:
         assert resp.status_code == 200
         return resp.json()
 
-    def test_total_length_equals_true_length_when_inline_truncated(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_total_length_equals_true_length_when_inline_truncated(self, client: TestClient, mock_session: AsyncMock) -> None:
         """Sandbox node: inline agent_stdout is capped but stdout_length is the real count."""
         full_stdout = "x" * 213_324  # true full length
         capped_stdout = "x" * 20_000  # what was actually stored inline
@@ -416,9 +412,7 @@ class TestIoLogTotals:
         # stdout_length = 200_000 is the true pre-truncation count.
         assert body["stdout_total_length"] == 200_000
 
-    def test_total_length_ignores_null_telemetry_inline_values(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_total_length_ignores_null_telemetry_inline_values(self, client: TestClient, mock_session: AsyncMock) -> None:
         """A null inline telemetry value contributes 0, not ``len("None")``."""
         run = _make_run(
             outputs_json={"node1": {"result": "ok"}},
@@ -437,9 +431,7 @@ class TestIoLogTotals:
         assert body["stdout_total_length"] == 0
         assert body["stderr_total_length"] == 0
 
-    def test_total_length_does_not_interpret_legacy_inline_outputs(
-        self, client: TestClient, mock_session: AsyncMock
-    ) -> None:
+    def test_total_length_does_not_interpret_legacy_inline_outputs(self, client: TestClient, mock_session: AsyncMock) -> None:
         """Inline log fields on the outputs surface are ignored, not counted.
 
         Only the telemetry surface carries log content after the split, so a

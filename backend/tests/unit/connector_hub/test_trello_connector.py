@@ -339,9 +339,7 @@ async def test_health_check_transport_error_raises_request_error(connector):
 async def test_health_check_error_detail_redacts_credentials(connector):
     """FAR-507: the non-200 ``health_check`` path scrubs credentials out of the
     upstream error body (this path IS redaction-covered)."""
-    respx.get(f"{_BASE}/members/me").mock(
-        return_value=httpx.Response(401, text=f"unauthorized key={API_KEY} token={TOKEN}")
-    )
+    respx.get(f"{_BASE}/members/me").mock(return_value=httpx.Response(401, text=f"unauthorized key={API_KEY} token={TOKEN}"))
     result = await connector.health_check()
     assert result.ok is False
     assert API_KEY not in result.detail

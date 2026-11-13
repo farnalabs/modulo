@@ -192,23 +192,17 @@ def _org_requests_get(client, alt_org_client, org: str, path: str, ctx: dict[str
 
 @then("the response status is 200")
 def _response_status_200(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 200, (
-        f"Expected 200, got {ctx['response'].status_code}: {ctx['response'].text}"
-    )
+    assert ctx["response"].status_code == 200, f"Expected 200, got {ctx['response'].status_code}: {ctx['response'].text}"
 
 
 @then("the response status is 201")
 def _response_status_201(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 201, (
-        f"Expected 201, got {ctx['response'].status_code}: {ctx['response'].text}"
-    )
+    assert ctx["response"].status_code == 201, f"Expected 201, got {ctx['response'].status_code}: {ctx['response'].text}"
 
 
 @then("the response status is 404")
 def _response_status_404(ctx: dict[str, Any]) -> None:
-    assert ctx["response"].status_code == 404, (
-        f"Expected 404, got {ctx['response'].status_code}: {ctx['response'].text}"
-    )
+    assert ctx["response"].status_code == 404, f"Expected 404, got {ctx['response'].status_code}: {ctx['response'].text}"
 
 
 @then(parsers.parse('the response body has key "{key}" with an array'))
@@ -240,10 +234,7 @@ def _each_entry_matches_search(ctx: dict[str, Any], term: str) -> None:
     term_lower = term.lower()
     for item in items:
         entry = item.get("entry", item)
-        match = (
-            term_lower in (entry.get("name", "") or "").lower()
-            or term_lower in (entry.get("description", "") or "").lower()
-        )
+        match = term_lower in (entry.get("name", "") or "").lower() or term_lower in (entry.get("description", "") or "").lower()
         assert match, f"No match for '{term_lower}' in {entry.get('name')} / {entry.get('description')}"
 
 

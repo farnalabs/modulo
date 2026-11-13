@@ -74,10 +74,10 @@ def patched_trust_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Ed25519Pub
 @pytest.fixture
 def clean_launcher_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scrub the whole-DB override trio (DATABASE_URL, REDIS_URL,
-    MODULO_SYSTEM_DATABASE_URL) so launcher-only config resolution runs."""
+    FARNA_CONTROL_SYSTEM_DATABASE_URL) so launcher-only config resolution runs."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
 
 
 @pytest.fixture

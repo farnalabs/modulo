@@ -1060,7 +1060,7 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             if run is None:
                 _log.warning("SAQ execute_suite_run: suite_run %s not found", rid)
                 return {"status": "missing"}
-            # modulo_app is NOBYPASSRLS (bootstrap_role.py asserts
+            # farna_control_app is NOBYPASSRLS (bootstrap_role.py asserts
             # ``rolbypassrls = false``), so on PostgreSQL ``session.get`` IS
             # org-scoped by the ``rls_org_isolation`` policy via the org
             # context set above — a cross-org row would already be invisible.
@@ -1385,7 +1385,7 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     ``UndefinedTable``/``UndefinedColumn``) is caught, logged as a warning, and
     the job still reports the runs purge count (``checkpoints_deleted=0``)
     without failing — the app boot creates the schema later. The retention
-    session is system-scoped (modulo_system role, LOGIN, BYPASSRLS) — checkpoint
+    session is system-scoped (farna_control_system role, LOGIN, BYPASSRLS) — checkpoint
     retention is cross-org by design and operates on the saver's unqualified
     tables.
     """
@@ -1532,13 +1532,13 @@ async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     The purge is CROSS-ORG by design (age-based retention over every org's
     events), so on PostgreSQL it runs on the system session factory
-    (modulo_system role, LOGIN, BYPASSRLS — FAR-523). ``trigger_events``
-    carries the ``rls_org_isolation`` policy and ``modulo_app`` is
+    (farna_control_system role, LOGIN, BYPASSRLS — FAR-523). ``trigger_events``
+    carries the ``rls_org_isolation`` policy and ``farna_control_app`` is
     NOBYPASSRLS, so the previous plain-factory session — which never set
     ``app.organisation_id`` — silently matched ZERO rows and deleted nothing:
     an invisible no-op that let retention grow unbounded. Do NOT swap back to
     ``_make_session_factory`` on PostgreSQL. On non-PostgreSQL backends (no
-    RLS, no modulo_system role) the plain factory is correct and used instead
+    RLS, no farna_control_system role) the plain factory is correct and used instead
     (see ``_cleanup_session_factory``).
 
     The system session factory is ``autobegin=False`` (the codebase DI
@@ -1573,14 +1573,14 @@ async def expired_webhook_dedup_purge(_ctx: dict[str, Any]) -> dict[str, Any]:
     rows whose ``expires_at`` has passed, in bounded batches.
 
     The purge is CROSS-ORG by design (expiry-based over every org's hashes),
-    so on PostgreSQL it runs on the system session factory (modulo_system
+    so on PostgreSQL it runs on the system session factory (farna_control_system
     role, LOGIN, BYPASSRLS — FAR-523) via ``_cleanup_session_factory``:
     ``webhook_dedup_hashes`` carries the org-scoped ``rls_org_isolation``
-    policy and ``modulo_app`` is NOBYPASSRLS, so a plain-factory session —
+    policy and ``farna_control_app`` is NOBYPASSRLS, so a plain-factory session —
     which never set ``app.organisation_id`` — would silently match ZERO rows
     (the same invisible no-op documented on ``webhook_dedup_cleanup``). Do
     NOT swap back to ``_make_session_factory`` on PostgreSQL. On
-    non-PostgreSQL backends (no RLS, no modulo_system role) the plain
+    non-PostgreSQL backends (no RLS, no farna_control_system role) the plain
     factory is correct and used instead (see ``_cleanup_session_factory``).
 
     Mirrors ``webhook_dedup_cleanup``: the system session factory is
@@ -1612,13 +1612,13 @@ async def trigger_events_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     window, so replayable events are never purged.
 
     The purge is CROSS-ORG by design, so on PostgreSQL it runs on the system
-    session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523).
+    session factory (farna_control_system role, LOGIN, BYPASSRLS — FAR-523).
     ``trigger_events`` is an ``OrgScoped`` table under the
-    ``rls_org_isolation`` policy and ``modulo_app`` is NOBYPASSRLS: the
+    ``rls_org_isolation`` policy and ``farna_control_app`` is NOBYPASSRLS: the
     previous plain-factory session never set ``app.organisation_id``, so every
     batch silently matched ZERO rows and the retention never deleted anything.
     Do NOT swap back to ``_make_session_factory`` on PostgreSQL. On
-    non-PostgreSQL backends (no RLS, no modulo_system role) the plain factory
+    non-PostgreSQL backends (no RLS, no farna_control_system role) the plain factory
     is correct and used instead (see ``_cleanup_session_factory``).
 
     Mirrors ``webhook_dedup_cleanup``: the system session factory is
@@ -1977,7 +1977,7 @@ async def runner_health_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
     editor read ONLY the cache — never a synchronous probe on the request
     path. A healthy→unreachable transition emits the error-dashboard entry +
     the ``runner_unavailable`` in-app notification. Cross-org: uses the
-    system session factory on PostgreSQL (modulo_app is NOBYPASSRLS).
+    system session factory on PostgreSQL (farna_control_app is NOBYPASSRLS).
 
     Liveness contract (qa F3, mirrors the sibling sweeps): the outcome
     (last_run_at + orgs probed/failed + transitions) is persisted to the
@@ -2129,8 +2129,8 @@ async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
 async def analytics_facts_maintenance(_ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
 
-    System cron: uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access.
-    modulo_app is NOBYPASSRLS. Non-Postgres backends no-op.
+    System cron: uses farna_control_system role (LOGIN, BYPASSRLS) for cross-org access.
+    farna_control_app is NOBYPASSRLS. Non-Postgres backends no-op.
     """
     from farna.core.analytics.maintenance import run_maintenance
 
@@ -2142,7 +2142,7 @@ async def journey_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
 
     Re-derives ``journeys`` evidence from terminal runs whose journey rows are
     MISSING or STALE (see ``modulo.core.lifecycle_map.reconcile``). System cron:
-    uses modulo_system role (LOGIN, BYPASSRLS) for cross-org access. modulo_app
+    uses farna_control_system role (LOGIN, BYPASSRLS) for cross-org access. farna_control_app
     is NOBYPASSRLS. The sweep is batch-bounded and idempotent, so an hourly
     tick simply drains whatever backlog remains.
     """
@@ -2536,18 +2536,18 @@ def _make_session_factory() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# System cron engine — dedicated modulo_system role (LOGIN, BYPASSRLS)
+# System cron engine — dedicated farna_control_system role (LOGIN, BYPASSRLS)
 # ---------------------------------------------------------------------------
 
 _SYSTEM_ASYNC_ENGINE: AsyncEngine | None = None
 
 
 def _get_system_async_engine() -> AsyncEngine:
-    """Engine for cross-org system crons using the modulo_system role.
+    """Engine for cross-org system crons using the farna_control_system role.
 
     FAIL CLOSED when MODULO_SYSTEM_DATABASE_URL is not set: cross-org system
-    crons require the modulo_system role (LOGIN, BYPASSRLS). Falling back to the
-    regular engine would run them as modulo_app, which is NOBYPASSRLS (see
+    crons require the farna_control_system role (LOGIN, BYPASSRLS). Falling back to the
+    regular engine would run them as farna_control_app, which is NOBYPASSRLS (see
     bootstrap_role.py: the app role asserts ``rolbypassrls = false``), so any
     RLS-scoped read silently returns zero rows — a silent no-op that masks a
     misconfigured deployment. Instead, a clear ``RuntimeError`` is raised. The
@@ -2599,14 +2599,14 @@ def _get_system_async_engine() -> AsyncEngine:
         else:
             _log.error(
                 "saq_worker.system_engine_misconfigured",
-                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org system crons as modulo_app (NOBYPASSRLS); RLS-scoped reads would silently return zero rows. Set the modulo_system role URL.")},
+                extra={"reason": ("MODULO_SYSTEM_DATABASE_URL not set — refusing to run cross-org system crons as farna_control_app (NOBYPASSRLS); RLS-scoped reads would silently return zero rows. Set the farna_control_system role URL.")},
             )
-            raise RuntimeError("MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require the modulo_system role (LOGIN, BYPASSRLS). Refusing to fail open to modulo_app (NOBYPASSRLS), which would silently return zero rows.")
+            raise RuntimeError("MODULO_SYSTEM_DATABASE_URL is not set: cross-org system crons require the farna_control_system role (LOGIN, BYPASSRLS). Refusing to fail open to farna_control_app (NOBYPASSRLS), which would silently return zero rows.")
     return _SYSTEM_ASYNC_ENGINE
 
 
 def _make_system_session_factory() -> Any:
-    """Session factory for cross-org system crons (modulo_system role).
+    """Session factory for cross-org system crons (farna_control_system role).
 
     Does NOT include the RLS reset hook — system crons operate cross-org
     intentionally and never call set_rls_org.
@@ -2621,11 +2621,11 @@ def _cleanup_session_factory() -> Any:
     (``webhook_dedup_cleanup`` / ``trigger_events_cleanup``).
 
     On PostgreSQL the purge is CROSS-ORG by design, so it MUST run on the
-    system session factory (modulo_system role, LOGIN, BYPASSRLS — FAR-523):
-    the plain ``modulo_app`` factory is NOBYPASSRLS and a batch without
+    system session factory (farna_control_system role, LOGIN, BYPASSRLS — FAR-523):
+    the plain ``farna_control_app`` factory is NOBYPASSRLS and a batch without
     ``app.organisation_id`` silently matches zero rows. Do NOT swap back on
     PostgreSQL. On non-PostgreSQL backends (SQLite/MariaDB/MySQL) there is no
-    RLS and no modulo_system role, so the plain factory is both correct and
+    RLS and no farna_control_system role, so the plain factory is both correct and
     the only option — the cross-org purge is exactly right there.
 
     The dialect is read from ``settings.modulo_db`` — the same signal

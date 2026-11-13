@@ -3,8 +3,8 @@
 Extends ``test_saml_rls_resolution.py`` (FAR-1058) — same harness, same
 real-Postgres posture. Why integration (mocked sessions CANNOT catch this
 defect class): per-provider SAML routing is only meaningful when the provider
-rows live behind the REAL RLS policy (``modulo_app`` NOBYPASSRLS /
-``modulo_system`` BYPASSRLS) and the HTTP routes resolve through it. A mocked
+rows live behind the REAL RLS policy (``farna_control_app`` NOBYPASSRLS /
+``farna_control_system`` BYPASSRLS) and the HTTP routes resolve through it. A mocked
 provider list can never prove that org B's ACS resolves org B's row, that
 org A's SP entity is invisible to org B, or that the legacy singleton routes
 still resolve the SAME first-enabled provider row.
@@ -168,7 +168,7 @@ async def two_saml_orgs(db_engine: AsyncEngine) -> dict[str, str]:
 
 @pytest_asyncio.fixture
 async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
-    """Engine on the real ``modulo_system`` role (BYPASSRLS), like production."""
+    """Engine on the real ``farna_control_system`` role (BYPASSRLS), like production."""
     engine = create_async_engine(
         os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"],
         echo=False,
@@ -180,7 +180,7 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 @pytest_asyncio.fixture
 async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``.
+    """Session on the ``farna_control_system`` role — mirrors ``get_system_db_session``.
 
     Closed on teardown: a session that is merely returned leaks its checked-out
     asyncpg connection (``engine.dispose()`` cannot reap an in-use connection,
@@ -213,7 +213,7 @@ _PUBLIC_URL = "https://staging.example.com"
 async def multi_org_client(db_url: str, app_engine: AsyncEngine, system_session: AsyncSession) -> AsyncClient:
     """ASGI client (mirrors ``test_saml_rls_resolution.multi_org_client``):
     - ``modulo_multi_org_enabled=True`` (org-login routes otherwise 404 per ADR 005),
-    - a REAL system-session override (exercises the modulo_system leg),
+    - a REAL system-session override (exercises the farna_control_system leg),
     - an anonymous plan-context override (pre-auth feature gate)."""
     from farna.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_system_db_session
     from farna.api.main import app

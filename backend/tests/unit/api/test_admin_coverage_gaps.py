@@ -284,9 +284,7 @@ def test_create_team_unexpected_error_500(api: tuple[TestClient, AsyncMock], mon
     assert resp.status_code == 500
 
 
-def test_create_team_audit_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_team_audit_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_team_by_name", AsyncMock(return_value=None))
     monkeypatch.setattr(admin, "create_team", AsyncMock(return_value=_team()))
@@ -299,9 +297,7 @@ def test_create_team_audit_integrity_error_409(
     "exc",
     [ProgrammingError("s", {}, Exception("x")), SQLAlchemyError("boom")],
 )
-def test_create_team_audit_failure_is_fail_open(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception
-) -> None:
+def test_create_team_audit_failure_is_fail_open(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_team_by_name", AsyncMock(return_value=None))
     monkeypatch.setattr(admin, "create_team", AsyncMock(return_value=_team()))
@@ -405,9 +401,7 @@ def test_update_org_error_mapping(
 
 def test_regenerate_api_key_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
-    monkeypatch.setattr(
-        "farna.auth.api_key.create_api_key", AsyncMock(return_value=(MagicMock(), "mk_abcdef1234567890"))
-    )
+    monkeypatch.setattr("farna.auth.api_key.create_api_key", AsyncMock(return_value=(MagicMock(), "mk_abcdef1234567890")))
     resp = client.post("/api/v1/admin/org/regenerate-api-key")
     assert resp.status_code == 200
     data = resp.json()
@@ -460,9 +454,7 @@ def test_list_users_programming_error_501(api: tuple[TestClient, AsyncMock]) -> 
 # ── PUT /users/{user_id} ──
 
 
-def test_update_user_role_uses_durable_top_level_transaction(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_update_user_role_uses_durable_top_level_transaction(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, session = api
     membership = _membership(role="runner")
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=membership))
@@ -491,14 +483,10 @@ def test_update_user_account_missing_404(api: tuple[TestClient, AsyncMock], monk
     assert resp.json()["detail"] == "User not found"
 
 
-def test_update_user_last_admin_guard_unavailable_503(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_update_user_last_admin_guard_unavailable_503(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
-    monkeypatch.setattr(
-        admin, "assert_not_last_admin", AsyncMock(side_effect=admin.LastAdminLockoutUnavailableError(org_id=_ORG_ID))
-    )
+    monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock(side_effect=admin.LastAdminLockoutUnavailableError(org_id=_ORG_ID)))
     resp = client.put(f"/api/v1/admin/users/{_TARGET_USER_ID}", json={"org_role": "viewer"})
     assert resp.status_code == 503
 
@@ -506,9 +494,7 @@ def test_update_user_last_admin_guard_unavailable_503(
 def test_update_user_programming_error_501(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
-    monkeypatch.setattr(
-        admin, "assert_not_last_admin", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x"))))
     resp = client.put(f"/api/v1/admin/users/{_TARGET_USER_ID}", json={"org_role": "viewer"})
     assert resp.status_code == 501
 
@@ -550,9 +536,7 @@ def test_deactivate_guard_unavailable_503(api: tuple[TestClient, AsyncMock], mon
     client, _ = api
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
-    monkeypatch.setattr(
-        admin, "assert_not_last_admin", AsyncMock(side_effect=admin.LastAdminLockoutUnavailableError(org_id=_ORG_ID))
-    )
+    monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock(side_effect=admin.LastAdminLockoutUnavailableError(org_id=_ORG_ID)))
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/deactivate")
     assert resp.status_code == 503
 
@@ -562,9 +546,7 @@ def test_deactivate_integrity_error_409(api: tuple[TestClient, AsyncMock], monke
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
     monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock())
-    monkeypatch.setattr(
-        admin, "list_team_memberships_for_account", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr(admin, "list_team_memberships_for_account", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x"))))
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/deactivate")
     assert resp.status_code == 409
 
@@ -574,9 +556,7 @@ def test_deactivate_programming_error_501(api: tuple[TestClient, AsyncMock], mon
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
     monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock())
-    monkeypatch.setattr(
-        admin, "list_team_memberships_for_account", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr(admin, "list_team_memberships_for_account", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x"))))
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/deactivate")
     assert resp.status_code == 501
 
@@ -709,9 +689,7 @@ def test_reset_password_account_missing_404(api: tuple[TestClient, AsyncMock], m
     assert resp.status_code == 404
 
 
-def test_reset_password_membership_missing_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reset_password_membership_missing_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=None))
@@ -719,15 +697,11 @@ def test_reset_password_membership_missing_404(
     assert resp.status_code == 404
 
 
-def test_reset_password_programming_error_501(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reset_password_programming_error_501(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
     monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=_membership()))
-    monkeypatch.setattr(
-        admin, "list_families_for_account", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr(admin, "list_families_for_account", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x"))))
     resp = client.post(f"/api/v1/admin/users/{_TARGET_USER_ID}/reset-password")
     assert resp.status_code == 501
 
@@ -782,23 +756,17 @@ def test_update_team_name_conflict_409(api: tuple[TestClient, AsyncMock], monkey
     assert resp.status_code == 409
 
 
-def test_update_team_optimistic_not_found_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_update_team_optimistic_not_found_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "update_team_if_unchanged", AsyncMock(return_value=(TeamUpdateOutcome.NOT_FOUND, None)))
-    resp = client.put(
-        f"/api/v1/admin/teams/{_TEAM_ID}", json={"name": "team-a", "expected_updated_at": _NOW.isoformat()}
-    )
+    resp = client.put(f"/api/v1/admin/teams/{_TEAM_ID}", json={"name": "team-a", "expected_updated_at": _NOW.isoformat()})
     assert resp.status_code == 404
 
 
 def test_update_team_optimistic_stale_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "update_team_if_unchanged", AsyncMock(return_value=(TeamUpdateOutcome.STALE, None)))
-    resp = client.put(
-        f"/api/v1/admin/teams/{_TEAM_ID}", json={"name": "team-a", "expected_updated_at": _NOW.isoformat()}
-    )
+    resp = client.put(f"/api/v1/admin/teams/{_TEAM_ID}", json={"name": "team-a", "expected_updated_at": _NOW.isoformat()})
     assert resp.status_code == 409
 
 
@@ -884,26 +852,18 @@ def test_delete_team_not_found_404(api: tuple[TestClient, AsyncMock], monkeypatc
     assert resp.status_code == 404
 
 
-def test_delete_team_audit_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_team_audit_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "delete_team", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        "farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=IntegrityError("s", {}, Exception("x"))))
     resp = client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
     assert resp.status_code == 409
 
 
-def test_delete_team_audit_programming_error_still_204(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_team_audit_programming_error_still_204(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "delete_team", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        "farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x")))
-    )
+    monkeypatch.setattr("farna.core.audit_logger.append_audit_event", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x"))))
     resp = client.delete(f"/api/v1/admin/teams/{_TEAM_ID}")
     assert resp.status_code == 204
 
@@ -980,9 +940,7 @@ def test_billing_overview_org_missing_returns_404(
     assert resp.status_code == 404
 
 
-def test_billing_overview_unexpected_error_503(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_billing_overview_unexpected_error_503(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_organisation", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.get("/api/v1/admin/billing/overview")
@@ -991,9 +949,7 @@ def test_billing_overview_unexpected_error_503(
 
 # ── Org deletion family ──
 
-_ACTIVE_ORG_DELETION_REFUSED = (
-    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
-)
+_ACTIVE_ORG_DELETION_REFUSED = "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
 
 
 @pytest.mark.parametrize(("exc", "_expected"), _DB_ERROR_PARAMS)
@@ -1031,9 +987,7 @@ def test_confirm_org_deletion_refuses_before_any_db_access(
 
 def test_cancel_org_deletion_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
-    monkeypatch.setattr(
-        "farna.db.crud.org_deletion.cancel_org_deletion", AsyncMock(return_value={"status": "cancelled"})
-    )
+    monkeypatch.setattr("farna.db.crud.org_deletion.cancel_org_deletion", AsyncMock(return_value={"status": "cancelled"}))
     resp = client.patch("/api/v1/admin/org/deletion-cancel")
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
@@ -1055,9 +1009,7 @@ def test_cancel_org_deletion_error_mapping(
 def test_export_org_data_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     bundle = {
-        "organisation": [
-            {"id": str(_ORG_ID), "name": "Org", "slug": "org", "status": "active", "created_at": str(_NOW)}
-        ],
+        "organisation": [{"id": str(_ORG_ID), "name": "Org", "slug": "org", "status": "active", "created_at": str(_NOW)}],
         "exported_at": "2025-06-01T00:00:00+00:00",
     }
     monkeypatch.setattr("farna.db.crud.org_deletion.export_org_data", AsyncMock(return_value=bundle))
@@ -1155,9 +1107,7 @@ def test_eval_regressions_error_mapping(
     assert resp.status_code == expected
 
 
-def test_eval_regressions_unexpected_error_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_eval_regressions_unexpected_error_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "detect_regressions", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.get("/api/v1/admin/evals/regressions")
@@ -1351,9 +1301,7 @@ def test_retention_purge_runs_error_mapping(
     assert resp.status_code == expected
 
 
-def test_retention_purge_runs_unexpected_error_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_retention_purge_runs_unexpected_error_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "batch_delete_old_terminal_runs", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.post("/api/v1/admin/purge/runs", json={"max_age_days": 30})
@@ -1464,9 +1412,7 @@ def test_update_retention_org_missing_returns_404(api: tuple[TestClient, AsyncMo
     assert resp.status_code == 404
 
 
-def test_update_retention_patches_only_retention_days(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_update_retention_patches_only_retention_days(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1830: the retention writer emits ONLY ``retention_days``.
 
     A revert to a whole-column ``settings_json`` write would not call the patch
@@ -1506,9 +1452,7 @@ def test_update_retention_error_mapping(
 # ── Sandbox / run concurrency ──
 
 
-def test_get_sandbox_concurrency_unexpected_error_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_sandbox_concurrency_unexpected_error_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_sandbox_concurrency_limit", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.get("/api/v1/admin/org/sandbox-concurrency")
@@ -1536,9 +1480,7 @@ def test_update_sandbox_concurrency_error_mapping(
     assert resp.status_code == expected
 
 
-def test_get_run_concurrency_unexpected_error_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_run_concurrency_unexpected_error_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "get_org_run_concurrency_limit", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.get("/api/v1/admin/org/run-concurrency")
@@ -1628,9 +1570,7 @@ def test_overdue_claims_viewer_403(viewer: TestClient) -> None:
     assert resp.status_code == 403
 
 
-def test_overdue_claims_programming_error_501(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_overdue_claims_programming_error_501(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin, "set_rls_org", AsyncMock(side_effect=ProgrammingError("s", {}, Exception("x"))))
     resp = client.get("/api/v1/admin/hitl/overdue")

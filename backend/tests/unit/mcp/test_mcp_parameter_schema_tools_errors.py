@@ -122,9 +122,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.update_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get, mock_update, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get, mock_update, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_update.side_effect = ProgrammingError("SELECT 1", {}, Exception("missing"))
         mock_session.return_value = _session()
@@ -146,9 +144,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.update_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get, mock_update, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get, mock_update, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_update.side_effect = SQLAlchemyError("dead")
         mock_session.return_value = _session()
@@ -159,9 +155,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.update_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get, mock_update, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get, mock_update, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_update.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
@@ -190,9 +184,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.soft_delete_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get, mock_delete, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get, mock_delete, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_delete.side_effect = ProgrammingError("SELECT 1", {}, Exception("missing"))
         mock_session.return_value = _session()
@@ -214,9 +206,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.soft_delete_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get, mock_delete, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get, mock_delete, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_delete.side_effect = SQLAlchemyError("dead")
         mock_session.return_value = _session()
@@ -227,9 +217,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.soft_delete_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get, mock_delete, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get, mock_delete, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_delete.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
@@ -247,9 +235,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get, mock_restore, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_restore.side_effect = ProgrammingError("SELECT 1", {}, Exception("missing"))
         mock_session.return_value = _session()
@@ -271,9 +257,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get, mock_restore, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_restore.side_effect = SQLAlchemyError("dead")
         mock_session.return_value = _session()
@@ -284,9 +268,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get, mock_restore, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_restore.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
@@ -308,9 +290,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_detail_pins_or_not_deleted_when_restore_returns_none(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_not_found_detail_pins_or_not_deleted_when_restore_returns_none(self, mock_get, mock_restore, mock_session, mock_validate):
         """FAR-1522: the restore not-found payload must keep the LONG detail string.
 
         The three restore call sites were briefly shadowed at runtime by the
@@ -330,9 +310,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(self, mock_get, mock_restore, mock_session, mock_validate):
         """FAR-1522: the schema-missing branch of the restore payload (the other repointed literal)."""
         mock_get.return_value = None
         mock_session.return_value = _session()
@@ -344,9 +322,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_schema.restore_schema")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_detail_pins_or_not_deleted_when_schema_cross_org(
-        self, mock_get, mock_restore, mock_session, mock_validate
-    ):
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_cross_org(self, mock_get, mock_restore, mock_session, mock_validate):
         """FAR-1522: the cross-org branch of the restore payload (the third repointed literal is on the set tool)."""
         mock_get.return_value = _cross_org_schema()
         mock_session.return_value = _session()
@@ -448,9 +424,7 @@ class TestCreateParameterSetErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_set.create_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get, mock_create, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get, mock_create, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_create.side_effect = ProgrammingError("SELECT 1", {}, Exception("missing"))
         mock_session.return_value = _session()
@@ -472,9 +446,7 @@ class TestCreateParameterSetErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_set.create_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get, mock_create, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get, mock_create, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_create.side_effect = SQLAlchemyError("dead")
         mock_session.return_value = _session()
@@ -485,9 +457,7 @@ class TestCreateParameterSetErrors(AuthContext):
     @patch("farna.api.mcp_server._session")
     @patch("farna.db.crud.parameter_set.create_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get, mock_create, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get, mock_create, mock_session, mock_validate):
         mock_get.return_value = _make_mock_schema()
         mock_create.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
@@ -531,9 +501,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.update_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -547,9 +515,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.update_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_generic_error_returns_tool_error(
-        self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
-    ):
+    async def test_generic_error_returns_tool_error(self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -563,9 +529,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.update_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -579,9 +543,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.update_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -595,9 +557,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.update_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_conflict_when_version_drift(
-        self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
-    ):
+    async def test_conflict_when_version_drift(self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -618,9 +578,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.soft_delete_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -634,9 +592,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.soft_delete_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_generic_error_returns_tool_error(
-        self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
-    ):
+    async def test_generic_error_returns_tool_error(self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -650,9 +606,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.soft_delete_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -666,9 +620,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.soft_delete_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -682,9 +634,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.soft_delete_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_when_delete_returns_none(
-        self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
-    ):
+    async def test_not_found_when_delete_returns_none(self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -705,9 +655,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_programming_error_returns_migration_required(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_programming_error_returns_migration_required(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -721,9 +669,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_generic_error_returns_tool_error(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_generic_error_returns_tool_error(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -737,9 +683,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_sqlalchemy_error_returns_database_unavailable(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_sqlalchemy_error_returns_database_unavailable(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -753,9 +697,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_internal_error(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_session_contract_error_returns_internal_error(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -769,9 +711,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_when_restore_returns_none(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_not_found_when_restore_returns_none(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         sid = uuid.uuid4()
         mock_get_schema.return_value = _make_mock_schema()
         mock_get_set.return_value = _make_mock_set(schema_id=sid)
@@ -785,9 +725,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("farna.db.crud.parameter_set.restore_set")
     @patch("farna.db.crud.parameter_set.get_set")
     @patch("farna.db.crud.parameter_schema.get_schema")
-    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(
-        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
-    ):
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate):
         """FAR-1522: the restore_parameter_set schema-not-found payload must keep the LONG detail string.
 
         Same shadowing hazard as the schema tool: a same-named module-level

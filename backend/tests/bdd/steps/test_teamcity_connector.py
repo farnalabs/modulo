@@ -107,28 +107,20 @@ def teamcity_write_build(ctx: dict, resource: str, build_type_id: str) -> None:
 
     connector = ctx["connector"]
     with respx.mock:
-        respx.post(f"{_BASE}/app/rest/buildQueue").mock(
-            return_value=httpx.Response(200, json={"id": 42, "buildTypeId": build_type_id})
-        )
+        respx.post(f"{_BASE}/app/rest/buildQueue").mock(return_value=httpx.Response(200, json={"id": 42, "buildTypeId": build_type_id}))
         result = asyncio.run(connector.write(ConnectorPayload(resource=resource, data={"buildTypeId": build_type_id})))
     assert result["id"] == "42", result
     assert result["buildTypeId"] == build_type_id, result
     ctx["write_result"] = result
 
 
-@when(
-    parsers.parse(
-        'I write resource "{resource}" with buildTypeId "{build_type_id}", projectId "{project_id}", and name "{name}"'
-    )
-)
+@when(parsers.parse('I write resource "{resource}" with buildTypeId "{build_type_id}", projectId "{project_id}", and name "{name}"'))
 def teamcity_write_build_type(ctx: dict, resource: str, build_type_id: str, project_id: str, name: str) -> None:
     from farna.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     with respx.mock:
-        respx.post(f"{_BASE}/app/rest/buildTypes").mock(
-            return_value=httpx.Response(200, json={"id": build_type_id, "name": name})
-        )
+        respx.post(f"{_BASE}/app/rest/buildTypes").mock(return_value=httpx.Response(200, json={"id": build_type_id, "name": name}))
         result = asyncio.run(
             connector.write(
                 ConnectorPayload(

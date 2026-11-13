@@ -288,9 +288,7 @@ class TestCompleteStatus:
     def test_db_enum_uses_complete_not_completed(self) -> None:
         from sqlalchemy import CheckConstraint
 
-        enum_sql = "\n".join(
-            str(getattr(c, "sqltext", c)) for c in Run.__table_args__ if isinstance(c, CheckConstraint)
-        )
+        enum_sql = "\n".join(str(getattr(c, "sqltext", c)) for c in Run.__table_args__ if isinstance(c, CheckConstraint))
         assert "complete" in enum_sql
         assert "'completed'" not in enum_sql
 
@@ -750,9 +748,7 @@ class TestHeartbeat:
         monkeypatch.setattr(pe, "heartbeat_once", _superseded)
         monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
         superseded = asyncio.Event()
-        await pe.heartbeat_loop(
-            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded
-        )
+        await pe.heartbeat_loop(MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded)
         assert superseded.is_set()
 
     async def test_heartbeat_loop_fails_closed_after_3_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -764,9 +760,7 @@ class TestHeartbeat:
         monkeypatch.setattr(pe, "heartbeat_once", _failing)
         monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
         health_failed = asyncio.Event()
-        await pe.heartbeat_loop(
-            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", health_failed=health_failed
-        )
+        await pe.heartbeat_loop(MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", health_failed=health_failed)
         assert health_failed.is_set()
         assert pe.asyncio.sleep.await_count == 3
 
@@ -785,9 +779,7 @@ class TestHeartbeat:
         # Every heartbeat is fenced with the executor's claim token (plan F3a).
         heartbeat_mock.assert_awaited_with(engine, "run-1", "org-1", job=None, claim_token="tok-a")
 
-    async def test_heartbeat_loop_superseded_breaks_without_further_sleeps(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_heartbeat_loop_superseded_breaks_without_further_sleeps(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A single ClaimSupersededError breaks the loop after the FIRST
         heartbeat — no further sleeps run, the abort is prompt (plan F3a)."""
         calls = {"n": 0}
@@ -799,17 +791,13 @@ class TestHeartbeat:
         monkeypatch.setattr(pe, "heartbeat_once", _superseded)
         monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
         superseded = asyncio.Event()
-        await pe.heartbeat_loop(
-            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded
-        )
+        await pe.heartbeat_loop(MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded)
         assert superseded.is_set()
         assert calls["n"] == 1
         # Exactly ONE lead-in sleep then the superseded heartbeat breaks the loop.
         assert pe.asyncio.sleep.await_count == 1
 
-    async def test_heartbeat_loop_transient_failure_then_success_continues(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_heartbeat_loop_transient_failure_then_success_continues(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A transient Exception is counted but does NOT break the loop — the
         next successful heartbeat resets the counter (fail-open on a single
         hiccup; only 3 consecutive failures set ``health_failed``)."""
@@ -826,9 +814,7 @@ class TestHeartbeat:
         # Third iteration's lead-in sleep fired before KeyboardInterrupt broke out.
         assert pe.asyncio.sleep.await_count == 3
 
-    async def test_heartbeat_loop_atomic_lease_rowcount_zero_breaks_and_sets_superseded(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_heartbeat_loop_atomic_lease_rowcount_zero_breaks_and_sets_superseded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """End-to-end: ``heartbeat_once``'s atomic fenced UPDATE matching ZERO
         rows (the run's claim token was rotated by a successor — superseded
         lease) surfaces as ClaimSupersededError; the loop sets the superseded
@@ -1158,9 +1144,7 @@ class TestStaleRunRecoverySweep:
         assert result["redispatch_outcomes"] == {"enqueued": 1}
         redispatch_mock.assert_awaited_once_with(run_id, org_id)
 
-    async def test_fresh_heartbeat_capacity_blocked_run_is_not_redispatched(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fresh_heartbeat_capacity_blocked_run_is_not_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A live retry loop's fresh heartbeat is the fence — no re-dispatch."""
         redispatch_mock = AsyncMock()
 
@@ -1400,9 +1384,7 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 1
         assert "error" not in result, "a facts-write failure must not fail the sweep"
 
-    async def test_never_dispatched_and_worker_lost_write_synthetic_detail(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_never_dispatched_and_worker_lost_write_synthetic_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-164 (option a): the genuinely detail-less sweep writers stamp a
         synthetic error_detail so the runs list always has something to show.
         Safe for the daily-watcher hang-death detector, which keys on
@@ -2113,9 +2095,7 @@ class TestRunExecutorWithWatchdog:
         assert "watchdog_await_bound_exceeded" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_classified_stall_not_abandoned_at_watchdog_await_bound(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_classified_stall_not_abandoned_at_watchdog_await_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-603: the bound must never abandon a classified watchdog write.
 
         A watchdog whose cause is classified (``stall_requested`` set — which
@@ -2477,9 +2457,7 @@ class TestRecordFactForTerminalFailedRunHelper:
         record_facts.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_failure_is_fail_open(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         run_id = str(uuid.uuid4())
         org_id = str(uuid.uuid4())
         fake_run = MagicMock()

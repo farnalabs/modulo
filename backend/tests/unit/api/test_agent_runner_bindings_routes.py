@@ -188,11 +188,7 @@ def test_replace_bindings_reserved_env_var_returns_400(client: TestClient) -> No
         ):
             resp = client.put(
                 f"/api/v1/agents/{_AGENT_ID}/bindings",
-                json={
-                    "bindings": [
-                        {"model_backend_id": str(_BACKEND_ID), "target_env_var": "PATH", "source_field": "api_key"}
-                    ]
-                },
+                json={"bindings": [{"model_backend_id": str(_BACKEND_ID), "target_env_var": "PATH", "source_field": "api_key"}]},
             )
     finally:
         _stop(patchers)
